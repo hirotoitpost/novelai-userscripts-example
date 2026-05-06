@@ -20,15 +20,7 @@ Write-Host ""
 if (-not $SkipProfile) {
     Write-Host "📋 ステップ 1: PowerShell プロフィール設定" -ForegroundColor Yellow
 
-    $ProfileDir = Split-Path -Parent $PROFILE
-    $ProfilePath = $PROFILE
     $RepoRoot = Split-Path -Parent $PSScriptRoot
-
-    # プロフィールディレクトリがなければ作成
-    if (-not (Test-Path $ProfileDir)) {
-        New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null
-        Write-Host "   ✅ プロフィールディレクトリを作成: $ProfileDir"
-    }
 
     $ProfileSection = @"
 
@@ -41,28 +33,36 @@ if (Test-Path `$LoadEnvScript) {
 }
 "@
 
-    # プロフィールが存在すればバックアップ
-    if (Test-Path $ProfilePath) {
-        $BackupPath = "$ProfilePath.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
-        Copy-Item -Path $ProfilePath -Destination $BackupPath -Force
-        Write-Host "   ✅ プロフィールをバックアップ: $BackupPath"
-    }
+    # CurrentUserAllHosts (profile.ps1) を PS5 / PS7 の両方に書き込む
+    # → 通常ターミナル・VS Code 統合ターミナル・PowerShell Extension すべてで読まれる
+    $allHostsProfiles = @(
+        "$env:USERPROFILE\Documents\WindowsPowerShell\profile.ps1",  # PS5
+        "$env:USERPROFILE\Documents\PowerShell\profile.ps1"           # PS7
+    )
 
-    # novelai セクションが既存なら追加をスキップ
-    if (Test-Path $ProfilePath) {
-        $CurrentContent = Get-Content $ProfilePath -Raw
-        if ($CurrentContent -match "novelai-userscripts-example") {
-            Write-Host "   ℹ️  設定は既に存在します（スキップ）"
+    foreach ($ProfilePath in $allHostsProfiles) {
+        $ProfileDir = Split-Path -Parent $ProfilePath
+
+        if (-not (Test-Path $ProfileDir)) {
+            New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null
+        }
+
+        if (Test-Path $ProfilePath) {
+            $CurrentContent = Get-Content $ProfilePath -Raw
+            if ($CurrentContent -match "novelai-userscripts-example") {
+                Write-Host "   ℹ️  設定は既に存在します（スキップ）: $ProfilePath"
+                continue
+            }
+            $BackupPath = "$ProfilePath.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
+            Copy-Item -Path $ProfilePath -Destination $BackupPath -Force
+            Write-Host "   ✅ バックアップ作成: $BackupPath"
+            Add-Content -Path $ProfilePath -Value $ProfileSection
         }
         else {
-            # 署名ブロックの外（末尾）に追記するため署名は維持される
-            Add-Content -Path $ProfilePath -Value $ProfileSection
-            Write-Host "   ✅ プロフィールに novelai-userscripts-example 設定を追加"
+            Set-Content -Path $ProfilePath -Value $ProfileSection.TrimStart()
         }
-    }
-    else {
-        Set-Content -Path $ProfilePath -Value $ProfileSection.TrimStart()
-        Write-Host "   ✅ 新規プロフィール作成: $ProfilePath"
+
+        Write-Host "   ✅ 設定を追加: $ProfilePath"
     }
 
     Write-Host ""
