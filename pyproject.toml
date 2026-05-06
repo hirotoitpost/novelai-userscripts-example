@@ -7,6 +7,8 @@ license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "novelai-sdk>=0.8.1",
+    "fastapi[standard]>=0.100.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [build-system]
@@ -32,6 +34,8 @@ lint-fix = "ruff check --fix"
 check = "pyright"
 test = "pytest"
 pre-commit = ["fmt", "lint", "check"]
+serve = "uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000"
+serve-dev = "uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000 --reload"
 
 [tool.ruff]
 src = ["src/python"]
