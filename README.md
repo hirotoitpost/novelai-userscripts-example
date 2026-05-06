@@ -36,11 +36,14 @@ A comprehensive UI framework for NovelAI integration, built on top of the [novel
 git clone https://github.com/hirotoitpost/novelai-userscripts-example.git
 cd novelai-userscripts-example
 
-# Initialize Python environment
+# Set up development environment (PATH, .env)
+.\scripts\setup-dev-env.ps1
+
+# Restart PowerShell, then initialize Python environment
 uv sync
 
 # Install pre-commit hooks
-uv run poe pre-commit
+uv run pre-commit install
 ```
 
 #### JavaScript/React Setup
@@ -73,7 +76,7 @@ uv run poe lint
 uv run poe check
 
 # Run tests
-pytest
+uv run pytest
 ```
 
 #### Commit Convention
@@ -91,10 +94,17 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
 ├── src/                    # Source code
 │   ├── python/            # Python backend
 │   └── javascript/        # JavaScript/React frontend
+├── scripts/               # Development scripts
+│   ├── load-env.ps1       # .env loader for PowerShell
+│   └── setup-dev-env.ps1  # One-time dev environment setup
 ├── tests/                 # Test files
 ├── docs/                  # Documentation
+├── index.html             # Application entry point
+├── vite.config.ts         # Vite configuration
+├── tsconfig.json          # TypeScript configuration
 ├── pyproject.toml         # Python project config
 ├── package.json           # Node.js project config
+├── .env.example           # Environment variable template
 ├── CONTRIBUTING.md        # Contribution guidelines
 └── README.md             # This file
 ```
@@ -147,11 +157,14 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 git clone https://github.com/hirotoitpost/novelai-userscripts-example.git
 cd novelai-userscripts-example
 
-# Python環境を初期化
+# 開発環境をセットアップ（PATH、.env）
+.\scripts\setup-dev-env.ps1
+
+# PowerShell を再起動後、Python環境を初期化
 uv sync
 
 # プリコミットフックをインストール
-uv run poe pre-commit
+uv run pre-commit install
 ```
 
 #### JavaScript/Reactセットアップ
@@ -184,7 +197,7 @@ uv run poe lint
 uv run poe check
 
 # テストを実行
-pytest
+uv run pytest
 ```
 
 #### コミット規約
@@ -202,10 +215,17 @@ pytest
 ├── src/                    # ソースコード
 │   ├── python/            # Pythonバックエンド
 │   └── javascript/        # JavaScript/Reactフロントエンド
+├── scripts/               # 開発スクリプト
+│   ├── load-env.ps1       # PowerShell 用 .env ローダー
+│   └── setup-dev-env.ps1  # 初回開発環境セットアップ
 ├── tests/                 # テストファイル
 ├── docs/                  # ドキュメント
+├── index.html             # アプリケーションエントリーポイント
+├── vite.config.ts         # Vite 設定
+├── tsconfig.json          # TypeScript 設定
 ├── pyproject.toml         # Pythonプロジェクト設定
 ├── package.json           # Node.jsプロジェクト設定
+├── .env.example           # 環境変数テンプレート
 ├── CONTRIBUTING.md        # コントリビューションガイドライン
 └── README.md             # このファイル
 ```

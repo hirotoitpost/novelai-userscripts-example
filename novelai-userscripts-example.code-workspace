@@ -16,5 +16,7 @@
 			"path": "../novelai-tokenizer"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"powershell.cwd": "novelai-userscripts-example"
+	}
 }
