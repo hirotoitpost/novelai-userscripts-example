@@ -1,2 +1,19 @@
 # Claude Code local settings (auto-generated, machine-specific)
 .claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node.js
+node_modules/
+
+# Environment
+.env
+.env.local
