@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git -C ../novelai-sdk*)",
+      "Bash(git -C ../novelai-image-metadata*)",
+      "Bash(git -C ../novelai-script-examples*)",
+      "Bash(git -C ../novelai-tokenizer*)"
+    ]
+  }
+}
