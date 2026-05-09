@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from novelai import (
     AsyncNovelAI,
     AuthenticationError,
@@ -198,5 +199,7 @@ async def estimate_anlas(req: AnlasEstimateRequest) -> AnlasEstimateResponse:
         params = GenerateImageParams(**_build_kwargs(req.params))
         est = params.calculate_anlas(is_opus=req.is_opus)
         return AnlasEstimateResponse(**est.model_dump())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -60,7 +60,7 @@ async def extract_image_metadata_endpoint(
         metadata = extract_image_metadata(np_img)
         return MetadataExtractResponse(metadata=metadata)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/erase", response_model=MetadataEraseResponse)
@@ -73,4 +73,4 @@ async def erase_image_metadata_endpoint(
         result = _erase_metadata(img, req.target)
         return MetadataEraseResponse(image=_pil_to_b64(result))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc))
