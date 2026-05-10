@@ -13,8 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Inpainting UI
 - Character Reference UI
 - Vibe Transfer / ControlNet UI
-- Metadata management UI
 - Batch generation UI
+
+---
+
+## [0.5.0] - 2026-05-10
+
+### Added
+
+- **Anlas cost preview** – estimated Anlas consumption shown below the generate button
+  - Calls `POST /api/image/anlas` with 500 ms debounce whenever parameters change
+  - Displays "推定消費: N Anlas"; silently suppressed on network error
+- **SSE streaming generation** – live intermediate preview during image generation
+  - Switched from `POST /api/image/generate` to `POST /api/image/generate/stream`
+  - Uses `fetch` + `ReadableStream` to consume SSE (supports `Authorization` header,
+    unlike `EventSource`)
+  - Intermediate frames render progressively in the canvas with a spinning overlay badge
+  - Final frame replaces the preview automatically when generation completes
+
+---
+
+## [0.4.0] - 2026-05-10
+
+### Added
+
+- **Settings persistence** – all generation parameters saved to `localStorage`
+  - Prompt, negative prompt, model, size, steps, scale, UC preset, and quality toggle
+    persist across page visits and browser restarts
+  - Text inputs debounced at 300 ms to avoid excessive writes; discrete controls write
+    immediately
+  - Seed intentionally excluded (random per generation is the expected UX)
+- **`src/javascript/hooks/useLocalStorage.ts`** – generic debounced `localStorage`
+  sync hook; flushes pending timer on component unmount
 
 ---
 
