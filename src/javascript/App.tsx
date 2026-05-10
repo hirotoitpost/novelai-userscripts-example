@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './pages/Login'
 import Home from './pages/Home'
 import ImageGenerate from './pages/ImageGenerate'
+import Metadata from './pages/Metadata'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -25,6 +26,10 @@ function AppRoutes() {
       <Route
         path="/generate"
         element={<ProtectedRoute><ImageGenerate /></ProtectedRoute>}
+      />
+      <Route
+        path="/metadata"
+        element={<ProtectedRoute><Metadata /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

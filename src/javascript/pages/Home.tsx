@@ -45,11 +45,17 @@ export default function Home() {
             <span className="home-card-badge home-card-badge--soon">近日実装</span>
           </div>
 
-          <div className="home-card home-card--available">
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/metadata')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/metadata')}
+          >
             <div className="home-card-icon">📊</div>
             <h2>メタデータ</h2>
             <p>NovelAI 生成画像のメタデータを抽出・消去します。</p>
-            <span className="home-card-badge home-card-badge--soon">近日実装</span>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
         </div>
 

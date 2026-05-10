@@ -39,6 +39,23 @@ export interface GenerateResponse {
   format: string
 }
 
+export interface MetadataExtractRequest {
+  image: string
+}
+
+export interface MetadataExtractResponse {
+  metadata: Record<string, unknown>
+}
+
+export interface MetadataEraseRequest {
+  image: string
+  target: 'alpha' | 'png_info' | 'both'
+}
+
+export interface MetadataEraseResponse {
+  image: string
+}
+
 export interface AnlasEstimateRequest {
   params: GenerateRequest
   is_opus?: boolean
