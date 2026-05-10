@@ -1,0 +1,188 @@
+/* ===== CSS Variables ===== */
+:root {
+  --bg-deep:      #0a0a14;
+  --bg-card:      #13132a;
+  --bg-input:     #1a1a35;
+  --border:       #2a2a50;
+  --accent:       #7b5cf6;
+  --accent-hover: #6d4fe0;
+  --accent-glow:  rgba(123, 92, 246, 0.35);
+  --text-primary: #e8e8ff;
+  --text-muted:   #7878a8;
+  --error:        #ff6b8a;
+}
+
+/* ===== Root ===== */
+.login-root {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-deep);
+  position: relative;
+  overflow: hidden;
+}
+
+/* ===== Animated gradient background ===== */
+.login-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 80%, rgba(123, 92, 246, 0.12) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 50% at 80% 20%, rgba(56, 182, 255, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* ===== Card ===== */
+.login-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 400px;
+  margin: 1rem;
+  padding: 2.5rem 2rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px rgba(123, 92, 246, 0.1),
+    0 24px 64px rgba(0, 0, 0, 0.6);
+}
+
+/* ===== Logo ===== */
+.login-logo {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.login-logo-text {
+  display: block;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
+  background: linear-gradient(135deg, #b8a4ff 0%, #7b5cf6 50%, #38b6ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.login-logo-sub {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ===== Form ===== */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.login-field label {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.login-field input {
+  padding: 0.7rem 1rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.login-field input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.login-field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.login-field input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== Error ===== */
+.login-error {
+  font-size: 0.85rem;
+  color: var(--error);
+  background: rgba(255, 107, 138, 0.1);
+  border: 1px solid rgba(255, 107, 138, 0.3);
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem;
+  margin: 0;
+}
+
+/* ===== Button ===== */
+.login-btn {
+  margin-top: 0.4rem;
+  padding: 0.8rem;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+}
+
+.login-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.login-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ===== Spinner ===== */
+.login-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ===== Note ===== */
+.login-note {
+  margin-top: 1.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.5;
+}

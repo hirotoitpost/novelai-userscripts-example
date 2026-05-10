@@ -17,3 +17,9 @@ node_modules/
 # Environment
 .env
 .env.local
+
+# Generated outputs (large binary files, not source code)
+outputs/
+
+# Reference samples (third-party HTML, not source code)
+samples/

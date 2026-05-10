@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .client import close_client, init_client
+from .routes.auth import router as auth_router
 from .routes.image import router as image_router
 from .routes.metadata import router as metadata_router
 
@@ -39,6 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(image_router)
 app.include_router(metadata_router)
 

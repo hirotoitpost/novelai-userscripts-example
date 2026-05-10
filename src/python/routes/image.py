@@ -5,6 +5,8 @@ import io
 import json
 from typing import Any
 
+from typing import Annotated, AsyncGenerator
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
@@ -28,6 +30,8 @@ from novelai.types import (
 )
 
 from ..client import get_client
+
+ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 from ..models import (
     AnlasEstimateRequest,
     AnlasEstimateResponse,
@@ -152,7 +156,7 @@ def _http_status(exc: Exception) -> int:
 @router.post("/generate", response_model=GenerateImageResponse)
 async def generate_image(
     req: GenerateImageRequest,
-    client: AsyncNovelAI = Depends(get_client),
+    client: ClientDep,
 ) -> GenerateImageResponse:
     try:
         params = GenerateImageParams(**_build_kwargs(req))
@@ -166,7 +170,7 @@ async def generate_image(
 @router.post("/generate/stream")
 async def generate_image_stream(
     req: GenerateImageRequest,
-    client: AsyncNovelAI = Depends(get_client),
+    client: ClientDep,
 ) -> StreamingResponse:
     async def event_gen():
         try:
