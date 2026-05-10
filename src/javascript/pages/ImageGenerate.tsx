@@ -1,8 +1,8 @@
-import { useState, useCallback, KeyboardEvent } from 'react'
+import { useState, useCallback, useEffect, KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
-import { apiFetch, GenerateRequest, GenerateResponse } from '../api'
+import { apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse } from '../api'
 import './ImageGenerate.css'
 
 const MODELS = [
@@ -43,34 +43,126 @@ export default function ImageGenerate() {
   const [quality,   setQuality]   = useLocalStorage('nai_gen_quality',   true)
 
   // セッション中のみ保持
-  const [seed,    setSeed]    = useState<string>('')
-  const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState<string | null>(null)
-  const [result,  setResult]  = useState<{ src: string; format: string } | null>(null)
+  const [seed,         setSeed]         = useState<string>('')
+  const [loading,      setLoading]      = useState(false)
+  const [error,        setError]        = useState<string | null>(null)
+  const [result,       setResult]       = useState<{ src: string; format: string } | null>(null)
+  const [preview,      setPreview]      = useState<string | null>(null)
+  const [anlasEst,     setAnlasEst]     = useState<number | null>(null)
+  const [anlasLoading, setAnlasLoading] = useState(false)
+
+  useEffect(() => {
+    if (!token || !prompt.trim()) {
+      setAnlasEst(null)
+      return
+    }
+    const timer = setTimeout(async () => {
+      setAnlasLoading(true)
+      try {
+        const body: AnlasEstimateRequest = {
+          params: {
+            prompt:          prompt.trim(),
+            negative_prompt: negPrompt.trim() || undefined,
+            model,
+            size,
+            steps,
+            scale,
+            seed:      seed ? Number(seed) : undefined,
+            quality,
+            uc_preset: ucPreset,
+            n_samples: 1,
+          },
+          is_opus: false,
+        }
+        const data = await apiFetch<AnlasEstimateResponse>(token, '/api/image/anlas', body)
+        setAnlasEst(data.total_anlas)
+      } catch {
+        setAnlasEst(null)
+      } finally {
+        setAnlasLoading(false)
+      }
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset])
 
   const generate = useCallback(async () => {
     if (!token || !prompt.trim()) return
     setLoading(true)
     setError(null)
+    setResult(null)
+    setPreview(null)
+
+    const body: GenerateRequest = {
+      prompt:          prompt.trim(),
+      negative_prompt: negPrompt.trim() || undefined,
+      model,
+      size,
+      steps,
+      scale,
+      seed:      seed ? Number(seed) : undefined,
+      quality,
+      uc_preset: ucPreset,
+      n_samples: 1,
+    }
+
     try {
-      const body: GenerateRequest = {
-        prompt:          prompt.trim(),
-        negative_prompt: negPrompt.trim() || undefined,
-        model,
-        size,
-        steps,
-        scale,
-        seed:      seed ? Number(seed) : undefined,
-        quality,
-        uc_preset: ucPreset,
-        n_samples: 1,
+      const res = await fetch('/api/image/generate/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!res.ok || !res.body) {
+        const errData = await res.json().catch(() => ({ detail: res.statusText }))
+        throw new Error((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
       }
-      const data = await apiFetch<GenerateResponse>(token, '/api/image/generate', body)
-      setResult({ src: `data:image/${data.format};base64,${data.images[0]}`, format: data.format })
+
+      const reader  = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer    = ''
+      let eventType = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (line === '') {
+            eventType = ''
+          } else if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            let chunk: Record<string, unknown>
+            try {
+              chunk = JSON.parse(line.slice(6)) as Record<string, unknown>
+            } catch {
+              continue
+            }
+            if (eventType === 'error') {
+              throw new Error((chunk.detail as string | undefined) ?? 'ストリーミングエラー')
+            }
+            const img = chunk.image as string | undefined
+            if (!img) continue
+            if (eventType === 'intermediate') {
+              setPreview(`data:image/png;base64,${img}`)
+            } else if (eventType === 'final') {
+              setResult({ src: `data:image/png;base64,${img}`, format: 'png' })
+            }
+          }
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
+      setPreview(null)
     }
   }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset])
 
@@ -230,15 +322,40 @@ export default function ImageGenerate() {
             {loading ? <span className="ig-spinner" /> : '🎨 生成する'}
           </button>
 
+          <div className="ig-anlas-row">
+            {anlasLoading && (
+              <span className="ig-anlas ig-anlas--loading">Anlas 計算中…</span>
+            )}
+            {!anlasLoading && anlasEst !== null && (
+              <span className="ig-anlas">
+                推定消費: <strong>{anlasEst}</strong> Anlas
+              </span>
+            )}
+          </div>
+
           {error && <p className="ig-error" role="alert">{error}</p>}
         </aside>
 
         {/* ===== Canvas Area ===== */}
         <main className="ig-canvas">
-          {loading && (
+          {loading && !preview && (
             <div className="ig-canvas-placeholder" aria-live="polite" aria-label="生成中">
               <span className="ig-canvas-spinner" />
               <p>生成中…</p>
+            </div>
+          )}
+
+          {loading && preview && (
+            <div className="ig-result ig-result--streaming">
+              <img
+                className="ig-result-img"
+                src={preview}
+                alt="生成中のプレビュー"
+              />
+              <div className="ig-streaming-badge">
+                <span className="ig-streaming-dot" />
+                生成中…
+              </div>
             </div>
           )}
 

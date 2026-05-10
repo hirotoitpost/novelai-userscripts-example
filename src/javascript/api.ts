@@ -38,3 +38,22 @@ export interface GenerateResponse {
   images: string[]
   format: string
 }
+
+export interface AnlasEstimateRequest {
+  params: GenerateRequest
+  is_opus?: boolean
+}
+
+export interface AnlasEstimateResponse {
+  model: string
+  total_anlas: number
+  base_anlas: number
+  character_reference_anlas: number
+  vibe_encoding_anlas: number
+  vibe_reference_anlas: number
+  per_image_anlas: number
+  requested_samples: number
+  billable_samples: number
+  strength_factor: number
+  opus_discount_applied: boolean
+}

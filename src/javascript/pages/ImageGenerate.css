@@ -222,6 +222,28 @@
 .ig-generate-btn:active:not(:disabled) { transform: scale(0.98); }
 .ig-generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ===== Anlas badge ===== */
+.ig-anlas-row {
+  min-height: 1.4rem;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
+}
+
+.ig-anlas {
+  font-size: 0.78rem;
+  color: var(--nai-muted);
+}
+
+.ig-anlas strong {
+  color: var(--nai-text);
+  font-weight: 600;
+}
+
+.ig-anlas--loading {
+  opacity: 0.45;
+}
+
 /* ===== Error ===== */
 .ig-error {
   margin: 0.5rem 0 0;
@@ -273,6 +295,40 @@
   border-top-color: var(--nai-accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
+}
+
+/* ===== Streaming overlay ===== */
+.ig-result--streaming {
+  position: relative;
+}
+
+.ig-streaming-badge {
+  position: absolute;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(14, 15, 33, 0.82);
+  color: var(--nai-muted);
+  font-size: 0.78rem;
+  padding: 0.3rem 0.9rem 0.3rem 0.6rem;
+  border-radius: 20px;
+  border: 1px solid var(--nai-border);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  white-space: nowrap;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.ig-streaming-dot {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--nai-accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
 }
 
 /* ===== Result ===== */
