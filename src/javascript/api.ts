@@ -21,6 +21,12 @@ export async function apiFetch<T>(
   return data as T
 }
 
+export interface I2iRequest {
+  image: string
+  strength?: number
+  noise?: number
+}
+
 export interface GenerateRequest {
   prompt: string
   negative_prompt?: string
@@ -32,6 +38,7 @@ export interface GenerateRequest {
   quality: boolean
   uc_preset: string
   n_samples: number
+  i2i?: I2iRequest
 }
 
 export interface GenerateResponse {

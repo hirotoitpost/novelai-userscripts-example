@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, KeyboardEvent } from 'react'
+import { useState, useCallback, useEffect, useRef, KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
-import { apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse } from '../api'
+import { apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest } from '../api'
 import './ImageGenerate.css'
 
 const MODELS = [
@@ -51,6 +51,21 @@ export default function ImageGenerate() {
   const [anlasEst,     setAnlasEst]     = useState<number | null>(null)
   const [anlasLoading, setAnlasLoading] = useState(false)
 
+  // Image-to-Image
+  const i2iFileInputRef               = useRef<HTMLInputElement>(null)
+  const [i2iEnabled,  setI2iEnabled]  = useState(false)
+  const [i2iImage,    setI2iImage]    = useState<string | null>(null)
+  const [i2iDragOver, setI2iDragOver] = useState(false)
+  const [i2iStrength, setI2iStrength] = useState(0.70)
+  const [i2iNoise,    setI2iNoise]    = useState(0.00)
+
+  const handleI2iFile = useCallback((file: File) => {
+    if (!file.type.match(/^image\//)) return
+    const reader = new FileReader()
+    reader.onload = (e) => setI2iImage(e.target?.result as string)
+    reader.readAsDataURL(file)
+  }, [])
+
   useEffect(() => {
     if (!token || !prompt.trim()) {
       setAnlasEst(null)
@@ -92,6 +107,11 @@ export default function ImageGenerate() {
     setResult(null)
     setPreview(null)
 
+    const i2i: I2iRequest | undefined =
+      (i2iEnabled && i2iImage)
+        ? { image: i2iImage, strength: i2iStrength, noise: i2iNoise }
+        : undefined
+
     const body: GenerateRequest = {
       prompt:          prompt.trim(),
       negative_prompt: negPrompt.trim() || undefined,
@@ -103,6 +123,7 @@ export default function ImageGenerate() {
       quality,
       uc_preset: ucPreset,
       n_samples: 1,
+      i2i,
     }
 
     try {
@@ -164,7 +185,7 @@ export default function ImageGenerate() {
       setLoading(false)
       setPreview(null)
     }
-  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset])
+  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset, i2iEnabled, i2iImage, i2iStrength, i2iNoise])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -311,13 +332,107 @@ export default function ImageGenerate() {
             </div>
           </section>
 
+          {/* Image-to-Image */}
+          <section className="ig-section ig-section--i2i">
+            <label className="ig-i2i-toggle">
+              <input
+                type="checkbox"
+                checked={i2iEnabled}
+                onChange={e => {
+                  setI2iEnabled(e.target.checked)
+                  if (!e.target.checked) setI2iImage(null)
+                }}
+              />
+              <span className="ig-label ig-label--inline">Image-to-Image</span>
+            </label>
+
+            {i2iEnabled && (
+              <div className="ig-i2i-controls">
+                <div
+                  className={[
+                    'ig-i2i-drop',
+                    i2iDragOver ? 'ig-i2i-drop--over'      : '',
+                    i2iImage    ? 'ig-i2i-drop--has-image' : '',
+                  ].join(' ')}
+                  onDragOver={e => { e.preventDefault(); setI2iDragOver(true) }}
+                  onDragLeave={() => setI2iDragOver(false)}
+                  onDrop={e => {
+                    e.preventDefault()
+                    setI2iDragOver(false)
+                    const f = e.dataTransfer.files[0]
+                    if (f) handleI2iFile(f)
+                  }}
+                  onClick={() => i2iFileInputRef.current?.click()}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={e => e.key === 'Enter' && i2iFileInputRef.current?.click()}
+                  aria-label="参照画像をドロップまたはクリックして選択"
+                >
+                  {i2iImage
+                    ? <img className="ig-i2i-thumb" src={i2iImage} alt="参照画像" />
+                    : <span>参照画像をドロップ / クリック</span>}
+                </div>
+
+                <input
+                  ref={i2iFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={e => {
+                    const f = e.target.files?.[0]
+                    if (f) handleI2iFile(f)
+                    e.target.value = ''
+                  }}
+                />
+
+                {i2iImage && (
+                  <button
+                    type="button"
+                    className="ig-i2i-clear"
+                    onClick={() => setI2iImage(null)}
+                  >
+                    ✕ 画像をクリア
+                  </button>
+                )}
+
+                <div className="ig-field ig-field--row">
+                  <label className="ig-field-label" htmlFor="ig-i2i-strength">Strength</label>
+                  <input
+                    id="ig-i2i-strength"
+                    type="range" min={0.01} max={0.99} step={0.01}
+                    value={i2iStrength}
+                    onChange={e => setI2iStrength(Number(e.target.value))}
+                    className="ig-range"
+                  />
+                  <span className="ig-field-value" aria-live="polite">{i2iStrength.toFixed(2)}</span>
+                </div>
+
+                <div className="ig-field ig-field--row">
+                  <label className="ig-field-label" htmlFor="ig-i2i-noise">Noise</label>
+                  <input
+                    id="ig-i2i-noise"
+                    type="range" min={0} max={0.99} step={0.01}
+                    value={i2iNoise}
+                    onChange={e => setI2iNoise(Number(e.target.value))}
+                    className="ig-range"
+                  />
+                  <span className="ig-field-value" aria-live="polite">{i2iNoise.toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* Generate button */}
           <button
             type="button"
             className="ig-generate-btn"
             onClick={generate}
-            disabled={loading || !prompt.trim()}
-            title="Ctrl+Enter でも生成できます"
+            disabled={loading || !prompt.trim() || (i2iEnabled && !i2iImage)}
+            title={
+              i2iEnabled && !i2iImage
+                ? '参照画像をアップロードしてください'
+                : 'Ctrl+Enter でも生成できます'
+            }
           >
             {loading ? <span className="ig-spinner" /> : '🎨 生成する'}
           </button>

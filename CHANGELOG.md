@@ -9,11 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 
-- Image-to-Image UI
 - Inpainting UI
 - Character Reference UI
 - Vibe Transfer / ControlNet UI
 - Batch generation UI
+
+---
+
+## [0.6.0] - 2026-05-10
+
+### Added
+
+- **Metadata management UI** (`/metadata`)
+  - Drag & drop or click-to-browse file upload (PNG / WebP)
+  - Auto-extracts metadata on upload via `POST /api/metadata/extract`; nested JSON
+    strings (e.g. NovelAI `Comment` field) are expanded inline for readability
+  - Erase controls: target selector (`png_info` / `alpha` / `both`) + erase button
+    via `POST /api/metadata/erase`; download cleaned image as `<name>_clean.png`
+  - Wired up `/metadata` route and Home dashboard card
+- **Image-to-Image mode** on the image generation page
+  - Toggle in the sidebar enables img2img controls: reference image upload (drag &
+    drop or click), Strength slider (0.01–0.99), Noise slider (0–0.99)
+  - Generate button disabled until a reference image is provided while in img2img
+    mode
+  - Reference image passed to `POST /api/image/generate/stream` via the existing
+    `i2i` field; streaming preview works as in text-to-image mode
 
 ---
 

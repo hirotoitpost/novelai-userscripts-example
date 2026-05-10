@@ -21,9 +21,9 @@ Login with your NovelAI account and generate images directly from your browser.
 | ✅ | Anlas cost preview before generation |
 | ✅ | Streaming generation with live intermediate preview (SSE) |
 | ✅ | Anlas consumption estimation (backend) |
-| ✅ | Image metadata extraction / erasure (backend) |
-| 🔄 | Metadata management UI (planned) |
-| 🔄 | Image-to-Image (planned) |
+| ✅ | Image metadata extraction / erasure |
+| ✅ | Metadata management UI |
+| ✅ | Image-to-Image mode |
 | 🔄 | Inpainting (planned) |
 | 🔄 | Character Reference UI (planned) |
 | 🔄 | Vibe Transfer / ControlNet UI (planned) |
@@ -202,9 +202,9 @@ NovelAI アカウントでログインして、ブラウザから直接画像を
 | ✅ | 生成前の Anlas 消費量プレビュー |
 | ✅ | ライブ中間プレビュー付きストリーミング生成（SSE） |
 | ✅ | Anlas 消費量の事前計算（バックエンド） |
-| ✅ | 画像メタデータの抽出・消去（バックエンド） |
-| 🔄 | メタデータ管理 UI（今後実装） |
-| 🔄 | Image-to-Image（今後実装） |
+| ✅ | 画像メタデータの抽出・消去 |
+| ✅ | メタデータ管理 UI |
+| ✅ | Image-to-Image モード |
 | 🔄 | インペインティング（今後実装） |
 | 🔄 | Character Reference UI（今後実装） |
 | 🔄 | Vibe Transfer / ControlNet UI（今後実装） |

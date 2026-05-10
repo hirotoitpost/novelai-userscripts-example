@@ -197,6 +197,88 @@
   cursor: pointer;
 }
 
+/* ===== Image-to-Image ===== */
+.ig-section--i2i {
+  border-top: 1px solid var(--nai-border);
+  padding-top: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+.ig-i2i-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.ig-i2i-toggle input[type=checkbox] {
+  accent-color: var(--nai-accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.ig-label--inline {
+  display: inline;
+  margin-bottom: 0;
+}
+
+.ig-i2i-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.ig-i2i-drop {
+  width: 100%;
+  min-height: 90px;
+  border: 2px dashed var(--nai-border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: var(--nai-card);
+  font-size: 0.78rem;
+  color: var(--nai-muted);
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+  overflow: hidden;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+.ig-i2i-drop:hover,
+.ig-i2i-drop--over {
+  border-color: var(--nai-accent);
+  background: rgba(123, 92, 246, 0.07);
+}
+.ig-i2i-drop--has-image {
+  border-style: solid;
+  padding: 0;
+  min-height: 120px;
+}
+
+.ig-i2i-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.ig-i2i-clear {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 4px;
+  color: var(--nai-muted);
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  align-self: flex-end;
+  transition: color 0.15s, border-color 0.15s;
+}
+.ig-i2i-clear:hover { color: var(--nai-error); border-color: var(--nai-error); }
+
 /* ===== Generate button ===== */
 .ig-generate-btn {
   margin-top: 0.4rem;
@@ -282,6 +364,7 @@
   align-items: center;
   gap: 0.6rem;
   color: var(--nai-muted);
+  -webkit-user-select: none;
   user-select: none;
 }
 .ig-canvas-icon { font-size: 3.5rem; opacity: 0.35; }
