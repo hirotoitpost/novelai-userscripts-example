@@ -1,5 +1,9 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(Get-Content ImageGeneration-NovelAI.html)",
+      "Bash(Measure-Object -Character)"
+    ],
     "deny": [
       "Bash(git -C ../novelai-sdk*)",
       "Bash(git -C ../novelai-image-metadata*)",

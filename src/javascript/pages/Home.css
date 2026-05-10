@@ -153,6 +153,21 @@
   border: 1px solid rgba(123, 92, 246, 0.3);
 }
 
+.home-card-badge--open {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.home-card--link {
+  cursor: pointer;
+}
+
+.home-card--link:hover {
+  border-color: rgba(52, 211, 153, 0.5);
+  box-shadow: 0 0 20px rgba(52, 211, 153, 0.08);
+}
+
 /* ===== SDK Info ===== */
 .home-sdk-info {
   background: var(--bg-card);

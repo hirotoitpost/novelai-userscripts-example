@@ -1,8 +1,10 @@
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import './Home.css'
 
 export default function Home() {
   const { logout } = useAuth()
+  const navigate = useNavigate()
 
   return (
     <div className="home-root">
@@ -11,7 +13,7 @@ export default function Home() {
           <span className="home-brand">NovelAI</span>
           <span className="home-brand-sub">Image Generation</span>
         </div>
-        <button className="home-logout-btn" onClick={logout}>
+        <button type="button" className="home-logout-btn" onClick={logout}>
           ログアウト
         </button>
       </header>
@@ -23,11 +25,17 @@ export default function Home() {
         </section>
 
         <div className="home-cards">
-          <div className="home-card home-card--available">
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/generate')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/generate')}
+          >
             <div className="home-card-icon">🎨</div>
             <h2>画像生成</h2>
             <p>テキストプロンプトから高品質な画像を生成します。</p>
-            <span className="home-card-badge home-card-badge--soon">近日実装</span>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
 
           <div className="home-card home-card--available">
