@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncGenerator, cast
+from typing import Any, AsyncGenerator, cast
 
+import httpx
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from ..llm_client import (
+    get_text_base_url,
     get_text_client,
     get_text_model,
+    get_vision_base_url,
     get_vision_client,
     get_vision_model,
+    is_ollama_text,
+    is_ollama_vision,
 )
 from ..llm_models import (
     AuxTextRequest,
@@ -24,6 +29,65 @@ from ..llm_models import (
 )
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
+
+
+def _ollama_base(url: str) -> str:
+    """Convert OpenAI-compat base URL to Ollama native API base."""
+    return url.rstrip("/").removesuffix("/v1")
+
+
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks that Qwen3 may emit in the content stream."""
+    import re
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+async def _stream_llm_ollama(
+    base_url: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    max_tokens: int = 1024,
+) -> StreamingResponse:
+    """Ollama native /api/chat with think=False — filters Qwen3 reasoning from content."""
+    ollama_base = _ollama_base(base_url)
+
+    async def event_gen() -> AsyncGenerator[str, None]:
+        raw: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream(
+                    "POST",
+                    f"{ollama_base}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "stream": True,
+                        "think": False,
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        data = json.loads(line)
+                        delta = data.get("message", {}).get("content", "")
+                        if delta:
+                            raw.append(delta)
+                        if data.get("done"):
+                            break
+            full_text = _strip_think_tags("".join(raw))
+            # Emit the cleaned text as a single token (avoids streaming partial think tags)
+            if full_text:
+                yield f"event: token\ndata: {json.dumps({'delta': full_text}, ensure_ascii=False)}\n\n"
+            yield f"event: done\ndata: {json.dumps({'full_text': full_text}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 async def _stream_llm(
@@ -58,9 +122,30 @@ async def _stream_llm(
     )
 
 
+async def _stream_text(
+    messages: list[dict[str, Any]],
+    max_tokens: int = 1024,
+) -> StreamingResponse:
+    if is_ollama_text():
+        return await _stream_llm_ollama(get_text_base_url(), get_text_model(), messages, max_tokens)
+    client = get_text_client()
+    typed = cast(list[ChatCompletionMessageParam], messages)
+    return await _stream_llm(client, get_text_model(), typed, max_tokens)
+
+
+async def _stream_vision(
+    messages: list[dict[str, Any]],
+    max_tokens: int = 1024,
+) -> StreamingResponse:
+    if is_ollama_vision():
+        return await _stream_llm_ollama(get_vision_base_url(), get_vision_model(), messages, max_tokens)
+    client = get_vision_client()
+    typed = cast(list[ChatCompletionMessageParam], messages)
+    return await _stream_llm(client, get_vision_model(), typed, max_tokens)
+
+
 @router.post("/prompt-format")
 async def stream_prompt_format(req: PromptFormatRequest) -> StreamingResponse:
-    client = get_text_client()
     system = (
         "あなたはNovelAI Diffusion向けのプロンプト整形AIです。"
         "ユーザーから受け取った曖昧な日本語や英語の説明を、"
@@ -74,16 +159,14 @@ async def stream_prompt_format(req: PromptFormatRequest) -> StreamingResponse:
         f"- モデル {req.target_model} の傾向に合わせて調整する\n"
         "- コードブロックや余分な説明は不要"
     )
-    messages = cast(list[ChatCompletionMessageParam], [
+    return await _stream_text([
         {"role": "system", "content": system},
         {"role": "user", "content": req.rough_prompt},
     ])
-    return await _stream_llm(client, get_text_model(), messages)
 
 
 @router.post("/char-gen")
 async def stream_char_gen(req: CharGenRequest) -> StreamingResponse:
-    client = get_text_client()
     system = (
         "あなたはNovelAI向けキャラクタービジュアルタグ生成AIです。\n"
         "ユーザーのキャラクター概念説明を受け取り、"
@@ -96,16 +179,14 @@ async def stream_char_gen(req: CharGenRequest) -> StreamingResponse:
         "- 髪色・髪型・目の色・体型・特徴的な衣装を必ず含める\n"
         f"- {req.style}スタイルに最適化すること"
     )
-    messages = cast(list[ChatCompletionMessageParam], [
+    return await _stream_text([
         {"role": "system", "content": system},
         {"role": "user", "content": req.concept},
-    ])
-    return await _stream_llm(client, get_text_model(), messages, max_tokens=1024)
+    ], max_tokens=1024)
 
 
 @router.post("/story-draft")
 async def stream_story_draft(req: StoryDraftRequest) -> StreamingResponse:
-    client = get_text_client()
     system = (
         "あなたはNovelAI画像生成シナリオ用の物語ドラフト生成AIです。\n"
         "ユーザーの前提設定から、画像生成に適した情景描写を含む短編物語を生成してください。\n\n"
@@ -120,16 +201,14 @@ async def stream_story_draft(req: StoryDraftRequest) -> StreamingResponse:
         "- 情景テキストは日本語で情感豊かに\n"
         "- 生成プロンプト候補は英語タグのみ"
     )
-    messages = cast(list[ChatCompletionMessageParam], [
+    return await _stream_text([
         {"role": "system", "content": system},
         {"role": "user", "content": req.premise},
-    ])
-    return await _stream_llm(client, get_text_model(), messages, max_tokens=2048)
+    ], max_tokens=2048)
 
 
 @router.post("/aux-text")
 async def stream_aux_text(req: AuxTextRequest) -> StreamingResponse:
-    client = get_text_client()
     system = (
         "あなたはNovelAI画像生成プロンプト最適化AIです。\n"
         "ユーザーのコンセプトから、ポジティブプロンプトとネガティブプロンプトの"
@@ -143,16 +222,14 @@ async def stream_aux_text(req: AuxTextRequest) -> StreamingResponse:
         "- negativeはNovelAI標準のUCプリセットを参考に拡張する\n"
         f"- モデル {req.target_model} の特性を考慮する"
     )
-    messages = cast(list[ChatCompletionMessageParam], [
+    return await _stream_text([
         {"role": "system", "content": system},
         {"role": "user", "content": req.concept},
-    ])
-    return await _stream_llm(client, get_text_model(), messages, max_tokens=1024)
+    ], max_tokens=1024)
 
 
 @router.post("/metadata-gen")
 async def stream_metadata_gen(req: MetadataGenRequest) -> StreamingResponse:
-    client = get_text_client()
     system = (
         "あなたはNovelAI画像生成パラメータ提案AIです。\n"
         "ユーザーのコンセプトから最適な生成パラメータの完全セットをJSONで出力してください。\n\n"
@@ -169,16 +246,14 @@ async def stream_metadata_gen(req: MetadataGenRequest) -> StreamingResponse:
         "- samplerは k_euler_ancestral または k_dpmpp_2s_ancestral を推奨\n"
         "- stepsは20〜35の範囲"
     )
-    messages = cast(list[ChatCompletionMessageParam], [
+    return await _stream_text([
         {"role": "system", "content": system},
         {"role": "user", "content": req.concept},
-    ])
-    return await _stream_llm(client, get_text_model(), messages, max_tokens=1024)
+    ], max_tokens=1024)
 
 
 @router.post("/reverse-prompt")
 async def stream_reverse_prompt(req: ReversePromptRequest) -> StreamingResponse:
-    client = get_vision_client()
     system = (
         "あなたはアニメ・イラスト画像解析AIです。\n"
         "アップロードされた画像を詳細に分析し、"
@@ -198,6 +273,21 @@ async def stream_reverse_prompt(req: ReversePromptRequest) -> StreamingResponse:
         "- タグは再現性の高い順に並べる\n"
         "- 英語タグのみ、コンマ区切り"
     )
+    if is_ollama_vision():
+        # Ollama native API: image must be base64 (without data URL prefix)
+        image_data = req.image
+        if image_data.startswith("data:"):
+            image_data = image_data.split(",", 1)[1]
+        return await _stream_llm_ollama(
+            get_vision_base_url(),
+            get_vision_model(),
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": system + "\nこの画像のNovelAIプロンプトを生成してください。", "images": [image_data]},
+            ],
+            max_tokens=1024,
+        )
+    client = get_vision_client()
     messages = cast(list[ChatCompletionMessageParam], [
         {"role": "system", "content": system},
         {

@@ -16,6 +16,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.1] - 2026-05-11
+
+### Fixed
+
+- **Ollama 対応** — vLLM の代わりに Ollama (llama.cpp ベース) を LLM バックエンドとして使用
+  - vLLM 0.20.x は CUDA compute capability 7.5+ が必要 (GTX 10xx / Pascal 世代は対象外)
+  - Ollama は Pascal GPU (sm_61) を含む旧世代 GPU で動作
+  - `docker-compose.yml` を `vllm/vllm-openai` から `ollama/ollama` へ変更
+- **Qwen3-VL 思考モード対応** — `routes/llm.py` を Ollama ネイティブ API に切り替え
+  - OpenAI 互換 API では Qwen3 の思考トークン (reasoning) が `content` を空にする問題を回避
+  - Ollama ネイティブ `/api/chat` を `think: false` で呼び出し、content フィールドを正常に取得
+  - ストリーム完了後に `<think>...</think>` ブロックをレスポンスから除去
+  - vLLM バックエンドでは従来通り OpenAI SDK ストリーミングを使用 (後方互換)
+- **デフォルトモデル更新** — `Qwen/Qwen2-VL-7B-Instruct` → `qwen3-vl:2b` (Ollama 用)
+
+### Configuration
+
+モデル起動手順（Ollama）:
+
+```bash
+docker compose up -d
+docker compose exec ollama ollama pull qwen3-vl:2b
+```
+
+`.env`:
+```
+VLLM_BASE_URL=http://localhost:11434/v1
+VLLM_MODEL=qwen3-vl:2b
+VLLM_VISION_BASE_URL=http://localhost:11434/v1
+VLLM_VISION_MODEL=qwen3-vl:2b
+```
+
+---
+
 ## [0.7.0] - 2026-05-11
 
 ### Added
