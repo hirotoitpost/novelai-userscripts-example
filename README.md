@@ -24,6 +24,7 @@ Login with your NovelAI account and generate images directly from your browser.
 | ✅ | Image metadata extraction / erasure |
 | ✅ | Metadata management UI |
 | ✅ | Image-to-Image mode |
+| ✅ | AI assistant (LLM-powered prompt tools via vLLM) |
 | 🔄 | Inpainting (planned) |
 | 🔄 | Character Reference UI (planned) |
 | 🔄 | Vibe Transfer / ControlNet UI (planned) |
@@ -33,6 +34,7 @@ Login with your NovelAI account and generate images directly from your browser.
 - **Python**: 3.10 or higher
 - **Node.js**: 20 or higher
 - **uv**: Latest (Python package manager)
+- **Docker + NVIDIA GPU** (optional): Required for the AI assistant (vLLM)
 
 ### Quick Start
 
@@ -56,6 +58,16 @@ cp .env.example .env
 # Edit .env if needed — no API token required for email/password login
 ```
 
+To enable the AI assistant, also add the following to `.env`:
+
+```
+VLLM_BASE_URL=http://localhost:8001/v1
+VLLM_MODEL=Qwen/Qwen2-VL-7B-Instruct
+VLLM_VISION_BASE_URL=http://localhost:8001/v1
+VLLM_VISION_MODEL=Qwen/Qwen2-VL-7B-Instruct
+HF_TOKEN=hf_...   # Hugging Face token for model download
+```
+
 #### 3. Start services
 
 Open **two terminals**:
@@ -66,6 +78,9 @@ uv run python -m uvicorn python.server:app --app-dir src --host 127.0.0.1 --port
 
 # Terminal 2 — Vite frontend (port 5173)
 npm run dev
+
+# Terminal 3 (optional) — vLLM server for AI assistant (requires NVIDIA GPU + Docker)
+docker compose up -d
 ```
 
 Open **http://localhost:5173** in your browser.
@@ -170,6 +185,12 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 | `POST` | `/api/image/anlas` | Estimate Anlas cost |
 | `POST` | `/api/metadata/extract` | Extract image metadata |
 | `POST` | `/api/metadata/erase` | Erase image metadata |
+| `POST` | `/api/llm/prompt-format` | Format prompt with LLM (SSE) |
+| `POST` | `/api/llm/char-gen` | Generate character tags (SSE) |
+| `POST` | `/api/llm/story-draft` | Generate story draft (SSE) |
+| `POST` | `/api/llm/aux-text` | Generate positive/negative pair (SSE) |
+| `POST` | `/api/llm/metadata-gen` | Generate full generation params (SSE) |
+| `POST` | `/api/llm/reverse-prompt` | Reverse prompt from image (SSE) |
 
 Full interactive docs available at **http://localhost:8000/docs** while the backend is running.
 
@@ -205,6 +226,7 @@ NovelAI アカウントでログインして、ブラウザから直接画像を
 | ✅ | 画像メタデータの抽出・消去 |
 | ✅ | メタデータ管理 UI |
 | ✅ | Image-to-Image モード |
+| ✅ | AI アシスタント（vLLM を活用したプロンプト支援ツール） |
 | 🔄 | インペインティング（今後実装） |
 | 🔄 | Character Reference UI（今後実装） |
 | 🔄 | Vibe Transfer / ControlNet UI（今後実装） |
@@ -214,6 +236,7 @@ NovelAI アカウントでログインして、ブラウザから直接画像を
 - **Python**: 3.10 以上
 - **Node.js**: 20 以上
 - **uv**: 最新版（Python パッケージマネージャー）
+- **Docker + NVIDIA GPU**（任意）: AI アシスタント機能（vLLM）に必要
 
 ### クイックスタート
 
@@ -237,6 +260,16 @@ cp .env.example .env
 # メール+パスワードでログインする場合、.env の編集は不要
 ```
 
+AI アシスタントを使用する場合は `.env` に以下を追加してください:
+
+```
+VLLM_BASE_URL=http://localhost:8001/v1
+VLLM_MODEL=Qwen/Qwen2-VL-7B-Instruct
+VLLM_VISION_BASE_URL=http://localhost:8001/v1
+VLLM_VISION_MODEL=Qwen/Qwen2-VL-7B-Instruct
+HF_TOKEN=hf_...   # モデルダウンロード用 Hugging Face トークン
+```
+
 #### 3. サービスの起動
 
 **2つのターミナル**を開いてそれぞれ実行します。
@@ -247,6 +280,9 @@ uv run python -m uvicorn python.server:app --app-dir src --host 127.0.0.1 --port
 
 # ターミナル 2 — Vite フロントエンド（ポート 5173）
 npm run dev
+
+# ターミナル 3（任意）— AI アシスタント用 vLLM サーバー（NVIDIA GPU + Docker が必要）
+docker compose up -d
 ```
 
 ブラウザで **http://localhost:5173** を開きます。
@@ -350,6 +386,12 @@ uv run pytest
 | `POST` | `/api/image/anlas` | Anlas 消費量の見積もり |
 | `POST` | `/api/metadata/extract` | 画像メタデータの抽出 |
 | `POST` | `/api/metadata/erase` | 画像メタデータの消去 |
+| `POST` | `/api/llm/prompt-format` | プロンプト整形（SSE） |
+| `POST` | `/api/llm/char-gen` | キャラ設定生成（SSE） |
+| `POST` | `/api/llm/story-draft` | 物語ドラフト生成（SSE） |
+| `POST` | `/api/llm/aux-text` | 補助テキスト生成（SSE） |
+| `POST` | `/api/llm/metadata-gen` | 生成パラメータ一括提案（SSE） |
+| `POST` | `/api/llm/reverse-prompt` | リバースプロンプト（SSE） |
 
 バックエンド起動中は **http://localhost:8000/docs** でインタラクティブな API ドキュメントを確認できます。
 

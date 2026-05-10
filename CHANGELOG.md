@@ -16,6 +16,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-05-11
+
+### Added
+
+- **AI アシスタント** (`/llm`) — vLLM 経由のローカル LLM を活用した 6 機能のタブ UI
+  - **プロンプト整形** — 曖昧な日本語・英語の説明を NovelAI コンマ区切りタグに変換
+  - **キャラ設定生成** — キャラクター概念 → ビジュアルタグ JSON（name / positive_tags / negative_tags / notes）
+  - **物語ドラフト** — 前提設定 → シーン付き物語文 + 各シーンの生成プロンプト候補
+  - **補助テキスト生成** — コンセプト → positive / negative プロンプトの最適ペア
+  - **メタデータ生成** — コンセプト → 全生成パラメータ JSON（steps / scale / sampler 等を一括提案）
+  - **リバースプロンプト** — アニメ・イラスト画像をアップロード → 再現用プロンプトを逆算（ビジョン LLM）
+- **「画像生成に使用」ボタン** — 各パネルの出力を `localStorage` 経由で `/generate` に一括転送
+- **「🤖 強化」ボタン** — `/generate` のプロンプト入力欄から直接 AI アシスタントへ往復
+- **`docker-compose.yml`** — GPU 1 枚構成（Qwen2-VL-7B-Instruct 単一インスタンスでテキスト+ビジョン両対応）
+  - コメントアウトで GPU 2 枚の text/vision 分離構成に切り替え可能
+- **`src/python/llm_client.py`** — `openai.AsyncOpenAI` シングルトン（text / vision）、起動時に自動初期化
+- **`src/python/llm_models.py`** — 6 機能分の Pydantic リクエストモデル
+- **`POST /api/llm/prompt-format`** — プロンプト整形（SSE ストリーミング）
+- **`POST /api/llm/char-gen`** — キャラ設定生成（SSE）
+- **`POST /api/llm/story-draft`** — 物語ドラフト生成（SSE）
+- **`POST /api/llm/aux-text`** — 補助テキスト生成（SSE）
+- **`POST /api/llm/metadata-gen`** — メタデータ生成（SSE）
+- **`POST /api/llm/reverse-prompt`** — リバースプロンプト（SSE、ビジョンモデル使用）
+- `openai>=1.0.0` を Python 依存関係に追加
+
+### Configuration
+
+vLLM を使用するには `.env` に以下を設定してください:
+
+```
+VLLM_BASE_URL=http://localhost:8001/v1
+VLLM_MODEL=Qwen/Qwen2-VL-7B-Instruct
+VLLM_VISION_BASE_URL=http://localhost:8001/v1
+VLLM_VISION_MODEL=Qwen/Qwen2-VL-7B-Instruct
+HF_TOKEN=hf_...
+```
+
+設定なしでもサーバーは起動し、LLM エンドポイントのみ 503 を返します。
+
+---
+
 ## [0.6.0] - 2026-05-10
 
 ### Added
