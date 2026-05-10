@@ -1,0 +1,142 @@
+# vLLM サーバー設定
+#
+# GPU 1枚構成（デフォルト）:
+#   Qwen2-VL-7B-Instruct 1インスタンスでテキスト+ビジョン両対応
+#   VLLM_BASE_URL=http://localhost:8001/v1
+#   VLLM_VISION_BASE_URL=http://localhost:8001/v1
+#
+# GPU 2枚構成（本番推奨）:
+#   vllm-text と vllm-vision を別コメントアウトして分離起動
+#
+# 起動コマンド:
+#   docker compose up -d
+#
+# VRAM 要件:
+#   bfloat16 (24GB+): デフォルト設定そのまま
+#   bfloat16 (16GB):  --gpu-memory-utilization 0.75 に調整
+#   AWQ 量子化 (12GB以下): コメント内の awq 設定に切り替え
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    ipc: host
+    environment:
+      HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN}"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "8001:8000"
+    command:
+      # --- VRAM 24GB+ (bfloat16) ---
+      - "--model"
+      - "Qwen/Qwen2-VL-7B-Instruct"
+      - "--dtype"
+      - "bfloat16"
+      - "--max-model-len"
+      - "8192"
+      - "--gpu-memory-utilization"
+      - "0.85"
+      - "--limit-mm-per-prompt"
+      - "image=1"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      # --- VRAM 16GB 以下は上記を以下に差し替え (AWQ 量子化) ---
+      # - "--model"
+      # - "Qwen/Qwen2-VL-7B-Instruct-AWQ"
+      # - "--quantization"
+      # - "awq"
+      # - "--max-model-len"
+      # - "4096"
+      # - "--gpu-memory-utilization"
+      # - "0.85"
+      # - "--limit-mm-per-prompt"
+      # - "image=1"
+      # - "--host"
+      # - "0.0.0.0"
+      # - "--port"
+      # - "8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # --- GPU 2枚構成: 以下のコメントを外してテキスト/ビジョン分離 ---
+  # vllm-text:
+  #   image: vllm/vllm-openai:latest
+  #   runtime: nvidia
+  #   ipc: host
+  #   environment:
+  #     HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN}"
+  #   volumes:
+  #     - huggingface_cache:/root/.cache/huggingface
+  #   ports:
+  #     - "8001:8000"
+  #   command:
+  #     - "--model"
+  #     - "Qwen/Qwen2.5-7B-Instruct"
+  #     - "--dtype"
+  #     - "bfloat16"
+  #     - "--max-model-len"
+  #     - "8192"
+  #     - "--gpu-memory-utilization"
+  #     - "0.85"
+  #     - "--host"
+  #     - "0.0.0.0"
+  #     - "--port"
+  #     - "8000"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             device_ids: ["0"]
+  #             capabilities: [gpu]
+  #
+  # vllm-vision:
+  #   image: vllm/vllm-openai:latest
+  #   runtime: nvidia
+  #   ipc: host
+  #   environment:
+  #     HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN}"
+  #   volumes:
+  #     - huggingface_cache:/root/.cache/huggingface
+  #   ports:
+  #     - "8002:8000"
+  #   command:
+  #     - "--model"
+  #     - "Qwen/Qwen2-VL-7B-Instruct"
+  #     - "--dtype"
+  #     - "bfloat16"
+  #     - "--max-model-len"
+  #     - "4096"
+  #     - "--gpu-memory-utilization"
+  #     - "0.85"
+  #     - "--limit-mm-per-prompt"
+  #     - "image=1"
+  #     - "--host"
+  #     - "0.0.0.0"
+  #     - "--port"
+  #     - "8000"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             device_ids: ["1"]
+  #             capabilities: [gpu]
+
+volumes:
+  huggingface_cache:

@@ -1,0 +1,463 @@
+/* LLMPage — NovelAI カラースキームに準拠 */
+:root {
+  --nai-bg:       #0e0f21;
+  --nai-panel:    #191b31;
+  --nai-card:     #222335;
+  --nai-border:   #2d2f45;
+  --nai-text:     #e1e4ff;
+  --nai-muted:    #a1a4bf;
+  --nai-accent:   #7b5cf6;
+  --nai-accent-h: #6d4fe0;
+  --nai-glow:     rgba(123, 92, 246, 0.3);
+  --nai-green:    #3fb950;
+  --nai-error:    #ff6b8a;
+  --nai-neg:      #ff6b8a;
+}
+
+/* ===== Root ===== */
+.llm-root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--nai-bg);
+  color: var(--nai-text);
+  font-size: 14px;
+}
+
+/* ===== Header ===== */
+.llm-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1.2rem;
+  background: var(--nai-panel);
+  border-bottom: 1px solid var(--nai-border);
+  flex-shrink: 0;
+}
+
+.llm-back {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-muted);
+  font-size: 0.82rem;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.llm-back:hover { color: var(--nai-text); border-color: var(--nai-accent); }
+
+.llm-header-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--nai-text);
+}
+
+/* ===== Tab bar ===== */
+.llm-tabs {
+  display: flex;
+  overflow-x: auto;
+  background: var(--nai-panel);
+  border-bottom: 1px solid var(--nai-border);
+  padding: 0 0.6rem;
+  gap: 0.1rem;
+  flex-shrink: 0;
+}
+.llm-tabs::-webkit-scrollbar { height: 3px; }
+.llm-tabs::-webkit-scrollbar-thumb { background: var(--nai-border); border-radius: 2px; }
+
+.llm-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--nai-muted);
+  font-size: 0.82rem;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.llm-tab:hover { color: var(--nai-text); }
+.llm-tab--active {
+  color: var(--nai-accent);
+  border-bottom-color: var(--nai-accent);
+}
+
+/* ===== Main content ===== */
+.llm-main {
+  flex: 1;
+  padding: 1.2rem;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* ===== Panel ===== */
+.llm-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.llm-panel-desc {
+  color: var(--nai-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* ===== Form fields ===== */
+.llm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.llm-field--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6rem;
+}
+.llm-row {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+.llm-row .llm-field { flex: 1; min-width: 160px; }
+
+.llm-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--nai-muted);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.llm-textarea {
+  width: 100%;
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-text);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  padding: 0.6rem 0.75rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+  font-family: inherit;
+  min-height: 80px;
+}
+.llm-textarea:focus {
+  border-color: var(--nai-accent);
+  box-shadow: 0 0 0 2px var(--nai-glow);
+}
+.llm-textarea::placeholder { color: var(--nai-muted); opacity: 0.6; }
+
+.llm-input {
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-text);
+  font-size: 0.88rem;
+  padding: 0.4rem 0.65rem;
+  outline: none;
+  width: 130px;
+  transition: border-color 0.15s;
+}
+.llm-input:focus { border-color: var(--nai-accent); }
+
+.llm-select {
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-text);
+  font-size: 0.82rem;
+  padding: 0.35rem 0.6rem;
+  outline: none;
+  cursor: pointer;
+  flex: 1;
+}
+.llm-select:focus { border-color: var(--nai-accent); }
+
+.llm-range { flex: 1; accent-color: var(--nai-accent); }
+.llm-range-val { min-width: 1.2rem; text-align: right; font-size: 0.85rem; }
+
+/* ===== Run button ===== */
+.llm-run-btn {
+  background: var(--nai-accent);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.6rem 1.4rem;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: background 0.15s, transform 0.1s;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.llm-run-btn:hover:not(:disabled) { background: var(--nai-accent-h); }
+.llm-run-btn:active:not(:disabled) { transform: scale(0.97); }
+.llm-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ===== Output box ===== */
+.llm-output-box {
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 8px;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.llm-output-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.llm-output {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--nai-text);
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+
+/* blinking cursor while streaming */
+.llm-cursor {
+  display: inline-block;
+  animation: llm-blink 0.8s step-end infinite;
+  color: var(--nai-accent);
+}
+@keyframes llm-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ===== Action buttons ===== */
+.llm-copy-btn {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 5px;
+  color: var(--nai-muted);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.7rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.llm-copy-btn:hover { color: var(--nai-text); border-color: var(--nai-accent); }
+.llm-copy-btn--sm { font-size: 0.7rem; padding: 0.18rem 0.5rem; }
+
+.llm-use-btn {
+  background: var(--nai-accent);
+  border: none;
+  border-radius: 5px;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.28rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.llm-use-btn:hover { background: var(--nai-accent-h); }
+
+.llm-clear-btn {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 5px;
+  color: var(--nai-muted);
+  font-size: 0.78rem;
+  padding: 0.22rem 0.65rem;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: color 0.15s, border-color 0.15s;
+}
+.llm-clear-btn:hover { color: var(--nai-error); border-color: var(--nai-error); }
+
+/* ===== Error ===== */
+.llm-error {
+  color: var(--nai-error);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* ===== Spinner ===== */
+.llm-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: llm-spin 0.6s linear infinite;
+}
+@keyframes llm-spin { to { transform: rotate(360deg); } }
+
+/* ===== CharGen card ===== */
+.llm-char-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.llm-char-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--nai-accent);
+}
+.llm-char-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.llm-char-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--nai-muted);
+  text-transform: uppercase;
+  min-width: 56px;
+  padding-top: 0.15rem;
+}
+.llm-char-tags {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--nai-text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.llm-char-tags--neg { color: var(--nai-neg); opacity: 0.85; }
+.llm-char-notes {
+  font-size: 0.82rem;
+  color: var(--nai-muted);
+  border-top: 1px solid var(--nai-border);
+  padding-top: 0.4rem;
+  margin-top: 0.2rem;
+}
+
+/* ===== Story prompts ===== */
+.llm-story-prompts {
+  border-top: 1px solid var(--nai-border);
+  padding-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.llm-story-prompts-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--nai-muted);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.llm-story-prompt-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.llm-story-prompt-text {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--nai-text);
+  line-height: 1.5;
+  word-break: break-word;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+
+/* ===== AuxText / Metadata rows ===== */
+.llm-aux-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.llm-aux-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--nai-green);
+  text-transform: uppercase;
+  min-width: 56px;
+  padding-top: 0.2rem;
+}
+.llm-aux-label--neg { color: var(--nai-neg); }
+.llm-aux-text {
+  flex: 1;
+  margin: 0;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--nai-text);
+  font-family: 'Consolas', 'Menlo', monospace;
+  line-height: 1.5;
+}
+.llm-aux-text--neg { color: var(--nai-neg); opacity: 0.85; }
+.llm-aux-explanation {
+  font-size: 0.82rem;
+  color: var(--nai-muted);
+  margin: 0;
+  border-top: 1px solid var(--nai-border);
+  padding-top: 0.4rem;
+  line-height: 1.5;
+}
+
+/* ===== Metadata table ===== */
+.llm-meta-table {
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  width: 100%;
+}
+.llm-meta-key {
+  color: var(--nai-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  padding: 0.2rem 0.8rem 0.2rem 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.llm-meta-val {
+  color: var(--nai-text);
+  padding: 0.2rem 0;
+}
+
+/* ===== Confidence badge ===== */
+.llm-confidence {
+  font-size: 0.82rem;
+  color: var(--nai-muted);
+  margin: 0;
+}
+.llm-confidence strong { color: var(--nai-green); }
+
+/* ===== Drop zone (reverse prompt) ===== */
+.llm-drop {
+  border: 2px dashed var(--nai-border);
+  border-radius: 8px;
+  background: var(--nai-card);
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--nai-muted);
+  font-size: 0.88rem;
+  transition: border-color 0.15s, background 0.15s;
+  overflow: hidden;
+}
+.llm-drop:hover, .llm-drop--over {
+  border-color: var(--nai-accent);
+  background: rgba(123, 92, 246, 0.05);
+}
+.llm-drop--has-image {
+  border-style: solid;
+  border-color: var(--nai-border);
+  padding: 0;
+}
+.llm-drop-thumb {
+  max-width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  display: block;
+}

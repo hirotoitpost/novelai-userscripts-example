@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './pages/Login'
 import Home from './pages/Home'
 import ImageGenerate from './pages/ImageGenerate'
+import LLMPage from './pages/LLMPage'
 import Metadata from './pages/Metadata'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
@@ -30,6 +31,10 @@ function AppRoutes() {
       <Route
         path="/metadata"
         element={<ProtectedRoute><Metadata /></ProtectedRoute>}
+      />
+      <Route
+        path="/llm"
+        element={<ProtectedRoute><LLMPage /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -105,3 +105,99 @@ export interface AnlasEstimateResponse {
   strength_factor: number
   opus_discount_applied: boolean
 }
+
+// ===== LLM feature types =====
+
+export interface PromptFormatRequest {
+  rough_prompt: string
+  target_model?: string
+}
+
+export interface CharGenRequest {
+  concept: string
+  style?: string
+}
+
+export interface StoryDraftRequest {
+  premise: string
+  n_scenes?: number
+}
+
+export interface AuxTextRequest {
+  concept: string
+  target_model?: string
+}
+
+export interface MetadataGenRequest {
+  concept: string
+  target_model?: string
+  size?: string
+}
+
+export interface ReversePromptRequest {
+  image: string
+}
+
+// SSE streaming helper for LLM endpoints
+// Handles: event: token | done | error
+export async function streamLLM(
+  token: string,
+  path: string,
+  body: unknown,
+  onToken: (delta: string) => void,
+  onDone: (fullText: string) => void,
+  onError: (msg: string) => void,
+): Promise<void> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok || !res.body) {
+    const errData = await res.json().catch(() => ({ detail: res.statusText }))
+    onError((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventType = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (line === '') {
+        eventType = ''
+      } else if (line.startsWith('event: ')) {
+        eventType = line.slice(7).trim()
+      } else if (line.startsWith('data: ')) {
+        let chunk: Record<string, unknown>
+        try {
+          chunk = JSON.parse(line.slice(6)) as Record<string, unknown>
+        } catch {
+          continue
+        }
+        if (eventType === 'error') {
+          onError((chunk.detail as string | undefined) ?? 'ストリーミングエラー')
+          return
+        }
+        if (eventType === 'token') {
+          onToken((chunk.delta as string | undefined) ?? '')
+        } else if (eventType === 'done') {
+          onDone((chunk.full_text as string | undefined) ?? '')
+        }
+      }
+    }
+  }
+}

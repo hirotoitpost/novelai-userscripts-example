@@ -88,6 +88,31 @@
   margin-bottom: 0.4rem;
 }
 
+.ig-prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+.ig-prompt-header .ig-label { margin-bottom: 0; }
+
+.ig-enhance-btn {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 5px;
+  color: var(--nai-muted);
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.ig-enhance-btn:hover {
+  color: var(--nai-text);
+  border-color: var(--nai-accent);
+  background: rgba(123, 92, 246, 0.08);
+}
+
 /* ===== Textareas ===== */
 .ig-textarea {
   width: 100%;

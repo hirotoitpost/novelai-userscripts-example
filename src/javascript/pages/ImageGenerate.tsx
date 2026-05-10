@@ -218,7 +218,20 @@ export default function ImageGenerate() {
 
           {/* Prompt */}
           <section className="ig-section">
-            <label className="ig-label" htmlFor="ig-prompt">プロンプト</label>
+            <div className="ig-prompt-header">
+              <label className="ig-label" htmlFor="ig-prompt">プロンプト</label>
+              <button
+                type="button"
+                className="ig-enhance-btn"
+                onClick={() => {
+                  localStorage.setItem('nai_llm_init_prompt', prompt)
+                  navigate('/llm')
+                }}
+                title="AI でプロンプトを強化する"
+              >
+                🤖 強化
+              </button>
+            </div>
             <textarea
               id="ig-prompt"
               className="ig-textarea ig-textarea--prompt"

@@ -9,8 +9,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .client import close_client, init_client
+from .llm_client import close_llm_clients, init_llm_clients
 from .routes.auth import router as auth_router
 from .routes.image import router as image_router
+from .routes.llm import router as llm_router
 from .routes.metadata import router as metadata_router
 from .routes.user import router as user_router
 
@@ -23,8 +25,10 @@ load_dotenv(_env_path, override=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_client()
+    await init_llm_clients()
     yield
     await close_client()
+    await close_llm_clients()
 
 
 app = FastAPI(
@@ -43,6 +47,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(image_router)
+app.include_router(llm_router)
 app.include_router(metadata_router)
 app.include_router(user_router)
 

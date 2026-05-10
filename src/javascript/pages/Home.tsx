@@ -96,6 +96,19 @@ export default function Home() {
             <p>NovelAI 生成画像のメタデータを抽出・消去します。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/llm')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/llm')}
+          >
+            <div className="home-card-icon">🤖</div>
+            <h2>AI アシスタント</h2>
+            <p>LLM を活用したプロンプト生成・キャラ設定・物語ドラフト・リバースプロンプトを提供します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">
@@ -104,6 +117,7 @@ export default function Home() {
             <li><span className="dot dot--green" />テキスト → 画像生成（ストリーミング対応）</li>
             <li><span className="dot dot--green" />Anlas 消費量の事前計算</li>
             <li><span className="dot dot--green" />画像メタデータの抽出・消去</li>
+            <li><span className="dot dot--green" />LLM によるプロンプト強化・キャラ設定・リバースプロンプト（vLLM）</li>
             <li><span className="dot dot--purple" />Character Reference（今後実装）</li>
             <li><span className="dot dot--purple" />ControlNet / Vibe Transfer（今後実装）</li>
           </ul>
