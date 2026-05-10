@@ -12,6 +12,7 @@ from .client import close_client, init_client
 from .routes.auth import router as auth_router
 from .routes.image import router as image_router
 from .routes.metadata import router as metadata_router
+from .routes.user import router as user_router
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _env_path = _PROJECT_ROOT / ".env"
@@ -43,6 +44,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(image_router)
 app.include_router(metadata_router)
+app.include_router(user_router)
 
 
 if __name__ == "__main__":

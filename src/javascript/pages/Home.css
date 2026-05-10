@@ -53,6 +53,48 @@
   text-transform: uppercase;
 }
 
+.home-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* ===== Subscription info ===== */
+.home-sub-info {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.home-tier {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.home-tier--free   { background: rgba(120,120,168,0.2); color: var(--text-muted); border: 1px solid rgba(120,120,168,0.4); }
+.home-tier--tablet { background: rgba(56,182,255,0.15); color: #7ecfff;           border: 1px solid rgba(56,182,255,0.35); }
+.home-tier--scroll { background: rgba(123,92,246,0.2);  color: #b8a4ff;           border: 1px solid rgba(123,92,246,0.4); }
+.home-tier--opus   { background: rgba(251,191,36,0.15); color: #fcd34d;           border: 1px solid rgba(251,191,36,0.35); }
+
+.home-sub-badge {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  background: rgba(120,120,168,0.15);
+  color: var(--text-muted);
+  border: 1px solid rgba(120,120,168,0.3);
+  white-space: nowrap;
+}
+.home-sub-badge--green {
+  background: rgba(52,211,153,0.1);
+  color: #34d399;
+  border-color: rgba(52,211,153,0.3);
+}
+
 .home-logout-btn {
   padding: 0.4rem 1rem;
   background: transparent;

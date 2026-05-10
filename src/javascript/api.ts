@@ -46,6 +46,30 @@ export interface GenerateResponse {
   format: string
 }
 
+export interface SubscriptionPerks {
+  unlimitedImageGeneration: boolean
+  imageGeneration: boolean
+  voiceGeneration: boolean
+  unlimitedMaxPriority: boolean
+  maxPriorityActions: number
+  startPriority: number
+  moduleTrainingSteps: number
+  contextTokens?: number
+}
+
+export interface SubscriptionResponse {
+  tier: number         // 0=Free 1=Tablet 2=Scroll 3=Opus
+  active: boolean
+  expiresAt?: number
+  perks: SubscriptionPerks
+  trainingStepsLeft: {
+    fixedTrainingStepsLeft: number
+    purchasedTrainingSteps: number
+  }
+  accountType?: number
+  isGracePeriod?: boolean
+}
+
 export interface MetadataExtractRequest {
   image: string
 }

@@ -1,10 +1,29 @@
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { apiFetch, SubscriptionResponse } from '../api'
 import './Home.css'
 
+const TIER_NAMES: Record<number, string> = { 0: 'Free', 1: 'Tablet', 2: 'Scroll', 3: 'Opus' }
+const TIER_CLASSES: Record<number, string> = {
+  0: 'home-tier--free',
+  1: 'home-tier--tablet',
+  2: 'home-tier--scroll',
+  3: 'home-tier--opus',
+}
+
 export default function Home() {
-  const { logout } = useAuth()
+  const { token, logout } = useAuth()
   const navigate = useNavigate()
+
+  const [sub, setSub] = useState<SubscriptionResponse | null>(null)
+
+  useEffect(() => {
+    if (!token) return
+    apiFetch<SubscriptionResponse>(token, '/api/user/subscription')
+      .then(setSub)
+      .catch(() => {/* サイレント失敗 */})
+  }, [token])
 
   return (
     <div className="home-root">
@@ -13,9 +32,29 @@ export default function Home() {
           <span className="home-brand">NovelAI</span>
           <span className="home-brand-sub">Image Generation</span>
         </div>
-        <button type="button" className="home-logout-btn" onClick={logout}>
-          ログアウト
-        </button>
+        <div className="home-header-right">
+          {sub && (
+            <div className="home-sub-info">
+              <span className={`home-tier ${TIER_CLASSES[sub.tier] ?? ''}`}>
+                {TIER_NAMES[sub.tier] ?? `Tier ${sub.tier}`}
+              </span>
+              {sub.perks.unlimitedImageGeneration ? (
+                <span className="home-sub-badge home-sub-badge--green">画像: 無制限</span>
+              ) : (
+                <span className="home-sub-badge">画像: あり</span>
+              )}
+              <span className="home-sub-badge" title="テキスト学習ステップ残量">
+                Steps: {(
+                  sub.trainingStepsLeft.fixedTrainingStepsLeft +
+                  sub.trainingStepsLeft.purchasedTrainingSteps
+                ).toLocaleString()}
+              </span>
+            </div>
+          )}
+          <button type="button" className="home-logout-btn" onClick={logout}>
+            ログアウト
+          </button>
+        </div>
       </header>
 
       <main className="home-main">
