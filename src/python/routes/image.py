@@ -5,8 +5,11 @@ import io
 import json
 from typing import Any
 
+from typing import Annotated, AsyncGenerator
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from novelai import (
     AsyncNovelAI,
     AuthenticationError,
@@ -27,6 +30,8 @@ from novelai.types import (
 )
 
 from ..client import get_client
+
+ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 from ..models import (
     AnlasEstimateRequest,
     AnlasEstimateResponse,
@@ -151,7 +156,7 @@ def _http_status(exc: Exception) -> int:
 @router.post("/generate", response_model=GenerateImageResponse)
 async def generate_image(
     req: GenerateImageRequest,
-    client: AsyncNovelAI = Depends(get_client),
+    client: ClientDep,
 ) -> GenerateImageResponse:
     try:
         params = GenerateImageParams(**_build_kwargs(req))
@@ -165,7 +170,7 @@ async def generate_image(
 @router.post("/generate/stream")
 async def generate_image_stream(
     req: GenerateImageRequest,
-    client: AsyncNovelAI = Depends(get_client),
+    client: ClientDep,
 ) -> StreamingResponse:
     async def event_gen():
         try:
@@ -198,5 +203,7 @@ async def estimate_anlas(req: AnlasEstimateRequest) -> AnlasEstimateResponse:
         params = GenerateImageParams(**_build_kwargs(req.params))
         est = params.calculate_anlas(is_opus=req.is_opus)
         return AnlasEstimateResponse(**est.model_dump())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -1,69 +1,118 @@
 # NovelAI Userscripts Example
 
-[English](#english) | [日本語](#日本語)
+English | [日本語](docs/README_jp.md)
 
----
+A full-stack UI application for NovelAI image generation, built on top of the [novelai-sdk](https://github.com/caru-ini/novelai-sdk).  
+Login with your NovelAI account and generate images directly from your browser.
 
-## English
+> **Disclaimer:** This project is an independent, personal work and is in no way affiliated with, endorsed by, or officially connected to the developers of [novelai-sdk](https://github.com/caru-ini/novelai-sdk) or NovelAI Inc.
 
-A comprehensive UI framework for NovelAI integration, built on top of the [novelai-sdk](https://github.com/caru-ini/novelai-sdk) to simplify image generation workflows with advanced features like character management, batch processing, and metadata handling.
+## Features
 
-> **Disclaimer:** This project is an independent, personal work and is in no way affiliated with, endorsed by, or officially connected to the developers of [novelai-sdk](https://github.com/caru-ini/novelai-sdk) or NovelAI Inc. The use of their libraries is solely at the author's own discretion.
+| Status | Feature |
+|--------|---------|
+| ✅ | NovelAI account login (email + password) |
+| ✅ | Image generation with full parameter control |
+| ✅ | Settings persistence (localStorage) |
+| ✅ | Anlas cost preview before generation |
+| ✅ | Streaming generation with live intermediate preview (SSE) |
+| ✅ | Anlas consumption estimation (backend) |
+| ✅ | Image metadata extraction / erasure |
+| ✅ | Metadata management UI |
+| ✅ | Image-to-Image mode |
+| ✅ | AI assistant (LLM-powered prompt tools via vLLM) |
+| 🔄 | Inpainting (planned) |
+| 🔄 | Character Reference UI (planned) |
+| 🔄 | Vibe Transfer / ControlNet UI (planned) |
 
-### Features
-
-- **Python + JavaScript/React Integration** – Full-stack UI development framework
-- **Type-Safe Development** – Built with Python 3.10+, TypeScript, and comprehensive type hints
-- **Image Generation** – Streamlined NovelAI API interaction
-- **Metadata Management** – Extract and manage image generation parameters
-- **Batch Operations** – Handle multiple image generations efficiently
-- **Character Reference System** – Maintain consistent character appearances
-
-### Requirements
+## Requirements
 
 - **Python**: 3.10 or higher
-- **Node.js**: 16 or higher
-- **npm**: 8 or higher (or alternative package manager)
-- **uv**: Latest version (Python package manager)
-- **Docker**: Optional, for containerized deployment
+- **Node.js**: 20 or higher
+- **uv**: Latest (Python package manager)
+- **Docker + NVIDIA GPU** (optional): Required for the AI assistant (vLLM)
 
-### Quick Start
+## Quick Start
 
-#### Python Setup
+### 1. Clone & install dependencies
 
 ```bash
-# Clone the repository
 git clone https://github.com/hirotoitpost/novelai-userscripts-example.git
 cd novelai-userscripts-example
 
-# Set up development environment (PATH, .env)
-.\scripts\setup-dev-env.ps1
-
-# Restart PowerShell, then initialize Python environment
+# Python dependencies (creates .venv automatically)
 uv sync
 
-# Install pre-commit hooks
-uv run pre-commit install
+# Node.js dependencies
+npm install
 ```
 
-#### JavaScript/React Setup
+### 2. Configure environment
 
 ```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Development
-npm run dev
+cp .env.example .env
+# Edit .env if needed — no API token required for email/password login
 ```
 
-### Development
+To enable the AI assistant, also add the following to `.env`:
 
-#### Code Quality
+```
+VLLM_BASE_URL=http://localhost:8001/v1
+VLLM_MODEL=Qwen/Qwen2-VL-7B-Instruct
+VLLM_VISION_BASE_URL=http://localhost:8001/v1
+VLLM_VISION_MODEL=Qwen/Qwen2-VL-7B-Instruct
+HF_TOKEN=hf_...   # Hugging Face token for model download
+```
 
-This project uses **Ruff** for linting and formatting, **Pyright** for type checking, and **pytest** for testing.
+### 3. Start services
+
+Open **two terminals**:
+
+```bash
+# Terminal 1 — FastAPI backend (port 8000)
+uv run python -m uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000 --reload
+
+# Terminal 2 — Vite frontend (port 5173)
+npm run dev
+
+# Terminal 3 (optional) — vLLM server for AI assistant (requires NVIDIA GPU + Docker)
+docker compose up -d
+```
+
+Open **http://localhost:5173** in your browser.
+
+### 4. Log in
+
+Enter your NovelAI account **email** and **password**.  
+The backend derives the access key using argon2id (same algorithm as the official client) and authenticates with NovelAI — your raw password is never stored.
+
+> **Alternative:** Set `NOVELAI_API_TOKEN=pst-...` in `.env` to skip the login screen and use a [persistent API token](https://docs.novelai.net) instead.
+
+## Usage
+
+### Image Generation
+
+1. Click **「画像生成」** on the home screen
+2. Enter a prompt in the left sidebar
+3. Adjust parameters (model, size, steps, scale, seed…)
+4. Check the **estimated Anlas cost** shown below the generate button
+5. Click **「生成する」** or press **Ctrl+Enter**
+6. Intermediate preview frames appear live as the model generates each step
+7. The final image appears on the right — use the **Download** button to save it
+
+> All prompt and parameter settings are automatically saved to `localStorage` and
+> restored on your next visit.
+
+### Prompt & Image Privacy
+
+| Data | Where it lives | Persisted? |
+|------|---------------|------------|
+| Prompt text | React state (browser memory) | No |
+| Generated image | Browser memory (base64) | No — download to save |
+| Access token | `localStorage` (browser only) | Until logout |
+| Email / Password | Used once for key derivation, then discarded | Never |
+
+## Development
 
 ```bash
 # Format code
@@ -79,167 +128,75 @@ uv run poe check
 uv run pytest
 ```
 
-#### Commit Convention
+### Commit Convention
 
-Follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 {feat|fix|docs|style|refactor|test|chore}: Short description
 ```
 
-### Project Structure
+## Project Structure
 
 ```
 .
-├── src/                    # Source code
-│   ├── python/            # Python backend
-│   └── javascript/        # JavaScript/React frontend
-├── scripts/               # Development scripts
-│   ├── load-env.ps1       # .env loader for PowerShell
-│   └── setup-dev-env.ps1  # One-time dev environment setup
-├── tests/                 # Test files
-├── docs/                  # Documentation
-├── index.html             # Application entry point
-├── vite.config.ts         # Vite configuration
-├── tsconfig.json          # TypeScript configuration
-├── pyproject.toml         # Python project config
-├── package.json           # Node.js project config
-├── .env.example           # Environment variable template
-├── CONTRIBUTING.md        # Contribution guidelines
-└── README.md             # This file
+├── src/
+│   ├── python/                  # FastAPI backend
+│   │   ├── server.py            # App entry point
+│   │   ├── client.py            # NovelAI client (Bearer token per-request)
+│   │   ├── auth_utils.py        # argon2id key derivation + login
+│   │   ├── models.py            # Pydantic request/response models
+│   │   └── routes/
+│   │       ├── auth.py          # POST /api/auth/login
+│   │       ├── image.py         # POST /api/image/generate (+ stream, anlas)
+│   │       └── metadata.py      # POST /api/metadata/extract|erase
+│   └── javascript/              # React + TypeScript frontend
+│       ├── api.ts               # Authenticated fetch utility
+│       ├── App.tsx              # Router setup
+│       ├── context/
+│       │   └── AuthContext.tsx  # Login state (localStorage)
+│       └── pages/
+│           ├── Login.tsx/css    # Email + password login screen
+│           ├── Home.tsx/css     # Dashboard
+│           └── ImageGenerate.tsx/css  # Image generation UI
+├── scripts/
+│   └── generate_cat_garden.py  # Standalone SDK usage example
+├── tests/                       # pytest test files
+├── docs/                        # Additional documentation
+│   ├── README_jp.md             # Japanese README
+│   └── architecture.md          # System architecture & API reference
+├── index.html                   # Vite entry point
+├── vite.config.ts               # Vite config (API proxy to :8000)
+├── pyproject.toml               # Python dependencies & tools
+├── package.json                 # Node.js dependencies
+└── .env.example                 # Environment variable template
 ```
 
-### Contributing
+## API Endpoints
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/auth/login` | Email + password → access token |
+| `POST` | `/api/image/generate` | Generate image(s) |
+| `POST` | `/api/image/generate/stream` | Streaming generation (SSE) |
+| `POST` | `/api/image/anlas` | Estimate Anlas cost |
+| `POST` | `/api/metadata/extract` | Extract image metadata |
+| `POST` | `/api/metadata/erase` | Erase image metadata |
+| `POST` | `/api/llm/prompt-format` | Format prompt with LLM (SSE) |
+| `POST` | `/api/llm/char-gen` | Generate character tags (SSE) |
+| `POST` | `/api/llm/story-draft` | Generate story draft (SSE) |
+| `POST` | `/api/llm/aux-text` | Generate positive/negative pair (SSE) |
+| `POST` | `/api/llm/metadata-gen` | Generate full generation params (SSE) |
+| `POST` | `/api/llm/reverse-prompt` | Reverse prompt from image (SSE) |
 
-### License
+Full interactive docs available at **http://localhost:8000/docs** while the backend is running.
 
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+## License
 
-### Related Projects
+MIT — see [LICENSE](LICENSE) for details.
 
-- [novelai-sdk](https://github.com/caru-ini/novelai-sdk) – Community Python SDK (third-party, not affiliated with this project)
-- [novelai-image-metadata](https://github.com/NovelAI/novelai-image-metadata) – Metadata extraction tools
+## Related Projects
+
+- [novelai-sdk](https://github.com/caru-ini/novelai-sdk) – Community Python SDK (third-party)
+- [novelai-image-metadata](https://github.com/NovelAI/novelai-image-metadata) – Metadata tools
 - [novelai-script-examples](https://github.com/NovelAI/novelai-script-examples) – Script examples
-
----
-
-## 日本語
-
-[novelai-sdk](https://github.com/caru-ini/novelai-sdk)を基盤とした、NovelAI統合用の包括的なUIフレームワークです。キャラクター管理、バッチ処理、メタデータ処理などの高度な機能で画像生成ワークフローを簡素化します。
-
-> **免責事項:** 本プロジェクトは個人による独自の取り組みであり、[novelai-sdk](https://github.com/caru-ini/novelai-sdk) の開発者および NovelAI Inc. とは一切関係ありません。同ライブラリの利用は、作者が独自の判断で行っているものです。
-
-### 機能
-
-- **Python + JavaScript/React統合** – フルスタックUI開発フレームワーク
-- **型安全な開発** – Python 3.10+、TypeScript、および包括的な型ヒント
-- **画像生成** – NovelAI APIとの連携を簡素化
-- **メタデータ管理** – 画像生成パラメータの抽出・管理
-- **バッチ操作** – 複数の画像生成を効率的に処理
-- **キャラクター参照システム** – キャラクターの一貫した外観を保持
-
-### 要件
-
-- **Python**: 3.10以上
-- **Node.js**: 16以上
-- **npm**: 8以上（または別のパッケージマネージャー）
-- **uv**: 最新版（Pythonパッケージマネージャー）
-- **Docker**: オプション（コンテナ化されたデプロイメント用）
-
-### クイックスタート
-
-#### Pythonセットアップ
-
-```bash
-# リポジトリをクローン
-git clone https://github.com/hirotoitpost/novelai-userscripts-example.git
-cd novelai-userscripts-example
-
-# 開発環境をセットアップ（PATH、.env）
-.\scripts\setup-dev-env.ps1
-
-# PowerShell を再起動後、Python環境を初期化
-uv sync
-
-# プリコミットフックをインストール
-uv run pre-commit install
-```
-
-#### JavaScript/Reactセットアップ
-
-```bash
-# 依存関係をインストール
-npm install
-
-# ビルド
-npm run build
-
-# 開発
-npm run dev
-```
-
-### 開発
-
-#### コード品質
-
-このプロジェクトは**Ruff**によるリント・フォーマット、**Pyright**による型チェック、**pytest**によるテストを使用しています。
-
-```bash
-# コードをフォーマット
-uv run poe fmt
-
-# リント
-uv run poe lint
-
-# 型チェック
-uv run poe check
-
-# テストを実行
-uv run pytest
-```
-
-#### コミット規約
-
-[Conventional Commits](https://www.conventionalcommits.org/ja/v1.0.0/) 形式に従ってください：
-
-```
-{feat|fix|docs|style|refactor|test|chore}: 簡潔な説明
-```
-
-### プロジェクト構造
-
-```
-.
-├── src/                    # ソースコード
-│   ├── python/            # Pythonバックエンド
-│   └── javascript/        # JavaScript/Reactフロントエンド
-├── scripts/               # 開発スクリプト
-│   ├── load-env.ps1       # PowerShell 用 .env ローダー
-│   └── setup-dev-env.ps1  # 初回開発環境セットアップ
-├── tests/                 # テストファイル
-├── docs/                  # ドキュメント
-├── index.html             # アプリケーションエントリーポイント
-├── vite.config.ts         # Vite 設定
-├── tsconfig.json          # TypeScript 設定
-├── pyproject.toml         # Pythonプロジェクト設定
-├── package.json           # Node.jsプロジェクト設定
-├── .env.example           # 環境変数テンプレート
-├── CONTRIBUTING.md        # コントリビューションガイドライン
-└── README.md             # このファイル
-```
-
-### コントリビューション
-
-詳細は[CONTRIBUTING.md](CONTRIBUTING.md)をご覧ください。
-
-### ライセンス
-
-このプロジェクトはMITライセンスの下でライセンスされています。詳細は[LICENSE](LICENSE)ファイルを参照してください。
-
-### 関連プロジェクト
-
-- [novelai-sdk](https://github.com/caru-ini/novelai-sdk) – コミュニティ製Python SDK（サードパーティ製・本プロジェクトとは無関係）
-- [novelai-image-metadata](https://github.com/NovelAI/novelai-image-metadata) – メタデータ抽出ツール
-- [novelai-script-examples](https://github.com/NovelAI/novelai-script-examples) – スクリプト例

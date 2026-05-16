@@ -1,0 +1,499 @@
+/* NovelAI 実測値をベースにしたカラースキーム */
+:root {
+  --nai-bg:        #0e0f21;
+  --nai-panel:     #191b31;
+  --nai-card:      #222335;
+  --nai-border:    #2d2f45;
+  --nai-text:      #e1e4ff;
+  --nai-muted:     #a1a4bf;
+  --nai-accent:    #7b5cf6;
+  --nai-accent-h:  #6d4fe0;
+  --nai-glow:      rgba(123, 92, 246, 0.3);
+  --nai-green:     #3fb950;
+  --nai-error:     #ff6b8a;
+  --sidebar-w:     360px;
+}
+
+/* ===== Root ===== */
+.ig-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--nai-bg);
+  color: var(--nai-text);
+  font-size: 14px;
+  overflow: hidden;
+}
+
+/* ===== Header ===== */
+.ig-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1.2rem;
+  background: var(--nai-panel);
+  border-bottom: 1px solid var(--nai-border);
+  flex-shrink: 0;
+}
+
+.ig-back {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-muted);
+  font-size: 0.82rem;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.ig-back:hover { color: var(--nai-text); border-color: var(--nai-accent); }
+
+.ig-header-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--nai-text);
+}
+
+/* ===== Body ===== */
+.ig-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ===== Sidebar ===== */
+.ig-sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--nai-panel);
+  border-right: 1px solid var(--nai-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  padding: 0.8rem;
+}
+
+.ig-section {
+  margin-bottom: 0.8rem;
+}
+
+.ig-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--nai-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
+
+.ig-prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+.ig-prompt-header .ig-label { margin-bottom: 0; }
+
+.ig-enhance-btn {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 5px;
+  color: var(--nai-muted);
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.ig-enhance-btn:hover {
+  color: var(--nai-text);
+  border-color: var(--nai-accent);
+  background: rgba(123, 92, 246, 0.08);
+}
+
+/* ===== Textareas ===== */
+.ig-textarea {
+  width: 100%;
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-text);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  padding: 0.6rem 0.75rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.ig-textarea:focus {
+  border-color: var(--nai-accent);
+  box-shadow: 0 0 0 2px var(--nai-glow);
+}
+.ig-textarea::placeholder { color: var(--nai-muted); opacity: 0.6; }
+.ig-textarea--prompt { min-height: 110px; }
+.ig-textarea--neg    { min-height: 72px; }
+
+/* ===== Settings ===== */
+.ig-settings { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.ig-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ig-field-label {
+  font-size: 0.78rem;
+  color: var(--nai-muted);
+}
+
+.ig-field--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ig-field--row .ig-field-label { width: 44px; flex-shrink: 0; }
+.ig-field--row .ig-range       { flex: 1; }
+
+.ig-field-value {
+  width: 36px;
+  text-align: right;
+  font-size: 0.82rem;
+  color: var(--nai-text);
+  flex-shrink: 0;
+}
+
+/* ===== Select / Input ===== */
+.ig-select,
+.ig-input-number {
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-text);
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ig-select:focus,
+.ig-input-number:focus { border-color: var(--nai-accent); }
+
+/* ===== Range ===== */
+.ig-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--nai-border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.ig-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--nai-accent);
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+.ig-range::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 0 4px var(--nai-glow);
+}
+
+/* ===== Checkbox ===== */
+.ig-field--checkbox { flex-direction: row; align-items: center; }
+.ig-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--nai-text);
+}
+.ig-checkbox-label input[type=checkbox] {
+  accent-color: var(--nai-accent);
+  width: 15px; height: 15px;
+  cursor: pointer;
+}
+
+/* ===== Image-to-Image ===== */
+.ig-section--i2i {
+  border-top: 1px solid var(--nai-border);
+  padding-top: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+.ig-i2i-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.ig-i2i-toggle input[type=checkbox] {
+  accent-color: var(--nai-accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.ig-label--inline {
+  display: inline;
+  margin-bottom: 0;
+}
+
+.ig-i2i-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.ig-i2i-drop {
+  width: 100%;
+  min-height: 90px;
+  border: 2px dashed var(--nai-border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: var(--nai-card);
+  font-size: 0.78rem;
+  color: var(--nai-muted);
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+  overflow: hidden;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+.ig-i2i-drop:hover,
+.ig-i2i-drop--over {
+  border-color: var(--nai-accent);
+  background: rgba(123, 92, 246, 0.07);
+}
+.ig-i2i-drop--has-image {
+  border-style: solid;
+  padding: 0;
+  min-height: 120px;
+}
+
+.ig-i2i-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.ig-i2i-clear {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 4px;
+  color: var(--nai-muted);
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  align-self: flex-end;
+  transition: color 0.15s, border-color 0.15s;
+}
+.ig-i2i-clear:hover { color: var(--nai-error); border-color: var(--nai-error); }
+
+/* ===== Generate button ===== */
+.ig-generate-btn {
+  margin-top: 0.4rem;
+  padding: 0.75rem;
+  background: var(--nai-accent);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  width: 100%;
+}
+.ig-generate-btn:hover:not(:disabled) {
+  background: var(--nai-accent-h);
+  box-shadow: 0 0 16px var(--nai-glow);
+}
+.ig-generate-btn:active:not(:disabled) { transform: scale(0.98); }
+.ig-generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ===== Anlas badge ===== */
+.ig-anlas-row {
+  min-height: 1.4rem;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
+}
+
+.ig-anlas {
+  font-size: 0.78rem;
+  color: var(--nai-muted);
+}
+
+.ig-anlas strong {
+  color: var(--nai-text);
+  font-weight: 600;
+}
+
+.ig-anlas--loading {
+  opacity: 0.45;
+}
+
+/* ===== Error ===== */
+.ig-error {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.82rem;
+  color: var(--nai-error);
+  background: rgba(255, 107, 138, 0.1);
+  border: 1px solid rgba(255, 107, 138, 0.3);
+  border-radius: 6px;
+}
+
+/* ===== Spinner (button) ===== */
+.ig-spinner {
+  width: 18px; height: 18px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* ===== Canvas ===== */
+.ig-canvas {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--nai-bg);
+  overflow: auto;
+  padding: 1.5rem;
+}
+
+/* ===== Placeholder ===== */
+.ig-canvas-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--nai-muted);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.ig-canvas-icon { font-size: 3.5rem; opacity: 0.35; }
+.ig-canvas-placeholder p { font-size: 0.9rem; margin: 0; }
+.ig-canvas-hint { font-size: 0.75rem; opacity: 0.55; }
+
+/* ===== Canvas spinner ===== */
+.ig-canvas-spinner {
+  width: 48px; height: 48px;
+  border: 3px solid var(--nai-border);
+  border-top-color: var(--nai-accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+/* ===== Streaming overlay ===== */
+.ig-result--streaming {
+  position: relative;
+}
+
+.ig-streaming-badge {
+  position: absolute;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(14, 15, 33, 0.82);
+  color: var(--nai-muted);
+  font-size: 0.78rem;
+  padding: 0.3rem 0.9rem 0.3rem 0.6rem;
+  border-radius: 20px;
+  border: 1px solid var(--nai-border);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  white-space: nowrap;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.ig-streaming-dot {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--nai-accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* ===== Result ===== */
+.ig-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 100%;
+}
+
+.ig-result-img {
+  max-width: 100%;
+  max-height: calc(100vh - 140px);
+  border-radius: 8px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  display: block;
+}
+
+.ig-result-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.ig-action-btn {
+  padding: 0.5rem 1.2rem;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  background: var(--nai-accent);
+  border: none;
+  color: #fff;
+}
+.ig-action-btn:hover {
+  background: var(--nai-accent-h);
+  box-shadow: 0 0 12px var(--nai-glow);
+}
+
+.ig-action-btn--secondary {
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  color: var(--nai-text);
+}
+.ig-action-btn--secondary:hover {
+  background: var(--nai-panel);
+  box-shadow: none;
+  border-color: var(--nai-accent);
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== Scrollbar ===== */
+.ig-sidebar::-webkit-scrollbar { width: 4px; }
+.ig-sidebar::-webkit-scrollbar-track { background: transparent; }
+.ig-sidebar::-webkit-scrollbar-thumb {
+  background: var(--nai-border);
+  border-radius: 2px;
+}

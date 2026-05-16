@@ -1,0 +1,56 @@
+# LLM サーバー設定
+#
+# バックエンド: Ollama (llama.cpp ベース)
+#   Pascal GPU (GTX 10xx, sm_61) 以上で動作
+#   vLLM は Turing (sm_75+) 以上が必要なため Ollama を使用
+#
+# 現在の構成: qwen3-vl:2b (テキスト + ビジョン両対応)
+#
+# 起動コマンド:
+#   1. docker compose up -d
+#   2. docker compose exec ollama ollama pull qwen3-vl:2b
+#
+# .env に設定が必要な値:
+#   VLLM_BASE_URL=http://localhost:11434/v1
+#   VLLM_MODEL=qwen3-vl:2b
+#   VLLM_VISION_BASE_URL=http://localhost:11434/v1
+#   VLLM_VISION_MODEL=qwen3-vl:2b
+#
+# モデルのバリエーション:
+#   qwen3-vl:2b    — VRAM 4GB 以上（このデフォルト）
+#   qwen2.5vl:3b   — VRAM 5GB 以上（Qwen2.5 系）
+#   qwen3-vl:8b    — VRAM 8GB 以上（高品質）
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    runtime: nvidia
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+      NVIDIA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- GPU 2枚構成（本番）: テキスト/ビジョン分離の場合 ---
+  # テキスト専用インスタンス (device_ids: ["0"]) と
+  # ビジョン専用インスタンス (device_ids: ["1"]) を分けて起動し、
+  # ポートを 11434 / 11435 等に分けて env vars で切り替え可能
+
+volumes:
+  ollama_data:
