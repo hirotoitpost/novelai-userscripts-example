@@ -1,5 +1,7 @@
 # Security
 
+English | [日本語](docs/SECURITY_jp.md)
+
 ## Audit Summary
 
 An internal security audit was conducted on **2026-05-09** covering the `novelai-sdk` dependency and the relay server in this repository (`src/python/`).
