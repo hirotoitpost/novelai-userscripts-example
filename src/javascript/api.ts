@@ -138,6 +138,13 @@ export interface ReversePromptRequest {
   image: string
 }
 
+function _parseErrorDetail(data: unknown, fallback: string): string {
+  const detail = (data as { detail?: unknown } | null)?.detail
+  if (Array.isArray(detail))
+    return (detail as { msg?: string }[]).map(e => e.msg).filter(Boolean).join('; ') || fallback
+  return typeof detail === 'string' ? detail : fallback
+}
+
 // ===== Batch organize types =====
 
 export interface BatchPreviewRequest {
@@ -213,7 +220,7 @@ export async function streamBatchOrganize(
 
   if (!res.ok || !res.body) {
     const errData = await res.json().catch(() => ({ detail: res.statusText }))
-    onError((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
     return
   }
 
@@ -276,7 +283,7 @@ export async function streamLLM(
 
   if (!res.ok || !res.body) {
     const errData = await res.json().catch(() => ({ detail: res.statusText }))
-    onError((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
     return
   }
 
