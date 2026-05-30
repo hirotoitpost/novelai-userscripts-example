@@ -138,6 +138,123 @@ export interface ReversePromptRequest {
   image: string
 }
 
+// ===== Batch organize types =====
+
+export interface BatchPreviewRequest {
+  input_path: string
+  similarity_threshold: number
+}
+
+export interface BatchFileInfo {
+  path: string
+  prompt: string
+  date: string
+  has_metadata: boolean
+}
+
+export interface BatchGroupInfo {
+  group_name: string
+  representative_prompt: string
+  files: BatchFileInfo[]
+  file_count: number
+}
+
+export interface BatchPreviewResponse {
+  groups: BatchGroupInfo[]
+  no_metadata_files: BatchFileInfo[]
+  total_files: number
+}
+
+export interface BatchOrganizeRequest {
+  input_path: string
+  output_path: string
+  operation: 'copy' | 'move'
+  similarity_threshold: number
+  save_metadata_json: boolean
+}
+
+export interface BatchScanEvent {
+  current: number
+  total: number
+  file: string
+}
+
+export interface BatchProgressEvent {
+  current: number
+  total: number
+  file: string
+  dest: string
+  status: 'ok' | 'no_metadata' | 'error'
+  message?: string
+}
+
+export interface BatchCompleteEvent {
+  organized: number
+  skipped_no_meta: number
+  errors: number
+}
+
+export async function streamBatchOrganize(
+  token: string,
+  body: BatchOrganizeRequest,
+  onScan: (e: BatchScanEvent) => void,
+  onProgress: (e: BatchProgressEvent) => void,
+  onComplete: (e: BatchCompleteEvent) => void,
+  onError: (msg: string) => void,
+): Promise<void> {
+  const res = await fetch('/api/batch/organize', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok || !res.body) {
+    const errData = await res.json().catch(() => ({ detail: res.statusText }))
+    onError((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventType = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (line === '') {
+        eventType = ''
+      } else if (line.startsWith('event: ')) {
+        eventType = line.slice(7).trim()
+      } else if (line.startsWith('data: ')) {
+        let chunk: Record<string, unknown>
+        try { chunk = JSON.parse(line.slice(6)) as Record<string, unknown> }
+        catch { continue }
+
+        if (eventType === 'error') {
+          onError((chunk.detail as string | undefined) ?? 'エラー')
+          return
+        } else if (eventType === 'scan') {
+          onScan(chunk as unknown as BatchScanEvent)
+        } else if (eventType === 'progress') {
+          onProgress(chunk as unknown as BatchProgressEvent)
+        } else if (eventType === 'complete') {
+          onComplete(chunk as unknown as BatchCompleteEvent)
+        }
+      }
+    }
+  }
+}
+
 // SSE streaming helper for LLM endpoints
 // Handles: event: token | done | error
 export async function streamLLM(

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './pages/Login'
 import Home from './pages/Home'
+import BatchOrganize from './pages/BatchOrganize'
 import ImageGenerate from './pages/ImageGenerate'
 import LLMPage from './pages/LLMPage'
 import Metadata from './pages/Metadata'
@@ -31,6 +32,10 @@ function AppRoutes() {
       <Route
         path="/metadata"
         element={<ProtectedRoute><Metadata /></ProtectedRoute>}
+      />
+      <Route
+        path="/batch"
+        element={<ProtectedRoute><BatchOrganize /></ProtectedRoute>}
       />
       <Route
         path="/llm"

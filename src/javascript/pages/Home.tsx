@@ -109,6 +109,19 @@ export default function Home() {
             <p>LLM を活用したプロンプト生成・キャラ設定・物語ドラフト・リバースプロンプトを提供します。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/batch')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/batch')}
+          >
+            <div className="home-card-icon">📂</div>
+            <h2>バッチ整理</h2>
+            <p>フォルダ内の NAI 画像をプロンプトの類似性と作成日付でグループ分けして自動整理します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">
