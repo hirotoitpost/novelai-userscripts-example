@@ -77,6 +77,15 @@ def _try_extract(path: Path) -> dict | None:
         return None
 
 
+def _save_clean(src: Path, dest: Path) -> None:
+    """アルファチャンネル LSB と PNG テキストチャンクを除去して保存する。"""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img = Image.open(src).convert("RGBA")
+    arr = np.array(img)
+    arr[..., 3] = 0xFF  # LSB をクリア
+    Image.fromarray(arr).save(str(dest), "PNG")  # pnginfo 渡さず → テキストチャンク除去
+
+
 def _collect_pngs(input_path: str) -> list[Path]:
     p = Path(input_path)
     if p.is_dir():
@@ -156,7 +165,7 @@ class PreviewResponse(BaseModel):
 class OrganizeRequest(BaseModel):
     input_path: str
     output_path: str
-    operation: str = Field(default="copy", pattern="^(copy|move)$")
+    operation: str = Field(default="copy", pattern="^(copy|move|clean_copy)$")
     similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     save_metadata_json: bool = True
 
@@ -241,11 +250,14 @@ async def batch_organize(req: OrganizeRequest) -> StreamingResponse:
         organized = skipped_no_meta = errors = current = 0
 
         def _do_op(src: Path, dest: Path) -> None:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if req.operation == "move":
-                shutil.move(str(src), dest)
+            if req.operation == "clean_copy":
+                _save_clean(src, dest)
             else:
-                shutil.copy2(str(src), dest)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if req.operation == "move":
+                    shutil.move(str(src), dest)
+                else:
+                    shutil.copy2(str(src), dest)
 
         for gname, _, files in raw_groups:
             for src_path, meta in files:

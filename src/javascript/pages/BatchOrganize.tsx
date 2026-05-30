@@ -27,7 +27,7 @@ export default function BatchOrganize() {
   const [inputPath,   setInputPath]   = useState('')
   const [outputPath,  setOutputPath]  = useState('')
   const [threshold,   setThreshold]   = useState(0.75)
-  const [operation,   setOperation]   = useState<'copy' | 'move'>('copy')
+  const [operation,   setOperation]   = useState<'copy' | 'move' | 'clean_copy'>('copy')
   const [saveJson,    setSaveJson]    = useState(true)
 
   const [phase,       setPhase]       = useState<Phase>('idle')
@@ -189,6 +189,14 @@ export default function BatchOrganize() {
                 />
                 移動 (元ファイルを削除)
               </label>
+              <label className="batch-radio-label">
+                <input
+                  type="radio" name="operation" value="clean_copy"
+                  checked={operation === 'clean_copy'}
+                  onChange={() => setOperation('clean_copy')}
+                />
+                クリーンコピー (メタデータを削除して保存)
+              </label>
             </fieldset>
 
             <label className="batch-checkbox-label">
@@ -302,16 +310,11 @@ export default function BatchOrganize() {
 
               {phase === 'scanning' && (
                 <div className="batch-progress-wrap">
-                  <div className="batch-progress-bar">
-                    <div
-                      className="batch-progress-fill"
-                      style={{
-                        width: scanProg.total > 0
-                          ? `${Math.round((scanProg.current / scanProg.total) * 100)}%`
-                          : '0%'
-                      }}
-                    />
-                  </div>
+                  <progress
+                    className="batch-progress-bar"
+                    value={scanProg.current}
+                    max={scanProg.total || 1}
+                  />
                   <span className="batch-progress-text">
                     {scanProg.current} / {scanProg.total}
                   </span>
@@ -321,12 +324,11 @@ export default function BatchOrganize() {
               {(phase === 'organizing' || phase === 'complete') && (
                 <>
                   <div className="batch-progress-wrap">
-                    <div className="batch-progress-bar">
-                      <div
-                        className={`batch-progress-fill${phase === 'complete' ? ' batch-progress-fill--done' : ''}`}
-                        style={{ width: `${phaseTotalProgress}%` }}
-                      />
-                    </div>
+                    <progress
+                      className={`batch-progress-bar${phase === 'complete' ? ' batch-progress-bar--done' : ''}`}
+                      value={orgProg.current}
+                      max={orgProg.total || 1}
+                    />
                     <span className="batch-progress-text">
                       {orgProg.current} / {orgProg.total} ({phaseTotalProgress}%)
                     </span>

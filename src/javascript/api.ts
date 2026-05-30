@@ -168,7 +168,7 @@ export interface BatchPreviewResponse {
 export interface BatchOrganizeRequest {
   input_path: string
   output_path: string
-  operation: 'copy' | 'move'
+  operation: 'copy' | 'move' | 'clean_copy'
   similarity_threshold: number
   save_metadata_json: boolean
 }
