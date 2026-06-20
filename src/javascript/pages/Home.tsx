@@ -122,6 +122,19 @@ export default function Home() {
             <p>フォルダ内の NAI 画像をプロンプトの類似性と作成日付でグループ分けして自動整理します。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/lora-dataset')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/lora-dataset')}
+          >
+            <div className="home-card-icon">🧬</div>
+            <h2>LoRA データセット生成</h2>
+            <p>トリガーワードやAI設定を指定して、顔/上半身/全身の学習用画像セットを自動生成します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">

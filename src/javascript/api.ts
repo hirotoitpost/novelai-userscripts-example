@@ -262,6 +262,98 @@ export async function streamBatchOrganize(
   }
 }
 
+// ===== LoRA dataset generation types =====
+
+export interface LoraDatasetRequest {
+  character_id: string
+  trigger_word: string
+  base_tags: string
+  extra_tags: string
+  outfit_tag: string
+  root_name: string
+  model: string
+  steps: number
+  scale: number
+  sampler: string
+  noise_schedule: string
+  cfg_rescale: number
+  negative_prompt: string
+}
+
+export interface LoraDatasetProgressEvent {
+  current: number
+  total: number
+  category: string
+  file: string
+  status: 'ok' | 'error'
+  message?: string
+}
+
+export interface LoraDatasetCompleteEvent {
+  total: number
+  succeeded: number
+  failed: number
+  output_path: string
+}
+
+export async function streamLoraDataset(
+  token: string,
+  body: LoraDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+): Promise<void> {
+  const res = await fetch('/api/lora-dataset/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok || !res.body) {
+    const errData = await res.json().catch(() => ({ detail: res.statusText }))
+    onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventType = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (line === '') {
+        eventType = ''
+      } else if (line.startsWith('event: ')) {
+        eventType = line.slice(7).trim()
+      } else if (line.startsWith('data: ')) {
+        let chunk: Record<string, unknown>
+        try { chunk = JSON.parse(line.slice(6)) as Record<string, unknown> }
+        catch { continue }
+
+        if (eventType === 'error') {
+          onError((chunk.detail as string | undefined) ?? 'エラー')
+          return
+        } else if (eventType === 'progress') {
+          onProgress(chunk as unknown as LoraDatasetProgressEvent)
+        } else if (eventType === 'complete') {
+          onComplete(chunk as unknown as LoraDatasetCompleteEvent)
+        }
+      }
+    }
+  }
+}
+
 // SSE streaming helper for LLM endpoints
 // Handles: event: token | done | error
 export async function streamLLM(

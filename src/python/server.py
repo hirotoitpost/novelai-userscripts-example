@@ -14,6 +14,7 @@ from .routes.auth import router as auth_router
 from .routes.batch import router as batch_router
 from .routes.image import router as image_router
 from .routes.llm import router as llm_router
+from .routes.lora_dataset import router as lora_dataset_router
 from .routes.metadata import router as metadata_router
 from .routes.user import router as user_router
 
@@ -50,6 +51,7 @@ app.include_router(auth_router)
 app.include_router(batch_router)
 app.include_router(image_router)
 app.include_router(llm_router)
+app.include_router(lora_dataset_router)
 app.include_router(metadata_router)
 app.include_router(user_router)
 

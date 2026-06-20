@@ -129,6 +129,41 @@ class AnlasEstimateResponse(BaseModel):
     opus_discount_applied: bool
 
 
+class LoraDatasetRequest(BaseModel):
+    character_id: str = Field(..., min_length=1, description="管理用キャラクターID（フォルダ名に使用）")
+    trigger_word: str = Field(..., min_length=1, description="LoRA学習用トリガーワード")
+    base_tags: str = Field("", description="外見タグなど（カンマ区切り）")
+    extra_tags: str = Field("", description="追加タグ（カンマ区切り）")
+    outfit_tag: str = Field("white dress", description="上半身/全身カットの衣装タグ。空文字で無効化")
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名")
+    model: ImageModelLiteral = "nai-diffusion-3"
+    steps: int = Field(23, ge=1, le=50)
+    scale: float = Field(5.0, ge=0.0, le=10.0)
+    sampler: SamplerLiteral = "k_euler_ancestral"
+    noise_schedule: NoiseScheduleLiteral = "karras"
+    cfg_rescale: float = Field(0.0, ge=0.0, le=1.0)
+    negative_prompt: str = Field(
+        "worst quality, low quality, blurry, bad anatomy, "
+        "extra limbs, missing fingers, ugly, duplicate"
+    )
+
+
+class LoraDatasetProgressEvent(BaseModel):
+    current: int
+    total: int
+    category: str
+    file: str
+    status: Literal["ok", "error"]
+    message: Optional[str] = None
+
+
+class LoraDatasetCompleteEvent(BaseModel):
+    total: int
+    succeeded: int
+    failed: int
+    output_path: str
+
+
 class MetadataExtractRequest(BaseModel):
     image: str
 
