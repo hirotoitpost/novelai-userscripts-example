@@ -45,6 +45,8 @@ def _build_cfg(req: LoraDatasetRequest, output_root: Path) -> GenConfig:
             cfg_rescale=req.cfg_rescale,
             negative_prompt=req.negative_prompt,
             seed=req.seed,
+            seed_offset=req.seed_offset,
+            micro_variation_tags=req.micro_variation_tags,
             shuffle_tags=req.shuffle_tags,
             character_references=build_character_references(req.character_reference),
             controlnet=build_controlnet(req.vibe_transfer),

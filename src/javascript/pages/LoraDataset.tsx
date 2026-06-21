@@ -79,6 +79,8 @@ export default function LoraDataset() {
     'worst quality, low quality, blurry, bad anatomy, extra limbs, missing fingers, ugly, duplicate',
   )
   const [seed, setSeed] = useState('')
+  const [seedOffset, setSeedOffset] = useLocalStorage('nai_lora_seed_offset', false)
+  const [microVariationTags, setMicroVariationTags] = useLocalStorage('nai_lora_micro_variation_tags', false)
   const [shuffleTags, setShuffleTags] = useLocalStorage('nai_lora_shuffle_tags', false)
 
   // 精密参照画像（Precise Character Reference）
@@ -148,6 +150,8 @@ export default function LoraDataset() {
     cfg_rescale: cfgRescale,
     negative_prompt: negativePrompt.trim(),
     seed: seed.trim() ? Number(seed) : undefined,
+    seed_offset: seedOffset,
+    micro_variation_tags: microVariationTags,
     shuffle_tags: shuffleTags,
     character_reference: (charRefEnabled && charRefImage) ? {
       image: charRefImage,
@@ -383,8 +387,26 @@ export default function LoraDataset() {
               />
               <p className="lora-hint">
                 0〜4294967295の範囲で指定してください（NovelAIのシード値仕様・32bit整数）。
-                画像ごとに連番オフセット（seed, seed+1, seed+2...）を適用し、再現性を保ちつつ構図に差を出します。
+                未指定なら毎回ランダム、指定すると以下のオプションが効きます。
               </p>
+
+              <label className="lora-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={seedOffset}
+                  onChange={e => setSeedOffset(e.target.checked)}
+                />
+                シードをオフセット（画像ごとにseed+indexを適用・構図が大きく変わる）
+              </label>
+
+              <label className="lora-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={microVariationTags}
+                  onChange={e => setMicroVariationTags(e.target.checked)}
+                />
+                微小タグを追加（シード固定のまま光源/雰囲気タグを1つランダム追加）
+              </label>
 
               <label className="lora-checkbox-label">
                 <input

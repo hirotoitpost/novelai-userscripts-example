@@ -4,6 +4,12 @@
 キャラクター外見タグ・追加タグ・衣装タグ・AI生成設定を差し替えられるようにする。
 CLI (scripts/generate_lora_dataset.py) と FastAPI ルート (routes/lora_dataset.py)
 の両方からこのモジュールを利用する。
+
+バリエーションの作り方（ベースシードを指定した場合に有効、併用も可）:
+- seed_offset:          画像ごとに seed+index を使う。構図が大きく変わる。
+- micro_variation_tags: シードは固定したまま、末尾に光源/雰囲気タグを1つランダム追加し、
+                        微小な差分だけを出す。
+- shuffle_tags:         トリガーワードを先頭固定したまま残りのタグ順序をランダム化する。
 """
 
 from __future__ import annotations
@@ -43,7 +49,7 @@ _SEED_MAX = 4294967295
 
 
 def _offset_seed(base_seed: int, offset: int) -> int:
-    """ベースシードに画像インデックスを加算し、似た構図のバリエーションを作る。"""
+    """ベースシードに画像インデックスを加算し、構図のバリエーションを作る（変化量は大きめ）。"""
     return (base_seed + offset) % (_SEED_MAX + 1)
 
 
@@ -55,6 +61,20 @@ def _shuffle_tags(prompt: str) -> str:
     head, rest = tags[0], tags[1:]
     random.shuffle(rest)
     return ", ".join([head, *rest])
+
+
+# シードを固定したまま末尾に追加する微小タグ。光源/雰囲気系のみに絞り、
+# 構図やポーズなど主要タグへの影響を小さく抑える。
+_MICRO_VARIATION_TAGS = [
+    "soft lighting", "warm lighting", "cool lighting", "rim light",
+    "backlighting", "dynamic lighting", "cinematic lighting",
+    "depth of field", "bokeh", "ambient occlusion", "subtle shadow",
+    "high contrast", "low contrast", "glowing",
+]
+
+
+def _pick_micro_variation_tag() -> str:
+    return random.choice(_MICRO_VARIATION_TAGS)
 
 
 def _decode_b64(b64: str) -> bytes:
@@ -177,6 +197,8 @@ class GenConfig:
     cfg_rescale: float = 0.0
     negative_prompt: str = field(default=NEGATIVE_PROMPT_DEFAULT)
     seed: int | None = None
+    seed_offset: bool = False
+    micro_variation_tags: bool = False
     shuffle_tags: bool = False
     character_references: list[CharacterReference] | None = None
     controlnet: ControlNet | None = None
@@ -245,8 +267,16 @@ async def run_dataset(
         for i in range(shot.count):
             done += 1
             stem = f"{shot.subcategory}_{i + 1:02d}"
-            seed = _offset_seed(cfg.seed, done - 1) if cfg.seed is not None else None
+            if cfg.seed is None:
+                seed = None
+            elif cfg.seed_offset:
+                seed = _offset_seed(cfg.seed, done - 1)
+            else:
+                seed = cfg.seed
+
             prompt = _shuffle_tags(shot.prompt) if cfg.shuffle_tags else shot.prompt
+            if cfg.micro_variation_tags:
+                prompt = f"{prompt}, {_pick_micro_variation_tag()}"
             try:
                 image = await generate_one(client, prompt, shot.size, cfg, seed=seed)
                 image.save(out_dir / f"{stem}.png", "PNG")

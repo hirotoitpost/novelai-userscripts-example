@@ -148,7 +148,11 @@ class LoraDatasetRequest(BaseModel):
     )
     seed: Optional[int] = Field(
         None, ge=0, le=4294967295,
-        description="ベースシード値。未指定でランダム。画像ごとに連番オフセット(seed+index)を加算して類似バリエーションを生成",
+        description="ベースシード値。未指定でランダム",
+    )
+    seed_offset: bool = Field(False, description="画像ごとにseed+indexを加算する。構図が大きく変わる")
+    micro_variation_tags: bool = Field(
+        False, description="シードは固定したまま末尾に光源/雰囲気タグを1つランダム追加し、微小な差分のみ出す"
     )
     shuffle_tags: bool = Field(False, description="トリガーワードを先頭固定したまま残りのタグ順序をランダムに入れ替える")
     character_reference: Optional[CharacterReferenceRequest] = Field(

@@ -42,7 +42,9 @@ if __name__ == "__main__":
     parser.add_argument("--sampler", default="k_euler_ancestral")
     parser.add_argument("--noise-schedule", default="karras")
     parser.add_argument("--cfg-rescale", type=float, default=0.0)
-    parser.add_argument("--seed", type=int, default=None, help="ベースシード値（未指定でランダム）。画像ごとにseed+indexを適用")
+    parser.add_argument("--seed", type=int, default=None, help="ベースシード値（未指定でランダム）")
+    parser.add_argument("--seed-offset", action="store_true", help="画像ごとにseed+indexを加算する（構図が大きく変わる）")
+    parser.add_argument("--micro-variation-tags", action="store_true", help="シード固定のまま光源/雰囲気タグを1つランダム追加し微小な差分を出す")
     parser.add_argument("--shuffle-tags", action="store_true", help="トリガーワードを先頭固定したまま残りのタグ順序をランダムに入れ替える")
     parser.add_argument("--character-reference-image", default=None, help="精密参照画像ファイルパス（V4.5系モデル限定）")
     parser.add_argument("--character-reference-type", default="character&style", choices=["character", "style", "character&style"])
@@ -83,6 +85,8 @@ if __name__ == "__main__":
         noise_schedule=args.noise_schedule,
         cfg_rescale=args.cfg_rescale,
         seed=args.seed,
+        seed_offset=args.seed_offset,
+        micro_variation_tags=args.micro_variation_tags,
         shuffle_tags=args.shuffle_tags,
         character_references=character_references,
         controlnet=controlnet,

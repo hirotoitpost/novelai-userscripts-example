@@ -298,6 +298,8 @@ export interface LoraDatasetRequest {
   cfg_rescale: number
   negative_prompt: string
   seed?: number
+  seed_offset?: boolean
+  micro_variation_tags?: boolean
   shuffle_tags?: boolean
   character_reference?: CharacterReferenceInput
   vibe_transfer?: ControlNetInput
