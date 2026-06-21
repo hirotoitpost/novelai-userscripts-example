@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
-import { streamLoraDataset, LoraDatasetProgressEvent, LoraDatasetCompleteEvent } from '../api'
+import { streamLoraDataset, streamLoraDatasetPreview, LoraDatasetProgressEvent, LoraDatasetCompleteEvent, LoraDatasetRequest } from '../api'
 import './LoraDataset.css'
 
 const MODELS = [
@@ -31,6 +31,23 @@ const NOISE_SCHEDULES = [
   { value: 'polyexponential', label: 'Polyexponential' },
 ] as const
 
+const REFERENCE_TYPES = [
+  { value: 'character&style', label: 'キャラクター＆画風' },
+  { value: 'character',       label: 'キャラクターのみ' },
+  { value: 'style',           label: '画風のみ' },
+] as const
+
+const V4_5_MODELS = new Set(['nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
 // 顔30枚 / 上半身40枚 / 全身30枚の固定テンプレート
 const SHOT_PLAN = [
   { category: 'face',       label: '顔アップ',  count: 30, size: '512×512' },
@@ -38,7 +55,7 @@ const SHOT_PLAN = [
   { category: 'full_body',  label: '全身',      count: 30, size: '512×768' },
 ] as const
 
-type Phase = 'idle' | 'running' | 'complete' | 'error'
+type Phase = 'idle' | 'running' | 'complete' | 'error' | 'cancelled'
 
 export default function LoraDataset() {
   const { token } = useAuth()
@@ -61,6 +78,25 @@ export default function LoraDataset() {
     'nai_lora_negative_prompt',
     'worst quality, low quality, blurry, bad anatomy, extra limbs, missing fingers, ugly, duplicate',
   )
+  const [seed, setSeed] = useState('')
+  const [shuffleTags, setShuffleTags] = useLocalStorage('nai_lora_shuffle_tags', false)
+
+  // 精密参照画像（Precise Character Reference）
+  const charRefFileRef = useRef<HTMLInputElement>(null)
+  const [charRefEnabled,  setCharRefEnabled]  = useState(false)
+  const [charRefImage,    setCharRefImage]    = useState<string | null>(null)
+  const [charRefDragOver, setCharRefDragOver] = useState(false)
+  const [charRefType,     setCharRefType]     = useState<typeof REFERENCE_TYPES[number]['value']>('character&style')
+  const [charRefFidelity, setCharRefFidelity] = useState(1.0)
+  const [charRefStrength, setCharRefStrength] = useState(1.0)
+
+  // Vibe Transfer
+  const vibeFileRef = useRef<HTMLInputElement>(null)
+  const [vibeEnabled,      setVibeEnabled]      = useState(false)
+  const [vibeImage,        setVibeImage]        = useState<string | null>(null)
+  const [vibeDragOver,     setVibeDragOver]     = useState(false)
+  const [vibeInfoExtracted, setVibeInfoExtracted] = useState(0.7)
+  const [vibeStrength,     setVibeStrength]     = useState(0.6)
 
   const [phase,    setPhase]    = useState<Phase>('idle')
   const [progress, setProgress] = useState({ current: 0, total: 0 })
@@ -68,17 +104,74 @@ export default function LoraDataset() {
   const [summary,   setSummary] = useState<LoraDatasetCompleteEvent | null>(null)
   const [errorMsg,  setErrorMsg] = useState<string | null>(null)
 
+  const abortRef = useRef<AbortController | null>(null)
+  const cancelledRef = useRef(false)
+
   const logEndRef = useRef<HTMLDivElement>(null)
   const scrollLog = useCallback(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [])
 
+  const [previewPhase,  setPreviewPhase]  = useState<Phase>('idle')
+  const [previewImages, setPreviewImages] = useState<LoraDatasetProgressEvent[]>([])
+  const [previewError,  setPreviewError]  = useState<string | null>(null)
+
   const totalCount = SHOT_PLAN.reduce((sum, s) => sum + s.count, 0)
   const isRunning = phase === 'running'
-  const canRun = !isRunning && characterId.trim() !== '' && triggerWord.trim() !== ''
+  const isPreviewRunning = previewPhase === 'running'
+  const isV45 = V4_5_MODELS.has(model)
+  const canRun = !isRunning && !isPreviewRunning && characterId.trim() !== '' && triggerWord.trim() !== ''
+    && (!charRefEnabled || (!!charRefImage && isV45))
+
+  const handleCharRefFile = useCallback((file: File) => {
+    if (!file.type.match(/^image\//)) return
+    readFileAsDataURL(file).then(setCharRefImage)
+  }, [])
+
+  const handleVibeFile = useCallback((file: File) => {
+    if (!file.type.match(/^image\//)) return
+    readFileAsDataURL(file).then(setVibeImage)
+  }, [])
+
+  const buildRequestBody = (): LoraDatasetRequest => ({
+    character_id: characterId.trim(),
+    trigger_word: triggerWord.trim(),
+    base_tags: baseTags.trim(),
+    extra_tags: extraTags.trim(),
+    outfit_tag: outfitTag.trim(),
+    root_name: rootName.trim() || 'training_data',
+    model,
+    steps,
+    scale,
+    sampler,
+    noise_schedule: noiseSchedule,
+    cfg_rescale: cfgRescale,
+    negative_prompt: negativePrompt.trim(),
+    seed: seed.trim() ? Number(seed) : undefined,
+    shuffle_tags: shuffleTags,
+    character_reference: (charRefEnabled && charRefImage) ? {
+      image: charRefImage,
+      type: charRefType,
+      fidelity: charRefFidelity,
+      strength: charRefStrength,
+    } : undefined,
+    vibe_transfer: (vibeEnabled && vibeImage) ? {
+      images: [{
+        image: vibeImage,
+        info_extracted: vibeInfoExtracted,
+        strength: vibeStrength,
+        controlnet_model: model,
+      }],
+      strength: vibeStrength,
+    } : undefined,
+  })
 
   const handleGenerate = async () => {
     if (!token || !canRun) return
+    cancelledRef.current = false
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setPhase('running')
     setLog([])
     setSummary(null)
@@ -87,21 +180,7 @@ export default function LoraDataset() {
 
     await streamLoraDataset(
       token,
-      {
-        character_id: characterId.trim(),
-        trigger_word: triggerWord.trim(),
-        base_tags: baseTags.trim(),
-        extra_tags: extraTags.trim(),
-        outfit_tag: outfitTag.trim(),
-        root_name: rootName.trim() || 'training_data',
-        model,
-        steps,
-        scale,
-        sampler,
-        noise_schedule: noiseSchedule,
-        cfg_rescale: cfgRescale,
-        negative_prompt: negativePrompt.trim(),
-      },
+      buildRequestBody(),
       (e) => {
         setProgress({ current: e.current, total: e.total })
         setLog(prev => {
@@ -111,17 +190,45 @@ export default function LoraDataset() {
         })
       },
       (e) => {
-        setSummary(e)
-        setPhase('complete')
+        if (!cancelledRef.current) { setSummary(e); setPhase('complete') }
       },
       (msg) => {
-        setErrorMsg(msg)
-        setPhase('error')
+        if (!cancelledRef.current) { setErrorMsg(msg); setPhase('error') }
+      },
+      controller.signal,
+    )
+  }
+
+  const handleCancel = () => {
+    cancelledRef.current = true
+    abortRef.current?.abort()
+    setPhase('cancelled')
+  }
+
+  const handlePreview = async () => {
+    if (!token || !canRun) return
+    setPreviewPhase('running')
+    setPreviewImages([])
+    setPreviewError(null)
+
+    await streamLoraDatasetPreview(
+      token,
+      buildRequestBody(),
+      (e) => {
+        setPreviewImages(prev => [...prev, e])
+      },
+      () => {
+        setPreviewPhase('complete')
+      },
+      (msg) => {
+        setPreviewError(msg)
+        setPreviewPhase('error')
       },
     )
   }
 
   const percent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0
+  const CATEGORY_LABELS: Record<string, string> = { face: '顔アップ', upper_body: '上半身', full_body: '全身' }
 
   return (
     <div className="lora-root">
@@ -259,20 +366,156 @@ export default function LoraDataset() {
                 value={cfgRescale}
                 onChange={e => setCfgRescale(parseFloat(e.target.value))}
               />
+
+              <label className="lora-label" htmlFor="lora-seed">ベースシード値（空欄でランダム）</label>
+              <input
+                id="lora-seed"
+                className="lora-input"
+                type="number" min={0} max={4294967295}
+                placeholder="ランダム"
+                value={seed}
+                onChange={e => {
+                  const v = e.target.value
+                  if (v === '') { setSeed(''); return }
+                  const n = Math.min(4294967295, Math.max(0, Math.floor(Number(v))))
+                  setSeed(Number.isNaN(n) ? '' : String(n))
+                }}
+              />
+              <p className="lora-hint">
+                0〜4294967295の範囲で指定してください（NovelAIのシード値仕様・32bit整数）。
+                画像ごとに連番オフセット（seed, seed+1, seed+2...）を適用し、再現性を保ちつつ構図に差を出します。
+              </p>
+
+              <label className="lora-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={shuffleTags}
+                  onChange={e => setShuffleTags(e.target.checked)}
+                />
+                タグの順序をシャッフル（トリガーワードは先頭固定）
+              </label>
+            </fieldset>
+
+            {/* 精密参照画像 */}
+            <fieldset className="lora-fieldset" disabled={isRunning}>
+              <legend className="lora-label">精密参照画像（V4.5系モデル限定）</legend>
+              <label className="lora-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={charRefEnabled}
+                  onChange={e => { setCharRefEnabled(e.target.checked); if (!e.target.checked) setCharRefImage(null) }}
+                />
+                有効化
+              </label>
+
+              {charRefEnabled && (
+                <>
+                  {!isV45 && (
+                    <p className="lora-warn">精密参照画像はNAI Diffusion V4.5系モデルでのみ使用できます。上のモデル選択を変更してください。</p>
+                  )}
+                  <div
+                    className={['lora-dropzone', charRefDragOver ? 'lora-dropzone--over' : '', charRefImage ? 'lora-dropzone--has-image' : ''].join(' ')}
+                    onDragOver={e => { e.preventDefault(); setCharRefDragOver(true) }}
+                    onDragLeave={() => setCharRefDragOver(false)}
+                    onDrop={e => { e.preventDefault(); setCharRefDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleCharRefFile(f) }}
+                    onClick={() => charRefFileRef.current?.click()}
+                    role="button" tabIndex={0}
+                    onKeyDown={e => e.key === 'Enter' && charRefFileRef.current?.click()}
+                  >
+                    {charRefImage
+                      ? <img className="lora-dropzone-thumb" src={charRefImage} alt="参照画像" />
+                      : <span>参照画像をドロップ / クリック</span>}
+                  </div>
+                  <input ref={charRefFileRef} type="file" accept="image/*" hidden
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleCharRefFile(f); e.target.value = '' }} />
+
+                  <label className="lora-label" htmlFor="lora-charref-type">参照タイプ</label>
+                  <select id="lora-charref-type" className="lora-select" value={charRefType} onChange={e => setCharRefType(e.target.value as typeof charRefType)}>
+                    {REFERENCE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+
+                  <label className="lora-label">Fidelity: <strong>{charRefFidelity.toFixed(2)}</strong></label>
+                  <input className="lora-range" type="range" min={0} max={1} step={0.01} aria-label="Fidelity"
+                    value={charRefFidelity} onChange={e => setCharRefFidelity(parseFloat(e.target.value))} />
+
+                  <label className="lora-label">強度: <strong>{charRefStrength.toFixed(2)}</strong></label>
+                  <input className="lora-range" type="range" min={0} max={1} step={0.01} aria-label="精密参照画像の強度"
+                    value={charRefStrength} onChange={e => setCharRefStrength(parseFloat(e.target.value))} />
+                </>
+              )}
+            </fieldset>
+
+            {/* Vibe Transfer */}
+            <fieldset className="lora-fieldset" disabled={isRunning}>
+              <legend className="lora-label">Vibe Transfer（雰囲気転送）</legend>
+              <label className="lora-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={vibeEnabled}
+                  onChange={e => { setVibeEnabled(e.target.checked); if (!e.target.checked) setVibeImage(null) }}
+                />
+                有効化
+              </label>
+
+              {vibeEnabled && (
+                <>
+                  <div
+                    className={['lora-dropzone', vibeDragOver ? 'lora-dropzone--over' : '', vibeImage ? 'lora-dropzone--has-image' : ''].join(' ')}
+                    onDragOver={e => { e.preventDefault(); setVibeDragOver(true) }}
+                    onDragLeave={() => setVibeDragOver(false)}
+                    onDrop={e => { e.preventDefault(); setVibeDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleVibeFile(f) }}
+                    onClick={() => vibeFileRef.current?.click()}
+                    role="button" tabIndex={0}
+                    onKeyDown={e => e.key === 'Enter' && vibeFileRef.current?.click()}
+                  >
+                    {vibeImage
+                      ? <img className="lora-dropzone-thumb" src={vibeImage} alt="雰囲気参照画像" />
+                      : <span>雰囲気参照画像をドロップ / クリック</span>}
+                  </div>
+                  <input ref={vibeFileRef} type="file" accept="image/*" hidden
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleVibeFile(f); e.target.value = '' }} />
+
+                  <label className="lora-label">情報抽出量: <strong>{vibeInfoExtracted.toFixed(2)}</strong></label>
+                  <input className="lora-range" type="range" min={0.01} max={1} step={0.01} aria-label="情報抽出量"
+                    value={vibeInfoExtracted} onChange={e => setVibeInfoExtracted(parseFloat(e.target.value))} />
+
+                  <label className="lora-label">強度: <strong>{vibeStrength.toFixed(2)}</strong></label>
+                  <input className="lora-range" type="range" min={0.01} max={1} step={0.01} aria-label="Vibe Transferの強度"
+                    value={vibeStrength} onChange={e => setVibeStrength(parseFloat(e.target.value))} />
+                </>
+              )}
             </fieldset>
           </section>
 
           <div className="lora-actions">
             <button
               type="button"
-              className="lora-btn lora-btn--primary"
-              onClick={handleGenerate}
+              className="lora-btn lora-btn--secondary"
+              onClick={handlePreview}
               disabled={!canRun}
             >
-              {isRunning
+              {isPreviewRunning
                 ? <><span className="lora-spinner lora-spinner--sm" />生成中…</>
-                : `▶ ${totalCount}枚を生成`}
+                : '🔍 1セットプレビュー'}
             </button>
+            {isRunning ? (
+              <button
+                type="button"
+                className="lora-btn lora-btn--danger"
+                onClick={handleCancel}
+              >
+                ⏹ 中断
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="lora-btn lora-btn--primary"
+                onClick={handleGenerate}
+                disabled={!canRun}
+              >
+                {`▶ ${totalCount}枚を生成`}
+              </button>
+            )}
           </div>
         </aside>
 
@@ -291,6 +534,28 @@ export default function LoraDataset() {
             </div>
           </section>
 
+          {previewPhase !== 'idle' && (
+            <section className="lora-section">
+              <span className="lora-section-label">1セットプレビュー</span>
+              <div className="lora-preview-grid">
+                {previewImages.map((e, i) => (
+                  <div key={i} className="lora-preview-card">
+                    <span className="lora-preview-label">{CATEGORY_LABELS[e.category] ?? e.category}</span>
+                    {e.status === 'ok' && e.image_b64
+                      ? <img className="lora-preview-img" src={`data:image/png;base64,${e.image_b64}`} alt={e.category} />
+                      : <span className="lora-preview-failed">✖ 失敗{e.message ? `: ${e.message}` : ''}</span>}
+                  </div>
+                ))}
+                {isPreviewRunning && previewImages.length < 3 && (
+                  <div className="lora-preview-card lora-preview-card--pending">
+                    <span className="lora-spinner lora-spinner--sm" />
+                  </div>
+                )}
+              </div>
+              {previewError && <p className="lora-error" role="alert">{previewError}</p>}
+            </section>
+          )}
+
           {phase !== 'idle' && (
             <section className="lora-section">
               <span className="lora-section-label">生成進捗</span>
@@ -304,6 +569,10 @@ export default function LoraDataset() {
                   {progress.current} / {progress.total} ({percent}%)
                 </span>
               </div>
+
+              {phase === 'cancelled' && (
+                <p className="lora-warn">⏹ 中断しました（{progress.current} / {progress.total} 枚まで生成済み）。「生成」を押すと最初からやり直します。</p>
+              )}
 
               {summary && (
                 <div className="lora-result-summary">

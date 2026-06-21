@@ -20,6 +20,7 @@ sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 from novelai import AsyncNovelAI  # noqa: E402
+from novelai.types import CharacterReference, ControlNet, ControlNetImage  # noqa: E402
 from python.lora_dataset import GenConfig, build_shots, run_dataset  # noqa: E402
 
 API_KEY = os.environ.get("NOVELAI_API_KEY") or os.environ.get("NOVELAI_API_TOKEN")
@@ -41,7 +42,36 @@ if __name__ == "__main__":
     parser.add_argument("--sampler", default="k_euler_ancestral")
     parser.add_argument("--noise-schedule", default="karras")
     parser.add_argument("--cfg-rescale", type=float, default=0.0)
+    parser.add_argument("--seed", type=int, default=None, help="ベースシード値（未指定でランダム）。画像ごとにseed+indexを適用")
+    parser.add_argument("--shuffle-tags", action="store_true", help="トリガーワードを先頭固定したまま残りのタグ順序をランダムに入れ替える")
+    parser.add_argument("--character-reference-image", default=None, help="精密参照画像ファイルパス（V4.5系モデル限定）")
+    parser.add_argument("--character-reference-type", default="character&style", choices=["character", "style", "character&style"])
+    parser.add_argument("--character-reference-fidelity", type=float, default=1.0)
+    parser.add_argument("--character-reference-strength", type=float, default=1.0)
+    parser.add_argument("--vibe-image", default=None, help="Vibe Transfer参照画像ファイルパス")
+    parser.add_argument("--vibe-info-extracted", type=float, default=0.7)
+    parser.add_argument("--vibe-strength", type=float, default=0.6)
     args = parser.parse_args()
+
+    character_references = None
+    if args.character_reference_image:
+        with open(args.character_reference_image, "rb") as f:
+            character_references = [CharacterReference(
+                image=f.read(),
+                type=args.character_reference_type,
+                fidelity=args.character_reference_fidelity,
+                strength=args.character_reference_strength,
+            )]
+
+    controlnet = None
+    if args.vibe_image:
+        with open(args.vibe_image, "rb") as f:
+            controlnet = ControlNet(images=[ControlNetImage(
+                image=f.read(),
+                info_extracted=args.vibe_info_extracted,
+                strength=args.vibe_strength,
+                controlnet_model=args.model,
+            )])
 
     shots = build_shots(args.trigger_word, args.base_tags, args.extra_tags, args.outfit_tag)
     config = GenConfig(
@@ -52,6 +82,10 @@ if __name__ == "__main__":
         sampler=args.sampler,
         noise_schedule=args.noise_schedule,
         cfg_rescale=args.cfg_rescale,
+        seed=args.seed,
+        shuffle_tags=args.shuffle_tags,
+        character_references=character_references,
+        controlnet=controlnet,
     )
 
     async def _run() -> None:

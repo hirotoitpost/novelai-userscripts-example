@@ -37,14 +37,14 @@ class I2iRequest(BaseModel):
     image: str
     strength: float = Field(0.7, ge=0.01, le=0.99)
     noise: float = Field(0.0, ge=0.0, le=0.99)
-    seed: Optional[int] = Field(None, ge=0, le=999999999)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
 
 
 class InpaintRequest(BaseModel):
     image: str
     mask: str
     strength: float = Field(1.0, ge=0.01, le=1.0)
-    seed: Optional[int] = Field(None, ge=0, le=999999999)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
 
 
 class ControlNetImageRequest(BaseModel):
@@ -84,7 +84,7 @@ class GenerateImageRequest(BaseModel):
     scale: float = Field(5.0, ge=0.0, le=10.0)
     sampler: SamplerLiteral = "k_euler_ancestral"
     noise_schedule: NoiseScheduleLiteral = "karras"
-    seed: Optional[int] = Field(None, ge=0, le=999999999)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
     n_samples: int = Field(1, ge=1, le=8)
     cfg_rescale: float = Field(0.0, ge=0.0, le=1.0)
     variety_boost: bool = False
@@ -146,6 +146,15 @@ class LoraDatasetRequest(BaseModel):
         "worst quality, low quality, blurry, bad anatomy, "
         "extra limbs, missing fingers, ugly, duplicate"
     )
+    seed: Optional[int] = Field(
+        None, ge=0, le=4294967295,
+        description="ベースシード値。未指定でランダム。画像ごとに連番オフセット(seed+index)を加算して類似バリエーションを生成",
+    )
+    shuffle_tags: bool = Field(False, description="トリガーワードを先頭固定したまま残りのタグ順序をランダムに入れ替える")
+    character_reference: Optional[CharacterReferenceRequest] = Field(
+        None, description="精密参照画像（Precise Character Reference）。V4.5系モデル限定"
+    )
+    vibe_transfer: Optional[ControlNetRequest] = Field(None, description="Vibe Transfer（雰囲気転送）")
 
 
 class LoraDatasetProgressEvent(BaseModel):

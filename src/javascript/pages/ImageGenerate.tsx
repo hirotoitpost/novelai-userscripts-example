@@ -312,7 +312,7 @@ export default function ImageGenerate() {
               <label className="ig-field-label" htmlFor="ig-seed">Seed</label>
               <input
                 id="ig-seed"
-                type="number" min={0} max={999999999}
+                type="number" min={0} max={4294967295}
                 value={seed}
                 onChange={e => setSeed(e.target.value)}
                 placeholder="ランダム"

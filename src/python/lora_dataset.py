@@ -9,21 +9,90 @@ CLI (scripts/generate_lora_dataset.py) と FastAPI ルート (routes/lora_datase
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+import base64
+import io
+import random
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import AsyncGenerator
 
 from novelai import AsyncNovelAI, RateLimitError, ServerError
-from novelai.types import GenerateImageParams
+from novelai.types import CharacterReference, ControlNet, ControlNetImage, GenerateImageParams
 from PIL.Image import Image
 
-from .models import ImageModelLiteral, NoiseScheduleLiteral, SamplerLiteral
+from .models import (
+    CharacterReferenceRequest,
+    ControlNetRequest,
+    ImageModelLiteral,
+    NoiseScheduleLiteral,
+    SamplerLiteral,
+)
 
 QUALITY_TAGS = "anime style, masterpiece, best quality"
 NEGATIVE_PROMPT_DEFAULT = (
     "worst quality, low quality, blurry, bad anatomy, "
     "extra limbs, missing fingers, ugly, duplicate"
 )
+
+_V4_5_MODELS = {
+    "nai-diffusion-4-5-full",
+    "nai-diffusion-4-5-curated",
+}
+
+_SEED_MAX = 4294967295
+
+
+def _offset_seed(base_seed: int, offset: int) -> int:
+    """ベースシードに画像インデックスを加算し、似た構図のバリエーションを作る。"""
+    return (base_seed + offset) % (_SEED_MAX + 1)
+
+
+def _shuffle_tags(prompt: str) -> str:
+    """先頭タグ（トリガーワード）は固定し、残りのタグ順序だけをランダムに並べ替える。"""
+    tags = [t.strip() for t in prompt.split(",") if t.strip()]
+    if len(tags) <= 2:
+        return prompt
+    head, rest = tags[0], tags[1:]
+    random.shuffle(rest)
+    return ", ".join([head, *rest])
+
+
+def _decode_b64(b64: str) -> bytes:
+    if "," in b64:
+        b64 = b64.split(",", 1)[1]
+    return base64.b64decode(b64)
+
+
+def build_character_references(
+    req: CharacterReferenceRequest | None,
+) -> list[CharacterReference] | None:
+    """精密参照画像（Precise Character Reference）。V4.5系モデル限定。"""
+    if req is None:
+        return None
+    return [CharacterReference(
+        image=_decode_b64(req.image),
+        type=req.type,
+        fidelity=req.fidelity,
+        strength=req.strength,
+    )]
+
+
+def build_controlnet(req: ControlNetRequest | None) -> ControlNet | None:
+    """Vibe Transfer（雰囲気転送）。"""
+    if req is None:
+        return None
+    return ControlNet(
+        images=[
+            ControlNetImage(
+                image=_decode_b64(ci.image),
+                info_extracted=ci.info_extracted,
+                strength=ci.strength,
+                controlnet_model=ci.controlnet_model,
+            )
+            for ci in req.images
+        ],
+        strength=req.strength,
+    )
 
 
 @dataclass
@@ -85,6 +154,18 @@ def build_shots(trigger_word: str, base_tags: str, extra_tags: str, outfit_tag: 
     ]
 
 
+def build_preview_shots(shots: list[Shot]) -> list[Shot]:
+    """カテゴリ（顔/上半身/全身）ごとに先頭のショットを1枚だけ取り出す。"""
+    seen: set[str] = set()
+    preview: list[Shot] = []
+    for shot in shots:
+        if shot.category in seen:
+            continue
+        seen.add(shot.category)
+        preview.append(replace(shot, count=1))
+    return preview
+
+
 @dataclass
 class GenConfig:
     output_root: Path
@@ -95,10 +176,24 @@ class GenConfig:
     noise_schedule: NoiseScheduleLiteral = "karras"
     cfg_rescale: float = 0.0
     negative_prompt: str = field(default=NEGATIVE_PROMPT_DEFAULT)
+    seed: int | None = None
+    shuffle_tags: bool = False
+    character_references: list[CharacterReference] | None = None
+    controlnet: ControlNet | None = None
+
+    def __post_init__(self) -> None:
+        if self.character_references and self.model not in _V4_5_MODELS:
+            raise ValueError("精密参照画像（character reference）はV4.5系モデルでのみ使用できます")
 
 
-async def generate_one(client: AsyncNovelAI, prompt: str, size: tuple[int, int], cfg: GenConfig) -> Image:
-    params = GenerateImageParams(
+async def generate_one(
+    client: AsyncNovelAI,
+    prompt: str,
+    size: tuple[int, int],
+    cfg: GenConfig,
+    seed: int | None = None,
+) -> Image:
+    kwargs: dict = dict(
         prompt=prompt,
         model=cfg.model,
         size=size,
@@ -112,6 +207,13 @@ async def generate_one(client: AsyncNovelAI, prompt: str, size: tuple[int, int],
         cfg_rescale=cfg.cfg_rescale,
         n_samples=1,
     )
+    if seed is not None:
+        kwargs["seed"] = seed
+    if cfg.character_references:
+        kwargs["character_references"] = cfg.character_references
+    if cfg.controlnet:
+        kwargs["controlnet"] = cfg.controlnet
+    params = GenerateImageParams(**kwargs)
     for attempt in range(5):
         try:
             images = await client.image.generate(params)
@@ -127,8 +229,13 @@ async def run_dataset(
     client: AsyncNovelAI,
     shots: list[Shot],
     cfg: GenConfig,
+    include_image_data: bool = False,
 ) -> AsyncGenerator[dict, None]:
-    """画像を1枚ずつ生成して保存し、進捗イベントをyieldする。"""
+    """画像を1枚ずつ生成して保存し、進捗イベントをyieldする。
+
+    include_image_data=True の場合、生成画像をbase64化して"image_b64"に含める
+    （プレビュー生成用。通常の100枚生成ではSSEペイロードを肥大化させないためFalse）。
+    """
     total = sum(s.count for s in shots)
     done = 0
 
@@ -138,15 +245,22 @@ async def run_dataset(
         for i in range(shot.count):
             done += 1
             stem = f"{shot.subcategory}_{i + 1:02d}"
+            seed = _offset_seed(cfg.seed, done - 1) if cfg.seed is not None else None
+            prompt = _shuffle_tags(shot.prompt) if cfg.shuffle_tags else shot.prompt
             try:
-                image = await generate_one(client, shot.prompt, shot.size, cfg)
+                image = await generate_one(client, prompt, shot.size, cfg, seed=seed)
                 image.save(out_dir / f"{stem}.png", "PNG")
-                (out_dir / f"{stem}.txt").write_text(shot.prompt, encoding="utf-8")
-                yield {
+                (out_dir / f"{stem}.txt").write_text(prompt, encoding="utf-8")
+                event: dict = {
                     "current": done, "total": total,
                     "category": shot.category, "file": f"{stem}.png",
                     "status": "ok",
                 }
+                if include_image_data:
+                    buf = io.BytesIO()
+                    image.save(buf, format="PNG")
+                    event["image_b64"] = base64.b64encode(buf.getvalue()).decode()
+                yield event
             except Exception as e:
                 yield {
                     "current": done, "total": total,

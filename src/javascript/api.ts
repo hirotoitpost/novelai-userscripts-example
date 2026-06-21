@@ -264,6 +264,25 @@ export async function streamBatchOrganize(
 
 // ===== LoRA dataset generation types =====
 
+export interface CharacterReferenceInput {
+  image: string
+  type: 'character' | 'style' | 'character&style'
+  fidelity: number
+  strength: number
+}
+
+export interface ControlNetImageInput {
+  image: string
+  info_extracted: number
+  strength: number
+  controlnet_model: string
+}
+
+export interface ControlNetInput {
+  images: ControlNetImageInput[]
+  strength: number
+}
+
 export interface LoraDatasetRequest {
   character_id: string
   trigger_word: string
@@ -278,6 +297,10 @@ export interface LoraDatasetRequest {
   noise_schedule: string
   cfg_rescale: number
   negative_prompt: string
+  seed?: number
+  shuffle_tags?: boolean
+  character_reference?: CharacterReferenceInput
+  vibe_transfer?: ControlNetInput
 }
 
 export interface LoraDatasetProgressEvent {
@@ -287,6 +310,7 @@ export interface LoraDatasetProgressEvent {
   file: string
   status: 'ok' | 'error'
   message?: string
+  image_b64?: string
 }
 
 export interface LoraDatasetCompleteEvent {
@@ -296,62 +320,92 @@ export interface LoraDatasetCompleteEvent {
   output_path: string
 }
 
-export async function streamLoraDataset(
+async function _streamLoraDataset(
+  endpoint: string,
   token: string,
   body: LoraDatasetRequest,
   onProgress: (e: LoraDatasetProgressEvent) => void,
   onComplete: (e: LoraDatasetCompleteEvent) => void,
   onError: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch('/api/lora-dataset/generate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body),
-  })
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    })
 
-  if (!res.ok || !res.body) {
-    const errData = await res.json().catch(() => ({ detail: res.statusText }))
-    onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
-    return
-  }
+    if (!res.ok || !res.body) {
+      const errData = await res.json().catch(() => ({ detail: res.statusText }))
+      onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
+      return
+    }
 
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let eventType = ''
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let eventType = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
 
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
 
-    for (const line of lines) {
-      if (line === '') {
-        eventType = ''
-      } else if (line.startsWith('event: ')) {
-        eventType = line.slice(7).trim()
-      } else if (line.startsWith('data: ')) {
-        let chunk: Record<string, unknown>
-        try { chunk = JSON.parse(line.slice(6)) as Record<string, unknown> }
-        catch { continue }
+      for (const line of lines) {
+        if (line === '') {
+          eventType = ''
+        } else if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          let chunk: Record<string, unknown>
+          try { chunk = JSON.parse(line.slice(6)) as Record<string, unknown> }
+          catch { continue }
 
-        if (eventType === 'error') {
-          onError((chunk.detail as string | undefined) ?? 'エラー')
-          return
-        } else if (eventType === 'progress') {
-          onProgress(chunk as unknown as LoraDatasetProgressEvent)
-        } else if (eventType === 'complete') {
-          onComplete(chunk as unknown as LoraDatasetCompleteEvent)
+          if (eventType === 'error') {
+            onError((chunk.detail as string | undefined) ?? 'エラー')
+            return
+          } else if (eventType === 'progress') {
+            onProgress(chunk as unknown as LoraDatasetProgressEvent)
+          } else if (eventType === 'complete') {
+            onComplete(chunk as unknown as LoraDatasetCompleteEvent)
+          }
         }
       }
     }
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') return // ユーザーによる中断
+    onError(e instanceof Error ? e.message : String(e))
   }
+}
+
+export function streamLoraDataset(
+  token: string,
+  body: LoraDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return _streamLoraDataset('/api/lora-dataset/generate', token, body, onProgress, onComplete, onError, signal)
+}
+
+export function streamLoraDatasetPreview(
+  token: string,
+  body: LoraDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return _streamLoraDataset('/api/lora-dataset/preview', token, body, onProgress, onComplete, onError, signal)
 }
 
 // SSE streaming helper for LLM endpoints
