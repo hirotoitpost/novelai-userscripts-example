@@ -55,7 +55,7 @@ from ..models import (
     SituationResponse,
     WordSelectionGenerateRequest,
 )
-from .image import _build_kwargs, _http_status, _pil_to_b64
+from .image import _build_kwargs, _decode_b64, _http_status, _pil_to_b64
 
 router = APIRouter(prefix="/api/chunks", tags=["chunks"])
 
@@ -333,6 +333,34 @@ async def select_generate_endpoint(
         (_HISTORY_DIR / filename).write_bytes(b64decode(b64))
         image_paths.append(f"outputs/history/{filename}")
 
+    i2i_image_path = None
+    if req.generation.i2i:
+        i2i_image_path = _save_reference_image(req.generation.i2i.image)
+
+    character_references: list[dict[str, Any]] | None = None
+    if req.generation.character_references:
+        character_references = [
+            {
+                "image_path": _save_reference_image(cr.image),
+                "type": cr.type,
+                "fidelity": cr.fidelity,
+                "strength": cr.strength,
+            }
+            for cr in req.generation.character_references
+        ]
+
+    characters: list[dict[str, Any]] | None = None
+    if req.generation.characters:
+        characters = [
+            {
+                "prompt": c.prompt,
+                "negative_prompt": c.negative_prompt,
+                "position": c.position,
+                "enabled": c.enabled,
+            }
+            for c in req.generation.characters
+        ]
+
     conn = get_connection()
     try:
         entry = record_generation(
@@ -346,11 +374,24 @@ async def select_generate_endpoint(
             seed=req.generation.seed,
             chunk_ids=req.chunk_ids,
             image_paths=image_paths,
+            i2i_image_path=i2i_image_path,
+            i2i_strength=req.generation.i2i.strength if req.generation.i2i else None,
+            i2i_noise=req.generation.i2i.noise if req.generation.i2i else None,
+            character_references=character_references,
+            characters=characters,
         )
     finally:
         conn.close()
 
     return {"images": b64_images, "format": "png", "history_id": entry["id"]}
+
+
+def _save_reference_image(image_b64: str) -> str:
+    """i2i/キャラクター参照画像を outputs/history/ に保存し、リポジトリルート相対パスを返す。"""
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}_ref.png"
+    (_HISTORY_DIR / filename).write_bytes(_decode_b64(image_b64))
+    return f"outputs/history/{filename}"
 
 
 @router.get("/history")
@@ -364,8 +405,23 @@ async def get_generation_history(limit: int = 50) -> list[dict[str, Any]]:
     for entry in entries:
         images: list[str] = []
         for rel_path in entry.pop("image_paths"):
-            full_path = _HISTORY_DIR.parent.parent / rel_path
-            if full_path.exists():
-                images.append(b64encode(full_path.read_bytes()).decode())
+            b64 = _read_ref_image(rel_path)
+            if b64:
+                images.append(b64)
         entry["images"] = images
+
+        i2i_image_path = entry.pop("i2i_image_path", None)
+        entry["i2i_image"] = _read_ref_image(i2i_image_path) if i2i_image_path else None
+
+        for cr in entry.get("character_references", []):
+            cr["image"] = _read_ref_image(cr.pop("image_path", None))
     return entries
+
+
+def _read_ref_image(rel_path: str | None) -> str | None:
+    if not rel_path:
+        return None
+    full_path = _HISTORY_DIR.parent.parent / rel_path
+    if not full_path.exists():
+        return None
+    return b64encode(full_path.read_bytes()).decode()

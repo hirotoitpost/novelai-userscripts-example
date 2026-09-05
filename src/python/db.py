@@ -110,10 +110,38 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             seed INTEGER,
             chunk_ids TEXT NOT NULL,
             image_paths TEXT NOT NULL,
+            i2i_image_path TEXT,
+            i2i_strength REAL,
+            i2i_noise REAL,
+            character_references TEXT,
+            characters TEXT,
             created_at TEXT NOT NULL
         )
         """
     )
+    conn.commit()
+    _migrate_generation_history(conn)
+
+
+_GENERATION_HISTORY_EXTRA_COLUMNS = {
+    "i2i_image_path": "TEXT",
+    "i2i_strength": "REAL",
+    "i2i_noise": "REAL",
+    "character_references": "TEXT",
+    "characters": "TEXT",
+}
+
+
+def _migrate_generation_history(conn: sqlite3.Connection) -> None:
+    """
+    既存の data/app.db は generation_history に i2i/キャラクター系の列を持たない状態で
+    作られている場合があるため、無ければ追加する（CREATE TABLE IF NOT EXISTS は既存
+    テーブルには効かないため）。
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(generation_history)")}
+    for column, column_type in _GENERATION_HISTORY_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE generation_history ADD COLUMN {column} {column_type}")
     conn.commit()
 
 
@@ -430,17 +458,24 @@ def record_generation(
     seed: int | None,
     chunk_ids: list[str],
     image_paths: list[str],
+    i2i_image_path: str | None = None,
+    i2i_strength: float | None = None,
+    i2i_noise: float | None = None,
+    character_references: list[dict[str, Any]] | None = None,
+    characters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
-    /select 経由の画像生成だけを対象にした履歴保存。image_paths はリポジトリルートからの
-    相対パス(outputs/history/...)で、画像データ自体はDBに入れずファイルのまま置く。
+    /select 経由の画像生成だけを対象にした履歴保存。image_paths / i2i_image_path /
+    character_references[].image_path はリポジトリルートからの相対パス(outputs/history/...)で、
+    画像データ自体はDBに入れずファイルのまま置く。
     """
     now = datetime.now(timezone.utc).isoformat()
     row = conn.execute(
         """
         INSERT INTO generation_history
-            (prompt, negative_prompt, model, size, steps, scale, seed, chunk_ids, image_paths, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (prompt, negative_prompt, model, size, steps, scale, seed, chunk_ids, image_paths,
+             i2i_image_path, i2i_strength, i2i_noise, character_references, characters, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id, created_at
         """,
         (
@@ -453,6 +488,11 @@ def record_generation(
             seed,
             json.dumps(chunk_ids),
             json.dumps(image_paths),
+            i2i_image_path,
+            i2i_strength,
+            i2i_noise,
+            json.dumps(character_references) if character_references else None,
+            json.dumps(characters) if characters else None,
             now,
         ),
     ).fetchone()
@@ -469,5 +509,7 @@ def list_generation_history(conn: sqlite3.Connection, limit: int = 50) -> list[d
         d = dict(row)
         d["chunk_ids"] = json.loads(d["chunk_ids"])
         d["image_paths"] = json.loads(d["image_paths"])
+        d["character_references"] = json.loads(d["character_references"]) if d["character_references"] else []
+        d["characters"] = json.loads(d["characters"]) if d["characters"] else []
         result.append(d)
     return result

@@ -29,6 +29,35 @@ interface AllChunk {
   is_category: boolean
 }
 
+interface CharacterReferenceEntry {
+  image: string | null
+  type: 'character' | 'style' | 'character&style'
+  fidelity: number
+  strength: number
+}
+
+interface CharacterPromptEntry {
+  prompt: string
+  negativePrompt: string
+  x: number
+  y: number
+  enabled: boolean
+}
+
+interface HistoryCharacterReference {
+  image: string | null
+  type: string
+  fidelity: number
+  strength: number
+}
+
+interface HistoryCharacterPrompt {
+  prompt: string
+  negative_prompt: string
+  position: [number, number] | string
+  enabled: boolean
+}
+
 interface HistoryEntry {
   id: number
   prompt: string
@@ -37,10 +66,30 @@ interface HistoryEntry {
   seed: number | null
   chunk_ids: string[]
   images: string[]
+  i2i_image: string | null
+  i2i_strength: number | null
+  i2i_noise: number | null
+  character_references: HistoryCharacterReference[]
+  characters: HistoryCharacterPrompt[]
   created_at: string
 }
 
 type Mode = 'scenario' | 'random' | 'similar' | 'preset'
+
+const CHARACTER_REFERENCE_TYPES = [
+  { value: 'character&style', label: 'キャラ+スタイル' },
+  { value: 'character',       label: 'キャラのみ' },
+  { value: 'style',           label: 'スタイルのみ' },
+] as const
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
 
 const MODELS = [
   { value: 'nai-diffusion-4-5-full',    label: 'NAI Diffusion V4.5 Full' },
@@ -132,6 +181,14 @@ export default function Selection() {
   const [seed, setSeed] = useState('')
   const [ucPreset, setUcPreset] = useState<string>(UC_PRESETS[0].value)
   const [quality, setQuality] = useState(true)
+
+  const [i2iEnabled, setI2iEnabled] = useState(false)
+  const [i2iImage, setI2iImage] = useState<string | null>(null)
+  const [i2iStrength, setI2iStrength] = useState(0.7)
+  const [i2iNoise, setI2iNoise] = useState(0.0)
+
+  const [characterRefs, setCharacterRefs] = useState<CharacterReferenceEntry[]>([])
+  const [characters, setCharacters] = useState<CharacterPromptEntry[]>([])
 
   const [generatedImages, setGeneratedImages] = useState<string[]>([])
   const [generating, setGenerating] = useState(false)
@@ -250,6 +307,35 @@ export default function Selection() {
     }
   }
 
+  const handleI2iFile = async (file: File) => {
+    if (!file.type.match(/^image\//)) return
+    setI2iImage(await readFileAsDataUrl(file))
+  }
+
+  const addCharacterRef = () => {
+    setCharacterRefs(prev => [...prev, { image: null, type: 'character&style', fidelity: 1.0, strength: 1.0 }])
+  }
+
+  const updateCharacterRef = (index: number, patch: Partial<CharacterReferenceEntry>) => {
+    setCharacterRefs(prev => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)))
+  }
+
+  const removeCharacterRef = (index: number) => {
+    setCharacterRefs(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const addCharacter = () => {
+    setCharacters(prev => [...prev, { prompt: '', negativePrompt: '', x: 0.5, y: 0.5, enabled: true }])
+  }
+
+  const updateCharacter = (index: number, patch: Partial<CharacterPromptEntry>) => {
+    setCharacters(prev => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)))
+  }
+
+  const removeCharacter = (index: number) => {
+    setCharacters(prev => prev.filter((_, i) => i !== index))
+  }
+
   const generateImage = async () => {
     if (!token || !assembledText) return
     setGenerateError(null)
@@ -257,6 +343,26 @@ export default function Selection() {
     setGeneratedImages([])
     try {
       const usedChunkIds = results.filter(c => checkedIds.has(c.id)).map(c => c.id)
+
+      const i2i = i2iEnabled && i2iImage
+        ? { image: i2iImage, strength: i2iStrength, noise: i2iNoise }
+        : undefined
+
+      const validCharacterRefs = characterRefs.filter(c => c.image)
+      const character_references = validCharacterRefs.length > 0
+        ? validCharacterRefs.map(c => ({ image: c.image, type: c.type, fidelity: c.fidelity, strength: c.strength }))
+        : undefined
+
+      const validCharacters = characters.filter(c => c.prompt.trim())
+      const charactersPayload = validCharacters.length > 0
+        ? validCharacters.map(c => ({
+            prompt: c.prompt,
+            negative_prompt: c.negativePrompt,
+            position: [c.x, c.y],
+            enabled: c.enabled,
+          }))
+        : undefined
+
       const res = await fetch('/api/chunks/select/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -273,6 +379,9 @@ export default function Selection() {
             quality,
             uc_preset: ucPreset,
             n_samples: 1,
+            i2i,
+            character_references,
+            characters: charactersPayload,
           },
         }),
       })
@@ -456,6 +565,144 @@ export default function Selection() {
           </label>
         </section>
 
+        <section className="selection-section">
+          <h2>Image-to-Image</h2>
+          <label className="selection-i2i-toggle">
+            <input
+              type="checkbox"
+              checked={i2iEnabled}
+              onChange={e => {
+                setI2iEnabled(e.target.checked)
+                if (!e.target.checked) setI2iImage(null)
+              }}
+            />
+            参照画像から変換する
+          </label>
+          {i2iEnabled && (
+            <div className="selection-i2i-controls">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={e => {
+                  const f = e.target.files?.[0]
+                  if (f) void handleI2iFile(f)
+                  e.target.value = ''
+                }}
+              />
+              {i2iImage && <img className="selection-i2i-thumb" src={i2iImage} alt="i2i参照画像" />}
+              <label className="selection-settings-row">
+                Strength
+                <input
+                  type="range" min={0.01} max={0.99} step={0.01}
+                  value={i2iStrength}
+                  onChange={e => setI2iStrength(Number(e.target.value))}
+                />
+                <span>{i2iStrength.toFixed(2)}</span>
+              </label>
+              <label className="selection-settings-row">
+                Noise
+                <input
+                  type="range" min={0} max={0.99} step={0.01}
+                  value={i2iNoise}
+                  onChange={e => setI2iNoise(Number(e.target.value))}
+                />
+                <span>{i2iNoise.toFixed(2)}</span>
+              </label>
+            </div>
+          )}
+        </section>
+
+        <section className="selection-section">
+          <h2>キャラクター参照画像(Character Reference)</h2>
+          <p className="selection-section-note">同じキャラを一貫して生成したい時に、人物画像を参照として渡します。</p>
+          {characterRefs.map((c, i) => (
+            <div key={i} className="selection-charref-item">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async e => {
+                  const f = e.target.files?.[0]
+                  if (f) updateCharacterRef(i, { image: await readFileAsDataUrl(f) })
+                  e.target.value = ''
+                }}
+              />
+              {c.image && <img className="selection-i2i-thumb" src={c.image} alt={`キャラ参照 ${i + 1}`} />}
+              <select value={c.type} onChange={e => updateCharacterRef(i, { type: e.target.value as CharacterReferenceEntry['type'] })}>
+                {CHARACTER_REFERENCE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+              <label className="selection-settings-row">
+                Fidelity
+                <input
+                  type="range" min={0} max={1} step={0.01}
+                  value={c.fidelity}
+                  onChange={e => updateCharacterRef(i, { fidelity: Number(e.target.value) })}
+                />
+                <span>{c.fidelity.toFixed(2)}</span>
+              </label>
+              <label className="selection-settings-row">
+                Strength
+                <input
+                  type="range" min={0} max={1} step={0.01}
+                  value={c.strength}
+                  onChange={e => updateCharacterRef(i, { strength: Number(e.target.value) })}
+                />
+                <span>{c.strength.toFixed(2)}</span>
+              </label>
+              <button type="button" onClick={() => removeCharacterRef(i)}>削除</button>
+            </div>
+          ))}
+          <button type="button" onClick={addCharacterRef}>+ 参照画像を追加</button>
+        </section>
+
+        <section className="selection-section">
+          <h2>複数キャラのテキストプロンプト</h2>
+          <p className="selection-section-note">画像なしで、キャラごとにプロンプトと配置位置(x, y: 0〜1)を指定して同時に生成します。</p>
+          {characters.map((c, i) => (
+            <div key={i} className="selection-character-item">
+              <label className="selection-settings-checkbox">
+                <input
+                  type="checkbox"
+                  checked={c.enabled}
+                  onChange={e => updateCharacter(i, { enabled: e.target.checked })}
+                />
+                有効
+              </label>
+              <textarea
+                placeholder="キャラのプロンプト"
+                value={c.prompt}
+                onChange={e => updateCharacter(i, { prompt: e.target.value })}
+                rows={2}
+              />
+              <textarea
+                placeholder="キャラのネガティブプロンプト"
+                value={c.negativePrompt}
+                onChange={e => updateCharacter(i, { negativePrompt: e.target.value })}
+                rows={1}
+              />
+              <div className="selection-settings-grid">
+                <label>
+                  X (0〜1)
+                  <input
+                    type="number" min={0} max={1} step={0.01}
+                    value={c.x}
+                    onChange={e => updateCharacter(i, { x: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Y (0〜1)
+                  <input
+                    type="number" min={0} max={1} step={0.01}
+                    value={c.y}
+                    onChange={e => updateCharacter(i, { y: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+              <button type="button" onClick={() => removeCharacter(i)}>削除</button>
+            </div>
+          ))}
+          <button type="button" onClick={addCharacter}>+ キャラを追加</button>
+        </section>
+
         {results.length > 0 && (
           <>
             <section className="selection-section">
@@ -537,6 +784,34 @@ export default function Selection() {
                       {h.model} / {h.size} / seed={h.seed ?? 'random'} / チャンク{h.chunk_ids.length}件 /{' '}
                       {new Date(h.created_at).toLocaleString('ja-JP')}
                     </p>
+                    {h.i2i_image && (
+                      <p className="selection-history-info">
+                        i2i: strength={h.i2i_strength?.toFixed(2)} noise={h.i2i_noise?.toFixed(2)}
+                        <img
+                          className="selection-history-ref-thumb"
+                          src={`data:image/png;base64,${h.i2i_image}`}
+                          alt="i2i参照画像"
+                        />
+                      </p>
+                    )}
+                    {h.character_references.length > 0 && (
+                      <p className="selection-history-info">
+                        キャラ参照{h.character_references.length}件
+                        {h.character_references.map((cr, i) => cr.image && (
+                          <img
+                            key={i}
+                            className="selection-history-ref-thumb"
+                            src={`data:image/png;base64,${cr.image}`}
+                            alt={`キャラ参照 ${i + 1}`}
+                          />
+                        ))}
+                      </p>
+                    )}
+                    {h.characters.length > 0 && (
+                      <p className="selection-history-info">
+                        複数キャラ: {h.characters.map(c => c.prompt).join(' / ')}
+                      </p>
+                    )}
                   </div>
                 </li>
               ))}
