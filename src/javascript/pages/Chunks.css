@@ -124,6 +124,44 @@
   word-break: break-word;
 }
 
+.chunks-item-category {
+  font-size: 0.72rem;
+  color: #7878a8;
+}
+
+/* ===== Filter bar ===== */
+.chunks-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.chunks-filter-bar input[type='search'] {
+  flex: 1 1 200px;
+  padding: 0.5rem 0.8rem;
+  border-radius: 6px;
+  border: 1px solid #2a2a50;
+  background: #1a1a35;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+}
+
+.chunks-filter-bar select {
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #2a2a50;
+  background: #1a1a35;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+}
+
+.chunks-filter-count {
+  font-size: 0.78rem;
+  color: #9a9ac0;
+  white-space: nowrap;
+}
+
 /* ===== Situation tags ===== */
 .chunks-situation-tags {
   display: flex;

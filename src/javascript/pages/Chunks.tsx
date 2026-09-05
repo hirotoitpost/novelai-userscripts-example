@@ -15,6 +15,7 @@ interface DbChunk {
   expansion: string
   color: string | null
   is_category: boolean
+  child_order: string[] | null
   situations: Situation[]
 }
 
@@ -33,6 +34,10 @@ export default function Chunks() {
   const [chunks, setChunks] = useState<DbChunk[]>([])
   const [situations, setSituations] = useState<Situation[]>([])
   const [newSituationName, setNewSituationName] = useState('')
+
+  const [searchQuery, setSearchQuery] = useState('')
+  const [situationFilter, setSituationFilter] = useState('all') // 'all' | 'untagged' | situationId
+  const [categoryFilter, setCategoryFilter] = useState('all') // 'all' | containerId
 
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -142,6 +147,33 @@ export default function Chunks() {
   }
 
   const leafChunks = chunks.filter(c => !c.is_category)
+  const categories = chunks.filter(c => c.is_category)
+  const categoryLabelById = new Map(categories.map(c => [c.id, c.label]))
+
+  // NovelAI 側のデータは container_id が実際の所属フォルダと一致しないことがあるため、
+  // カテゴリの child_order (親→子の一覧) を逆引きして本当の親を求める。
+  const parentIdByChunkId = new Map<string, string>()
+  for (const cat of categories) {
+    for (const childId of cat.child_order ?? []) {
+      parentIdByChunkId.set(childId, cat.id)
+    }
+  }
+
+  const filteredChunks = leafChunks.filter(chunk => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      if (!chunk.label.toLowerCase().includes(q) && !chunk.expansion.toLowerCase().includes(q)) {
+        return false
+      }
+    }
+    if (situationFilter === 'untagged') {
+      if (chunk.situations.length > 0) return false
+    } else if (situationFilter !== 'all') {
+      if (!chunk.situations.some(s => s.id === Number(situationFilter))) return false
+    }
+    if (categoryFilter !== 'all' && parentIdByChunkId.get(chunk.id) !== categoryFilter) return false
+    return true
+  })
 
   return (
     <div className="chunks-root">
@@ -214,14 +246,44 @@ export default function Chunks() {
 
         {error && <p className="chunks-error">{error}</p>}
 
+        <section className="chunks-section chunks-filter-bar">
+          <input
+            type="search"
+            placeholder="ラベル・内容で検索..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+          <select value={situationFilter} onChange={e => setSituationFilter(e.target.value)}>
+            <option value="all">すべてのタグ</option>
+            <option value="untagged">未タグのみ</option>
+            {situations.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+          <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
+            <option value="all">すべてのカテゴリ</option>
+            {categories.map(c => (
+              <option key={c.id} value={c.id}>{c.label}</option>
+            ))}
+          </select>
+          <span className="chunks-filter-count">
+            {filteredChunks.length} / {leafChunks.length} 件
+          </span>
+        </section>
+
         <ul className="chunks-list">
-          {leafChunks.map(chunk => {
+          {filteredChunks.map(chunk => {
             const assignedIds = new Set(chunk.situations.map(s => s.id))
             const available = situations.filter(s => !assignedIds.has(s.id))
             return (
               <li key={chunk.id} className="chunks-item">
                 <span className="chunks-item-dot" style={{ background: chunk.color ?? '#888' }} />
                 <span className="chunks-item-label">🏷️ {chunk.label}</span>
+                {categoryLabelById.get(parentIdByChunkId.get(chunk.id) ?? '') && (
+                  <span className="chunks-item-category">
+                    📁 {categoryLabelById.get(parentIdByChunkId.get(chunk.id) ?? '')}
+                  </span>
+                )}
                 <div className="chunks-item-expansion">{chunk.expansion}</div>
 
                 <div className="chunks-item-situations">
