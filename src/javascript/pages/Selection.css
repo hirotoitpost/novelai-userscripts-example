@@ -35,12 +35,14 @@
 /* ===== Mode tabs ===== */
 .selection-modes {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin: 1.25rem 0;
 }
 
 .selection-mode {
   flex: 1;
+  min-width: 130px;
   padding: 0.6rem;
   border-radius: 8px;
   border: 1px solid #2a2a50;
@@ -74,6 +76,9 @@
 .selection-section input,
 .selection-section textarea,
 .selection-section button {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
   padding: 0.6rem 0.8rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
@@ -171,6 +176,10 @@
 
 .selection-settings-grid select,
 .selection-settings-grid input[type='number'] {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
   padding: 0.4rem 0.6rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
@@ -204,6 +213,9 @@
 }
 
 .selection-negprompt-label textarea {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
   width: 100%;
   padding: 0.5rem 0.7rem;
   border-radius: 6px;
@@ -338,4 +350,12 @@
   font-size: 0.72rem;
   color: #7878a8;
   margin: 0;
+}
+
+/* ===== Mobile ===== */
+@media (max-width: 600px) {
+  .selection-inner { padding: 1.25rem 1rem; }
+  .selection-generated img { max-width: 100%; }
+  .selection-history-item { flex-direction: column; }
+  .selection-history-images img { width: 70px; height: 96px; }
 }
