@@ -8,6 +8,11 @@ interface Situation {
   name: string
 }
 
+interface ExclusiveGroup {
+  id: number
+  name: string
+}
+
 interface DbChunk {
   id: string
   container_id: string | null
@@ -17,6 +22,7 @@ interface DbChunk {
   is_category: boolean
   child_order: string[] | null
   situations: Situation[]
+  exclusive_groups: ExclusiveGroup[]
 }
 
 const KEY_STORAGE = 'nai_encryption_key'
@@ -34,10 +40,13 @@ export default function Chunks() {
   const [chunks, setChunks] = useState<DbChunk[]>([])
   const [situations, setSituations] = useState<Situation[]>([])
   const [newSituationName, setNewSituationName] = useState('')
+  const [exclusiveGroups, setExclusiveGroups] = useState<ExclusiveGroup[]>([])
+  const [newGroupName, setNewGroupName] = useState('')
 
   const [searchQuery, setSearchQuery] = useState('')
   const [situationFilter, setSituationFilter] = useState('all') // 'all' | 'untagged' | situationId
   const [categoryFilter, setCategoryFilter] = useState('all') // 'all' | containerId
+  const [groupFilter, setGroupFilter] = useState('all') // 'all' | groupId
 
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -54,9 +63,16 @@ export default function Chunks() {
     if (res.ok) setSituations(data)
   }
 
+  const loadExclusiveGroups = async () => {
+    const res = await fetch('/api/chunks/exclusive-groups')
+    const data = await res.json()
+    if (res.ok) setExclusiveGroups(data)
+  }
+
   useEffect(() => {
     loadChunks()
     loadSituations()
+    loadExclusiveGroups()
   }, [])
 
   const computeKey = async () => {
@@ -146,6 +162,48 @@ export default function Chunks() {
     void setChunkSituationIds(chunk.id, ids)
   }
 
+  const addExclusiveGroup = async () => {
+    const name = newGroupName.trim()
+    if (!name) return
+    await fetch('/api/chunks/exclusive-groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    setNewGroupName('')
+    await loadExclusiveGroups()
+  }
+
+  const deleteExclusiveGroup = async (groupId: number) => {
+    await fetch(`/api/chunks/exclusive-groups/${groupId}`, { method: 'DELETE' })
+    await Promise.all([loadExclusiveGroups(), loadChunks()])
+  }
+
+  const setChunkGroupIds = async (chunkId: string, groupIds: number[]) => {
+    await fetch(`/api/chunks/${chunkId}/exclusive-groups`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group_ids: groupIds }),
+    })
+    setChunks(prev =>
+      prev.map(c =>
+        c.id === chunkId
+          ? { ...c, exclusive_groups: exclusiveGroups.filter(g => groupIds.includes(g.id)) }
+          : c
+      )
+    )
+  }
+
+  const addGroupToChunk = (chunk: DbChunk, groupId: number) => {
+    const ids = [...chunk.exclusive_groups.map(g => g.id), groupId]
+    void setChunkGroupIds(chunk.id, ids)
+  }
+
+  const removeGroupFromChunk = (chunk: DbChunk, groupId: number) => {
+    const ids = chunk.exclusive_groups.map(g => g.id).filter(id => id !== groupId)
+    void setChunkGroupIds(chunk.id, ids)
+  }
+
   const leafChunks = chunks.filter(c => !c.is_category)
   const categories = chunks.filter(c => c.is_category)
   const categoryLabelById = new Map(categories.map(c => [c.id, c.label]))
@@ -172,6 +230,9 @@ export default function Chunks() {
       if (!chunk.situations.some(s => s.id === Number(situationFilter))) return false
     }
     if (categoryFilter !== 'all' && parentIdByChunkId.get(chunk.id) !== categoryFilter) return false
+    if (groupFilter !== 'all' && !chunk.exclusive_groups.some(g => g.id === Number(groupFilter))) {
+      return false
+    }
     return true
   })
 
@@ -244,6 +305,31 @@ export default function Chunks() {
           </div>
         </section>
 
+        <section className="chunks-section">
+          <h2>排他グループ（同時に使えない組み合わせ）</h2>
+          <p className="chunks-section-note">
+            同じグループに属するチャンクは、同時に選ぶべきではない組み合わせとして扱います（例:「髪の長さ」グループに長い髪/短い髪/坊主）。
+          </p>
+          <div className="chunks-situation-tags">
+            {exclusiveGroups.map(g => (
+              <span key={g.id} className="chunks-situation-chip chunks-group-chip">
+                {g.name}
+                <button type="button" onClick={() => deleteExclusiveGroup(g.id)}>×</button>
+              </span>
+            ))}
+          </div>
+          <div className="chunks-situation-form">
+            <input
+              placeholder="新しい排他グループ名"
+              value={newGroupName}
+              onChange={e => setNewGroupName(e.target.value)}
+            />
+            <button type="button" onClick={addExclusiveGroup} disabled={!newGroupName.trim()}>
+              追加
+            </button>
+          </div>
+        </section>
+
         {error && <p className="chunks-error">{error}</p>}
 
         <section className="chunks-section chunks-filter-bar">
@@ -266,6 +352,12 @@ export default function Chunks() {
               <option key={c.id} value={c.id}>{c.label}</option>
             ))}
           </select>
+          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)}>
+            <option value="all">すべての排他グループ</option>
+            {exclusiveGroups.map(g => (
+              <option key={g.id} value={g.id}>{g.name}</option>
+            ))}
+          </select>
           <span className="chunks-filter-count">
             {filteredChunks.length} / {leafChunks.length} 件
           </span>
@@ -275,6 +367,8 @@ export default function Chunks() {
           {filteredChunks.map(chunk => {
             const assignedIds = new Set(chunk.situations.map(s => s.id))
             const available = situations.filter(s => !assignedIds.has(s.id))
+            const assignedGroupIds = new Set(chunk.exclusive_groups.map(g => g.id))
+            const availableGroups = exclusiveGroups.filter(g => !assignedGroupIds.has(g.id))
             return (
               <li key={chunk.id} className="chunks-item">
                 <span className="chunks-item-dot" style={{ background: chunk.color ?? '#888' }} />
@@ -303,6 +397,28 @@ export default function Chunks() {
                       <option value="">+ タグを追加</option>
                       {available.map(s => (
                         <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="chunks-item-situations">
+                  {chunk.exclusive_groups.map(g => (
+                    <span key={g.id} className="chunks-situation-chip chunks-group-chip">
+                      {g.name}
+                      <button type="button" onClick={() => removeGroupFromChunk(chunk, g.id)}>×</button>
+                    </span>
+                  ))}
+                  {availableGroups.length > 0 && (
+                    <select
+                      value=""
+                      onChange={e => {
+                        if (e.target.value) addGroupToChunk(chunk, Number(e.target.value))
+                      }}
+                    >
+                      <option value="">+ 排他グループを追加</option>
+                      {availableGroups.map(g => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
                       ))}
                     </select>
                   )}

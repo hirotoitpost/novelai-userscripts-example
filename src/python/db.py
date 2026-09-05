@@ -54,6 +54,25 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # ワードの関係(競合/排他): 「髪の長さ」のような排他グループを作り、
+    # 同じグループに属するチャンクは同時に選ばれてはいけない、という形でモデル化する。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exclusive_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS prompt_chunk_exclusive_groups (
+            chunk_id TEXT NOT NULL REFERENCES prompt_chunks(id) ON DELETE CASCADE,
+            group_id INTEGER NOT NULL REFERENCES exclusive_groups(id) ON DELETE CASCADE,
+            PRIMARY KEY (chunk_id, group_id)
+        )
+        """
+    )
     conn.commit()
 
 
@@ -104,6 +123,7 @@ def list_prompt_chunks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         "SELECT * FROM prompt_chunks ORDER BY is_category DESC, label"
     ).fetchall()
     situations_by_chunk = _situations_by_chunk(conn)
+    exclusive_groups_by_chunk = _exclusive_groups_by_chunk(conn)
 
     result = []
     for row in rows:
@@ -111,6 +131,7 @@ def list_prompt_chunks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         d["is_category"] = bool(d["is_category"])
         d["child_order"] = json.loads(d["child_order"]) if d["child_order"] else None
         d["situations"] = situations_by_chunk.get(d["id"], [])
+        d["exclusive_groups"] = exclusive_groups_by_chunk.get(d["id"], [])
         result.append(d)
     return result
 
@@ -157,3 +178,77 @@ def set_chunk_situations(conn: sqlite3.Connection, chunk_id: str, situation_ids:
         [(chunk_id, sid) for sid in situation_ids],
     )
     conn.commit()
+
+
+def _exclusive_groups_by_chunk(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+    rows = conn.execute(
+        """
+        SELECT pceg.chunk_id, g.id, g.name
+        FROM prompt_chunk_exclusive_groups pceg
+        JOIN exclusive_groups g ON g.id = pceg.group_id
+        ORDER BY g.name
+        """
+    ).fetchall()
+    result: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        result.setdefault(row["chunk_id"], []).append({"id": row["id"], "name": row["name"]})
+    return result
+
+
+def list_exclusive_groups(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT id, name FROM exclusive_groups ORDER BY name").fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_exclusive_group(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
+    name = name.strip()
+    row = conn.execute(
+        "INSERT INTO exclusive_groups (name) VALUES (?) ON CONFLICT(name) DO UPDATE SET name = name RETURNING id, name",
+        (name,),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def delete_exclusive_group(conn: sqlite3.Connection, group_id: int) -> None:
+    conn.execute("DELETE FROM exclusive_groups WHERE id = ?", (group_id,))
+    conn.commit()
+
+
+def set_chunk_exclusive_groups(conn: sqlite3.Connection, chunk_id: str, group_ids: list[int]) -> None:
+    conn.execute("DELETE FROM prompt_chunk_exclusive_groups WHERE chunk_id = ?", (chunk_id,))
+    conn.executemany(
+        "INSERT INTO prompt_chunk_exclusive_groups (chunk_id, group_id) VALUES (?, ?)",
+        [(chunk_id, gid) for gid in group_ids],
+    )
+    conn.commit()
+
+
+def find_conflicts(conn: sqlite3.Connection, chunk_ids: list[str]) -> list[dict[str, Any]]:
+    """
+    指定したチャンク群の中に、同じ排他グループに属するものが2件以上あれば報告する。
+    ワード選択ルール実装時にこのまま流用する想定。
+    """
+    if not chunk_ids:
+        return []
+    placeholders = ",".join("?" for _ in chunk_ids)
+    rows = conn.execute(
+        f"""
+        SELECT g.id AS group_id, g.name AS group_name, pceg.chunk_id, pc.label
+        FROM prompt_chunk_exclusive_groups pceg
+        JOIN exclusive_groups g ON g.id = pceg.group_id
+        JOIN prompt_chunks pc ON pc.id = pceg.chunk_id
+        WHERE pceg.chunk_id IN ({placeholders})
+        ORDER BY g.name
+        """,
+        chunk_ids,
+    ).fetchall()
+
+    by_group: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        group = by_group.setdefault(
+            row["group_id"], {"group_id": row["group_id"], "group_name": row["group_name"], "members": []}
+        )
+        group["members"].append({"id": row["chunk_id"], "label": row["label"]})
+
+    return [g for g in by_group.values() if len(g["members"]) > 1]

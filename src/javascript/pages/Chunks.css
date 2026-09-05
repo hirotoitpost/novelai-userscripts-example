@@ -45,6 +45,17 @@
   font-size: 1rem;
 }
 
+.chunks-section-note {
+  font-size: 0.78rem;
+  color: #9a9ac0;
+  margin: -0.4rem 0 0.75rem;
+}
+
+.chunks-group-chip {
+  background: rgba(255, 159, 67, 0.18);
+  border: 1px solid rgba(255, 159, 67, 0.35);
+}
+
 .chunks-key-form,
 .chunks-key-set {
   display: flex;

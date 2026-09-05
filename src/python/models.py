@@ -199,6 +199,23 @@ class SetChunkSituationsRequest(BaseModel):
     situation_ids: list[int]
 
 
+class ExclusiveGroupCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class ExclusiveGroupResponse(BaseModel):
+    id: int
+    name: str
+
+
+class SetChunkExclusiveGroupsRequest(BaseModel):
+    group_ids: list[int]
+
+
+class ConflictCheckRequest(BaseModel):
+    chunk_ids: list[str]
+
+
 class MetadataExtractRequest(BaseModel):
     image: str
 

@@ -8,18 +8,27 @@ from fastapi import APIRouter, Header, HTTPException, Query
 
 from ..auth_utils import get_encryption_key
 from ..db import (
+    create_exclusive_group,
     create_situation,
+    delete_exclusive_group,
     delete_situation,
+    find_conflicts,
     get_connection,
+    list_exclusive_groups,
     list_prompt_chunks,
     list_situations,
+    set_chunk_exclusive_groups,
     set_chunk_situations,
     upsert_prompt_chunks,
 )
 from ..keystore_crypto import decrypt_keystore, decrypt_object
 from ..models import (
+    ConflictCheckRequest,
     EncryptionKeyRequest,
     EncryptionKeyResponse,
+    ExclusiveGroupCreateRequest,
+    ExclusiveGroupResponse,
+    SetChunkExclusiveGroupsRequest,
     SetChunkSituationsRequest,
     SituationCreateRequest,
     SituationResponse,
@@ -138,5 +147,54 @@ async def set_chunk_situations_endpoint(chunk_id: str, req: SetChunkSituationsRe
     conn = get_connection()
     try:
         set_chunk_situations(conn, chunk_id, req.situation_ids)
+    finally:
+        conn.close()
+
+
+@router.get("/exclusive-groups", response_model=list[ExclusiveGroupResponse])
+async def get_exclusive_groups() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_exclusive_groups(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/exclusive-groups", response_model=ExclusiveGroupResponse)
+async def create_exclusive_group_endpoint(req: ExclusiveGroupCreateRequest) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return create_exclusive_group(conn, req.name)
+    finally:
+        conn.close()
+
+
+@router.delete("/exclusive-groups/{group_id}", status_code=204)
+async def delete_exclusive_group_endpoint(group_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_exclusive_group(conn, group_id)
+    finally:
+        conn.close()
+
+
+@router.put("/{chunk_id}/exclusive-groups", status_code=204)
+async def set_chunk_exclusive_groups_endpoint(chunk_id: str, req: SetChunkExclusiveGroupsRequest) -> None:
+    conn = get_connection()
+    try:
+        set_chunk_exclusive_groups(conn, chunk_id, req.group_ids)
+    finally:
+        conn.close()
+
+
+@router.post("/check-conflicts")
+async def check_conflicts_endpoint(req: ConflictCheckRequest) -> list[dict[str, Any]]:
+    """
+    渡したチャンクID群の中に、同じ排他グループのものが複数含まれていないか確認する。
+    ワード選択ルール実装時に流用する想定の検証エンドポイント。
+    """
+    conn = get_connection()
+    try:
+        return find_conflicts(conn, req.chunk_ids)
     finally:
         conn.close()
