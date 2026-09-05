@@ -161,6 +161,19 @@ export default function Home() {
             <p>インポート済みチャンクの件数・カテゴリ構成・タグ付け状況を確認します。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/select')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/select')}
+          >
+            <div className="home-card-icon">🎲</div>
+            <h2>ワード選択</h2>
+            <p>シナリオ・ランダム・類似・プリセットの4通りでチャンクを選び、プロンプトに結合します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">

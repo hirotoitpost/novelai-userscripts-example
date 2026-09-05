@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,6 +71,27 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             chunk_id TEXT NOT NULL REFERENCES prompt_chunks(id) ON DELETE CASCADE,
             group_id INTEGER NOT NULL REFERENCES exclusive_groups(id) ON DELETE CASCADE,
             PRIMARY KEY (chunk_id, group_id)
+        )
+        """
+    )
+    # ワード選択ルール: プリセットは特定のチャンクID組み合わせを名前付きで保存し、
+    # 呼び出すたびに同じ組み合わせを再現する。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS presets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS preset_chunks (
+            preset_id INTEGER NOT NULL REFERENCES presets(id) ON DELETE CASCADE,
+            chunk_id TEXT NOT NULL REFERENCES prompt_chunks(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (preset_id, chunk_id)
         )
         """
     )
@@ -252,3 +274,127 @@ def find_conflicts(conn: sqlite3.Connection, chunk_ids: list[str]) -> list[dict[
         group["members"].append({"id": row["chunk_id"], "label": row["label"]})
 
     return [g for g in by_group.values() if len(g["members"]) > 1]
+
+
+# ===== ワード選択ルール =====
+
+def _resolve_conflicts(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同じ排他グループに属するチャンクが複数あれば、先に出てきたものだけを残す。"""
+    used_groups: set[int] = set()
+    result: list[dict[str, Any]] = []
+    for chunk in chunks:
+        group_ids = [g["id"] for g in chunk.get("exclusive_groups", [])]
+        if any(gid in used_groups for gid in group_ids):
+            continue
+        used_groups.update(group_ids)
+        result.append(chunk)
+    return result
+
+
+def select_by_situation(conn: sqlite3.Connection, situation_id: int) -> list[dict[str, Any]]:
+    """シナリオベース選択: 指定シチュエーションが付いたチャンクを、排他グループの重複を除いて全て返す。"""
+    candidates = [
+        c
+        for c in list_prompt_chunks(conn)
+        if not c["is_category"] and any(s["id"] == situation_id for s in c["situations"])
+    ]
+    return _resolve_conflicts(candidates)
+
+
+def select_random(
+    conn: sqlite3.Connection, situation_id: int | None, count: int | None
+) -> list[dict[str, Any]]:
+    """ランダム選択: (任意でシチュエーション絞り込み後)排他グループの重複を除いてランダムに選ぶ。"""
+    pool = [c for c in list_prompt_chunks(conn) if not c["is_category"]]
+    if situation_id is not None:
+        pool = [c for c in pool if any(s["id"] == situation_id for s in c["situations"])]
+    random.shuffle(pool)
+    resolved = _resolve_conflicts(pool)
+    return resolved[:count] if count is not None else resolved
+
+
+def _tag_set(expansion: str) -> set[str]:
+    return {t.strip().lower() for t in expansion.split(",") if t.strip()}
+
+
+def find_similar(conn: sqlite3.Connection, chunk_id: str, limit: int) -> list[dict[str, Any]]:
+    """類似選択: expansion のタグ集合の Jaccard 係数でランキングする(追加インフラ不要)。"""
+    all_chunks = list_prompt_chunks(conn)
+    by_id = {c["id"]: c for c in all_chunks}
+    ref = by_id.get(chunk_id)
+    if ref is None:
+        return []
+
+    ref_tags = _tag_set(ref["expansion"])
+    scored: list[dict[str, Any]] = []
+    for c in all_chunks:
+        if c["id"] == chunk_id or c["is_category"]:
+            continue
+        tags = _tag_set(c["expansion"])
+        union = ref_tags | tags
+        if not union:
+            continue
+        score = len(ref_tags & tags) / len(union)
+        if score > 0:
+            scored.append({**c, "score": score})
+
+    scored.sort(key=lambda c: c["score"], reverse=True)
+    return scored[:limit]
+
+
+def list_presets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT id, name, created_at FROM presets ORDER BY name").fetchall()
+    return [dict(row) for row in rows]
+
+
+def _set_preset_chunks(conn: sqlite3.Connection, preset_id: int, chunk_ids: list[str]) -> None:
+    conn.execute("DELETE FROM preset_chunks WHERE preset_id = ?", (preset_id,))
+    conn.executemany(
+        "INSERT INTO preset_chunks (preset_id, chunk_id, position) VALUES (?, ?, ?)",
+        [(preset_id, cid, i) for i, cid in enumerate(chunk_ids)],
+    )
+
+
+def create_preset(conn: sqlite3.Connection, name: str, chunk_ids: list[str]) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        "INSERT INTO presets (name, created_at) VALUES (?, ?) RETURNING id, name, created_at",
+        (name.strip(), now),
+    ).fetchone()
+    preset = dict(row)
+    _set_preset_chunks(conn, preset["id"], chunk_ids)
+    conn.commit()
+    return preset
+
+
+def update_preset_chunks(conn: sqlite3.Connection, preset_id: int, chunk_ids: list[str]) -> None:
+    _set_preset_chunks(conn, preset_id, chunk_ids)
+    conn.commit()
+
+
+def delete_preset(conn: sqlite3.Connection, preset_id: int) -> None:
+    conn.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+    conn.commit()
+
+
+def get_preset(conn: sqlite3.Connection, preset_id: int) -> dict[str, Any] | None:
+    preset_row = conn.execute(
+        "SELECT id, name, created_at FROM presets WHERE id = ?", (preset_id,)
+    ).fetchone()
+    if preset_row is None:
+        return None
+
+    rows = conn.execute(
+        """
+        SELECT pc.id AS id, pc.label AS label, pc.expansion AS expansion, pc.color AS color
+        FROM preset_chunks p
+        JOIN prompt_chunks pc ON pc.id = p.chunk_id
+        WHERE p.preset_id = ?
+        ORDER BY p.position
+        """,
+        (preset_id,),
+    ).fetchall()
+
+    result = dict(preset_row)
+    result["chunks"] = [dict(row) for row in rows]
+    return result

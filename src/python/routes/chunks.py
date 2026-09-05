@@ -9,16 +9,24 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from ..auth_utils import get_encryption_key
 from ..db import (
     create_exclusive_group,
+    create_preset,
     create_situation,
     delete_exclusive_group,
+    delete_preset,
     delete_situation,
     find_conflicts,
+    find_similar,
     get_connection,
+    get_preset,
     list_exclusive_groups,
     list_prompt_chunks,
+    list_presets,
     list_situations,
+    select_by_situation,
+    select_random,
     set_chunk_exclusive_groups,
     set_chunk_situations,
+    update_preset_chunks,
     upsert_prompt_chunks,
 )
 from ..keystore_crypto import decrypt_keystore, decrypt_object
@@ -28,8 +36,14 @@ from ..models import (
     EncryptionKeyResponse,
     ExclusiveGroupCreateRequest,
     ExclusiveGroupResponse,
+    PresetCreateRequest,
+    PresetSummary,
+    PresetUpdateRequest,
+    RandomSelectRequest,
+    ScenarioSelectRequest,
     SetChunkExclusiveGroupsRequest,
     SetChunkSituationsRequest,
+    SimilarSelectRequest,
     SituationCreateRequest,
     SituationResponse,
 )
@@ -196,5 +210,85 @@ async def check_conflicts_endpoint(req: ConflictCheckRequest) -> list[dict[str, 
     conn = get_connection()
     try:
         return find_conflicts(conn, req.chunk_ids)
+    finally:
+        conn.close()
+
+
+# ===== ワード選択ルール =====
+
+@router.post("/select/scenario")
+async def select_scenario_endpoint(req: ScenarioSelectRequest) -> list[dict[str, Any]]:
+    """指定シチュエーションのチャンクを、排他グループの重複を除いて返す。"""
+    conn = get_connection()
+    try:
+        return select_by_situation(conn, req.situation_id)
+    finally:
+        conn.close()
+
+
+@router.post("/select/random")
+async def select_random_endpoint(req: RandomSelectRequest) -> list[dict[str, Any]]:
+    """(任意でシチュエーション絞り込み後)排他グループの重複を除いてランダムに選ぶ。"""
+    conn = get_connection()
+    try:
+        return select_random(conn, req.situation_id, req.count)
+    finally:
+        conn.close()
+
+
+@router.post("/select/similar")
+async def select_similar_endpoint(req: SimilarSelectRequest) -> list[dict[str, Any]]:
+    """指定チャンクとタグの重なりが大きい順にランキングする。"""
+    conn = get_connection()
+    try:
+        return find_similar(conn, req.chunk_id, req.limit)
+    finally:
+        conn.close()
+
+
+@router.get("/presets", response_model=list[PresetSummary])
+async def get_presets() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_presets(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/presets", response_model=PresetSummary)
+async def create_preset_endpoint(req: PresetCreateRequest) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return create_preset(conn, req.name, req.chunk_ids)
+    finally:
+        conn.close()
+
+
+@router.get("/presets/{preset_id}")
+async def get_preset_endpoint(preset_id: int) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        preset = get_preset(conn, preset_id)
+        if preset is None:
+            raise HTTPException(status_code=404, detail="preset not found")
+        return preset
+    finally:
+        conn.close()
+
+
+@router.put("/presets/{preset_id}", status_code=204)
+async def update_preset_endpoint(preset_id: int, req: PresetUpdateRequest) -> None:
+    conn = get_connection()
+    try:
+        update_preset_chunks(conn, preset_id, req.chunk_ids)
+    finally:
+        conn.close()
+
+
+@router.delete("/presets/{preset_id}", status_code=204)
+async def delete_preset_endpoint(preset_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_preset(conn, preset_id)
     finally:
         conn.close()

@@ -216,6 +216,35 @@ class ConflictCheckRequest(BaseModel):
     chunk_ids: list[str]
 
 
+class ScenarioSelectRequest(BaseModel):
+    situation_id: int
+
+
+class RandomSelectRequest(BaseModel):
+    situation_id: Optional[int] = None
+    count: Optional[int] = Field(None, ge=1)
+
+
+class SimilarSelectRequest(BaseModel):
+    chunk_id: str
+    limit: int = Field(10, ge=1, le=100)
+
+
+class PresetCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    chunk_ids: list[str]
+
+
+class PresetUpdateRequest(BaseModel):
+    chunk_ids: list[str]
+
+
+class PresetSummary(BaseModel):
+    id: int
+    name: str
+    created_at: str
+
+
 class MetadataExtractRequest(BaseModel):
     image: str
 

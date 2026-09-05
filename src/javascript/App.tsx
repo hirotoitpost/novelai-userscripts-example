@@ -10,6 +10,7 @@ import Metadata from './pages/Metadata'
 import LoraDataset from './pages/LoraDataset'
 import Chunks from './pages/Chunks'
 import DbStatus from './pages/DbStatus'
+import Selection from './pages/Selection'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -55,6 +56,10 @@ function AppRoutes() {
       <Route
         path="/db-status"
         element={<ProtectedRoute><DbStatus /></ProtectedRoute>}
+      />
+      <Route
+        path="/select"
+        element={<ProtectedRoute><Selection /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
