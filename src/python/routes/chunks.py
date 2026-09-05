@@ -7,9 +7,23 @@ import httpx
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from ..auth_utils import get_encryption_key
-from ..db import get_connection, list_prompt_chunks, upsert_prompt_chunks
+from ..db import (
+    create_situation,
+    delete_situation,
+    get_connection,
+    list_prompt_chunks,
+    list_situations,
+    set_chunk_situations,
+    upsert_prompt_chunks,
+)
 from ..keystore_crypto import decrypt_keystore, decrypt_object
-from ..models import EncryptionKeyRequest, EncryptionKeyResponse
+from ..models import (
+    EncryptionKeyRequest,
+    EncryptionKeyResponse,
+    SetChunkSituationsRequest,
+    SituationCreateRequest,
+    SituationResponse,
+)
 
 router = APIRouter(prefix="/api/chunks", tags=["chunks"])
 
@@ -88,5 +102,41 @@ async def get_imported_chunks() -> list[dict[str, Any]]:
     conn = get_connection()
     try:
         return list_prompt_chunks(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/situations", response_model=list[SituationResponse])
+async def get_situations() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_situations(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/situations", response_model=SituationResponse)
+async def create_situation_endpoint(req: SituationCreateRequest) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return create_situation(conn, req.name)
+    finally:
+        conn.close()
+
+
+@router.delete("/situations/{situation_id}", status_code=204)
+async def delete_situation_endpoint(situation_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_situation(conn, situation_id)
+    finally:
+        conn.close()
+
+
+@router.put("/{chunk_id}/situations", status_code=204)
+async def set_chunk_situations_endpoint(chunk_id: str, req: SetChunkSituationsRequest) -> None:
+    conn = get_connection()
+    try:
+        set_chunk_situations(conn, chunk_id, req.situation_ids)
     finally:
         conn.close()

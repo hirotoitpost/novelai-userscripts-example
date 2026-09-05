@@ -186,6 +186,19 @@ class EncryptionKeyResponse(BaseModel):
     encryption_key: str = Field(description="base64エンコードされた32byte鍵")
 
 
+class SituationCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class SituationResponse(BaseModel):
+    id: int
+    name: str
+
+
+class SetChunkSituationsRequest(BaseModel):
+    situation_ids: list[int]
+
+
 class MetadataExtractRequest(BaseModel):
     image: str
 

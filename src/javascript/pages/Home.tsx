@@ -148,6 +148,19 @@ export default function Home() {
             <p>NovelAI 公式のプロンプトチャンクを読み取り専用で同期します（セッショントークンが必要）。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/db-status')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/db-status')}
+          >
+            <div className="home-card-icon">📊</div>
+            <h2>DB状態</h2>
+            <p>インポート済みチャンクの件数・カテゴリ構成・タグ付け状況を確認します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">

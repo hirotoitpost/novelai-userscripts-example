@@ -1,21 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import './Chunks.css'
 
-interface PromptMacro {
+interface Situation {
+  id: number
+  name: string
+}
+
+interface DbChunk {
   id: string
-  containerId: string
+  container_id: string | null
   label: string
   expansion: string
-  color: string
-  isCategory: boolean
-  childOrder?: string[]
+  color: string | null
+  is_category: boolean
+  situations: Situation[]
 }
 
 const KEY_STORAGE = 'nai_encryption_key'
 
 export default function Chunks() {
   const { token } = useAuth()
+  const navigate = useNavigate()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -23,9 +30,29 @@ export default function Chunks() {
     localStorage.getItem(KEY_STORAGE)
   )
 
-  const [macros, setMacros] = useState<PromptMacro[] | null>(null)
+  const [chunks, setChunks] = useState<DbChunk[]>([])
+  const [situations, setSituations] = useState<Situation[]>([])
+  const [newSituationName, setNewSituationName] = useState('')
+
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+
+  const loadChunks = async () => {
+    const res = await fetch('/api/chunks/imported')
+    const data = await res.json()
+    if (res.ok) setChunks(data)
+  }
+
+  const loadSituations = async () => {
+    const res = await fetch('/api/chunks/situations')
+    const data = await res.json()
+    if (res.ok) setSituations(data)
+  }
+
+  useEffect(() => {
+    loadChunks()
+    loadSituations()
+  }, [])
 
   const computeKey = async () => {
     setError(null)
@@ -51,10 +78,9 @@ export default function Chunks() {
   const forgetKey = () => {
     localStorage.removeItem(KEY_STORAGE)
     setEncryptionKey(null)
-    setMacros(null)
   }
 
-  const fetchMacros = async () => {
+  const syncFromNovelAI = async () => {
     if (!token || !encryptionKey) return
     setError(null)
     setLoading(true)
@@ -65,7 +91,7 @@ export default function Chunks() {
       )
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? 'チャンクの取得に失敗しました')
-      setMacros(data)
+      await loadChunks()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -73,68 +99,156 @@ export default function Chunks() {
     }
   }
 
+  const addSituation = async () => {
+    const name = newSituationName.trim()
+    if (!name) return
+    await fetch('/api/chunks/situations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    setNewSituationName('')
+    await loadSituations()
+  }
+
+  const deleteSituation = async (situationId: number) => {
+    await fetch(`/api/chunks/situations/${situationId}`, { method: 'DELETE' })
+    await Promise.all([loadSituations(), loadChunks()])
+  }
+
+  const setChunkSituationIds = async (chunkId: string, situationIds: number[]) => {
+    await fetch(`/api/chunks/${chunkId}/situations`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ situation_ids: situationIds }),
+    })
+    setChunks(prev =>
+      prev.map(c =>
+        c.id === chunkId
+          ? { ...c, situations: situations.filter(s => situationIds.includes(s.id)) }
+          : c
+      )
+    )
+  }
+
+  const addSituationToChunk = (chunk: DbChunk, situationId: number) => {
+    const ids = [...chunk.situations.map(s => s.id), situationId]
+    void setChunkSituationIds(chunk.id, ids)
+  }
+
+  const removeSituationFromChunk = (chunk: DbChunk, situationId: number) => {
+    const ids = chunk.situations.map(s => s.id).filter(id => id !== situationId)
+    void setChunkSituationIds(chunk.id, ids)
+  }
+
+  const leafChunks = chunks.filter(c => !c.is_category)
+
   return (
     <div className="chunks-root">
       <div className="chunks-inner">
-      <h1>プロンプトチャンク</h1>
-      <p className="chunks-intro">
-        NovelAI 公式の「プロンプトチャンク」を読み取り専用で同期します。
-        <code>/user/keystore</code> は Persistent API Token を受け付けないため、
-        ログイン画面で novelai.net から取得したセッショントークン（有効期限あり）でログインしている必要があります。
-      </p>
+        <button type="button" className="chunks-back" onClick={() => navigate('/')}>
+          ← ホーム
+        </button>
+        <h1>プロンプトチャンク</h1>
+        <p className="chunks-intro">
+          NovelAI 公式の「プロンプトチャンク」を読み取り専用で同期し、シチュエーションタグを付けて管理します。
+          同期(取得)は任意操作で、通常はローカルDBの内容だけを表示します。
+        </p>
 
-      <section className="chunks-section">
-        <h2>1. 復号鍵</h2>
-        {encryptionKey ? (
-          <div className="chunks-key-set">
-            <span>✓ 設定済み</span>
-            <button type="button" onClick={forgetKey}>削除</button>
+        <section className="chunks-section">
+          <h2>公式からの同期(任意)</h2>
+          {encryptionKey ? (
+            <div className="chunks-key-set">
+              <span>✓ 復号鍵 設定済み</span>
+              <button type="button" onClick={forgetKey}>削除</button>
+              <button type="button" onClick={syncFromNovelAI} disabled={loading}>
+                {loading ? '同期中...' : 'チャンクを同期'}
+              </button>
+            </div>
+          ) : (
+            <div className="chunks-key-form">
+              <p>
+                同期にはメール・パスワードから計算する復号鍵と、novelai.net から取得したセッショントークンでのログインが必要です。
+                パスワード自体は保存されません。
+              </p>
+              <input
+                type="email"
+                placeholder="メールアドレス"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+              />
+              <input
+                type="password"
+                placeholder="パスワード"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+              />
+              <button type="button" onClick={computeKey} disabled={loading || !email || !password}>
+                鍵を計算して保存
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className="chunks-section">
+          <h2>シチュエーションタグ</h2>
+          <div className="chunks-situation-tags">
+            {situations.map(s => (
+              <span key={s.id} className="chunks-situation-chip">
+                {s.name}
+                <button type="button" onClick={() => deleteSituation(s.id)}>×</button>
+              </span>
+            ))}
           </div>
-        ) : (
-          <div className="chunks-key-form">
-            <p>
-              メール・パスワードから復号鍵をこのブラウザ内で計算します。ネットワークには送信されず、
-              パスワード自体も保存されません。
-            </p>
+          <div className="chunks-situation-form">
             <input
-              type="email"
-              placeholder="メールアドレス"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
+              placeholder="新しいシチュエーション名"
+              value={newSituationName}
+              onChange={e => setNewSituationName(e.target.value)}
             />
-            <input
-              type="password"
-              placeholder="パスワード"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-            />
-            <button type="button" onClick={computeKey} disabled={loading || !email || !password}>
-              鍵を計算して保存
+            <button type="button" onClick={addSituation} disabled={!newSituationName.trim()}>
+              追加
             </button>
           </div>
-        )}
-      </section>
+        </section>
 
-      <section className="chunks-section">
-        <h2>2. チャンク取得</h2>
-        <button type="button" onClick={fetchMacros} disabled={loading || !encryptionKey}>
-          {loading ? '取得中...' : 'チャンクを取得'}
-        </button>
-      </section>
+        {error && <p className="chunks-error">{error}</p>}
 
-      {error && <p className="chunks-error">{error}</p>}
-
-      {macros && (
         <ul className="chunks-list">
-          {macros.map(m => (
-            <li key={m.id} className={m.isCategory ? 'chunks-item--category' : 'chunks-item'}>
-              <span className="chunks-item-dot" style={{ background: m.color }} />
-              <span className="chunks-item-label">{m.isCategory ? '📁' : '🏷️'} {m.label}</span>
-              {!m.isCategory && <div className="chunks-item-expansion">{m.expansion}</div>}
-            </li>
-          ))}
+          {leafChunks.map(chunk => {
+            const assignedIds = new Set(chunk.situations.map(s => s.id))
+            const available = situations.filter(s => !assignedIds.has(s.id))
+            return (
+              <li key={chunk.id} className="chunks-item">
+                <span className="chunks-item-dot" style={{ background: chunk.color ?? '#888' }} />
+                <span className="chunks-item-label">🏷️ {chunk.label}</span>
+                <div className="chunks-item-expansion">{chunk.expansion}</div>
+
+                <div className="chunks-item-situations">
+                  {chunk.situations.map(s => (
+                    <span key={s.id} className="chunks-situation-chip">
+                      {s.name}
+                      <button type="button" onClick={() => removeSituationFromChunk(chunk, s.id)}>×</button>
+                    </span>
+                  ))}
+                  {available.length > 0 && (
+                    <select
+                      value=""
+                      onChange={e => {
+                        if (e.target.value) addSituationToChunk(chunk, Number(e.target.value))
+                      }}
+                    >
+                      <option value="">+ タグを追加</option>
+                      {available.map(s => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </li>
+            )
+          })}
         </ul>
-      )}
       </div>
     </div>
   )

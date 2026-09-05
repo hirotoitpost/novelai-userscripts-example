@@ -10,6 +10,22 @@
   padding: 2rem 1.5rem;
 }
 
+.chunks-back {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #9a9ac0;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  margin-bottom: 1rem;
+}
+
+.chunks-back:hover {
+  color: #e8e8ff;
+  border-color: #7b5cf6;
+}
+
 .chunks-intro {
   font-size: 0.85rem;
   color: #9a9ac0;
@@ -106,4 +122,68 @@
   font-size: 0.78rem;
   color: #9a9ac0;
   word-break: break-word;
+}
+
+/* ===== Situation tags ===== */
+.chunks-situation-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.chunks-situation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  background: #2a2a50;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.chunks-situation-chip button {
+  background: none;
+  border: none;
+  color: #9a9ac0;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.chunks-situation-chip button:hover {
+  color: #ff6b8a;
+}
+
+.chunks-situation-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.chunks-situation-form input {
+  flex: 1;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #2a2a50;
+  background: #1a1a35;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+}
+
+.chunks-item-situations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.chunks-item-situations select {
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #2a2a50;
+  background: #1a1a35;
+  color: #9a9ac0;
+  font-size: 0.78rem;
 }
