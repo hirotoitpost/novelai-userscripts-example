@@ -177,6 +177,15 @@ class LoraDatasetCompleteEvent(BaseModel):
     output_path: str
 
 
+class EncryptionKeyRequest(BaseModel):
+    email: str
+    password: str
+
+
+class EncryptionKeyResponse(BaseModel):
+    encryption_key: str = Field(description="base64エンコードされた32byte鍵")
+
+
 class MetadataExtractRequest(BaseModel):
     image: str
 

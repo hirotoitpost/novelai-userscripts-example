@@ -12,6 +12,7 @@ from .client import close_client, init_client
 from .llm_client import close_llm_clients, init_llm_clients
 from .routes.auth import router as auth_router
 from .routes.batch import router as batch_router
+from .routes.chunks import router as chunks_router
 from .routes.image import router as image_router
 from .routes.llm import router as llm_router
 from .routes.lora_dataset import router as lora_dataset_router
@@ -49,6 +50,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(batch_router)
+app.include_router(chunks_router)
 app.include_router(image_router)
 app.include_router(llm_router)
 app.include_router(lora_dataset_router)

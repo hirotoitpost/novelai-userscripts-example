@@ -21,5 +21,8 @@ node_modules/
 # Generated outputs (large binary files, not source code)
 outputs/
 
+# Local SQLite DB (user data, not source code)
+data/
+
 # Reference samples (third-party HTML, not source code)
 samples/

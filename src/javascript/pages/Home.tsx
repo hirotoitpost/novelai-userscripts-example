@@ -135,6 +135,19 @@ export default function Home() {
             <p>トリガーワードやAI設定を指定して、顔/上半身/全身の学習用画像セットを自動生成します。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/chunks')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/chunks')}
+          >
+            <div className="home-card-icon">🧩</div>
+            <h2>プロンプトチャンク</h2>
+            <p>NovelAI 公式のプロンプトチャンクを読み取り専用で同期します（セッショントークンが必要）。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">

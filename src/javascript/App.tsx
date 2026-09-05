@@ -8,6 +8,7 @@ import ImageGenerate from './pages/ImageGenerate'
 import LLMPage from './pages/LLMPage'
 import Metadata from './pages/Metadata'
 import LoraDataset from './pages/LoraDataset'
+import Chunks from './pages/Chunks'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -45,6 +46,10 @@ function AppRoutes() {
       <Route
         path="/lora-dataset"
         element={<ProtectedRoute><LoraDataset /></ProtectedRoute>}
+      />
+      <Route
+        path="/chunks"
+        element={<ProtectedRoute><Chunks /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

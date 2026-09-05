@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginRequest(BaseModel):
     email: str
     password: str
+    recaptcha: str
 
 
 class LoginResponse(BaseModel):
@@ -21,7 +22,7 @@ class LoginResponse(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 async def login(req: LoginRequest) -> LoginResponse:
     try:
-        token = await login_with_credentials(req.email, req.password)
+        token = await login_with_credentials(req.email, req.password, req.recaptcha)
         return LoginResponse(access_token=token)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc))

@@ -1,0 +1,109 @@
+.chunks-root {
+  min-height: 100vh;
+  background: #0a0a14;
+  color: #e8e8ff;
+}
+
+.chunks-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.chunks-intro {
+  font-size: 0.85rem;
+  color: #9a9ac0;
+  line-height: 1.6;
+}
+
+.chunks-section {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  background: #13132a;
+  border: 1px solid #2a2a50;
+  border-radius: 10px;
+}
+
+.chunks-section h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.chunks-key-form,
+.chunks-key-set {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.chunks-key-set {
+  flex-direction: row;
+  align-items: center;
+  gap: 1rem;
+}
+
+.chunks-key-form input,
+.chunks-section button {
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  border: 1px solid #2a2a50;
+  background: #1a1a35;
+  color: #e8e8ff;
+  font-size: 0.9rem;
+}
+
+.chunks-section button {
+  cursor: pointer;
+  background: #7b5cf6;
+  border: none;
+}
+
+.chunks-section button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chunks-error {
+  color: #ff6b8a;
+  background: rgba(255, 107, 138, 0.1);
+  border: 1px solid rgba(255, 107, 138, 0.3);
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem;
+}
+
+.chunks-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.chunks-item,
+.chunks-item--category {
+  padding: 0.6rem 0.8rem;
+  background: #13132a;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.chunks-item--category {
+  background: #1a1a35;
+}
+
+.chunks-item-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+}
+
+.chunks-item-expansion {
+  font-size: 0.78rem;
+  color: #9a9ac0;
+  word-break: break-word;
+}
