@@ -45,7 +45,7 @@ interface CharacterPromptEntry {
 }
 
 interface HistoryCharacterReference {
-  image: string | null
+  image_path: string | null
   type: string
   fidelity: number
   strength: number
@@ -65,8 +65,8 @@ interface HistoryEntry {
   size: string
   seed: number | null
   chunk_ids: string[]
-  images: string[]
-  i2i_image: string | null
+  image_paths: string[]
+  i2i_image_path: string | null
   i2i_strength: number | null
   i2i_noise: number | null
   character_references: HistoryCharacterReference[]
@@ -81,6 +81,12 @@ const CHARACTER_REFERENCE_TYPES = [
   { value: 'character',       label: 'キャラのみ' },
   { value: 'style',           label: 'スタイルのみ' },
 ] as const
+
+// 履歴の画像は base64 埋め込みではなく、実ファイルを都度取得するURLで参照する
+// (履歴が増えるとJSONペイロードが肥大化して重くなるため)。
+function historyFileUrl(path: string): string {
+  return `/api/chunks/history-file?path=${encodeURIComponent(path)}`
+}
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -769,13 +775,10 @@ export default function Selection() {
               {history.map(h => (
                 <li key={h.id} className="selection-history-item">
                   <div className="selection-history-images">
-                    {h.images.map((b64, i) => (
-                      <DownloadableImage
-                        key={i}
-                        base64={b64}
-                        alt={`履歴 ${h.id}-${i + 1}`}
-                        date={new Date(h.created_at)}
-                      />
+                    {h.image_paths.map((path, i) => (
+                      <a key={i} href={historyFileUrl(path)} download={`nai_${formatForFilename(new Date(h.created_at))}_${h.id}-${i + 1}.png`}>
+                        <img src={historyFileUrl(path)} alt={`履歴 ${h.id}-${i + 1}`} loading="lazy" />
+                      </a>
                     ))}
                   </div>
                   <div className="selection-history-meta">
@@ -784,25 +787,27 @@ export default function Selection() {
                       {h.model} / {h.size} / seed={h.seed ?? 'random'} / チャンク{h.chunk_ids.length}件 /{' '}
                       {new Date(h.created_at).toLocaleString('ja-JP')}
                     </p>
-                    {h.i2i_image && (
+                    {h.i2i_image_path && (
                       <p className="selection-history-info">
                         i2i: strength={h.i2i_strength?.toFixed(2)} noise={h.i2i_noise?.toFixed(2)}
                         <img
                           className="selection-history-ref-thumb"
-                          src={`data:image/png;base64,${h.i2i_image}`}
+                          src={historyFileUrl(h.i2i_image_path)}
                           alt="i2i参照画像"
+                          loading="lazy"
                         />
                       </p>
                     )}
                     {h.character_references.length > 0 && (
                       <p className="selection-history-info">
                         キャラ参照{h.character_references.length}件
-                        {h.character_references.map((cr, i) => cr.image && (
+                        {h.character_references.map((cr, i) => cr.image_path && (
                           <img
                             key={i}
                             className="selection-history-ref-thumb"
-                            src={`data:image/png;base64,${cr.image}`}
+                            src={historyFileUrl(cr.image_path)}
                             alt={`キャラ参照 ${i + 1}`}
+                            loading="lazy"
                           />
                         ))}
                       </p>

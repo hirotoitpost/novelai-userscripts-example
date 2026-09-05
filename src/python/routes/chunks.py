@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import FileResponse
 from novelai import AsyncNovelAI
 from novelai.types import GenerateImageParams
 
@@ -396,32 +397,26 @@ def _save_reference_image(image_b64: str) -> str:
 
 @router.get("/history")
 async def get_generation_history(limit: int = 50) -> list[dict[str, Any]]:
+    """
+    画像は base64 で埋め込まず、ファイルパスのまま返す。履歴が増えるほど
+    /history のペイロードが肥大化して重くなっていたため、実体は
+    GET /history-file で都度取得させる方式に変えた。
+    """
     conn = get_connection()
     try:
-        entries = list_generation_history(conn, limit)
+        return list_generation_history(conn, limit)
     finally:
         conn.close()
 
-    for entry in entries:
-        images: list[str] = []
-        for rel_path in entry.pop("image_paths"):
-            b64 = _read_ref_image(rel_path)
-            if b64:
-                images.append(b64)
-        entry["images"] = images
 
-        i2i_image_path = entry.pop("i2i_image_path", None)
-        entry["i2i_image"] = _read_ref_image(i2i_image_path) if i2i_image_path else None
-
-        for cr in entry.get("character_references", []):
-            cr["image"] = _read_ref_image(cr.pop("image_path", None))
-    return entries
-
-
-def _read_ref_image(rel_path: str | None) -> str | None:
-    if not rel_path:
-        return None
-    full_path = _HISTORY_DIR.parent.parent / rel_path
-    if not full_path.exists():
-        return None
-    return b64encode(full_path.read_bytes()).decode()
+@router.get("/history-file")
+async def get_history_file(path: str) -> FileResponse:
+    """generation_history が指す outputs/history/ 配下の画像ファイルだけを配信する。"""
+    full_path = (_HISTORY_DIR.parent.parent / path).resolve()
+    try:
+        full_path.relative_to(_HISTORY_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="invalid path")
+    if not full_path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(full_path, media_type="image/png")
