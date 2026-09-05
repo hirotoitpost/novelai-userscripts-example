@@ -95,6 +95,25 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # ワード選択(/select)経由で生成した画像だけの履歴。プロンプト/設定/使ったチャンクIDと
+    # 生成画像(ファイルパス)を紐付けて保存する。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS generation_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT NOT NULL,
+            negative_prompt TEXT,
+            model TEXT NOT NULL,
+            size TEXT NOT NULL,
+            steps INTEGER NOT NULL,
+            scale REAL NOT NULL,
+            seed INTEGER,
+            chunk_ids TEXT NOT NULL,
+            image_paths TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
 
 
@@ -397,4 +416,58 @@ def get_preset(conn: sqlite3.Connection, preset_id: int) -> dict[str, Any] | Non
 
     result = dict(preset_row)
     result["chunks"] = [dict(row) for row in rows]
+    return result
+
+
+def record_generation(
+    conn: sqlite3.Connection,
+    prompt: str,
+    negative_prompt: str | None,
+    model: str,
+    size: str,
+    steps: int,
+    scale: float,
+    seed: int | None,
+    chunk_ids: list[str],
+    image_paths: list[str],
+) -> dict[str, Any]:
+    """
+    /select 経由の画像生成だけを対象にした履歴保存。image_paths はリポジトリルートからの
+    相対パス(outputs/history/...)で、画像データ自体はDBに入れずファイルのまま置く。
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO generation_history
+            (prompt, negative_prompt, model, size, steps, scale, seed, chunk_ids, image_paths, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id, created_at
+        """,
+        (
+            prompt,
+            negative_prompt,
+            model,
+            size,
+            steps,
+            scale,
+            seed,
+            json.dumps(chunk_ids),
+            json.dumps(image_paths),
+            now,
+        ),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def list_generation_history(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM generation_history ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["chunk_ids"] = json.loads(d["chunk_ids"])
+        d["image_paths"] = json.loads(d["image_paths"])
+        result.append(d)
     return result

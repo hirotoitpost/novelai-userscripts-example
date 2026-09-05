@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { apiFetch, GenerateRequest, GenerateResponse } from '../api'
 import './Selection.css'
 
 interface Situation {
@@ -30,7 +29,41 @@ interface AllChunk {
   is_category: boolean
 }
 
+interface HistoryEntry {
+  id: number
+  prompt: string
+  model: string
+  size: string
+  seed: number | null
+  chunk_ids: string[]
+  images: string[]
+  created_at: string
+}
+
 type Mode = 'scenario' | 'random' | 'similar' | 'preset'
+
+const MODELS = [
+  { value: 'nai-diffusion-4-5-full',    label: 'NAI Diffusion V4.5 Full' },
+  { value: 'nai-diffusion-4-5-curated', label: 'NAI Diffusion V4.5 Curated' },
+  { value: 'nai-diffusion-4-full',      label: 'NAI Diffusion V4 Full' },
+  { value: 'nai-diffusion-4-curated',   label: 'NAI Diffusion V4 Curated' },
+  { value: 'nai-diffusion-3',           label: 'NAI Diffusion V3' },
+] as const
+
+const SIZES = [
+  { value: 'portrait',        label: 'Portrait  (832×1216)' },
+  { value: 'landscape',       label: 'Landscape (1216×832)' },
+  { value: 'square',          label: 'Square    (1024×1024)' },
+  { value: 'large_portrait',  label: 'Portrait Large (1024×1536)' },
+  { value: 'large_landscape', label: 'Landscape Large (1536×1024)' },
+] as const
+
+const UC_PRESETS = [
+  { value: 'light',       label: 'ライト' },
+  { value: 'strong',      label: 'ストロング' },
+  { value: 'human_focus', label: '人物重視' },
+  { value: 'furry_focus', label: 'ファーリー重視' },
+] as const
 
 export default function Selection() {
   const navigate = useNavigate()
@@ -51,17 +84,34 @@ export default function Selection() {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
   const [presetName, setPresetName] = useState('')
 
+  const [negPrompt, setNegPrompt] = useState('')
+  const [model, setModel] = useState<string>(MODELS[0].value)
+  const [size, setSize] = useState<string>(SIZES[0].value)
+  const [steps, setSteps] = useState(23)
+  const [scale, setScale] = useState(5.0)
+  const [seed, setSeed] = useState('')
+  const [ucPreset, setUcPreset] = useState<string>(UC_PRESETS[0].value)
+  const [quality, setQuality] = useState(true)
+
   const [generatedImages, setGeneratedImages] = useState<string[]>([])
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
+  const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+
+  const loadHistory = () => {
+    fetch('/api/chunks/history').then(r => r.json()).then(setHistory)
+  }
 
   useEffect(() => {
     fetch('/api/chunks/situations').then(r => r.json()).then(setSituations)
     fetch('/api/chunks/presets').then(r => r.json()).then(setPresets)
     fetch('/api/chunks/imported').then(r => r.json()).then(setAllChunks)
+    loadHistory()
   }, [])
 
   const referenceMatches = useMemo(() => {
@@ -166,18 +216,30 @@ export default function Selection() {
     setGenerating(true)
     setGeneratedImages([])
     try {
-      const body: GenerateRequest = {
-        prompt: assembledText,
-        model: 'nai-diffusion-4-5-full',
-        size: 'portrait',
-        steps: 23,
-        scale: 5.0,
-        quality: true,
-        uc_preset: 'light',
-        n_samples: 1,
-      }
-      const data = await apiFetch<GenerateResponse>(token, '/api/image/generate', body)
+      const usedChunkIds = results.filter(c => checkedIds.has(c.id)).map(c => c.id)
+      const res = await fetch('/api/chunks/select/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          chunk_ids: usedChunkIds,
+          generation: {
+            prompt: assembledText,
+            negative_prompt: negPrompt.trim() || undefined,
+            model,
+            size,
+            steps,
+            scale,
+            seed: seed ? Number(seed) : undefined,
+            quality,
+            uc_preset: ucPreset,
+            n_samples: 1,
+          },
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? '生成に失敗しました')
       setGeneratedImages(data.images)
+      loadHistory()
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -286,6 +348,74 @@ export default function Selection() {
 
         {error && <p className="selection-error">{error}</p>}
 
+        <section className="selection-section">
+          <h2>生成設定</h2>
+          <div className="selection-settings-grid">
+            <label>
+              モデル
+              <select value={model} onChange={e => setModel(e.target.value)}>
+                {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </label>
+            <label>
+              サイズ
+              <select value={size} onChange={e => setSize(e.target.value)}>
+                {SIZES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </label>
+            <label>
+              UC プリセット
+              <select value={ucPreset} onChange={e => setUcPreset(e.target.value)}>
+                {UC_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </label>
+            <label>
+              Seed
+              <input
+                type="number" min={0} max={4294967295}
+                value={seed}
+                onChange={e => setSeed(e.target.value)}
+                placeholder="ランダム"
+              />
+            </label>
+            <label className="selection-settings-row">
+              Steps
+              <input
+                type="range" min={1} max={50} step={1}
+                value={steps}
+                onChange={e => setSteps(Number(e.target.value))}
+              />
+              <span>{steps}</span>
+            </label>
+            <label className="selection-settings-row">
+              Scale
+              <input
+                type="range" min={0} max={10} step={0.1}
+                value={scale}
+                onChange={e => setScale(Number(e.target.value))}
+              />
+              <span>{scale.toFixed(1)}</span>
+            </label>
+            <label className="selection-settings-checkbox">
+              <input
+                type="checkbox"
+                checked={quality}
+                onChange={e => setQuality(e.target.checked)}
+              />
+              品質タグを自動付与
+            </label>
+          </div>
+          <label className="selection-negprompt-label">
+            ネガティブプロンプト
+            <textarea
+              value={negPrompt}
+              onChange={e => setNegPrompt(e.target.value)}
+              placeholder="lowres, bad anatomy, ..."
+              rows={2}
+            />
+          </label>
+        </section>
+
         {results.length > 0 && (
           <>
             <section className="selection-section">
@@ -342,6 +472,32 @@ export default function Selection() {
             </section>
           </>
         )}
+
+        <section className="selection-section">
+          <h2 onClick={() => setShowHistory(v => !v)} className="selection-history-toggle">
+            生成履歴({history.length}件) {showHistory ? '▲' : '▼'}
+          </h2>
+          {showHistory && (
+            <ul className="selection-history-list">
+              {history.map(h => (
+                <li key={h.id} className="selection-history-item">
+                  <div className="selection-history-images">
+                    {h.images.map((b64, i) => (
+                      <img key={i} src={`data:image/png;base64,${b64}`} alt={`履歴 ${h.id}-${i + 1}`} />
+                    ))}
+                  </div>
+                  <div className="selection-history-meta">
+                    <p className="selection-history-prompt">{h.prompt}</p>
+                    <p className="selection-history-info">
+                      {h.model} / {h.size} / seed={h.seed ?? 'random'} / チャンク{h.chunk_ids.length}件 /{' '}
+                      {new Date(h.created_at).toLocaleString('ja-JP')}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
     </div>
   )

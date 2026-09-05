@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from base64 import b64decode, b64encode
-from typing import Any
+from pathlib import Path
+from typing import Annotated, Any
+from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from novelai import AsyncNovelAI
+from novelai.types import GenerateImageParams
 
 from ..auth_utils import get_encryption_key
+from ..client import get_client
 from ..db import (
     create_exclusive_group,
     create_preset,
@@ -19,9 +24,11 @@ from ..db import (
     get_connection,
     get_preset,
     list_exclusive_groups,
+    list_generation_history,
     list_prompt_chunks,
     list_presets,
     list_situations,
+    record_generation,
     select_by_situation,
     select_random,
     set_chunk_exclusive_groups,
@@ -46,9 +53,15 @@ from ..models import (
     SimilarSelectRequest,
     SituationCreateRequest,
     SituationResponse,
+    WordSelectionGenerateRequest,
 )
+from .image import _build_kwargs, _http_status, _pil_to_b64
 
 router = APIRouter(prefix="/api/chunks", tags=["chunks"])
+
+ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
+
+_HISTORY_DIR = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "history"
 
 # promptmacros(プロンプトチャンク)は image.novelai.net 側のユーザーストレージにある。
 # persistent access token は拒否されるため、実ログインで発行されたセッショントークンが必要。
@@ -292,3 +305,67 @@ async def delete_preset_endpoint(preset_id: int) -> None:
         delete_preset(conn, preset_id)
     finally:
         conn.close()
+
+
+# ===== 生成履歴(/select 経由の生成のみ対象) =====
+
+@router.post("/select/generate")
+async def select_generate_endpoint(
+    req: WordSelectionGenerateRequest,
+    client: ClientDep,
+) -> dict[str, Any]:
+    """
+    ワード選択(/select)からの画像生成専用エンドポイント。通常の /api/image/generate と同じ
+    生成処理を行うが、使ったチャンクIDと合わせて generation_history に記録する点だけが違う。
+    """
+    try:
+        params = GenerateImageParams(**_build_kwargs(req.generation))
+        images = await client.image.generate(params)
+    except Exception as exc:
+        raise HTTPException(status_code=_http_status(exc), detail=str(exc))
+
+    b64_images = _pil_to_b64(images, "png")
+
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    image_paths: list[str] = []
+    for b64 in b64_images:
+        filename = f"{uuid4().hex}.png"
+        (_HISTORY_DIR / filename).write_bytes(b64decode(b64))
+        image_paths.append(f"outputs/history/{filename}")
+
+    conn = get_connection()
+    try:
+        entry = record_generation(
+            conn,
+            prompt=req.generation.prompt,
+            negative_prompt=req.generation.negative_prompt,
+            model=req.generation.model,
+            size=str(req.generation.size),
+            steps=req.generation.steps,
+            scale=req.generation.scale,
+            seed=req.generation.seed,
+            chunk_ids=req.chunk_ids,
+            image_paths=image_paths,
+        )
+    finally:
+        conn.close()
+
+    return {"images": b64_images, "format": "png", "history_id": entry["id"]}
+
+
+@router.get("/history")
+async def get_generation_history(limit: int = 50) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        entries = list_generation_history(conn, limit)
+    finally:
+        conn.close()
+
+    for entry in entries:
+        images: list[str] = []
+        for rel_path in entry.pop("image_paths"):
+            full_path = _HISTORY_DIR.parent.parent / rel_path
+            if full_path.exists():
+                images.append(b64encode(full_path.read_bytes()).decode())
+        entry["images"] = images
+    return entries

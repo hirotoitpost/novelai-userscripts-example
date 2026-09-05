@@ -245,6 +245,25 @@ class PresetSummary(BaseModel):
     created_at: str
 
 
+class WordSelectionGenerateRequest(BaseModel):
+    chunk_ids: list[str] = Field(default_factory=list)
+    generation: GenerateImageRequest
+
+
+class GenerationHistoryEntry(BaseModel):
+    id: int
+    prompt: str
+    negative_prompt: Optional[str] = None
+    model: str
+    size: str
+    steps: int
+    scale: float
+    seed: Optional[int] = None
+    chunk_ids: list[str]
+    image_paths: list[str]
+    created_at: str
+
+
 class MetadataExtractRequest(BaseModel):
     image: str
 
