@@ -205,6 +205,8 @@
 }
 
 .meta-select {
+  -webkit-appearance: none;
+  appearance: none;
   background: var(--nai-card);
   border: 1px solid var(--nai-border);
   border-radius: 6px;
@@ -289,6 +291,19 @@
 .meta-json::-webkit-scrollbar-thumb {
   background: var(--nai-border);
   border-radius: 2px;
+}
+
+/* ===== Mobile: stack sidebar above main instead of side-by-side ===== */
+@media (max-width: 760px) {
+  .meta-root { height: auto; min-height: 100vh; overflow: visible; }
+  .meta-body { flex-direction: column; overflow: visible; }
+  .meta-sidebar {
+    width: 100%;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--nai-border);
+  }
+  .meta-main { padding: 1rem; }
 }
 
 @keyframes meta-spin { to { transform: rotate(360deg); } }

@@ -92,6 +92,8 @@
 
 .lora-input,
 .lora-select {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   background: var(--nai-card);
   border: 1px solid var(--nai-border);
@@ -110,6 +112,8 @@
 .lora-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .lora-textarea {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   background: var(--nai-card);
   border: 1px solid var(--nai-border);
@@ -457,3 +461,16 @@
 }
 
 @keyframes lora-spin { to { transform: rotate(360deg); } }
+
+/* ===== Mobile: stack sidebar above main instead of side-by-side ===== */
+@media (max-width: 760px) {
+  .lora-root { height: auto; min-height: 100vh; overflow: visible; }
+  .lora-body { flex-direction: column; overflow: visible; }
+  .lora-sidebar {
+    width: 100%;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--nai-border);
+  }
+  .lora-main { padding: 1rem; }
+}

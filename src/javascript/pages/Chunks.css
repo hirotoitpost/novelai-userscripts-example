@@ -71,12 +71,19 @@
 
 .chunks-key-form input,
 .chunks-section button {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
   padding: 0.6rem 0.8rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
   background: #1a1a35;
   color: #e8e8ff;
   font-size: 0.9rem;
+}
+
+.chunks-key-form input {
+  width: 100%;
 }
 
 .chunks-section button {
@@ -149,7 +156,11 @@
 }
 
 .chunks-filter-bar input[type='search'] {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
   flex: 1 1 200px;
+  min-width: 0;
   padding: 0.5rem 0.8rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
@@ -159,6 +170,9 @@
 }
 
 .chunks-filter-bar select {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
   padding: 0.5rem 0.7rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
@@ -211,7 +225,11 @@
 }
 
 .chunks-situation-form input {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
   flex: 1;
+  min-width: 0;
   padding: 0.5rem 0.7rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
@@ -229,10 +247,19 @@
 }
 
 .chunks-item-situations select {
+  -webkit-appearance: none;
+  appearance: none;
   padding: 0.2rem 0.4rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
   background: #1a1a35;
   color: #9a9ac0;
   font-size: 0.78rem;
+}
+
+/* ===== Mobile ===== */
+@media (max-width: 600px) {
+  .chunks-inner { padding: 1.25rem 1rem; }
+  .chunks-filter-bar { flex-direction: column; align-items: stretch; }
+  .chunks-filter-count { text-align: right; }
 }

@@ -96,6 +96,10 @@
 }
 
 .login-field input {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
   padding: 0.7rem 1rem;
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -203,4 +207,9 @@
 
 .login-token-toggle:hover {
   color: var(--text-primary);
+}
+
+/* ===== Mobile ===== */
+@media (max-width: 400px) {
+  .login-card { padding: 1.75rem 1.25rem; }
 }

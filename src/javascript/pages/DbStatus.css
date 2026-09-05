@@ -207,3 +207,10 @@
   color: #ff6b8a;
   flex-shrink: 0;
 }
+
+/* ===== Mobile ===== */
+@media (max-width: 600px) {
+  .dbstatus-inner { padding: 1.25rem 1rem; }
+  .dbstatus-situation-list li { grid-template-columns: 70px 1fr 28px; }
+  .dbstatus-children { padding-left: 0.85rem; }
+}

@@ -134,6 +134,8 @@
 }
 
 .llm-textarea {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   background: var(--nai-card);
   border: 1px solid var(--nai-border);
@@ -156,6 +158,9 @@
 .llm-textarea::placeholder { color: var(--nai-muted); opacity: 0.6; }
 
 .llm-input {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
   background: var(--nai-card);
   border: 1px solid var(--nai-border);
   border-radius: 6px;
@@ -169,6 +174,8 @@
 .llm-input:focus { border-color: var(--nai-accent); }
 
 .llm-select {
+  -webkit-appearance: none;
+  appearance: none;
   background: var(--nai-card);
   border: 1px solid var(--nai-border);
   border-radius: 6px;
@@ -460,4 +467,9 @@
   max-height: 280px;
   object-fit: contain;
   display: block;
+}
+
+/* ===== Mobile ===== */
+@media (max-width: 600px) {
+  .llm-main { padding: 1rem; }
 }

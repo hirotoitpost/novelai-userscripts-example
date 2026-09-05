@@ -91,6 +91,8 @@
 .batch-label:first-child { margin-top: 0; }
 
 .batch-input {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   background: var(--nai-card);
   border: 1px solid var(--nai-border);
@@ -436,6 +438,20 @@
 .batch-log::-webkit-scrollbar-thumb {
   background: var(--nai-border);
   border-radius: 2px;
+}
+
+/* ===== Mobile: stack sidebar above main instead of side-by-side ===== */
+@media (max-width: 760px) {
+  .batch-root { height: auto; min-height: 100vh; overflow: visible; }
+  .batch-body { flex-direction: column; overflow: visible; }
+  .batch-sidebar {
+    width: 100%;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--nai-border);
+  }
+  .batch-main { padding: 1rem; }
+  .batch-groups { grid-template-columns: 1fr; }
 }
 
 @keyframes batch-spin { to { transform: rotate(360deg); } }
