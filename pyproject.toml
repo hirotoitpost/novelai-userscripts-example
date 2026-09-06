@@ -13,6 +13,7 @@ dependencies = [
     "httpx>=0.28.0",
     "openai>=1.0.0",
     "pynacl>=1.6.2",
+    "mcp[cli]>=2.1.1",
 ]
 
 [build-system]
@@ -40,6 +41,7 @@ test = "pytest"
 pre-commit = ["fmt", "lint", "check"]
 serve = "uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000"
 serve-dev = "uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000 --reload"
+mcp-server = "python scripts/run_mcp_server.py"
 
 [tool.ruff]
 src = ["src/python"]

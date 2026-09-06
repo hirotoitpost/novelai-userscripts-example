@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "novelai-word-selection": {
+      "command": "uv",
+      "args": ["run", "python", "scripts/run_mcp_server.py"]
+    }
+  }
+}

@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 _DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "app.db"
 
@@ -207,6 +208,47 @@ def list_prompt_chunks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         d["exclusive_groups"] = exclusive_groups_by_chunk.get(d["id"], [])
         result.append(d)
     return result
+
+
+def search_prompt_chunks(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    """ラベルの部分一致でチャンク(カテゴリ以外)を検索する。MCPツールなど、UIの検索ボックスを
+    使わない呼び出し元がチャンクIDを見つけるための入り口。"""
+    rows = conn.execute(
+        "SELECT * FROM prompt_chunks WHERE is_category = 0 AND label LIKE ? ORDER BY label LIMIT ?",
+        (f"%{query}%", limit),
+    ).fetchall()
+    situations_by_chunk = _situations_by_chunk(conn)
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["is_category"] = bool(d["is_category"])
+        d["child_order"] = None
+        d["situations"] = situations_by_chunk.get(d["id"], [])
+        result.append(d)
+    return result
+
+
+def create_custom_chunk(
+    conn: sqlite3.Connection, label: str, expansion: str, situation_ids: list[int] | None = None
+) -> dict[str, Any]:
+    """
+    NovelAI公式の同期とは独立に、自前でプロンプトチャンクを作成する（MCPの「チャンク作成」用）。
+    カテゴリには属さず(container_id=NULL)、通常のカテゴリツリーには表示されない。
+    """
+    chunk_id = str(uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO prompt_chunks
+            (id, remote_object_id, container_id, label, expansion, color, is_category, child_order, version, synced_at)
+        VALUES (?, NULL, NULL, ?, ?, NULL, 0, NULL, NULL, ?)
+        """,
+        (chunk_id, label, expansion, now),
+    )
+    conn.commit()
+    if situation_ids:
+        set_chunk_situations(conn, chunk_id, situation_ids)
+    return {"id": chunk_id, "label": label, "expansion": expansion, "situations": situation_ids or []}
 
 
 def _situations_by_chunk(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
