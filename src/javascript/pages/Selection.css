@@ -196,6 +196,12 @@
 
 .selection-settings-row input[type='range'] {
   flex: 1;
+  min-width: 0;
+}
+
+.selection-settings-numbox {
+  width: 4.5rem;
+  flex-shrink: 0;
 }
 
 .selection-settings-checkbox {
@@ -361,6 +367,33 @@
   height: 36px;
   object-fit: cover;
   border-radius: 4px;
+}
+
+.selection-history-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  margin-right: 0.4rem;
+}
+
+.selection-history-item button {
+  align-self: flex-start;
+  margin-top: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #2a2a50;
+  background: #1a1a35;
+  color: #e8e8ff;
+  cursor: pointer;
+}
+
+.selection-history-item button:hover {
+  border-color: #7b5cf6;
 }
 
 .selection-section-note {

@@ -248,6 +248,9 @@ class PresetSummary(BaseModel):
 class WordSelectionGenerateRequest(BaseModel):
     chunk_ids: list[str] = Field(default_factory=list)
     generation: GenerateImageRequest
+    based_on: Optional[int] = Field(
+        None, description="この生成の元にした generation_history.id（再生成の系譜を遡るため）"
+    )
 
 
 class GenerationHistoryEntry(BaseModel):
@@ -262,6 +265,16 @@ class GenerationHistoryEntry(BaseModel):
     chunk_ids: list[str]
     image_paths: list[str]
     created_at: str
+
+
+class ImportImagesRequest(BaseModel):
+    images: list[str] = Field(min_length=1, description="base64エンコードされたNovelAI生成画像(複数可)")
+
+
+class ImportImageResult(BaseModel):
+    success: bool
+    id: Optional[int] = None
+    error: Optional[str] = None
 
 
 class MetadataExtractRequest(BaseModel):

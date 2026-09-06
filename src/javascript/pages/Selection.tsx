@@ -61,8 +61,11 @@ interface HistoryCharacterPrompt {
 interface HistoryEntry {
   id: number
   prompt: string
+  negative_prompt: string | null
   model: string
   size: string
+  steps: number
+  scale: number
   seed: number | null
   chunk_ids: string[]
   image_paths: string[]
@@ -71,6 +74,8 @@ interface HistoryEntry {
   i2i_noise: number | null
   character_references: HistoryCharacterReference[]
   characters: HistoryCharacterPrompt[]
+  based_on_id: number | null
+  metadata_incomplete: boolean
   created_at: string
 }
 
@@ -196,12 +201,18 @@ export default function Selection() {
   const [characterRefs, setCharacterRefs] = useState<CharacterReferenceEntry[]>([])
   const [characters, setCharacters] = useState<CharacterPromptEntry[]>([])
 
+  const [finalPrompt, setFinalPrompt] = useState('')
+  const [basedOnId, setBasedOnId] = useState<number | null>(null)
+
   const [generatedImages, setGeneratedImages] = useState<string[]>([])
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [showHistory, setShowHistory] = useState(false)
+
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<string | null>(null)
 
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -231,6 +242,7 @@ export default function Selection() {
   const run = async () => {
     setError(null)
     setLoading(true)
+    setBasedOnId(null)
     try {
       if (mode === 'scenario') {
         if (situationId === null) throw new Error('シチュエーションを選んでください')
@@ -293,8 +305,14 @@ export default function Selection() {
     .filter(Boolean)
     .join(', ')
 
+  // チャンク選択が変わったら追従するが、ユーザーが手で編集した内容(履歴からの読み込み含む)は
+  // 次に選択が変わるまで保持する。
+  useEffect(() => {
+    setFinalPrompt(assembledText)
+  }, [assembledText])
+
   const copyAssembled = async () => {
-    await navigator.clipboard.writeText(assembledText)
+    await navigator.clipboard.writeText(finalPrompt)
   }
 
   const saveAsPreset = async () => {
@@ -343,7 +361,7 @@ export default function Selection() {
   }
 
   const generateImage = async () => {
-    if (!token || !assembledText) return
+    if (!token || !finalPrompt.trim()) return
     setGenerateError(null)
     setGenerating(true)
     setGeneratedImages([])
@@ -374,8 +392,9 @@ export default function Selection() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           chunk_ids: usedChunkIds,
+          based_on: basedOnId ?? undefined,
           generation: {
-            prompt: assembledText,
+            prompt: finalPrompt,
             negative_prompt: negPrompt.trim() || undefined,
             model,
             size,
@@ -400,6 +419,48 @@ export default function Selection() {
     } finally {
       setGenerating(false)
     }
+  }
+
+  const importImages = async (files: FileList) => {
+    setImportResult(null)
+    setImporting(true)
+    try {
+      const images = await Promise.all(Array.from(files).map(readFileAsDataUrl))
+      const res = await fetch('/api/chunks/import-images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images }),
+      })
+      const results: { success: boolean; id?: number; error?: string }[] = await res.json()
+      const okCount = results.filter(r => r.success).length
+      const failed = results.filter(r => !r.success)
+      setImportResult(
+        failed.length === 0
+          ? `${okCount}件インポートしました`
+          : `${okCount}件成功、${failed.length}件失敗(${failed.map(f => f.error).join(' / ')})`
+      )
+      if (okCount > 0) {
+        loadHistory()
+        setShowHistory(true)
+      }
+    } catch (e) {
+      setImportResult(e instanceof Error ? e.message : String(e))
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const loadFromHistory = (h: HistoryEntry) => {
+    setResults([])
+    setCheckedIds(new Set())
+    setFinalPrompt(h.prompt)
+    setNegPrompt(h.negative_prompt ?? '')
+    if (MODELS.some(m => m.value === h.model)) setModel(h.model)
+    if (SIZES.some(s => s.value === h.size)) setSize(h.size)
+    setSteps(h.steps || 23)
+    setScale(h.scale || 5.0)
+    setSeed(h.seed != null ? String(h.seed) : '')
+    setBasedOnId(h.id)
   }
 
   return (
@@ -540,7 +601,12 @@ export default function Selection() {
                 value={steps}
                 onChange={e => setSteps(Number(e.target.value))}
               />
-              <span>{steps}</span>
+              <input
+                type="number" min={1} max={50} step={1}
+                className="selection-settings-numbox"
+                value={steps}
+                onChange={e => setSteps(Number(e.target.value))}
+              />
             </label>
             <label className="selection-settings-row">
               Scale
@@ -549,7 +615,12 @@ export default function Selection() {
                 value={scale}
                 onChange={e => setScale(Number(e.target.value))}
               />
-              <span>{scale.toFixed(1)}</span>
+              <input
+                type="number" min={0} max={10} step={0.1}
+                className="selection-settings-numbox"
+                value={scale}
+                onChange={e => setScale(Number(e.target.value))}
+              />
             </label>
             <label className="selection-settings-checkbox">
               <input
@@ -603,7 +674,12 @@ export default function Selection() {
                   value={i2iStrength}
                   onChange={e => setI2iStrength(Number(e.target.value))}
                 />
-                <span>{i2iStrength.toFixed(2)}</span>
+                <input
+                  type="number" min={0.01} max={0.99} step={0.01}
+                  className="selection-settings-numbox"
+                  value={i2iStrength}
+                  onChange={e => setI2iStrength(Number(e.target.value))}
+                />
               </label>
               <label className="selection-settings-row">
                 Noise
@@ -612,7 +688,12 @@ export default function Selection() {
                   value={i2iNoise}
                   onChange={e => setI2iNoise(Number(e.target.value))}
                 />
-                <span>{i2iNoise.toFixed(2)}</span>
+                <input
+                  type="number" min={0} max={0.99} step={0.01}
+                  className="selection-settings-numbox"
+                  value={i2iNoise}
+                  onChange={e => setI2iNoise(Number(e.target.value))}
+                />
               </label>
             </div>
           )}
@@ -643,7 +724,12 @@ export default function Selection() {
                   value={c.fidelity}
                   onChange={e => updateCharacterRef(i, { fidelity: Number(e.target.value) })}
                 />
-                <span>{c.fidelity.toFixed(2)}</span>
+                <input
+                  type="number" min={0} max={1} step={0.01}
+                  className="selection-settings-numbox"
+                  value={c.fidelity}
+                  onChange={e => updateCharacterRef(i, { fidelity: Number(e.target.value) })}
+                />
               </label>
               <label className="selection-settings-row">
                 Strength
@@ -652,7 +738,12 @@ export default function Selection() {
                   value={c.strength}
                   onChange={e => updateCharacterRef(i, { strength: Number(e.target.value) })}
                 />
-                <span>{c.strength.toFixed(2)}</span>
+                <input
+                  type="number" min={0} max={1} step={0.01}
+                  className="selection-settings-numbox"
+                  value={c.strength}
+                  onChange={e => updateCharacterRef(i, { strength: Number(e.target.value) })}
+                />
               </label>
               <button type="button" onClick={() => removeCharacterRef(i)}>削除</button>
             </div>
@@ -710,34 +801,42 @@ export default function Selection() {
         </section>
 
         {results.length > 0 && (
+          <section className="selection-section">
+            <h2>結果({checkedIds.size} / {results.length} 件選択中)</h2>
+            <ul className="selection-results">
+              {results.map(c => (
+                <li key={c.id}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={checkedIds.has(c.id)}
+                      onChange={() => toggleChecked(c.id)}
+                    />
+                    <span className="selection-result-dot" style={{ background: c.color ?? '#888' }} />
+                    {c.label}
+                    {c.score !== undefined && (
+                      <span className="selection-result-score">類似度 {c.score.toFixed(3)}</span>
+                    )}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {(results.length > 0 || finalPrompt.trim() !== '' || basedOnId !== null) && (
           <>
             <section className="selection-section">
-              <h2>結果({checkedIds.size} / {results.length} 件選択中)</h2>
-              <ul className="selection-results">
-                {results.map(c => (
-                  <li key={c.id}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={checkedIds.has(c.id)}
-                        onChange={() => toggleChecked(c.id)}
-                      />
-                      <span className="selection-result-dot" style={{ background: c.color ?? '#888' }} />
-                      {c.label}
-                      {c.score !== undefined && (
-                        <span className="selection-result-score">類似度 {c.score.toFixed(3)}</span>
-                      )}
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            </section>
-
-            <section className="selection-section">
               <h2>結合結果</h2>
-              <textarea readOnly value={assembledText} rows={4} />
+              {basedOnId !== null && (
+                <p className="selection-section-note">
+                  履歴#{basedOnId} を元に再生成します。
+                  <button type="button" onClick={() => setBasedOnId(null)}>ベースを解除</button>
+                </p>
+              )}
+              <textarea value={finalPrompt} onChange={e => setFinalPrompt(e.target.value)} rows={4} />
               <div className="selection-assembled-actions">
-                <button type="button" onClick={copyAssembled} disabled={!assembledText}>
+                <button type="button" onClick={copyAssembled} disabled={!finalPrompt}>
                   コピー
                 </button>
                 <input
@@ -748,7 +847,7 @@ export default function Selection() {
                 <button type="button" onClick={saveAsPreset} disabled={!presetName.trim() || checkedIds.size === 0}>
                   プリセットとして保存
                 </button>
-                <button type="button" onClick={generateImage} disabled={!assembledText || generating}>
+                <button type="button" onClick={generateImage} disabled={!finalPrompt.trim() || generating}>
                   {generating ? '生成中...' : '画像を生成'}
                 </button>
               </div>
@@ -767,6 +866,25 @@ export default function Selection() {
         )}
 
         <section className="selection-section">
+          <h2>過去の生成画像をインポート</h2>
+          <p className="selection-section-note">
+            NovelAIで生成したPNG画像(メタデータ埋め込み済み)を選ぶと、プロンプト等を読み取って生成履歴に追加します。
+          </p>
+          <input
+            type="file"
+            accept="image/png"
+            multiple
+            disabled={importing}
+            onChange={e => {
+              if (e.target.files && e.target.files.length > 0) void importImages(e.target.files)
+              e.target.value = ''
+            }}
+          />
+          {importing && <p className="selection-history-info">インポート中...</p>}
+          {importResult && <p className="selection-history-info">{importResult}</p>}
+        </section>
+
+        <section className="selection-section">
           <h2 onClick={() => setShowHistory(v => !v)} className="selection-history-toggle">
             生成履歴({history.length}件) {showHistory ? '▲' : '▼'}
           </h2>
@@ -782,11 +900,20 @@ export default function Selection() {
                     ))}
                   </div>
                   <div className="selection-history-meta">
-                    <p className="selection-history-prompt">{h.prompt}</p>
+                    <p className="selection-history-prompt">
+                      {h.metadata_incomplete && <span className="selection-history-badge">⚠️ メタデータ不足</span>}
+                      {h.prompt || '(プロンプトなし)'}
+                    </p>
                     <p className="selection-history-info">
                       {h.model} / {h.size} / seed={h.seed ?? 'random'} / チャンク{h.chunk_ids.length}件 /{' '}
                       {new Date(h.created_at).toLocaleString('ja-JP')}
                     </p>
+                    {h.based_on_id !== null && (
+                      <p className="selection-history-info">元: 履歴#{h.based_on_id}</p>
+                    )}
+                    <button type="button" onClick={() => loadFromHistory(h)}>
+                      再生成のベースにする
+                    </button>
                     {h.i2i_image_path && (
                       <p className="selection-history-info">
                         i2i: strength={h.i2i_strength?.toFixed(2)} noise={h.i2i_noise?.toFixed(2)}

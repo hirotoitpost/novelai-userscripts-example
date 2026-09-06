@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import io
 from base64 import b64decode, b64encode
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
 import httpx
+import numpy as np
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from novelai import AsyncNovelAI
+from novelai._utils.nai_meta import extract_image_metadata
 from novelai.types import GenerateImageParams
+from PIL import Image
 
 from ..auth_utils import get_encryption_key
 from ..client import get_client
@@ -44,6 +48,7 @@ from ..models import (
     EncryptionKeyResponse,
     ExclusiveGroupCreateRequest,
     ExclusiveGroupResponse,
+    ImportImagesRequest,
     PresetCreateRequest,
     PresetSummary,
     PresetUpdateRequest,
@@ -380,6 +385,7 @@ async def select_generate_endpoint(
             i2i_noise=req.generation.i2i.noise if req.generation.i2i else None,
             character_references=character_references,
             characters=characters,
+            based_on_id=req.based_on,
         )
     finally:
         conn.close()
@@ -420,3 +426,70 @@ async def get_history_file(path: str) -> FileResponse:
     if not full_path.is_file():
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(full_path, media_type="image/png")
+
+
+@router.post("/import-images")
+async def import_images_endpoint(req: ImportImagesRequest) -> list[dict[str, Any]]:
+    """
+    NovelAI で過去に生成した画像(埋め込みメタデータ付きPNG)を読み込み、生成履歴として
+    取り込む。チャンク選択を経由していないため chunk_ids は空になる。
+    """
+    conn = get_connection()
+    try:
+        results: list[dict[str, Any]] = []
+        for image_b64 in req.images:
+            try:
+                entry = _import_single_image(conn, image_b64)
+                results.append({"success": True, "id": entry["id"]})
+            except Exception as exc:  # noqa: BLE001 1件の失敗で残りの取り込みを止めない
+                results.append({"success": False, "error": str(exc)})
+        return results
+    finally:
+        conn.close()
+
+
+def _import_single_image(conn: Any, image_b64: str) -> dict[str, Any]:
+    """
+    NovelAI の埋め込みメタデータを読み取れるだけ読み取って履歴に保存する。
+    メタデータが一部/全部読めなくても、画像自体は必ず保存し、欠けた項目は
+    デフォルト値で埋めた上で metadata_incomplete=True としておく（読めない画像だからと
+    言って取り込み自体を諦めない。ここで失敗させて良いのは画像として開けない場合だけ）。
+    """
+    image_bytes = _decode_b64(image_b64)
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    np_img = np.asarray(img, dtype=np.uint8)
+
+    comment: dict[str, Any] = {}
+    source = "unknown"
+    metadata_incomplete = True
+    try:
+        meta = extract_image_metadata(np_img)
+        if isinstance(meta, dict):
+            source = str(meta.get("Source", "unknown"))
+            maybe_comment = meta.get("Comment")
+            if isinstance(maybe_comment, dict):
+                comment = maybe_comment
+                metadata_incomplete = "prompt" not in comment
+    except Exception:  # noqa: BLE001 メタデータが読めなくても画像自体は保存を続ける
+        pass
+
+    width = comment.get("width")
+    height = comment.get("height")
+
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}_import.png"
+    (_HISTORY_DIR / filename).write_bytes(image_bytes)
+
+    return record_generation(
+        conn,
+        prompt=comment.get("prompt", ""),
+        negative_prompt=comment.get("uc"),
+        model=source,
+        size=f"{width}x{height}" if width and height else "unknown",
+        steps=comment.get("steps") or 23,
+        scale=comment.get("scale") or 5.0,
+        seed=comment.get("seed"),
+        chunk_ids=[],
+        image_paths=[f"outputs/history/{filename}"],
+        metadata_incomplete=metadata_incomplete,
+    )

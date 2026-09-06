@@ -115,6 +115,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             i2i_noise REAL,
             character_references TEXT,
             characters TEXT,
+            based_on_id INTEGER,
+            metadata_incomplete INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
         """
@@ -127,6 +129,8 @@ _GENERATION_HISTORY_EXTRA_COLUMNS = {
     "i2i_image_path": "TEXT",
     "i2i_strength": "REAL",
     "i2i_noise": "REAL",
+    "based_on_id": "INTEGER",
+    "metadata_incomplete": "INTEGER NOT NULL DEFAULT 0",
     "character_references": "TEXT",
     "characters": "TEXT",
 }
@@ -463,19 +467,27 @@ def record_generation(
     i2i_noise: float | None = None,
     character_references: list[dict[str, Any]] | None = None,
     characters: list[dict[str, Any]] | None = None,
+    based_on_id: int | None = None,
+    metadata_incomplete: bool = False,
 ) -> dict[str, Any]:
     """
     /select 経由の画像生成だけを対象にした履歴保存。image_paths / i2i_image_path /
     character_references[].image_path はリポジトリルートからの相対パス(outputs/history/...)で、
     画像データ自体はDBに入れずファイルのまま置く。
+
+    based_on_id: この生成が別の履歴エントリ(インポート画像やメタデータ不足のエントリなど)を
+    元に再生成された場合、その元エントリの id を入れておくことで rerun の系譜を遡れるようにする。
+    metadata_incomplete: インポート時にメタデータの一部/全部が読み取れず、デフォルト値で
+    補完した場合に立てる。ユーザーが再生成のベースにすべきかの目印になる。
     """
     now = datetime.now(timezone.utc).isoformat()
     row = conn.execute(
         """
         INSERT INTO generation_history
             (prompt, negative_prompt, model, size, steps, scale, seed, chunk_ids, image_paths,
-             i2i_image_path, i2i_strength, i2i_noise, character_references, characters, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             i2i_image_path, i2i_strength, i2i_noise, character_references, characters,
+             based_on_id, metadata_incomplete, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id, created_at
         """,
         (
@@ -493,6 +505,8 @@ def record_generation(
             i2i_noise,
             json.dumps(character_references) if character_references else None,
             json.dumps(characters) if characters else None,
+            based_on_id,
+            1 if metadata_incomplete else 0,
             now,
         ),
     ).fetchone()
@@ -511,5 +525,6 @@ def list_generation_history(conn: sqlite3.Connection, limit: int = 50) -> list[d
         d["image_paths"] = json.loads(d["image_paths"])
         d["character_references"] = json.loads(d["character_references"]) if d["character_references"] else []
         d["characters"] = json.loads(d["characters"]) if d["characters"] else []
+        d["metadata_incomplete"] = bool(d["metadata_incomplete"])
         result.append(d)
     return result
