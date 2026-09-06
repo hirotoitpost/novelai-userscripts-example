@@ -17,6 +17,7 @@ from .routes.image import router as image_router
 from .routes.llm import router as llm_router
 from .routes.lora_dataset import router as lora_dataset_router
 from .routes.metadata import router as metadata_router
+from .routes.story import router as story_router
 from .routes.user import router as user_router
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -55,6 +56,7 @@ app.include_router(image_router)
 app.include_router(llm_router)
 app.include_router(lora_dataset_router)
 app.include_router(metadata_router)
+app.include_router(story_router)
 app.include_router(user_router)
 
 

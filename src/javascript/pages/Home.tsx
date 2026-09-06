@@ -174,6 +174,19 @@ export default function Home() {
             <p>シナリオ・ランダム・類似・プリセットの4通りでチャンクを選び、プロンプトに結合します。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/story')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/story')}
+          >
+            <div className="home-card-icon">📖</div>
+            <h2>物語 → 漫画</h2>
+            <p>前提からOllamaでドラフトを作り、NovelAI公式(Kayra)で本文を執筆、V5で挿絵を生成して漫画にまとめます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">

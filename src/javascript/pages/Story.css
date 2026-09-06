@@ -1,0 +1,251 @@
+.story-root {
+  min-height: 100vh;
+  background: #0a0a14;
+  color: #e8e8ff;
+}
+
+.story-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.story-back {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #9a9ac0;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  margin-bottom: 1rem;
+}
+
+.story-back:hover {
+  color: #e8e8ff;
+  border-color: #7b5cf6;
+}
+
+.story-intro {
+  font-size: 0.85rem;
+  color: #9a9ac0;
+  line-height: 1.6;
+}
+
+.story-error {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  background: #2a1020;
+  border: 1px solid #ff5c8a;
+  border-radius: 8px;
+  color: #ffb0c8;
+  font-size: 0.85rem;
+}
+
+.story-section {
+  margin: 1rem 0;
+  padding: 1rem;
+  background: #13132a;
+  border: 1px solid #2a2a50;
+  border-radius: 10px;
+}
+
+.story-section h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.story-section input,
+.story-section textarea,
+.story-section button {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+}
+
+.story-premise {
+  width: 100%;
+  min-width: 0;
+  background: #0a0a14;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  color: #e8e8ff;
+  padding: 0.6rem;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.story-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.75rem 0;
+}
+
+.story-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: #9a9ac0;
+  flex: 1;
+  min-width: 140px;
+}
+
+.story-row input {
+  background: #0a0a14;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  padding: 0.4rem 0.5rem;
+  min-width: 0;
+}
+
+.story-section button {
+  background: #7b5cf6;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  padding: 0.6rem 1.2rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+
+.story-section button:disabled {
+  background: #3a3a5a;
+  cursor: not-allowed;
+}
+
+.story-secondary {
+  background: transparent !important;
+  border: 1px solid #2a2a50 !important;
+  color: #9a9ac0 !important;
+}
+
+.story-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.story-cancel {
+  background: transparent !important;
+  border: 1px solid #ff5c8a !important;
+  color: #ffb0c8 !important;
+  margin-top: 0 !important;
+}
+
+.story-step {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #b8a4ff;
+}
+
+.story-muted {
+  color: #9a9ac0;
+  font-size: 0.85rem;
+}
+
+.story-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.story-history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.6rem 0.75rem;
+  background: #0a0a14;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.story-history-item:hover {
+  border-color: #7b5cf6;
+}
+
+.story-history-premise {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.story-history-meta {
+  font-size: 0.75rem;
+  color: #9a9ac0;
+}
+
+.story-scene-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.story-scene {
+  padding: 0.75rem;
+  background: #0a0a14;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+}
+
+.story-scene-title {
+  font-weight: 600;
+  color: #b8a4ff;
+  margin-bottom: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.story-scene-text {
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  margin: 0 0 0.4rem;
+}
+
+.story-scene-tags {
+  font-size: 0.75rem;
+  color: #9a9ac0;
+  margin: 0;
+}
+
+.story-pages-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.story-page-thumb {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #2a2a50;
+}
+
+.story-final-image {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #2a2a50;
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .story-inner {
+    padding: 1.25rem 1rem;
+  }
+
+  .story-row {
+    flex-direction: column;
+  }
+}

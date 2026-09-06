@@ -2,7 +2,27 @@
   "permissions": {
     "allow": [
       "Bash(Get-Content ImageGeneration-NovelAI.html)",
-      "Bash(Measure-Object -Character)"
+      "Bash(Measure-Object -Character)",
+      "Bash(git commit -m ' *)",
+      "Bash(xargs ls -la)",
+      "Bash(xargs grep -l \"user.*api\\\\|subscription.*api\")",
+      "Bash(uv run *)",
+      "Bash(.venv\\\\Scripts\\\\pytest.exe tests/test_subscription.py -v -s)",
+      "Bash(\".venv/Scripts/pytest.exe\" tests/test_subscription.py -v -s)",
+      "Bash(cmd /c \"cd /d d:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example && uv run pytest tests/test_subscription.py -v -s 2>&1\")",
+      "Bash(cmd /c \"cd /d d:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example && uv run pytest tests/test_subscription.py -v -s\")",
+      "Bash(powershell -Command \"Set-Location 'd:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example'; uv run pytest tests/test_subscription.py -v -s 2>&1 | Out-String\")",
+      "Bash(powershell -Command \"Get-Process python* | Select-Object Id,Name,Path\")",
+      "Bash(powershell -Command \"& 'D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example\\\\.venv\\\\Scripts\\\\python.exe' -m pytest tests/test_subscription.py -v -s 2>&1\")",
+      "Bash(powershell -NoProfile -Command \"Get-ChildItem 'D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example\\\\.venv\\\\Scripts\\\\' | Select-Object Name\")",
+      "Bash(powershell -NoProfile -Command \"& 'D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example\\\\.venv\\\\Scripts\\\\python.exe' -c 'import pytest; print\\(pytest.__version__\\)' 2>&1\")",
+      "Bash(powershell -NoProfile -Command \"& 'D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example\\\\.venv\\\\Scripts\\\\python.exe' 'D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example\\\\tests\\\\_run_subscription_check.py'\")",
+      "Bash(powershell -NoProfile -Command \"Set-Location 'D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example'; uv run --no-sync python tests/_run_subscription_check.py 2>&1\")",
+      "Bash(powershell -NoProfile -Command \"try { \\(Invoke-WebRequest -Uri 'http://localhost:8000/docs' -TimeoutSec 3\\).StatusCode } catch { 'NOT_RUNNING' }\")",
+      "Bash(powershell -NoProfile -Command \"python 'D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example\\\\tests\\\\_run_subscription_check.py'\")",
+      "Bash(powershell -NoProfile -Command \"try { \\(Invoke-WebRequest -Uri 'http://localhost:8000/docs' -TimeoutSec 3\\).StatusCode } catch { 'NOT_RUNNING' }; try { \\(Invoke-WebRequest -Uri 'http://localhost:5173' -TimeoutSec 3\\).StatusCode } catch { 'NOT_RUNNING' }\")",
+      "Bash(powershell -NoProfile -Command \"Start-Process powershell -ArgumentList '-NoProfile', '-Command', 'Set-Location ''D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example''; uv run uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000 --reload' -WindowStyle Normal\")",
+      "Bash(powershell -NoProfile -Command \"Start-Process powershell -ArgumentList '-NoProfile', '-Command', 'Set-Location ''D:\\\\ProjectPool2\\\\hirotoitpost\\\\GitHub\\\\novelai-userscripts-example''; npm run dev' -WindowStyle Normal\")"
     ],
     "deny": [
       "Bash(git -C ../novelai-sdk*)",

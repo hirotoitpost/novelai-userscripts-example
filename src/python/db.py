@@ -122,8 +122,69 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 物語生成パイプライン: 前提(premise)からOllamaでシーン分割ドラフトを作り、
+    # シーンごとにNovelAI公式(Kayra)へ本文を書かせ、最終的に挿絵→漫画ページへ繋げる。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            premise TEXT NOT NULL,
+            title TEXT,
+            n_scenes INTEGER NOT NULL,
+            panels_per_page INTEGER NOT NULL DEFAULT 4,
+            status TEXT NOT NULL DEFAULT 'draft',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS story_scenes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            scene_index INTEGER NOT NULL,
+            page_index INTEGER NOT NULL,
+            draft_title TEXT,
+            draft_text TEXT NOT NULL DEFAULT '',
+            draft_prompt_tags TEXT NOT NULL DEFAULT '',
+            seed_cue TEXT,
+            novelai_text TEXT,
+            UNIQUE (story_id, scene_index)
+        )
+        """
+    )
+    # 1ページ = panels_per_page 個のシーンをまとめてV5に1回で生成させたコマ割り済み画像。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manga_pages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            page_index INTEGER NOT NULL,
+            image_path TEXT NOT NULL,
+            scene_ids TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (story_id, page_index)
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
+    _migrate_stories(conn)
+
+
+_STORIES_EXTRA_COLUMNS = {
+    # export-manga で最終的に連結した画像のパス。ブラウザをリロードしても
+    # 完成済みの漫画をDBから復元して表示できるようにするため。
+    "final_image_path": "TEXT",
+}
+
+
+def _migrate_stories(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(stories)")}
+    for column, column_type in _STORIES_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE stories ADD COLUMN {column} {column_type}")
+    conn.commit()
 
 
 _GENERATION_HISTORY_EXTRA_COLUMNS = {
@@ -568,5 +629,120 @@ def list_generation_history(conn: sqlite3.Connection, limit: int = 50) -> list[d
         d["character_references"] = json.loads(d["character_references"]) if d["character_references"] else []
         d["characters"] = json.loads(d["characters"]) if d["characters"] else []
         d["metadata_incomplete"] = bool(d["metadata_incomplete"])
+        result.append(d)
+    return result
+
+
+def create_story(conn: sqlite3.Connection, premise: str, n_scenes: int, panels_per_page: int = 4) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO stories (premise, n_scenes, panels_per_page, status, created_at)
+        VALUES (?, ?, ?, 'draft', ?)
+        RETURNING id, premise, title, n_scenes, panels_per_page, status, created_at
+        """,
+        (premise, n_scenes, panels_per_page, now),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def add_story_scenes(conn: sqlite3.Connection, story_id: int, scenes: list[dict[str, Any]]) -> None:
+    """
+    scenes: [{"draft_title": str | None, "draft_text": str, "draft_prompt_tags": str}, ...]
+    scene_index はリストの順番、page_index は stories.panels_per_page から自動算出する。
+    """
+    panels_per_page = conn.execute(
+        "SELECT panels_per_page FROM stories WHERE id = ?", (story_id,)
+    ).fetchone()["panels_per_page"]
+
+    for i, scene in enumerate(scenes):
+        conn.execute(
+            """
+            INSERT INTO story_scenes (story_id, scene_index, page_index, draft_title, draft_text, draft_prompt_tags)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                story_id,
+                i,
+                i // panels_per_page,
+                scene.get("draft_title"),
+                scene.get("draft_text", ""),
+                scene.get("draft_prompt_tags", ""),
+            ),
+        )
+    conn.commit()
+
+
+def get_story(conn: sqlite3.Connection, story_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM stories WHERE id = ?", (story_id,)).fetchone()
+    if row is None:
+        return None
+    story = dict(row)
+    story["scenes"] = list_story_scenes(conn, story_id)
+    return story
+
+
+def list_story_scenes(conn: sqlite3.Connection, story_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM story_scenes WHERE story_id = ? ORDER BY scene_index", (story_id,)
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_scene_writing(conn: sqlite3.Connection, scene_id: int, seed_cue: str, novelai_text: str) -> None:
+    conn.execute(
+        "UPDATE story_scenes SET seed_cue = ?, novelai_text = ? WHERE id = ?",
+        (seed_cue, novelai_text, scene_id),
+    )
+    conn.commit()
+
+
+def update_story_status(conn: sqlite3.Connection, story_id: int, status: str) -> None:
+    conn.execute("UPDATE stories SET status = ? WHERE id = ?", (status, story_id))
+    conn.commit()
+
+
+def update_story_final_image(conn: sqlite3.Connection, story_id: int, final_image_path: str) -> None:
+    conn.execute("UPDATE stories SET final_image_path = ? WHERE id = ?", (final_image_path, story_id))
+    conn.commit()
+
+
+def list_stories(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
+    """ブラウザ再読み込みや別セッションから過去の物語に戻れるようにするための一覧。"""
+    rows = conn.execute(
+        "SELECT * FROM stories ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_manga_page(
+    conn: sqlite3.Connection, story_id: int, page_index: int, image_path: str, scene_ids: list[int]
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO manga_pages (story_id, page_index, image_path, scene_ids, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (story_id, page_index) DO UPDATE SET image_path = excluded.image_path,
+            scene_ids = excluded.scene_ids, created_at = excluded.created_at
+        RETURNING id, story_id, page_index, image_path, scene_ids, created_at
+        """,
+        (story_id, page_index, image_path, json.dumps(scene_ids), now),
+    ).fetchone()
+    conn.commit()
+    result = dict(row)
+    result["scene_ids"] = json.loads(result["scene_ids"])
+    return result
+
+
+def list_manga_pages(conn: sqlite3.Connection, story_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM manga_pages WHERE story_id = ? ORDER BY page_index", (story_id,)
+    ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["scene_ids"] = json.loads(d["scene_ids"])
         result.append(d)
     return result

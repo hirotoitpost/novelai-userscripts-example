@@ -4,7 +4,7 @@ import json
 from typing import Any, AsyncGenerator, cast
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -36,7 +36,7 @@ def _ollama_base(url: str) -> str:
     return url.rstrip("/").removesuffix("/v1")
 
 
-def _strip_think_tags(text: str) -> str:
+def strip_think_tags(text: str) -> str:
     """Remove <think>...</think> blocks that Qwen3 may emit in the content stream."""
     import re
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
@@ -51,31 +51,42 @@ async def _stream_llm_ollama(
     """Ollama native /api/chat with think=False — filters Qwen3 reasoning from content."""
     ollama_base = _ollama_base(base_url)
 
-    async def event_gen() -> AsyncGenerator[str, None]:
+    async def run_once() -> str:
         raw: list[str] = []
+        async with httpx.AsyncClient(timeout=600) as client:
+            async with client.stream(
+                "POST",
+                f"{ollama_base}/api/chat",
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "stream": True,
+                    "think": False,
+                    # デフォルトのrepeat_penalty(1.1)だと同じ文を丸ごと繰り返すことが
+            # 実機で頻発したため、やや強めに設定する。
+            "options": {"num_predict": max_tokens, "repeat_penalty": 1.3, "repeat_last_n": 256},
+                },
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    delta = data.get("message", {}).get("content", "")
+                    if delta:
+                        raw.append(delta)
+                    if data.get("done"):
+                        break
+        return strip_think_tags("".join(raw))
+
+    async def event_gen() -> AsyncGenerator[str, None]:
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                async with client.stream(
-                    "POST",
-                    f"{ollama_base}/api/chat",
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "stream": True,
-                        "think": False,
-                    },
-                ) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        data = json.loads(line)
-                        delta = data.get("message", {}).get("content", "")
-                        if delta:
-                            raw.append(delta)
-                        if data.get("done"):
-                            break
-            full_text = _strip_think_tags("".join(raw))
+            # qwen3の思考モデルはたまに回答全体を message.thinking 側に出してしまい、
+            # content が空になることがある(実機で確認済みの既知の不安定挙動)。
+            # 空の場合は一度だけ再試行する。
+            full_text = await run_once()
+            if not full_text:
+                full_text = await run_once()
             # Emit the cleaned text as a single token (avoids streaming partial think tags)
             if full_text:
                 yield f"event: token\ndata: {json.dumps({'delta': full_text}, ensure_ascii=False)}\n\n"
@@ -133,6 +144,80 @@ async def _stream_text(
     return await _stream_llm(client, get_text_model(), typed, max_tokens)
 
 
+def sse_event(event: str, data: Any) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def stream_llm_text(
+    messages: list[dict[str, Any]],
+    request: Request,
+    max_tokens: int = 1024,
+    json_schema: dict[str, Any] | None = None,
+) -> AsyncGenerator[str, None]:
+    """
+    _stream_text と同じテキストLLM(通常はOllama)から、内容のデルタを逐次yieldする。
+    サーバー内部でLLM呼び出しを連鎖させる物語生成パイプラインが、進捗表示と
+    途中キャンセル(request.is_disconnected())の両方に対応できるようにするための版。
+
+    json_schema: 指定するとOllamaの構造化出力(format)機能でJSON Schemaに適合する
+    出力だけをサンプリングさせる。ローカルの小型LLMは指示した自由形式のフォーマット
+    (見出し記法や番号付け)に従わないことが多く実機で複数回確認したため、機械的に
+    パースする必要がある呼び出しは自由形式のプロンプト整形ではなくこちらを使う。
+    """
+    if is_ollama_text():
+        ollama_base = _ollama_base(get_text_base_url())
+        options: dict[str, Any] = {"num_predict": max_tokens}
+        if json_schema is None:
+            # デフォルトのrepeat_penalty(1.1)だと同じ文を丸ごと繰り返すことが実機で
+            # 頻発したため、やや強めに設定する。ただしJSON Schema制約下では、必要な
+            # 構造トークン(引用符・カンマ・波括弧)の反復まで抑制してしまい、自然に
+            # 停止できず上限まで暴走する不具合を実機で確認したため、そちらには適用しない。
+            options["repeat_penalty"] = 1.3
+            options["repeat_last_n"] = 256
+        body: dict[str, Any] = {
+            "model": get_text_model(),
+            "messages": messages,
+            "stream": True,
+            "think": False,
+            "options": options,
+        }
+        if json_schema is not None:
+            body["format"] = json_schema
+        async with httpx.AsyncClient(timeout=600) as client:
+            async with client.stream("POST", f"{ollama_base}/api/chat", json=body) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if await request.is_disconnected():
+                        return
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    delta = data.get("message", {}).get("content", "")
+                    if delta:
+                        yield delta
+                    if data.get("done"):
+                        break
+        return
+
+    client = get_text_client()
+    typed = cast(list[ChatCompletionMessageParam], messages)
+    stream = await client.chat.completions.create(
+        model=get_text_model(), messages=typed, stream=True, max_tokens=max_tokens, temperature=0.7
+    )
+    async for chunk in stream:
+        if await request.is_disconnected():
+            return
+        delta = chunk.choices[0].delta.content or ""
+        if delta:
+            yield delta
+
+
+async def collect_llm_text(messages: list[dict[str, Any]], request: Request, max_tokens: int = 1024) -> str:
+    """stream_llm_text を最後まで消費して、思考タグを除いた全文だけを返す(進捗不要な内部利用向け)。"""
+    parts = [delta async for delta in stream_llm_text(messages, request, max_tokens)]
+    return strip_think_tags("".join(parts))
+
+
 async def _stream_vision(
     messages: list[dict[str, Any]],
     max_tokens: int = 1024,
@@ -185,9 +270,8 @@ async def stream_char_gen(req: CharGenRequest) -> StreamingResponse:
     ], max_tokens=1024)
 
 
-@router.post("/story-draft")
-async def stream_story_draft(req: StoryDraftRequest) -> StreamingResponse:
-    system = (
+def story_draft_system_prompt(n_scenes: int) -> str:
+    return (
         "あなたはNovelAI画像生成シナリオ用の物語ドラフト生成AIです。\n"
         "ユーザーの前提設定から、画像生成に適した情景描写を含む短編物語を生成してください。\n\n"
         "出力形式:\n"
@@ -196,13 +280,17 @@ async def stream_story_draft(req: StoryDraftRequest) -> StreamingResponse:
         "情景テキスト（日本語、3〜5文）\n"
         "[生成プロンプト候補]: masterpiece, best quality, ...\n\n"
         "ルール:\n"
-        f"- {req.n_scenes}個のシーンを生成する\n"
+        f"- {n_scenes}個のシーンを生成する\n"
         "- 各シーンは画像1枚で表現できる情景に絞る\n"
         "- 情景テキストは日本語で情感豊かに\n"
         "- 生成プロンプト候補は英語タグのみ"
     )
+
+
+@router.post("/story-draft")
+async def stream_story_draft(req: StoryDraftRequest) -> StreamingResponse:
     return await _stream_text([
-        {"role": "system", "content": system},
+        {"role": "system", "content": story_draft_system_prompt(req.n_scenes)},
         {"role": "user", "content": req.premise},
     ], max_tokens=2048)
 

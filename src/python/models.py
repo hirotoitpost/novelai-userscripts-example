@@ -292,3 +292,51 @@ class MetadataEraseRequest(BaseModel):
 
 class MetadataEraseResponse(BaseModel):
     image: str
+
+
+class StoryDraftCreateRequest(BaseModel):
+    premise: str
+    n_scenes: int = Field(4, ge=1, le=20)
+    panels_per_page: int = Field(4, ge=1, le=8)
+
+
+class StorySceneResponse(BaseModel):
+    id: int
+    story_id: int
+    scene_index: int
+    page_index: int
+    draft_title: str | None
+    draft_text: str
+    draft_prompt_tags: str
+    seed_cue: str | None
+    novelai_text: str | None
+
+
+class StoryResponse(BaseModel):
+    id: int
+    premise: str
+    title: str | None
+    n_scenes: int
+    panels_per_page: int
+    status: str
+    created_at: str
+    final_image_path: str | None = None
+    scenes: list[StorySceneResponse]
+
+
+class StorySummary(BaseModel):
+    id: int
+    premise: str
+    title: str | None
+    status: str
+    created_at: str
+    final_image_path: str | None = None
+
+
+class MangaPageResponse(BaseModel):
+    id: int
+    story_id: int
+    page_index: int
+    image_path: str
+    scene_ids: list[int]
+    created_at: str
