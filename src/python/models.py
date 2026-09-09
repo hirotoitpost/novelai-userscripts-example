@@ -306,6 +306,20 @@ class StoryImportRequest(BaseModel):
     panels_per_page: int = Field(4, ge=1, le=8)
 
 
+class StorySplitRequest(BaseModel):
+    """1シーンの上限。シーン数は本文の分量から決まる。"""
+
+    max_paragraphs: int = Field(6, ge=1, le=100)
+    max_chars: int = Field(300, ge=50, le=5000)
+
+
+class StoryIllustrateRequest(BaseModel):
+    """挿絵を生成するページ範囲(0始まり)。page_to 未指定なら最後まで。"""
+
+    page_from: int = Field(0, ge=0)
+    page_to: int | None = Field(None, ge=0)
+
+
 class StorySceneResponse(BaseModel):
     id: int
     story_id: int

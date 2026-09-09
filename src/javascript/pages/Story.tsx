@@ -176,6 +176,13 @@ export default function Story() {
   const [premise, setPremise] = useState('')
   const [nScenes, setNScenes] = useState(4)
   const [panelsPerPage, setPanelsPerPage] = useState(4)
+
+  // シーン分割の条件。シーン数はこの上限から結果として決まる。
+  const [maxParagraphs, setMaxParagraphs] = useState(6)
+  const [maxChars, setMaxChars] = useState(300)
+  // 挿絵を生成するページ範囲(表示は1始まり)。
+  const [pageFrom, setPageFrom] = useState(1)
+  const [pageTo, setPageTo] = useState(5)
   const [importText, setImportText] = useState('')
 
   const [remoteEmail, setRemoteEmail] = useState('')
@@ -199,6 +206,7 @@ export default function Story() {
 
   const isWritten = (story?.scenes.length ?? 0) > 0 && story!.scenes.every(s => s.novelai_text)
   const isUnsplitImport = (story?.scenes.length ?? 0) === 0 && !!story?.raw_text
+  const totalPages = story ? Math.max(...story.scenes.map(s => s.page_index + 1), 0) : 0
 
   function loadHistory() {
     fetch(`${API_ORIGIN}/api/story?limit=20`)
@@ -291,7 +299,12 @@ export default function Story() {
     abortRef.current = controller
     try {
       setStepLabel('シーン分割・タグ付けを実行中...')
-      const result = await postSSE<StoryData>(`/api/story/${story.id}/split`, controller.signal, setStepLabel)
+      const result = await postSSE<StoryData>(
+        `/api/story/${story.id}/split`,
+        controller.signal,
+        setStepLabel,
+        { max_paragraphs: maxParagraphs, max_chars: maxChars },
+      )
       setStory(result)
       loadHistory()
     } catch (e) {
@@ -414,8 +427,15 @@ export default function Story() {
     const controller = new AbortController()
     abortRef.current = controller
     try {
-      setStepLabel('NovelAI Diffusion V5でコマ割り済み挿絵を生成中...')
-      const pages = await postSSE<MangaPage[]>(`/api/story/${story.id}/illustrate`, controller.signal, setStepLabel)
+      const from = Math.max(1, Math.min(pageFrom, totalPages))
+      const to = Math.max(from, Math.min(pageTo, totalPages))
+      setStepLabel(`NovelAI Diffusion V5でコマ割り済み挿絵を生成中(${from}〜${to}ページ)...`)
+      const pages = await postSSE<MangaPage[]>(
+        `/api/story/${story.id}/illustrate`,
+        controller.signal,
+        setStepLabel,
+        { page_from: from - 1, page_to: to - 1 },
+      )
       setMangaPages(pages)
 
       setStepLabel('全ページを1枚の漫画に合成中...')
@@ -681,6 +701,57 @@ export default function Story() {
                   </li>
                 ))}
               </ol>
+            )}
+
+            {isUnsplitImport && (
+              <div className="story-row">
+                <label>
+                  1シーンの段落数上限
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={maxParagraphs}
+                    onChange={e => setMaxParagraphs(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  1シーンの文字数上限
+                  <input
+                    type="number"
+                    min={50}
+                    max={5000}
+                    step={50}
+                    value={maxChars}
+                    onChange={e => setMaxChars(Number(e.target.value))}
+                  />
+                </label>
+              </div>
+            )}
+
+            {isWritten && (
+              <div className="story-row">
+                <label>
+                  挿絵の開始ページ
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={pageFrom}
+                    onChange={e => setPageFrom(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  挿絵の終了ページ(全{totalPages}ページ)
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={pageTo}
+                    onChange={e => setPageTo(Number(e.target.value))}
+                  />
+                </label>
+              </div>
             )}
 
             <div className="story-actions">

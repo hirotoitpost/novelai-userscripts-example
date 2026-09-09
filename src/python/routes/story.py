@@ -32,6 +32,7 @@ from ..db import (
     list_story_scenes,
     update_scene_writing,
     update_story_final_image,
+    update_story_scene_count,
     update_story_status,
 )
 from ..keystore_crypto import decrypt_keystore, decrypt_object
@@ -39,8 +40,10 @@ from ..manga_export import assemble_manga
 from ..models import (
     MangaPageResponse,
     StoryDraftCreateRequest,
+    StoryIllustrateRequest,
     StoryImportRequest,
     StoryResponse,
+    StorySplitRequest,
     StorySummary,
 )
 from ..novelai_image_v5 import generate_manga_page
@@ -133,6 +136,10 @@ def _story_response(story: dict[str, Any] | None) -> StoryResponse:
 
 _DRAFT_MAX_ATTEMPTS = 3
 _DRAFT_MIN_BODY_LENGTH = 20
+
+# タグ付けを1リクエストに詰め込む上限。長編は数百〜数千シーンになるため、
+# 全件を一度に送るとローカルLLMのコンテキストに収まらない。
+_TAG_BATCH_SIZE = 10
 
 
 def _is_usable_draft(scenes: list[dict[str, Any]]) -> bool:
@@ -304,36 +311,66 @@ async def list_remote_stories(
     return result
 
 
-def _split_text_into_scenes(text: str, n_scenes: int) -> list[str]:
+# 文の切れ目。日本語の句点類は直後で、ラテン文字の終止符は後ろに空白が続く場合だけ
+# 区切る(小数点や略語で切らないため)。どちらも幅ゼロで区切るので、連結すれば元の
+# 本文がそのまま復元される(取り込んだ本文は書き換えない、という前提を守るため)。
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？])|(?<=[.!?])(?=\s)")
+
+
+def _split_into_units(text: str, max_chars: int) -> list[str]:
     """
-    公式サイトなどで既に書かれた物語を、本文を一切書き換えずにちょうど n_scenes 個
-    (テキストの分量が足りない場合はそれ以下)の場面に分割する。
+    本文を段落へ分け、max_chars を超える段落は文単位へさらに分解する。
 
-    段落(空行区切り)を最小単位とし、段落数が n_scenes 以上あれば段落の個数で
-    n_scenes 個の連続したグループへ均等に分ける(文字数の重みは見ない:
-    1段落が閾値を超えているだけで後続のバケットを1つ丸ごと飛ばしてしまう、
-    という不具合を文字数ベースの貪欲法で実機確認したため)。段落数が n_scenes に
-    満たない場合は、文単位(。！？の直後)にさらに分割してから同じグルーピングを行う。
+    公式サイトから取り込んだ本文はセクション区切りが単一改行のため、空行だけでなく
+    任意の改行を段落境界として扱う。改行がほとんど無い物語(実機データで1段落3,000字超の
+    英語作品を確認)ではこの文分割が効き、1コマに収まらない巨大なシーンができるのを防ぐ。
+    1文だけで max_chars を超える場合はそれ以上分割せず、そのまま1単位とする。
     """
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+    paragraphs = [p.strip() for p in re.split(r"\n+", text.strip()) if p.strip()]
 
-    if len(paragraphs) < n_scenes:
-        pieces = [s.strip() for p in paragraphs for s in re.split(r"(?<=[。！？])", p) if s.strip()]
-        if pieces:
-            paragraphs = pieces
+    units: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph) <= max_chars:
+            units.append(paragraph)
+            continue
 
-    if not paragraphs:
+        buffer = ""
+        for sentence in _SENTENCE_BOUNDARY_RE.split(paragraph):
+            if not sentence.strip():
+                continue
+            if buffer and len(buffer) + len(sentence) > max_chars:
+                units.append(buffer)
+                buffer = ""
+            buffer += sentence
+        if buffer:
+            units.append(buffer)
+    return units
+
+
+def _split_text_into_scenes(text: str, max_paragraphs: int, max_chars: int) -> list[str]:
+    """
+    本文を書き換えずに場面へ分割する。段落を順に詰めていき、段落数が max_paragraphs に
+    達するか、合計が max_chars を超える時点で次のシーンへ区切る(シーン数は結果として
+    決まる)。
+
+    シーン数を先に決める方式だと、長編ほど1シーンが際限なく長くなり、そのまま画像
+    プロンプトへ載せられなくなるため、1シーンの上限を指定する方式にしている。
+    """
+    units = _split_into_units(text, max_chars)
+    if not units:
         return []
 
-    n_scenes = min(n_scenes, len(paragraphs))
-    base, extra = divmod(len(paragraphs), n_scenes)
-
     scenes: list[str] = []
-    start = 0
-    for i in range(n_scenes):
-        size = base + (1 if i < extra else 0)
-        scenes.append("\n".join(paragraphs[start : start + size]))
-        start += size
+    current: list[str] = []
+    current_len = 0
+    for unit in units:
+        if current and (len(current) >= max_paragraphs or current_len + len(unit) > max_chars):
+            scenes.append("\n".join(current))
+            current, current_len = [], 0
+        current.append(unit)
+        current_len += len(unit)
+    if current:
+        scenes.append("\n".join(current))
     return scenes
 
 
@@ -421,13 +458,13 @@ async def import_story(req: StoryImportRequest) -> StoryResponse:
 
 
 @router.post("/{story_id}/split")
-async def split_story(story_id: int, request: Request) -> StreamingResponse:
+async def split_story(story_id: int, req: StorySplitRequest, request: Request) -> StreamingResponse:
     """
-    /import で raw_text のまま保存しておいた物語を、本文には一切手を加えずに
-    n_scenes個の場面へ分割する。Ollamaはタグ付け(タイトル・画像生成タグ)のためだけに
-    使い、本文の生成/書き換えには使わない。分割したシーンは novelai_text を
-    draft_text と同じ値で埋め、/write (Kayraによる自動執筆)をスキップした状態で
-    保存するため、そのまま /illustrate へ進める。
+    /import で raw_text のまま保存しておいた物語を、本文には一切手を加えずに場面へ
+    分割する。Ollamaはタグ付け(タイトル・画像生成タグ)のためだけに使い、本文の生成/
+    書き換えには使わない。分割したシーンは novelai_text を draft_text と同じ値で埋め、
+    /write (Kayraによる自動執筆)をスキップした状態で保存するため、そのまま
+    /illustrate へ進める。
     """
 
     async def gen() -> AsyncGenerator[str, None]:
@@ -448,50 +485,64 @@ async def split_story(story_id: int, request: Request) -> StreamingResponse:
                 yield sse_event("error", {"detail": "raw_text がありません(インポートされた物語ではない可能性があります)。"})
                 return
 
-            scene_texts = _split_text_into_scenes(raw_text, story["n_scenes"])
+            scene_texts = _split_text_into_scenes(raw_text, req.max_paragraphs, req.max_chars)
             if not scene_texts:
                 yield sse_event("error", {"detail": "本文からシーンを分割できませんでした。"})
                 return
 
             n_scenes = len(scene_texts)
-            if n_scenes != story["n_scenes"]:
-                yield sse_event(
-                    "progress",
-                    {"message": f"本文の分量から、{n_scenes}シーンに調整しました(要求: {story['n_scenes']})"},
-                )
+            pages = -(-n_scenes // story["panels_per_page"])
+            yield sse_event(
+                "progress",
+                {"message": f"{n_scenes}シーン({pages}ページ相当)に分割しました。タグ付けを開始します"},
+            )
 
-            tags_by_scene: list[dict[str, Any]] | None = None
-            for attempt in range(1, _DRAFT_MAX_ATTEMPTS + 1):
-                if await request.is_disconnected():
-                    return
-                yield sse_event(
-                    "progress", {"message": f"Ollamaでタグ付け中(試行{attempt}/{_DRAFT_MAX_ATTEMPTS})"}
-                )
-                parts: list[str] = []
-                async for delta in stream_llm_text(
-                    [
-                        {"role": "system", "content": _import_tags_system_prompt(n_scenes)},
-                        {"role": "user", "content": _format_scenes_for_tagging(scene_texts)},
-                    ],
-                    request,
-                    max_tokens=4096,
-                    json_schema=_import_tags_json_schema(n_scenes),
-                ):
-                    parts.append(delta)
-                if await request.is_disconnected():
-                    return
+            # 長編では全シーンを1リクエストに載せるとローカルLLMのコンテキストを超えるため、
+            # 一定数ずつに分けてタグ付けする(実機の取り込みで2,000シーン超を確認)。
+            tags_by_scene: list[dict[str, Any]] = []
+            batches = [
+                scene_texts[i : i + _TAG_BATCH_SIZE] for i in range(0, n_scenes, _TAG_BATCH_SIZE)
+            ]
+            for batch_index, batch in enumerate(batches, start=1):
+                batch_tags: list[dict[str, Any]] | None = None
+                for attempt in range(1, _DRAFT_MAX_ATTEMPTS + 1):
+                    if await request.is_disconnected():
+                        return
+                    yield sse_event(
+                        "progress",
+                        {
+                            "message": (
+                                f"Ollamaでタグ付け中 {batch_index}/{len(batches)} "
+                                f"(試行{attempt}/{_DRAFT_MAX_ATTEMPTS})"
+                            )
+                        },
+                    )
+                    parts: list[str] = []
+                    async for delta in stream_llm_text(
+                        [
+                            {"role": "system", "content": _import_tags_system_prompt(len(batch))},
+                            {"role": "user", "content": _format_scenes_for_tagging(batch)},
+                        ],
+                        request,
+                        max_tokens=4096,
+                        json_schema=_import_tags_json_schema(len(batch)),
+                    ):
+                        parts.append(delta)
+                    if await request.is_disconnected():
+                        return
 
-                tags_by_scene = _parse_import_tags(strip_think_tags("".join(parts)), n_scenes)
-                if tags_by_scene is not None:
-                    break
-                yield sse_event(
-                    "progress",
-                    {"message": f"タグ付け出力の形式が不十分だったため再試行します({attempt}/{_DRAFT_MAX_ATTEMPTS})"},
-                )
+                    batch_tags = _parse_import_tags(strip_think_tags("".join(parts)), len(batch))
+                    if batch_tags is not None:
+                        break
 
-            if tags_by_scene is None:
-                yield sse_event("progress", {"message": "タグ付けに失敗したため、タグなしで分割します。"})
-                tags_by_scene = [{"draft_title": None, "draft_prompt_tags": ""} for _ in scene_texts]
+                if batch_tags is None:
+                    # 一部のバッチだけ失敗しても分割自体は成立させる(タグ無しで続行)。
+                    yield sse_event(
+                        "progress",
+                        {"message": f"{batch_index}/{len(batches)} のタグ付けに失敗したため、タグなしで続行します"},
+                    )
+                    batch_tags = [{"draft_title": None, "draft_prompt_tags": ""} for _ in batch]
+                tags_by_scene.extend(batch_tags)
 
             scenes = [
                 {
@@ -506,6 +557,8 @@ async def split_story(story_id: int, request: Request) -> StreamingResponse:
             conn = get_connection()
             try:
                 add_story_scenes(conn, story_id, scenes)
+                # n_scenes は分割時に決まるので、実際の件数で上書きしておく。
+                update_story_scene_count(conn, story_id, n_scenes)
                 update_story_status(conn, story_id, "written")
                 result = get_story(conn, story_id)
             finally:
@@ -596,7 +649,14 @@ async def write_story(story_id: int, client: ClientDep, request: Request) -> Str
 
 
 @router.post("/{story_id}/illustrate")
-async def illustrate_story(story_id: int, client: ClientDep, request: Request) -> StreamingResponse:
+async def illustrate_story(
+    story_id: int, req: StoryIllustrateRequest, client: ClientDep, request: Request
+) -> StreamingResponse:
+    """
+    ページ単位でV5にコマ割り画像を生成させる。長編は分割すると数十〜百ページ規模に
+    なり一度に生成できないため、page_from/page_to で生成するページ範囲を絞れる。
+    """
+
     async def gen() -> AsyncGenerator[str, None]:
         conn = get_connection()
         try:
@@ -611,7 +671,14 @@ async def illustrate_story(story_id: int, client: ClientDep, request: Request) -
 
             _MANGA_DIR.mkdir(parents=True, exist_ok=True)
             results = []
-            page_indexes = sorted(pages_scenes)
+            page_indexes = [
+                p
+                for p in sorted(pages_scenes)
+                if p >= req.page_from and (req.page_to is None or p <= req.page_to)
+            ]
+            if not page_indexes:
+                yield sse_event("error", {"detail": "指定した範囲にページがありません。"})
+                return
             for i, page_index in enumerate(page_indexes, start=1):
                 if await request.is_disconnected():
                     return

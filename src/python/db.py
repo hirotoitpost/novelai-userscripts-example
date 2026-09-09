@@ -724,6 +724,12 @@ def update_story_status(conn: sqlite3.Connection, story_id: int, status: str) ->
     conn.commit()
 
 
+def update_story_scene_count(conn: sqlite3.Connection, story_id: int, n_scenes: int) -> None:
+    """分割の結果として決まったシーン数を記録する(取り込み時の値は暫定値のため)。"""
+    conn.execute("UPDATE stories SET n_scenes = ? WHERE id = ?", (n_scenes, story_id))
+    conn.commit()
+
+
 def update_story_final_image(conn: sqlite3.Connection, story_id: int, final_image_path: str) -> None:
     conn.execute("UPDATE stories SET final_image_path = ? WHERE id = ?", (final_image_path, story_id))
     conn.commit()

@@ -32,6 +32,9 @@ _DEFAULT_NEGATIVE_PROMPT = (
     "multiple views, very displeasing, too many watermarks, negative space, blank page, "
 )
 
+# 1コマの説明にそのまま載せる本文の上限文字数。
+_MAX_PANEL_TEXT_CHARS = 200
+
 
 def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
     """
@@ -49,7 +52,10 @@ def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
 
     for i, panel in enumerate(panels, start=1):
         tags = panel.get("draft_prompt_tags", "").strip()
-        text = panel.get("draft_text", "").strip()
+        # 本文はセリフ素材として渡すだけなので、長いシーンをそのまま載せない。
+        # 分割条件によっては1シーンが数千字になり得るが、その長さのプロンプトは
+        # トークン上限を超えて後続のコマ指定ごと無視されてしまう。
+        text = panel.get("draft_text", "").strip()[:_MAX_PANEL_TEXT_CHARS]
         description = ", ".join(d for d in (tags, text) if d)
         if description:
             parts.append(f"panel {i}: {description}")
