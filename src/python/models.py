@@ -313,11 +313,63 @@ class StorySplitRequest(BaseModel):
     max_chars: int = Field(300, ge=50, le=5000)
 
 
+# 挿絵(コマ割りページ)生成で選べるモデル。V5はこのリポジトリ独自のリクエスト組み立てで
+# 実績があるもの、4.5系はSDK側で実績があり同じv4形式のボディで動くものを載せている。
+MangaModelLiteral = Literal[
+    "nai-diffusion-5-full",
+    "nai-diffusion-4-5-full",
+    "nai-diffusion-4-5-curated",
+]
+
+
+class MangaImageSettings(BaseModel):
+    """挿絵生成のパラメータ。既定値は従来のハードコード値と同じ。"""
+
+    # 既定値だけで生成できる必要があるので、default= を明示して型チェッカにも
+    # 省略可能だと伝える(Field の第1引数だけだと省略可能と解釈されない)。
+    model: MangaModelLiteral = "nai-diffusion-5-full"
+    width: int = Field(default=1216, ge=512, le=2048)
+    height: int = Field(default=1728, ge=512, le=2048)
+    steps: int = Field(default=28, ge=1, le=50)
+    scale: float = Field(default=7.0, ge=0.0, le=10.0)
+    sampler: SamplerLiteral = "k_euler_ancestral"
+    noise_schedule: NoiseScheduleLiteral = "karras"
+    cfg_rescale: float = Field(default=0.0, ge=0.0, le=1.0)
+    negative_prompt: Optional[str] = None
+    # 未指定ならページごとに別のシードを使う(従来動作)。指定すると全ページで固定する。
+    seed: Optional[int] = Field(default=None, ge=0, le=4294967295)
+
+
 class StoryIllustrateRequest(BaseModel):
     """挿絵を生成するページ範囲(0始まり)。page_to 未指定なら最後まで。"""
 
     page_from: int = Field(0, ge=0)
     page_to: int | None = Field(None, ge=0)
+    settings: MangaImageSettings = MangaImageSettings()
+
+
+class StoryJobResponse(BaseModel):
+    """分割/挿絵生成のバックグラウンドジョブの進捗。"""
+
+    story_id: int
+    kind: Literal["split", "illustrate"]
+    status: Literal["running", "done", "error", "cancelled"]
+    message: str = ""
+    progress: int = 0
+    total: int = 0
+    detail: Optional[str] = None
+
+
+class ImagePresetCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    settings: MangaImageSettings
+
+
+class ImagePresetResponse(BaseModel):
+    id: int
+    name: str
+    settings: MangaImageSettings
+    created_at: str
 
 
 class StorySceneResponse(BaseModel):

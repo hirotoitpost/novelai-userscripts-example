@@ -30,6 +30,7 @@ from novelai.types import (
 )
 
 from ..client import get_client
+from ..db import delete_image_preset, get_connection, list_image_presets, save_image_preset
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 from ..models import (
@@ -37,9 +38,40 @@ from ..models import (
     AnlasEstimateResponse,
     GenerateImageRequest,
     GenerateImageResponse,
+    ImagePresetCreateRequest,
+    ImagePresetResponse,
 )
 
 router = APIRouter(prefix="/api/image", tags=["image"])
+
+
+@router.get("/presets", response_model=list[ImagePresetResponse])
+async def get_image_presets() -> list[dict[str, Any]]:
+    """挿絵生成のパラメータプリセット一覧。"""
+    conn = get_connection()
+    try:
+        return list_image_presets(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/presets", response_model=ImagePresetResponse)
+async def create_image_preset(req: ImagePresetCreateRequest) -> dict[str, Any]:
+    """プリセットを保存する。同じ名前なら上書きする。"""
+    conn = get_connection()
+    try:
+        return save_image_preset(conn, req.name, req.settings.model_dump())
+    finally:
+        conn.close()
+
+
+@router.delete("/presets/{preset_id}", status_code=204)
+async def delete_image_preset_endpoint(preset_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_image_preset(conn, preset_id)
+    finally:
+        conn.close()
 
 
 def _decode_b64(b64: str) -> bytes:

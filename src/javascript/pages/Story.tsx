@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { decodeStoryDocument } from '../novelaiDocument'
+import MangaImageSettings, {
+  DEFAULT_MANGA_IMAGE_SETTINGS,
+  MangaImageSettingsValue,
+} from '../components/MangaImageSettings'
 import './Story.css'
 
 interface StoryScene {
@@ -183,6 +187,9 @@ export default function Story() {
   // 挿絵を生成するページ範囲(表示は1始まり)。
   const [pageFrom, setPageFrom] = useState(1)
   const [pageTo, setPageTo] = useState(5)
+  const [imageSettings, setImageSettings] = useState<MangaImageSettingsValue>(
+    DEFAULT_MANGA_IMAGE_SETTINGS
+  )
   const [importText, setImportText] = useState('')
 
   const [remoteEmail, setRemoteEmail] = useState('')
@@ -207,6 +214,7 @@ export default function Story() {
   const isWritten = (story?.scenes.length ?? 0) > 0 && story!.scenes.every(s => s.novelai_text)
   const isUnsplitImport = (story?.scenes.length ?? 0) === 0 && !!story?.raw_text
   const totalPages = story ? Math.max(...story.scenes.map(s => s.page_index + 1), 0) : 0
+  const untaggedCount = story ? story.scenes.filter(s => !s.draft_prompt_tags).length : 0
 
   function loadHistory() {
     fetch(`${API_ORIGIN}/api/story?limit=20`)
@@ -219,8 +227,55 @@ export default function Story() {
     loadHistory()
   }, [])
 
-  function cancel() {
+  async function cancel() {
     abortRef.current?.abort()
+    // 分割/挿絵生成はサーバー側のバックグラウンドジョブなので、接続を切るだけでは止まらない。
+    if (story) {
+      await fetch(`${API_ORIGIN}/api/story/${story.id}/job/cancel`, { method: 'POST' }).catch(
+        () => {/* 進行中でなければ何もしない */}
+      )
+    }
+  }
+
+  /**
+   * バックグラウンドジョブの進捗をポーリングし、終了するまで待つ。
+   * スマホがスリープしてもサーバー側の処理は続くので、開き直せばここから再開できる。
+   */
+  async function pollJob(storyId: number, signal: AbortSignal): Promise<void> {
+    while (true) {
+      const res = await fetch(`${API_ORIGIN}/api/story/${storyId}/job`, { signal })
+      const job = res.ok ? await res.json() : null
+      if (!job) return
+
+      setStepLabel(job.total > 0 ? `${job.message} (${job.progress}/${job.total})` : job.message)
+      if (job.status === 'done') return
+      if (job.status === 'error') throw new Error(job.detail ?? '処理に失敗しました')
+      if (job.status === 'cancelled') throw new Error('キャンセルしました。途中までの結果は残っています。')
+
+      await new Promise(resolve => setTimeout(resolve, 2000))
+    }
+  }
+
+  /** 開いた物語で既にジョブが走っていれば、進捗表示を引き継ぐ。 */
+  async function resumeJobIfRunning(id: number) {
+    const res = await fetch(`${API_ORIGIN}/api/story/${id}/job`).catch(() => null)
+    const job = res?.ok ? await res.json() : null
+    if (!job || job.status !== 'running') return
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    try {
+      await pollJob(id, controller.signal)
+      await loadStory(id)
+      loadHistory()
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === 'AbortError')) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setStepLabel('')
+      abortRef.current = null
+    }
   }
 
   async function loadStory(id: number) {
@@ -238,6 +293,12 @@ export default function Story() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  /** 一覧から物語を開く。処理中なら進捗表示も引き継ぐ。 */
+  async function openStory(id: number) {
+    await loadStory(id)
+    void resumeJobIfRunning(id)
   }
 
   async function createDraft() {
@@ -298,14 +359,16 @@ export default function Story() {
     const controller = new AbortController()
     abortRef.current = controller
     try {
-      setStepLabel('シーン分割・タグ付けを実行中...')
-      const result = await postSSE<StoryData>(
-        `/api/story/${story.id}/split`,
-        controller.signal,
-        setStepLabel,
-        { max_paragraphs: maxParagraphs, max_chars: maxChars },
-      )
-      setStory(result)
+      setStepLabel('シーン分割を開始しています...')
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/split`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_paragraphs: maxParagraphs, max_chars: maxChars }),
+        signal: controller.signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      await pollJob(story.id, controller.signal)
+      await loadStory(story.id)
       loadHistory()
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
@@ -421,6 +484,32 @@ export default function Story() {
     }
   }
 
+  async function runRetag() {
+    if (!story) return
+    setError(null)
+    const controller = new AbortController()
+    abortRef.current = controller
+    try {
+      setStepLabel('タグ付けを開始しています...')
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/retag`, {
+        method: 'POST',
+        signal: controller.signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      await pollJob(story.id, controller.signal)
+      await loadStory(story.id)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setError('キャンセルしました。')
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setStepLabel('')
+      abortRef.current = null
+    }
+  }
+
   async function runIllustrateAndExport() {
     if (!story) return
     setError(null)
@@ -429,14 +518,15 @@ export default function Story() {
     try {
       const from = Math.max(1, Math.min(pageFrom, totalPages))
       const to = Math.max(from, Math.min(pageTo, totalPages))
-      setStepLabel(`NovelAI Diffusion V5でコマ割り済み挿絵を生成中(${from}〜${to}ページ)...`)
-      const pages = await postSSE<MangaPage[]>(
-        `/api/story/${story.id}/illustrate`,
-        controller.signal,
-        setStepLabel,
-        { page_from: from - 1, page_to: to - 1 },
-      )
-      setMangaPages(pages)
+      setStepLabel(`挿絵生成を開始しています(${from}〜${to}ページ)...`)
+      const startRes = await fetch(`${API_ORIGIN}/api/story/${story.id}/illustrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_from: from - 1, page_to: to - 1, settings: imageSettings }),
+        signal: controller.signal,
+      })
+      if (!startRes.ok) throw new Error(await readErrorDetail(startRes))
+      await pollJob(story.id, controller.signal)
 
       setStepLabel('全ページを1枚の漫画に合成中...')
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/export-manga`, {
@@ -444,8 +534,7 @@ export default function Story() {
         signal: controller.signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
-      const { image_path } = await res.json()
-      setStory({ ...story, final_image_path: image_path })
+      await loadStory(story.id)
       loadHistory()
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
@@ -662,7 +751,7 @@ export default function Story() {
                 <h2>過去の物語(ブラウザ再読み込みしても続きから再開できます)</h2>
                 <ul className="story-history-list">
                   {history.map(h => (
-                    <li key={h.id} className="story-history-item" onClick={() => loadStory(h.id)}>
+                    <li key={h.id} className="story-history-item" onClick={() => openStory(h.id)}>
                       <span className="story-history-premise">{h.premise}</span>
                       <span className="story-history-meta">
                         {h.status} ・ {new Date(h.created_at).toLocaleString()}
@@ -730,6 +819,15 @@ export default function Story() {
             )}
 
             {isWritten && (
+              <MangaImageSettings
+                apiOrigin={API_ORIGIN}
+                value={imageSettings}
+                onChange={setImageSettings}
+                disabled={busy}
+              />
+            )}
+
+            {isWritten && (
               <div className="story-row">
                 <label>
                   挿絵の開始ページ
@@ -763,6 +861,11 @@ export default function Story() {
               {!isUnsplitImport && !isWritten && (
                 <button type="button" onClick={runWrite} disabled={busy}>
                   本編執筆(NovelAI公式)
+                </button>
+              )}
+              {untaggedCount > 0 && (
+                <button type="button" onClick={runRetag} disabled={busy}>
+                  タグ付けを実行({untaggedCount}シーン未設定)
                 </button>
               )}
               {isWritten && (

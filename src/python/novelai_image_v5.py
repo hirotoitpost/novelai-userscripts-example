@@ -21,7 +21,6 @@ import zipfile
 from typing import Any
 
 import httpx
-from novelai import AsyncNovelAI
 
 _IMAGE_API_ADDRESS = "https://image.novelai.net"
 
@@ -64,13 +63,26 @@ def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
     return ", ".join(parts)
 
 
-def _build_v5_body(prompt: str, negative_prompt: str, *, width: int, height: int, steps: int, scale: float, seed: int) -> dict[str, Any]:
+def _build_v5_body(
+    prompt: str,
+    negative_prompt: str,
+    *,
+    model: str,
+    width: int,
+    height: int,
+    steps: int,
+    scale: float,
+    sampler: str,
+    noise_schedule: str,
+    cfg_rescale: float,
+    seed: int,
+) -> dict[str, Any]:
     parameters: dict[str, Any] = {
         "width": width,
         "height": height,
         "steps": steps,
         "scale": scale,
-        "sampler": "k_euler_ancestral",
+        "sampler": sampler,
         "seed": seed,
         "n_samples": 1,
         "negative_prompt": negative_prompt,
@@ -89,8 +101,8 @@ def _build_v5_body(prompt: str, negative_prompt: str, *, width: int, height: int
         "sm_dyn": False,
         "autoSmea": False,
         "dynamic_thresholding": False,
-        "cfg_rescale": 0.0,
-        "noise_schedule": "karras",
+        "cfg_rescale": cfg_rescale,
+        "noise_schedule": noise_schedule,
         "legacy": False,
         "legacy_uc": False,
         "legacy_v3_extend": False,
@@ -107,33 +119,50 @@ def _build_v5_body(prompt: str, negative_prompt: str, *, width: int, height: int
     return {
         "action": "generate",
         "input": prompt,
-        "model": V5_MODEL,
+        "model": model,
         "use_new_shared_trial": True,
         "parameters": parameters,
     }
 
 
 async def generate_manga_page(
-    client: AsyncNovelAI,
+    api_key: str,
     panels: list[dict[str, Any]],
     *,
+    model: str = V5_MODEL,
     width: int = 1216,
     height: int = 1728,
     steps: int = 28,
     scale: float = 7.0,
+    sampler: str = "k_euler_ancestral",
+    noise_schedule: str = "karras",
+    cfg_rescale: float = 0.0,
     seed: int = 0,
     negative_prompt: str = _DEFAULT_NEGATIVE_PROMPT,
 ) -> bytes:
     """
-    panelsからコマ割りプロンプトを組み立て、V5で1枚の漫画ページ画像(PNGバイト列)を生成する。
+    panelsからコマ割りプロンプトを組み立て、1枚の漫画ページ画像(PNGバイト列)を生成する。
 
-    :param client: 認証済みのAsyncNovelAIクライアント(api_keyの取り出しにのみ使う)
+    :param api_key: NovelAIのアクセストークン。バックグラウンドジョブから呼ぶため、
+        リクエスト終了時に閉じられるクライアントではなくキーだけを受け取る。
     """
 
     prompt = build_manga_page_prompt(panels)
-    body = _build_v5_body(prompt, negative_prompt, width=width, height=height, steps=steps, scale=scale, seed=seed)
+    body = _build_v5_body(
+        prompt,
+        negative_prompt,
+        model=model,
+        width=width,
+        height=height,
+        steps=steps,
+        scale=scale,
+        sampler=sampler,
+        noise_schedule=noise_schedule,
+        cfg_rescale=cfg_rescale,
+        seed=seed,
+    )
 
-    headers = {"Authorization": f"Bearer {client.api_key}"}
+    headers = {"Authorization": f"Bearer {api_key}"}
     async with httpx.AsyncClient(headers=headers, timeout=180) as http_client:
         response = await http_client.post(f"{_IMAGE_API_ADDRESS}/ai/generate-image", json=body)
         if response.status_code != 200:

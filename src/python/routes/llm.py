@@ -150,7 +150,7 @@ def sse_event(event: str, data: Any) -> str:
 
 async def stream_llm_text(
     messages: list[dict[str, Any]],
-    request: Request,
+    request: Request | None = None,
     max_tokens: int = 1024,
     json_schema: dict[str, Any] | None = None,
 ) -> AsyncGenerator[str, None]:
@@ -158,6 +158,7 @@ async def stream_llm_text(
     _stream_text と同じテキストLLM(通常はOllama)から、内容のデルタを逐次yieldする。
     サーバー内部でLLM呼び出しを連鎖させる物語生成パイプラインが、進捗表示と
     途中キャンセル(request.is_disconnected())の両方に対応できるようにするための版。
+    request=None なら切断チェックを行わない(バックグラウンドジョブからの呼び出し用)。
 
     json_schema: 指定するとOllamaの構造化出力(format)機能でJSON Schemaに適合する
     出力だけをサンプリングさせる。ローカルの小型LLMは指示した自由形式のフォーマット
@@ -187,7 +188,7 @@ async def stream_llm_text(
             async with client.stream("POST", f"{ollama_base}/api/chat", json=body) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
-                    if await request.is_disconnected():
+                    if request is not None and await request.is_disconnected():
                         return
                     if not line:
                         continue
@@ -205,7 +206,7 @@ async def stream_llm_text(
         model=get_text_model(), messages=typed, stream=True, max_tokens=max_tokens, temperature=0.7
     )
     async for chunk in stream:
-        if await request.is_disconnected():
+        if request is not None and await request.is_disconnected():
             return
         delta = chunk.choices[0].delta.content or ""
         if delta:

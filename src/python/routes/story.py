@@ -8,11 +8,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from base64 import b64decode
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, AsyncGenerator
+from typing import Annotated, Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
 import httpx
@@ -30,6 +32,7 @@ from ..db import (
     list_manga_pages,
     list_stories,
     list_story_scenes,
+    update_scene_tags,
     update_scene_writing,
     update_story_final_image,
     update_story_scene_count,
@@ -42,6 +45,7 @@ from ..models import (
     StoryDraftCreateRequest,
     StoryIllustrateRequest,
     StoryImportRequest,
+    StoryJobResponse,
     StoryResponse,
     StorySplitRequest,
     StorySummary,
@@ -140,6 +144,67 @@ _DRAFT_MIN_BODY_LENGTH = 20
 # タグ付けを1リクエストに詰め込む上限。長編は数百〜数千シーンになるため、
 # 全件を一度に送るとローカルLLMのコンテキストに収まらない。
 _TAG_BATCH_SIZE = 10
+
+
+@dataclass
+class _Job:
+    """
+    分割/挿絵生成の進捗。長編は数十分かかり、その間ブラウザが眠ったり閉じられたりする。
+    リクエストに紐付けて実行すると切断でタスクごとキャンセルされ、実機では511シーンの
+    分割が丸ごと失われたため、処理はリクエストと切り離したタスクで動かし、進捗だけを
+    ここに書き出してポーリングで読ませる。
+    """
+
+    story_id: int
+    kind: str
+    status: str = "running"
+    message: str = ""
+    progress: int = 0
+    total: int = 0
+    detail: str | None = None
+    task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+
+# 物語ごとに同時に1ジョブだけ。プロセス内メモリなので再起動で消えるが、
+# 途中結果はDBへ逐次書き込むので処理そのものは失われない。
+_jobs: dict[int, _Job] = {}
+
+
+def _job_response(job: _Job) -> dict[str, Any]:
+    return {
+        "story_id": job.story_id,
+        "kind": job.kind,
+        "status": job.status,
+        "message": job.message,
+        "progress": job.progress,
+        "total": job.total,
+        "detail": job.detail,
+    }
+
+
+def _start_job(story_id: int, kind: str, runner: Callable[[_Job], Awaitable[None]]) -> _Job:
+    running = _jobs.get(story_id)
+    if running is not None and running.status == "running":
+        raise HTTPException(status_code=409, detail="この物語は既に処理中です。")
+
+    job = _Job(story_id=story_id, kind=kind, message="開始しました")
+    _jobs[story_id] = job
+
+    async def wrapper() -> None:
+        try:
+            await runner(job)
+            if job.status == "running":
+                job.status = "done"
+        except asyncio.CancelledError:
+            job.status = "cancelled"
+            job.message = "キャンセルしました"
+            raise
+        except Exception as exc:  # noqa: BLE001 ジョブの失敗は状態として持たせる
+            job.status = "error"
+            job.detail = str(exc)
+
+    job.task = asyncio.create_task(wrapper())
+    return job
 
 
 def _is_usable_draft(scenes: list[dict[str, Any]]) -> bool:
@@ -419,20 +484,24 @@ def _parse_import_tags(tags_text: str, n_scenes: int) -> list[dict[str, Any]] | 
         return None
 
     scenes = data.get("scenes")
-    if not isinstance(scenes, list) or len(scenes) != n_scenes:
+    if not isinstance(scenes, list) or not scenes:
         return None
 
+    # 件数がバッチと一致しないことは実機で普通に起きる(スキーマのminItems/maxItemsは
+    # 守られないことがある)。以前は不一致なら全件捨てていたが、それだと1件足りない
+    # だけで10シーン分のタグ付けが無駄になるため、取れた分だけ先頭から採用する。
+    # 余ったシーンはタグ空のまま残り、後から /retag で埋め直せる。
     result: list[dict[str, Any]] = []
-    for scene in scenes:
+    for scene in scenes[:n_scenes]:
         if not isinstance(scene, dict):
-            return None
+            continue
         result.append(
             {
                 "draft_title": (str(scene.get("title") or "")).strip() or None,
                 "draft_prompt_tags": (str(scene.get("prompt_tags") or "")).strip(),
             }
         )
-    return result
+    return result or None
 
 
 def _premise_label(text: str) -> str:
@@ -457,119 +526,117 @@ async def import_story(req: StoryImportRequest) -> StoryResponse:
     return _story_response(result)
 
 
-@router.post("/{story_id}/split")
-async def split_story(story_id: int, req: StorySplitRequest, request: Request) -> StreamingResponse:
+@router.post("/{story_id}/split", response_model=StoryJobResponse)
+async def split_story(story_id: int, req: StorySplitRequest) -> dict[str, Any]:
     """
     /import で raw_text のまま保存しておいた物語を、本文には一切手を加えずに場面へ
     分割する。Ollamaはタグ付け(タイトル・画像生成タグ)のためだけに使い、本文の生成/
     書き換えには使わない。分割したシーンは novelai_text を draft_text と同じ値で埋め、
     /write (Kayraによる自動執筆)をスキップした状態で保存するため、そのまま
     /illustrate へ進める。
+
+    長編では数十分かかるため、処理はバックグラウンドで走らせて即座に返す。
+    進捗は GET /{story_id}/job を見る。
     """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
 
-    async def gen() -> AsyncGenerator[str, None]:
-        try:
-            conn = get_connection()
-            try:
-                story = get_story(conn, story_id)
-            finally:
-                conn.close()
-            if story is None:
-                yield sse_event("error", {"detail": "story not found"})
-                return
-            if story["scenes"]:
-                yield sse_event("error", {"detail": "この物語は既に分割済みです。"})
-                return
-            raw_text = story.get("raw_text")
-            if not raw_text:
-                yield sse_event("error", {"detail": "raw_text がありません(インポートされた物語ではない可能性があります)。"})
-                return
+    if story is None:
+        raise HTTPException(status_code=404, detail="story not found")
+    if story["scenes"]:
+        raise HTTPException(status_code=409, detail="この物語は既に分割済みです。")
+    if not story.get("raw_text"):
+        raise HTTPException(
+            status_code=400, detail="raw_text がありません(インポートされた物語ではない可能性があります)。"
+        )
 
-            scene_texts = _split_text_into_scenes(raw_text, req.max_paragraphs, req.max_chars)
-            if not scene_texts:
-                yield sse_event("error", {"detail": "本文からシーンを分割できませんでした。"})
-                return
+    async def runner(job: _Job) -> None:
+        await _run_split(job, story_id, req)
 
-            n_scenes = len(scene_texts)
-            pages = -(-n_scenes // story["panels_per_page"])
-            yield sse_event(
-                "progress",
-                {"message": f"{n_scenes}シーン({pages}ページ相当)に分割しました。タグ付けを開始します"},
-            )
+    return _job_response(_start_job(story_id, "split", runner))
 
-            # 長編では全シーンを1リクエストに載せるとローカルLLMのコンテキストを超えるため、
-            # 一定数ずつに分けてタグ付けする(実機の取り込みで2,000シーン超を確認)。
-            tags_by_scene: list[dict[str, Any]] = []
-            batches = [
-                scene_texts[i : i + _TAG_BATCH_SIZE] for i in range(0, n_scenes, _TAG_BATCH_SIZE)
-            ]
-            for batch_index, batch in enumerate(batches, start=1):
-                batch_tags: list[dict[str, Any]] | None = None
-                for attempt in range(1, _DRAFT_MAX_ATTEMPTS + 1):
-                    if await request.is_disconnected():
-                        return
-                    yield sse_event(
-                        "progress",
-                        {
-                            "message": (
-                                f"Ollamaでタグ付け中 {batch_index}/{len(batches)} "
-                                f"(試行{attempt}/{_DRAFT_MAX_ATTEMPTS})"
-                            )
-                        },
-                    )
-                    parts: list[str] = []
-                    async for delta in stream_llm_text(
-                        [
-                            {"role": "system", "content": _import_tags_system_prompt(len(batch))},
-                            {"role": "user", "content": _format_scenes_for_tagging(batch)},
-                        ],
-                        request,
-                        max_tokens=4096,
-                        json_schema=_import_tags_json_schema(len(batch)),
-                    ):
-                        parts.append(delta)
-                    if await request.is_disconnected():
-                        return
 
-                    batch_tags = _parse_import_tags(strip_think_tags("".join(parts)), len(batch))
-                    if batch_tags is not None:
-                        break
+async def _tag_scene_batch(batch_texts: list[str]) -> list[dict[str, Any]] | None:
+    """1バッチ分のタグ付け。形式が崩れたら数回まで再試行し、それでも駄目ならNone。"""
+    for _ in range(_DRAFT_MAX_ATTEMPTS):
+        parts: list[str] = []
+        async for delta in stream_llm_text(
+            [
+                {"role": "system", "content": _import_tags_system_prompt(len(batch_texts))},
+                {"role": "user", "content": _format_scenes_for_tagging(batch_texts)},
+            ],
+            max_tokens=4096,
+            json_schema=_import_tags_json_schema(len(batch_texts)),
+        ):
+            parts.append(delta)
+        tags = _parse_import_tags(strip_think_tags("".join(parts)), len(batch_texts))
+        if tags is not None:
+            return tags
+    return None
 
-                if batch_tags is None:
-                    # 一部のバッチだけ失敗しても分割自体は成立させる(タグ無しで続行)。
-                    yield sse_event(
-                        "progress",
-                        {"message": f"{batch_index}/{len(batches)} のタグ付けに失敗したため、タグなしで続行します"},
-                    )
-                    batch_tags = [{"draft_title": None, "draft_prompt_tags": ""} for _ in batch]
-                tags_by_scene.extend(batch_tags)
 
-            scenes = [
-                {
-                    "draft_title": tags["draft_title"],
-                    "draft_text": text,
-                    "draft_prompt_tags": tags["draft_prompt_tags"],
-                    "novelai_text": text,
-                }
-                for text, tags in zip(scene_texts, tags_by_scene)
-            ]
+async def _apply_tags(scenes: list[dict[str, Any]], texts: list[str]) -> int:
+    """1バッチ分のタグ付けとDB反映。付けられたシーン数を返す(0なら丸ごと失敗)。"""
+    tags = await _tag_scene_batch(texts)
+    if not tags:
+        return 0
+    conn = get_connection()
+    try:
+        for scene, tag in zip(scenes, tags):
+            update_scene_tags(conn, scene["id"], tag["draft_title"], tag["draft_prompt_tags"])
+    finally:
+        conn.close()
+    return min(len(scenes), len(tags))
 
-            conn = get_connection()
-            try:
-                add_story_scenes(conn, story_id, scenes)
-                # n_scenes は分割時に決まるので、実際の件数で上書きしておく。
-                update_story_scene_count(conn, story_id, n_scenes)
-                update_story_status(conn, story_id, "written")
-                result = get_story(conn, story_id)
-            finally:
-                conn.close()
-            yield sse_event("done", _story_response(result).model_dump())
-        except Exception as exc:
-            yield sse_event("error", {"detail": str(exc)})
 
-    return StreamingResponse(
-        gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
+async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise RuntimeError("story not found")
+        scene_texts = _split_text_into_scenes(story["raw_text"] or "", req.max_paragraphs, req.max_chars)
+        if not scene_texts:
+            raise RuntimeError("本文からシーンを分割できませんでした。")
+
+        # タグ付けはシーン数に比例して長くかかるので、先に本文だけのシーンを保存して
+        # 物語として成立させておく。途中で止まっても分割結果は残り、タグが空でも
+        # 挿絵生成は本文から行える。
+        add_story_scenes(
+            conn,
+            story_id,
+            [
+                {"draft_title": None, "draft_text": text, "draft_prompt_tags": "", "novelai_text": text}
+                for text in scene_texts
+            ],
+        )
+        update_story_scene_count(conn, story_id, len(scene_texts))
+        update_story_status(conn, story_id, "written")
+        scenes = list_story_scenes(conn, story_id)
+        panels_per_page = story["panels_per_page"]
+    finally:
+        conn.close()
+
+    batches = [
+        (scenes[i : i + _TAG_BATCH_SIZE], scene_texts[i : i + _TAG_BATCH_SIZE])
+        for i in range(0, len(scene_texts), _TAG_BATCH_SIZE)
+    ]
+    job.total = len(batches)
+    pages = -(-len(scene_texts) // panels_per_page)
+    job.message = f"{len(scene_texts)}シーン({pages}ページ相当)に分割しました。タグ付け中..."
+
+    tagged = 0
+    for index, (batch_scenes, batch_texts) in enumerate(batches, start=1):
+        job.message = f"タグ付け中 {index}/{len(batches)}"
+        tagged += await _apply_tags(batch_scenes, batch_texts)
+        job.progress = index
+
+    job.message = f"{len(scene_texts)}シーンに分割し、{tagged}シーンにタグを付けました"
+    if tagged < len(scene_texts):
+        job.message += f"(未設定{len(scene_texts) - tagged}シーンは「タグ付けを実行」でやり直せます)"
 
 
 @router.post("/{story_id}/write")
@@ -648,72 +715,155 @@ async def write_story(story_id: int, client: ClientDep, request: Request) -> Str
     )
 
 
-@router.post("/{story_id}/illustrate")
-async def illustrate_story(
-    story_id: int, req: StoryIllustrateRequest, client: ClientDep, request: Request
-) -> StreamingResponse:
+@router.post("/{story_id}/illustrate", response_model=StoryJobResponse)
+async def illustrate_story(story_id: int, req: StoryIllustrateRequest, client: ClientDep) -> dict[str, Any]:
     """
     ページ単位でV5にコマ割り画像を生成させる。長編は分割すると数十〜百ページ規模に
     なり一度に生成できないため、page_from/page_to で生成するページ範囲を絞れる。
-    """
 
-    async def gen() -> AsyncGenerator[str, None]:
+    1ページに数十秒かかり全体では数十分になるので、処理はバックグラウンドで走らせて
+    即座に返す。進捗は GET /{story_id}/job を見る。
+    """
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+    finally:
+        conn.close()
+
+    if not scenes:
+        raise HTTPException(status_code=404, detail="story not found")
+
+    page_indexes = sorted({scene["page_index"] for scene in scenes})
+    targets = [
+        p for p in page_indexes if p >= req.page_from and (req.page_to is None or p <= req.page_to)
+    ]
+    if not targets:
+        raise HTTPException(status_code=400, detail="指定した範囲にページがありません。")
+
+    # get_client はリクエスト終了時にクライアントを閉じるため、バックグラウンドでは
+    # 使えない。必要なのはトークンだけなのでここで取り出しておく。
+    api_key = client.api_key
+
+    async def runner(job: _Job) -> None:
+        await _run_illustrate(job, story_id, req, api_key, targets)
+
+    return _job_response(_start_job(story_id, "illustrate", runner))
+
+
+async def _run_illustrate(
+    job: _Job, story_id: int, req: StoryIllustrateRequest, api_key: str, targets: list[int]
+) -> None:
+    job.total = len(targets)
+    settings = req.settings
+    negative = {"negative_prompt": settings.negative_prompt} if settings.negative_prompt else {}
+
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+    finally:
+        conn.close()
+
+    pages_scenes: dict[int, list[dict[str, Any]]] = {}
+    for scene in scenes:
+        pages_scenes.setdefault(scene["page_index"], []).append(scene)
+
+    _MANGA_DIR.mkdir(parents=True, exist_ok=True)
+    for i, page_index in enumerate(targets, start=1):
+        job.message = f"ページ{page_index + 1}を生成中 ({i}/{len(targets)})"
+        page_scenes = pages_scenes[page_index]
+        panels = [
+            {
+                "draft_text": s["novelai_text"] or s["draft_text"],
+                "draft_prompt_tags": s["draft_prompt_tags"],
+            }
+            for s in page_scenes
+        ]
+        # シード未指定ならページごとに変える(従来動作)。指定時は全ページ固定。
+        seed = settings.seed if settings.seed is not None else story_id * 1000 + page_index
+        image_bytes = await generate_manga_page(
+            api_key,
+            panels,
+            model=settings.model,
+            width=settings.width,
+            height=settings.height,
+            steps=settings.steps,
+            scale=settings.scale,
+            sampler=settings.sampler,
+            noise_schedule=settings.noise_schedule,
+            cfg_rescale=settings.cfg_rescale,
+            seed=seed,
+            **negative,
+        )
+
+        filename = f"story{story_id}_page{page_index}_{uuid4().hex[:8]}.png"
+        (_MANGA_DIR / filename).write_bytes(image_bytes)
+
         conn = get_connection()
         try:
-            scenes = list_story_scenes(conn, story_id)
-            if not scenes:
-                yield sse_event("error", {"detail": "story not found"})
-                return
-
-            pages_scenes: dict[int, list[dict[str, Any]]] = {}
-            for scene in scenes:
-                pages_scenes.setdefault(scene["page_index"], []).append(scene)
-
-            _MANGA_DIR.mkdir(parents=True, exist_ok=True)
-            results = []
-            page_indexes = [
-                p
-                for p in sorted(pages_scenes)
-                if p >= req.page_from and (req.page_to is None or p <= req.page_to)
-            ]
-            if not page_indexes:
-                yield sse_event("error", {"detail": "指定した範囲にページがありません。"})
-                return
-            for i, page_index in enumerate(page_indexes, start=1):
-                if await request.is_disconnected():
-                    return
-                yield sse_event(
-                    "progress", {"message": f"ページ{i}/{len(page_indexes)}: V5でコマ割り画像を生成中..."}
-                )
-
-                page_scenes = pages_scenes[page_index]
-                panels = [
-                    {
-                        "draft_text": s["novelai_text"] or s["draft_text"],
-                        "draft_prompt_tags": s["draft_prompt_tags"],
-                    }
-                    for s in page_scenes
-                ]
-                image_bytes = await generate_manga_page(client, panels, seed=story_id * 1000 + page_index)
-
-                filename = f"story{story_id}_page{page_index}_{uuid4().hex[:8]}.png"
-                (_MANGA_DIR / filename).write_bytes(image_bytes)
-                image_path = f"outputs/manga/{filename}"
-
-                scene_ids = [s["id"] for s in page_scenes]
-                record = create_manga_page(conn, story_id, page_index, image_path, scene_ids)
-                results.append(MangaPageResponse.model_validate(record).model_dump())
-
+            create_manga_page(
+                conn, story_id, page_index, f"outputs/manga/{filename}", [s["id"] for s in page_scenes]
+            )
             update_story_status(conn, story_id, "illustrated")
-            yield sse_event("done", results)
-        except Exception as exc:
-            yield sse_event("error", {"detail": str(exc)})
         finally:
             conn.close()
+        job.progress = i
 
-    return StreamingResponse(
-        gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
+    job.message = f"{len(targets)}ページの挿絵を生成しました"
+
+
+@router.post("/{story_id}/retag", response_model=StoryJobResponse)
+async def retag_story(story_id: int) -> dict[str, Any]:
+    """
+    タグが空のシーンにだけタグ付けをやり直す。分割は先にDBへ書き込む方式なので、
+    タグ付けの途中で中断/キャンセルするとタグ無しのシーンが残る。その埋め直し用。
+    """
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+    finally:
+        conn.close()
+
+    if not scenes:
+        raise HTTPException(status_code=404, detail="story not found")
+    untagged = [scene for scene in scenes if not scene["draft_prompt_tags"]]
+    if not untagged:
+        raise HTTPException(status_code=409, detail="タグ付けされていないシーンはありません。")
+
+    async def runner(job: _Job) -> None:
+        await _run_retag(job, untagged)
+
+    return _job_response(_start_job(story_id, "split", runner))
+
+
+async def _run_retag(job: _Job, untagged: list[dict[str, Any]]) -> None:
+    batches = [untagged[i : i + _TAG_BATCH_SIZE] for i in range(0, len(untagged), _TAG_BATCH_SIZE)]
+    job.total = len(batches)
+    job.message = f"タグ未設定の{len(untagged)}シーンにタグ付けします"
+
+    tagged = 0
+    for index, batch in enumerate(batches, start=1):
+        job.message = f"タグ付け中 {index}/{len(batches)}"
+        tagged += await _apply_tags(batch, [scene["draft_text"] for scene in batch])
+        job.progress = index
+
+    job.message = f"{len(untagged)}シーン中{tagged}シーンにタグを付けました"
+
+
+@router.get("/{story_id}/job", response_model=StoryJobResponse | None)
+async def get_story_job(story_id: int) -> dict[str, Any] | None:
+    """進行中(または直前)のジョブの状態。ブラウザを閉じても処理は続くので、開き直したらこれを見る。"""
+    job = _jobs.get(story_id)
+    return _job_response(job) if job else None
+
+
+@router.post("/{story_id}/job/cancel", response_model=StoryJobResponse | None)
+async def cancel_story_job(story_id: int) -> dict[str, Any] | None:
+    job = _jobs.get(story_id)
+    if job is None:
+        return None
+    if job.status == "running" and job.task is not None:
+        job.task.cancel()
+    return _job_response(job)
 
 
 @router.post("/{story_id}/export-manga")

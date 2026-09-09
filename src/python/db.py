@@ -167,6 +167,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 挿絵生成のパラメータを名前を付けて保存しておくためのプリセット。
+    # プロンプトチャンク用の presets とは別物なので、テーブルを分けている。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS image_presets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            settings TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -711,6 +723,17 @@ def list_story_scenes(conn: sqlite3.Connection, story_id: int) -> list[dict[str,
     return [dict(row) for row in rows]
 
 
+def update_scene_tags(
+    conn: sqlite3.Connection, scene_id: int, draft_title: str | None, draft_prompt_tags: str
+) -> None:
+    """分割後に非同期で付けるタイトル/画像生成タグだけを更新する。"""
+    conn.execute(
+        "UPDATE story_scenes SET draft_title = ?, draft_prompt_tags = ? WHERE id = ?",
+        (draft_title, draft_prompt_tags, scene_id),
+    )
+    conn.commit()
+
+
 def update_scene_writing(conn: sqlite3.Connection, scene_id: int, seed_cue: str, novelai_text: str) -> None:
     conn.execute(
         "UPDATE story_scenes SET seed_cue = ?, novelai_text = ? WHERE id = ?",
@@ -721,6 +744,32 @@ def update_scene_writing(conn: sqlite3.Connection, scene_id: int, seed_cue: str,
 
 def update_story_status(conn: sqlite3.Connection, story_id: int, status: str) -> None:
     conn.execute("UPDATE stories SET status = ? WHERE id = ?", (status, story_id))
+    conn.commit()
+
+
+def list_image_presets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM image_presets ORDER BY name").fetchall()
+    return [{**dict(row), "settings": json.loads(row["settings"])} for row in rows]
+
+
+def save_image_preset(conn: sqlite3.Connection, name: str, settings: dict[str, Any]) -> dict[str, Any]:
+    """同じ名前のプリセットがあれば上書きする(「保存」で同名を選び直せるようにするため)。"""
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO image_presets (name, settings, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET settings = excluded.settings, created_at = excluded.created_at
+        RETURNING id, name, settings, created_at
+        """,
+        (name, json.dumps(settings), now),
+    ).fetchone()
+    conn.commit()
+    return {**dict(row), "settings": json.loads(row["settings"])}
+
+
+def delete_image_preset(conn: sqlite3.Connection, preset_id: int) -> None:
+    conn.execute("DELETE FROM image_presets WHERE id = ?", (preset_id,))
     conn.commit()
 
 
