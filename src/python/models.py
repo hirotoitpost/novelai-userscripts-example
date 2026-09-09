@@ -300,6 +300,12 @@ class StoryDraftCreateRequest(BaseModel):
     panels_per_page: int = Field(4, ge=1, le=8)
 
 
+class StoryImportRequest(BaseModel):
+    text: str = Field(min_length=1)
+    n_scenes: int = Field(4, ge=1, le=20)
+    panels_per_page: int = Field(4, ge=1, le=8)
+
+
 class StorySceneResponse(BaseModel):
     id: int
     story_id: int
@@ -321,6 +327,7 @@ class StoryResponse(BaseModel):
     status: str
     created_at: str
     final_image_path: str | None = None
+    raw_text: str | None = None
     scenes: list[StorySceneResponse]
 
 

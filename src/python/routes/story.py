@@ -9,11 +9,14 @@
 from __future__ import annotations
 
 import json
+import re
+from base64 import b64decode
 from pathlib import Path
 from typing import Annotated, Any, AsyncGenerator
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from novelai import AsyncNovelAI
 
@@ -31,8 +34,15 @@ from ..db import (
     update_story_final_image,
     update_story_status,
 )
+from ..keystore_crypto import decrypt_keystore, decrypt_object
 from ..manga_export import assemble_manga
-from ..models import MangaPageResponse, StoryDraftCreateRequest, StoryResponse, StorySummary
+from ..models import (
+    MangaPageResponse,
+    StoryDraftCreateRequest,
+    StoryImportRequest,
+    StoryResponse,
+    StorySummary,
+)
 from ..novelai_image_v5 import generate_manga_page
 from ..novelai_text import generate_kayra
 from .llm import sse_event, strip_think_tags, stream_llm_text
@@ -40,6 +50,11 @@ from .llm import sse_event, strip_think_tags, stream_llm_text
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
 router = APIRouter(prefix="/api/story", tags=["story"])
+
+# 物語本文(storycontent)は image.novelai.net 側のユーザーストレージにある。
+# persistent access token は拒否されるため、実ログインで発行されたセッショントークンが必要
+# (routes/chunks.py の promptmacros 取得と同じ制約)。
+_IMAGE_API = "https://image.novelai.net"
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _MANGA_DIR = _PROJECT_ROOT / "outputs" / "manga"
@@ -193,6 +208,306 @@ async def create_story_draft(req: StoryDraftCreateRequest, request: Request) -> 
                 story = create_story(conn, req.premise, req.n_scenes, req.panels_per_page)
                 add_story_scenes(conn, story["id"], scenes)
                 result = get_story(conn, story["id"])
+            finally:
+                conn.close()
+            yield sse_event("done", _story_response(result).model_dump())
+        except Exception as exc:
+            yield sse_event("error", {"detail": str(exc)})
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+
+async def _fetch_decrypted_objects(
+    object_type: str, http_client: httpx.AsyncClient, keystore: dict[str, bytes]
+) -> list[dict[str, Any]]:
+    """GET /user/objects/{object_type} を取得し、keystoreで復号できたアイテムだけを返す。"""
+    resp = await http_client.get(f"{_IMAGE_API}/user/objects/{object_type}")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    body = resp.json()
+    items = body.get("objects", body) if isinstance(body, dict) else body
+
+    result: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            decrypted = decrypt_object(item, keystore)
+        except Exception:  # noqa: BLE001 一部アイテムの復号失敗はスキップして続行する
+            continue
+        if not isinstance(decrypted, dict):
+            continue
+        decrypted["remote_object_id"] = item.get("id")
+        result.append(decrypted)
+    return result
+
+
+def _match_content_for_story(
+    story_meta: dict[str, Any], contents_by_id: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """stories オブジェクトのメタ情報から、対応する storycontent オブジェクトを探す。"""
+    for key in ("remoteStoryId", "remoteId", "id"):
+        ref = story_meta.get(key)
+        if isinstance(ref, str) and ref in contents_by_id:
+            return contents_by_id[ref]
+    return None
+
+
+@router.get("/remote")
+async def list_remote_stories(
+    encryption_key: str = Query(..., description="POST /api/chunks/encryption-key で取得した base64 鍵"),
+    authorization: str | None = Header(None),
+) -> list[dict[str, Any]]:
+    """
+    NovelAI公式サイトのストーリーエディタで書いた物語を、貼り付けなしで一覧取得する。
+
+    本文(document)はbase64+msgpack(msgpackrのレコード定義拡張)で保存されており、
+    デコードにはmsgpackrのJS実装が要るため、ここでは生の文字列のまま返して
+    フロントエンド(novelaiDocument.ts)でプレーンテキストへ復元する。
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authorization ヘッダーが必要です")
+    token = authorization[7:]
+
+    try:
+        key = b64decode(encryption_key)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"encryption_key が不正です: {exc}")
+
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(headers=headers, timeout=30) as client:
+        resp = await client.get(f"{_IMAGE_API}/user/keystore")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        try:
+            keystore = decrypt_keystore(resp.json(), key)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"keystore の復号に失敗しました: {exc}")
+
+        stories_meta = await _fetch_decrypted_objects("stories", client, keystore)
+        contents = await _fetch_decrypted_objects("storycontent", client, keystore)
+
+    contents_by_id = {c["remote_object_id"]: c for c in contents if c.get("remote_object_id")}
+
+    result: list[dict[str, Any]] = []
+    for meta in stories_meta:
+        content = _match_content_for_story(meta, contents_by_id)
+        result.append(
+            {
+                "remote_object_id": meta.get("remote_object_id"),
+                "title": meta.get("title") or "(無題)",
+                "description": meta.get("description") or "",
+                "text_preview": meta.get("textPreview") or "",
+                "document": (content.get("document") if content else None) or None,
+            }
+        )
+    return result
+
+
+def _split_text_into_scenes(text: str, n_scenes: int) -> list[str]:
+    """
+    公式サイトなどで既に書かれた物語を、本文を一切書き換えずにちょうど n_scenes 個
+    (テキストの分量が足りない場合はそれ以下)の場面に分割する。
+
+    段落(空行区切り)を最小単位とし、段落数が n_scenes 以上あれば段落の個数で
+    n_scenes 個の連続したグループへ均等に分ける(文字数の重みは見ない:
+    1段落が閾値を超えているだけで後続のバケットを1つ丸ごと飛ばしてしまう、
+    という不具合を文字数ベースの貪欲法で実機確認したため)。段落数が n_scenes に
+    満たない場合は、文単位(。！？の直後)にさらに分割してから同じグルーピングを行う。
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+
+    if len(paragraphs) < n_scenes:
+        pieces = [s.strip() for p in paragraphs for s in re.split(r"(?<=[。！？])", p) if s.strip()]
+        if pieces:
+            paragraphs = pieces
+
+    if not paragraphs:
+        return []
+
+    n_scenes = min(n_scenes, len(paragraphs))
+    base, extra = divmod(len(paragraphs), n_scenes)
+
+    scenes: list[str] = []
+    start = 0
+    for i in range(n_scenes):
+        size = base + (1 if i < extra else 0)
+        scenes.append("\n".join(paragraphs[start : start + size]))
+        start += size
+    return scenes
+
+
+def _import_tags_json_schema(n_scenes: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "scenes": {
+                "type": "array",
+                "minItems": n_scenes,
+                "maxItems": n_scenes,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "prompt_tags": {"type": "string"},
+                    },
+                    "required": ["title", "prompt_tags"],
+                },
+            }
+        },
+        "required": ["scenes"],
+    }
+
+
+def _import_tags_system_prompt(n_scenes: int) -> str:
+    return (
+        "あなたはNovelAI画像生成タグ付けAIです。\n"
+        "ユーザーから、既に完成している物語を場面ごとに分割した本文が渡されます。\n"
+        "本文は一切書き換えず、各場面に短い日本語タイトルと、画像生成用の英語タグ"
+        "(コンマ区切り)だけを付与してJSON形式で返してください。\n\n"
+        f"- scenes配列にちょうど{n_scenes}個の要素を、渡された場面の順番通りに含める\n"
+        "- title: その場面の短い日本語タイトル\n"
+        "- prompt_tags: その場面の情景を画像生成するための英語タグ(コンマ区切り)"
+    )
+
+
+def _format_scenes_for_tagging(scene_texts: list[str]) -> str:
+    return "\n\n".join(f"場面{i}:\n{text}" for i, text in enumerate(scene_texts, start=1))
+
+
+def _parse_import_tags(tags_text: str, n_scenes: int) -> list[dict[str, Any]] | None:
+    try:
+        data = json.loads(tags_text)
+    except json.JSONDecodeError:
+        return None
+
+    scenes = data.get("scenes")
+    if not isinstance(scenes, list) or len(scenes) != n_scenes:
+        return None
+
+    result: list[dict[str, Any]] = []
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            return None
+        result.append(
+            {
+                "draft_title": (str(scene.get("title") or "")).strip() or None,
+                "draft_prompt_tags": (str(scene.get("prompt_tags") or "")).strip(),
+            }
+        )
+    return result
+
+
+def _premise_label(text: str) -> str:
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return f"[インポート] {first_line[:100]}"
+
+
+@router.post("/import", response_model=StoryResponse)
+async def import_story(req: StoryImportRequest) -> StoryResponse:
+    """
+    公式サイト等で既に書かれた物語テキストを、シーン分割・タグ付けを一切行わずに
+    raw_text としてそのままDBへ保存する。Ollamaの呼び出しは無いため即座に完了する。
+    シーン分割・タグ付け(→挿絵生成の前提)は、後で /{story_id}/split を呼んで
+    好きなタイミングで行う。
+    """
+    conn = get_connection()
+    try:
+        story = create_story(conn, _premise_label(req.text), req.n_scenes, req.panels_per_page, raw_text=req.text)
+        result = get_story(conn, story["id"])
+    finally:
+        conn.close()
+    return _story_response(result)
+
+
+@router.post("/{story_id}/split")
+async def split_story(story_id: int, request: Request) -> StreamingResponse:
+    """
+    /import で raw_text のまま保存しておいた物語を、本文には一切手を加えずに
+    n_scenes個の場面へ分割する。Ollamaはタグ付け(タイトル・画像生成タグ)のためだけに
+    使い、本文の生成/書き換えには使わない。分割したシーンは novelai_text を
+    draft_text と同じ値で埋め、/write (Kayraによる自動執筆)をスキップした状態で
+    保存するため、そのまま /illustrate へ進める。
+    """
+
+    async def gen() -> AsyncGenerator[str, None]:
+        try:
+            conn = get_connection()
+            try:
+                story = get_story(conn, story_id)
+            finally:
+                conn.close()
+            if story is None:
+                yield sse_event("error", {"detail": "story not found"})
+                return
+            if story["scenes"]:
+                yield sse_event("error", {"detail": "この物語は既に分割済みです。"})
+                return
+            raw_text = story.get("raw_text")
+            if not raw_text:
+                yield sse_event("error", {"detail": "raw_text がありません(インポートされた物語ではない可能性があります)。"})
+                return
+
+            scene_texts = _split_text_into_scenes(raw_text, story["n_scenes"])
+            if not scene_texts:
+                yield sse_event("error", {"detail": "本文からシーンを分割できませんでした。"})
+                return
+
+            n_scenes = len(scene_texts)
+            if n_scenes != story["n_scenes"]:
+                yield sse_event(
+                    "progress",
+                    {"message": f"本文の分量から、{n_scenes}シーンに調整しました(要求: {story['n_scenes']})"},
+                )
+
+            tags_by_scene: list[dict[str, Any]] | None = None
+            for attempt in range(1, _DRAFT_MAX_ATTEMPTS + 1):
+                if await request.is_disconnected():
+                    return
+                yield sse_event(
+                    "progress", {"message": f"Ollamaでタグ付け中(試行{attempt}/{_DRAFT_MAX_ATTEMPTS})"}
+                )
+                parts: list[str] = []
+                async for delta in stream_llm_text(
+                    [
+                        {"role": "system", "content": _import_tags_system_prompt(n_scenes)},
+                        {"role": "user", "content": _format_scenes_for_tagging(scene_texts)},
+                    ],
+                    request,
+                    max_tokens=4096,
+                    json_schema=_import_tags_json_schema(n_scenes),
+                ):
+                    parts.append(delta)
+                if await request.is_disconnected():
+                    return
+
+                tags_by_scene = _parse_import_tags(strip_think_tags("".join(parts)), n_scenes)
+                if tags_by_scene is not None:
+                    break
+                yield sse_event(
+                    "progress",
+                    {"message": f"タグ付け出力の形式が不十分だったため再試行します({attempt}/{_DRAFT_MAX_ATTEMPTS})"},
+                )
+
+            if tags_by_scene is None:
+                yield sse_event("progress", {"message": "タグ付けに失敗したため、タグなしで分割します。"})
+                tags_by_scene = [{"draft_title": None, "draft_prompt_tags": ""} for _ in scene_texts]
+
+            scenes = [
+                {
+                    "draft_title": tags["draft_title"],
+                    "draft_text": text,
+                    "draft_prompt_tags": tags["draft_prompt_tags"],
+                    "novelai_text": text,
+                }
+                for text, tags in zip(scene_texts, tags_by_scene)
+            ]
+
+            conn = get_connection()
+            try:
+                add_story_scenes(conn, story_id, scenes)
+                update_story_status(conn, story_id, "written")
+                result = get_story(conn, story_id)
             finally:
                 conn.close()
             yield sse_event("done", _story_response(result).model_dump())

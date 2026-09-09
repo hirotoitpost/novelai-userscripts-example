@@ -187,6 +187,19 @@ export default function Home() {
             <p>前提からOllamaでドラフトを作り、NovelAI公式(Kayra)で本文を執筆、V5で挿絵を生成して漫画にまとめます。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/story-library')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/story-library')}
+          >
+            <div className="home-card-icon">📚</div>
+            <h2>物語を読む</h2>
+            <p>取り込み・生成した物語を一覧から選んで読めます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">

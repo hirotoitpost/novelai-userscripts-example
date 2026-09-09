@@ -12,6 +12,7 @@ import Chunks from './pages/Chunks'
 import DbStatus from './pages/DbStatus'
 import Selection from './pages/Selection'
 import Story from './pages/Story'
+import StoryLibrary from './pages/StoryLibrary'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -65,6 +66,10 @@ function AppRoutes() {
       <Route
         path="/story"
         element={<ProtectedRoute><Story /></ProtectedRoute>}
+      />
+      <Route
+        path="/story-library"
+        element={<ProtectedRoute><StoryLibrary /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

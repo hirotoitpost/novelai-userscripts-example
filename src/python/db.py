@@ -176,6 +176,9 @@ _STORIES_EXTRA_COLUMNS = {
     # export-manga で最終的に連結した画像のパス。ブラウザをリロードしても
     # 完成済みの漫画をDBから復元して表示できるようにするため。
     "final_image_path": "TEXT",
+    # 公式サイト等から取り込んだ、シーン分割・タグ付け前の生の本文。
+    # /split で分割済みになった後もそのまま残す(参照用)。
+    "raw_text": "TEXT",
 }
 
 
@@ -633,15 +636,28 @@ def list_generation_history(conn: sqlite3.Connection, limit: int = 50) -> list[d
     return result
 
 
-def create_story(conn: sqlite3.Connection, premise: str, n_scenes: int, panels_per_page: int = 4) -> dict[str, Any]:
+def create_story(
+    conn: sqlite3.Connection,
+    premise: str,
+    n_scenes: int,
+    panels_per_page: int = 4,
+    raw_text: str | None = None,
+) -> dict[str, Any]:
+    """
+    raw_text を渡すと、シーン分割・タグ付けをまだ行っていない「取り込み済み」状態
+    (status='imported')で保存する。公式サイトから取り込んだ物語を、シーン分割は
+    後で(add_story_scenes を呼ぶ /split で)行いたい場合に使う。省略時は従来通り
+    status='draft' で作成する。
+    """
     now = datetime.now(timezone.utc).isoformat()
+    status = "imported" if raw_text is not None else "draft"
     row = conn.execute(
         """
-        INSERT INTO stories (premise, n_scenes, panels_per_page, status, created_at)
-        VALUES (?, ?, ?, 'draft', ?)
-        RETURNING id, premise, title, n_scenes, panels_per_page, status, created_at
+        INSERT INTO stories (premise, n_scenes, panels_per_page, status, raw_text, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        RETURNING id, premise, title, n_scenes, panels_per_page, status, raw_text, created_at
         """,
-        (premise, n_scenes, panels_per_page, now),
+        (premise, n_scenes, panels_per_page, status, raw_text, now),
     ).fetchone()
     conn.commit()
     return dict(row)
@@ -649,8 +665,11 @@ def create_story(conn: sqlite3.Connection, premise: str, n_scenes: int, panels_p
 
 def add_story_scenes(conn: sqlite3.Connection, story_id: int, scenes: list[dict[str, Any]]) -> None:
     """
-    scenes: [{"draft_title": str | None, "draft_text": str, "draft_prompt_tags": str}, ...]
+    scenes: [{"draft_title": str | None, "draft_text": str, "draft_prompt_tags": str, "novelai_text": str | None}, ...]
     scene_index はリストの順番、page_index は stories.panels_per_page から自動算出する。
+    novelai_text は、公式サイトからインポートした既に執筆済みの本文をそのまま使い、
+    /write (Kayraによる自動執筆)をスキップする場合にのみ渡す。通常のドラフト生成
+    フローでは省略し、NULLのまま/writeで埋める。
     """
     panels_per_page = conn.execute(
         "SELECT panels_per_page FROM stories WHERE id = ?", (story_id,)
@@ -659,8 +678,9 @@ def add_story_scenes(conn: sqlite3.Connection, story_id: int, scenes: list[dict[
     for i, scene in enumerate(scenes):
         conn.execute(
             """
-            INSERT INTO story_scenes (story_id, scene_index, page_index, draft_title, draft_text, draft_prompt_tags)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO story_scenes
+                (story_id, scene_index, page_index, draft_title, draft_text, draft_prompt_tags, novelai_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 story_id,
@@ -669,6 +689,7 @@ def add_story_scenes(conn: sqlite3.Connection, story_id: int, scenes: list[dict[
                 scene.get("draft_title"),
                 scene.get("draft_text", ""),
                 scene.get("draft_prompt_tags", ""),
+                scene.get("novelai_text"),
             ),
         )
     conn.commit()
