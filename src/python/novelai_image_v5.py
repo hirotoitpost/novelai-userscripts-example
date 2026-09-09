@@ -63,6 +63,29 @@ def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
     return ", ".join(parts)
 
 
+# V5に渡せるキャラクター指定の上限。1ページに複数コマが入るため登場人物が増えがちだが、
+# characterPrompts は画像全体に効く指定でコマごとには分けられないので、多すぎると
+# かえって混ざる。V4系の上限に合わせて絞る。
+_MAX_CHARACTER_PROMPTS = 4
+
+
+def _build_character_prompts(
+    character_tags: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    (characterPrompts, char_captions) を組み立てる。V4形式のリクエストでは同じ内容を
+    この2箇所に入れる必要がある(SDKのCharacter指定が生成するボディと同じ形)。
+    位置は指定せず中央固定にしている(コマ割りはbase側のプロンプトで指示しているため)。
+    """
+    center = {"x": 0.5, "y": 0.5}
+    prompts: list[dict[str, Any]] = []
+    captions: list[dict[str, Any]] = []
+    for tags in character_tags[:_MAX_CHARACTER_PROMPTS]:
+        prompts.append({"prompt": tags, "uc": "", "center": center, "enabled": True})
+        captions.append({"char_caption": tags, "centers": [center]})
+    return prompts, captions
+
+
 def _build_v5_body(
     prompt: str,
     negative_prompt: str,
@@ -76,7 +99,9 @@ def _build_v5_body(
     noise_schedule: str,
     cfg_rescale: float,
     seed: int,
+    character_tags: list[str],
 ) -> dict[str, Any]:
+    character_prompts, char_captions = _build_character_prompts(character_tags)
     parameters: dict[str, Any] = {
         "width": width,
         "height": height,
@@ -89,7 +114,7 @@ def _build_v5_body(
         "ucPreset": 1,
         "qualityToggle": True,
         "v4_prompt": {
-            "caption": {"base_caption": prompt, "char_captions": []},
+            "caption": {"base_caption": prompt, "char_captions": char_captions},
             "use_coords": False,
             "use_order": True,
         },
@@ -112,7 +137,7 @@ def _build_v5_body(
         "add_original_image": False,
         "controlnet_strength": 1.0,
         "normalize_reference_strength_multiple": False,
-        "characterPrompts": [],
+        "characterPrompts": character_prompts,
         "params_version": 4,
         "use_coords": False,
     }
@@ -139,6 +164,7 @@ async def generate_manga_page(
     cfg_rescale: float = 0.0,
     seed: int = 0,
     negative_prompt: str = _DEFAULT_NEGATIVE_PROMPT,
+    character_tags: list[str] | None = None,
 ) -> bytes:
     """
     panelsからコマ割りプロンプトを組み立て、1枚の漫画ページ画像(PNGバイト列)を生成する。
@@ -160,6 +186,7 @@ async def generate_manga_page(
         noise_schedule=noise_schedule,
         cfg_rescale=cfg_rescale,
         seed=seed,
+        character_tags=character_tags or [],
     )
 
     headers = {"Authorization": f"Bearer {api_key}"}

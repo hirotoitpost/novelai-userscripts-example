@@ -352,7 +352,7 @@ class StoryJobResponse(BaseModel):
     """分割/挿絵生成のバックグラウンドジョブの進捗。"""
 
     story_id: int
-    kind: Literal["split", "illustrate"]
+    kind: Literal["split", "illustrate", "characters"]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
     progress: int = 0
@@ -372,6 +372,30 @@ class ImagePresetResponse(BaseModel):
     created_at: str
 
 
+class SceneCharacterResponse(BaseModel):
+    id: int
+    name: str
+    appearance_tags: str
+
+
+class CharacterResponse(BaseModel):
+    id: int
+    name: str
+    appearance_tags: str
+    notes: Optional[str] = None
+    created_at: str
+
+
+class CharacterSaveRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    appearance_tags: str = ""
+    notes: Optional[str] = None
+
+
+class SetSceneCharactersRequest(BaseModel):
+    character_ids: list[int]
+
+
 class StorySceneResponse(BaseModel):
     id: int
     story_id: int
@@ -382,6 +406,7 @@ class StorySceneResponse(BaseModel):
     draft_prompt_tags: str
     seed_cue: str | None
     novelai_text: str | None
+    characters: list[SceneCharacterResponse] = []
 
 
 class StoryResponse(BaseModel):

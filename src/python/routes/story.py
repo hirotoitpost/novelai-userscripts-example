@@ -27,11 +27,15 @@ from ..db import (
     add_story_scenes,
     create_manga_page,
     create_story,
+    delete_character,
     get_connection,
     get_story,
     list_manga_pages,
     list_stories,
+    list_characters,
     list_story_scenes,
+    save_character,
+    set_scene_characters,
     update_scene_tags,
     update_scene_writing,
     update_story_final_image,
@@ -41,6 +45,8 @@ from ..db import (
 from ..keystore_crypto import decrypt_keystore, decrypt_object
 from ..manga_export import assemble_manga
 from ..models import (
+    CharacterResponse,
+    CharacterSaveRequest,
     MangaPageResponse,
     StoryDraftCreateRequest,
     StoryIllustrateRequest,
@@ -49,6 +55,7 @@ from ..models import (
     StoryResponse,
     StorySplitRequest,
     StorySummary,
+    SetSceneCharactersRequest,
 )
 from ..novelai_image_v5 import generate_manga_page
 from ..novelai_text import generate_kayra
@@ -805,11 +812,21 @@ async def _run_illustrate(
             }
             for s in page_scenes
         ]
+        # ページ内のコマに登場するキャラの容姿タグをまとめて渡す。characterPrompts は
+        # 画像全体に効く指定でコマごとには分けられないため、重複を除いた和集合になる。
+        character_tags: list[str] = []
+        for scene in page_scenes:
+            for character in scene.get("characters", []):
+                tags = character["appearance_tags"].strip()
+                if tags and tags not in character_tags:
+                    character_tags.append(tags)
+
         # シード未指定ならページごとに変える(従来動作)。指定時は全ページ固定。
         seed = settings.seed if settings.seed is not None else story_id * 1000 + page_index
         image_bytes = await generate_manga_page(
             api_key,
             panels,
+            character_tags=character_tags,
             model=settings.model,
             width=settings.width,
             height=settings.height,
@@ -941,6 +958,254 @@ async def list_stories_route(limit: int = 50) -> list[StorySummary]:
     conn = get_connection()
     try:
         return [StorySummary.model_validate(s) for s in list_stories(conn, limit)]
+    finally:
+        conn.close()
+
+
+# 抽出は1回のリクエストで扱うシーン数を絞る。タグ付けと同じくローカルLLMの
+# コンテキストに収める必要があり、加えて「誰が出ているか」と「その人の容姿」の
+# 2種類を同時に返させるぶん出力も長くなる。
+_CHARACTER_BATCH_SIZE = 5
+
+
+def _character_json_schema(n_scenes: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "scenes": {
+                "type": "array",
+                "minItems": n_scenes,
+                "maxItems": n_scenes,
+                "items": {
+                    "type": "object",
+                    "properties": {"names": {"type": "string"}},
+                    "required": ["names"],
+                },
+            },
+            "characters": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "appearance_tags": {"type": "string"},
+                    },
+                    "required": ["name", "appearance_tags"],
+                },
+            },
+        },
+        "required": ["scenes", "characters"],
+    }
+
+
+def _character_system_prompt(n_scenes: int) -> str:
+    return (
+        "あなたは物語から登場人物を抽出するAIです。\n"
+        "渡された場面それぞれについて、そこに登場する人物の名前を挙げ、"
+        "さらに登場した人物の容姿を画像生成用の英語タグにしてJSONで返してください。\n\n"
+        f"- scenes配列にちょうど{n_scenes}個の要素を、渡された場面の順番通りに含める\n"
+        "- scenes[].names: その場面に登場する人物名をコンマ区切りで(該当なしなら空文字)\n"
+        "- 名前として挙げてよいのは固有名詞(人名・あだ名・「先生」のような固有の呼称)だけ\n"
+        "- 代名詞は絶対に名前として扱わない(私/僕/俺/あたし/彼/彼女/あなた/君/我 など)\n"
+        "- 「生徒達」「二人の女子」のような集団や、文になっている説明も名前にしない\n"
+        "- 名前が分からない人物はその場面では挙げない\n"
+        "- characters: この範囲で登場した人物の name と appearance_tags\n"
+        "- appearance_tags は必ず英語のタグをコンマ区切りで書く(日本語・中国語は使わない)\n"
+        '- 例: {"name": "サクラ", "appearance_tags": "1girl, long black hair, blue eyes, school uniform"}'
+    )
+
+
+# 一人称視点の作品では、代名詞がそのまま人物名として大量に返ってくることを実機で確認した
+# (私/彼女/我/我是/私は…が別々のキャラとして登録され、同一人物の容姿も矛盾していた)。
+# プロンプトで禁じても完全には従わないため、コード側でも弾く。
+_PRONOUN_NAMES = {
+    "私", "私は", "わたし", "あたし", "僕", "ぼく", "俺", "おれ", "自分", "我", "我是", "我々",
+    "彼", "彼女", "彼ら", "彼女ら", "あなた", "貴方", "君", "きみ", "お前", "おまえ",
+    "二人", "三人", "皆", "みんな", "全員", "男", "女", "少年", "少女",
+}
+_GROUP_SUFFIXES = ("達", "たち", "ら", "群", "全員")
+_MAX_NAME_LENGTH = 15
+
+
+def _is_usable_character_name(name: str) -> bool:
+    if not name or name in _PRONOUN_NAMES:
+        return False
+    # 「私、彼女」のように複数を1つにまとめた文字列や、文になっている説明を弾く。
+    if len(name) > _MAX_NAME_LENGTH or any(ch in name for ch in "、。！？,"):
+        return False
+    if name.endswith(_GROUP_SUFFIXES):
+        return False
+    # 「私（教師）」のように代名詞に補足を付けた形も、結局は語り手を指していて
+    # 別のキャラとして登録すると重複するだけなので弾く。
+    if any(name.startswith(pronoun) for pronoun in _PRONOUN_NAMES):
+        return False
+    return True
+
+
+def _clean_appearance_tags(tags: str) -> str:
+    """
+    英語タグ以外を落とす。NovelAIのプロンプトは英語(danbooru系)前提なので、
+    日本語や中国語のまま渡しても効かない。実機では「髪色茶色」「中等身材」といった
+    出力が混ざったため、非ASCIIを多く含むタグは捨てる。
+    """
+    kept: list[str] = []
+    for tag in tags.split(","):
+        tag = tag.strip()
+        if not tag:
+            continue
+        ascii_ratio = sum(1 for ch in tag if ch.isascii()) / len(tag)
+        if ascii_ratio > 0.8:
+            kept.append(tag)
+    return ", ".join(kept)
+
+
+def _parse_characters(text: str, n_scenes: int) -> tuple[list[list[str]], dict[str, str]] | None:
+    """(場面ごとの人物名リスト, 人物名→容姿タグ) を返す。パースできなければ None。"""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    raw_scenes = data.get("scenes")
+    if not isinstance(raw_scenes, list) or not raw_scenes:
+        return None
+
+    per_scene: list[list[str]] = []
+    for scene in raw_scenes[:n_scenes]:
+        names_text = scene.get("names") if isinstance(scene, dict) else None
+        names = [n.strip() for n in str(names_text or "").split(",") if n.strip()]
+        per_scene.append([n for n in names if _is_usable_character_name(n)])
+
+    appearances: dict[str, str] = {}
+    for entry in data.get("characters") or []:
+        if not isinstance(entry, dict):
+            continue
+        tags = _clean_appearance_tags(str(entry.get("appearance_tags") or ""))
+        # name に「生徒達, 我」のように複数を詰めて返してくることがあるので分解する。
+        for name in str(entry.get("name") or "").split(","):
+            name = name.strip()
+            if _is_usable_character_name(name):
+                appearances[name] = tags
+
+    return per_scene, appearances
+
+
+@router.post("/{story_id}/extract-characters", response_model=StoryJobResponse)
+async def extract_characters(story_id: int) -> dict[str, Any]:
+    """
+    本文から登場人物と容姿を抽出し、キャラとして登録してシーンに割り当てる。
+    キャラは物語をまたいで使い回せるよう名前で一意にしており、既に同名で登録済みなら
+    そちらを使う(AIアシスタントのキャラ生成で作った設定もそのまま流用できる)。
+    """
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+    finally:
+        conn.close()
+
+    if not scenes:
+        raise HTTPException(status_code=404, detail="先にシーン分割を実行してください。")
+
+    async def runner(job: _Job) -> None:
+        await _run_extract_characters(job, scenes)
+
+    return _job_response(_start_job(story_id, "characters", runner))
+
+
+async def _run_extract_characters(job: _Job, scenes: list[dict[str, Any]]) -> None:
+    batches = [
+        scenes[i : i + _CHARACTER_BATCH_SIZE] for i in range(0, len(scenes), _CHARACTER_BATCH_SIZE)
+    ]
+    job.total = len(batches)
+    found = 0
+
+    for index, batch in enumerate(batches, start=1):
+        job.message = f"登場人物を抽出中 {index}/{len(batches)}"
+        texts = [scene["draft_text"][:_TAG_TEXT_CHARS] for scene in batch]
+
+        parsed = None
+        for _ in range(_DRAFT_MAX_ATTEMPTS):
+            parts: list[str] = []
+            async for delta in stream_llm_text(
+                [
+                    {"role": "system", "content": _character_system_prompt(len(batch))},
+                    {"role": "user", "content": _format_scenes_for_tagging(texts)},
+                ],
+                max_tokens=_TAG_MAX_TOKENS,
+                json_schema=_character_json_schema(len(batch)),
+            ):
+                parts.append(delta)
+            parsed = _parse_characters(strip_think_tags("".join(parts)), len(batch))
+            if parsed is not None:
+                break
+
+        job.progress = index
+        if parsed is None:
+            if _should_give_up(index, found):
+                job.message = f"登場人物を抽出できませんでした({index}バッチ試行)"
+                return
+            continue
+
+        per_scene, appearances = parsed
+        conn = get_connection()
+        try:
+            ids_by_name: dict[str, int] = {}
+            for name, tags in appearances.items():
+                ids_by_name[name] = save_character(conn, name, tags)["id"]
+
+            for scene, names in zip(batch, per_scene):
+                character_ids = []
+                for name in names:
+                    if name not in ids_by_name:
+                        # 場面側にだけ出てきた名前も、容姿は後で埋められるよう登録しておく。
+                        ids_by_name[name] = save_character(conn, name, "")["id"]
+                    character_ids.append(ids_by_name[name])
+                if character_ids:
+                    set_scene_characters(conn, scene["id"], character_ids)
+                    found += 1
+        finally:
+            conn.close()
+
+    job.message = f"{found}シーンに登場人物を割り当てました"
+
+
+@router.get("/characters", response_model=list[CharacterResponse])
+async def get_characters() -> list[dict[str, Any]]:
+    """登録済みキャラの一覧(物語共通)。"""
+    conn = get_connection()
+    try:
+        return list_characters(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/characters", response_model=CharacterResponse)
+async def create_character(req: CharacterSaveRequest) -> dict[str, Any]:
+    """キャラを登録/更新する。同じ名前なら上書き(容姿タグが空なら既存値を残す)。"""
+    conn = get_connection()
+    try:
+        return save_character(conn, req.name, req.appearance_tags, req.notes)
+    finally:
+        conn.close()
+
+
+@router.delete("/characters/{character_id}", status_code=204)
+async def delete_character_endpoint(character_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_character(conn, character_id)
+    finally:
+        conn.close()
+
+
+@router.put("/scenes/{scene_id}/characters", status_code=204)
+async def put_scene_characters(scene_id: int, req: SetSceneCharactersRequest) -> None:
+    """シーンに登場するキャラを設定し直す(抽出結果の手直し用)。"""
+    conn = get_connection()
+    try:
+        set_scene_characters(conn, scene_id, req.character_ids)
     finally:
         conn.close()
 

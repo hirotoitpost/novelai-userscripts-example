@@ -173,6 +173,55 @@
   color: #9a9ac0;
 }
 
+.story-characters-block {
+  margin: 0.75rem 0;
+}
+
+.story-characters-block > summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #b8a4ff;
+  padding: 0.3rem 0;
+}
+
+.story-character-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.story-character {
+  padding: 0.6rem;
+  background: #0a0a14;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+}
+
+.story-character-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.story-character-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.story-character-head button {
+  background: transparent !important;
+  border: 1px solid #2a2a50 !important;
+  color: #9a9ac0 !important;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem !important;
+  margin-top: 0 !important;
+}
+
 .story-preset-chips {
   display: flex;
   flex-wrap: wrap;

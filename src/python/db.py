@@ -167,6 +167,29 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 登場人物。物語をまたいで使い回せるよう story_id は持たせず、名前で一意にする
+    # (同じキャラが続編にも出る、AIアシスタントのキャラ生成結果を流用する、といった使い方)。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS characters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            appearance_tags TEXT NOT NULL DEFAULT '',
+            notes TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    # どのシーンに誰が出ているか。挿絵生成時にそのシーンのキャラの容姿タグを渡すために使う。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scene_characters (
+            scene_id INTEGER NOT NULL REFERENCES story_scenes(id) ON DELETE CASCADE,
+            character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+            PRIMARY KEY (scene_id, character_id)
+        )
+        """
+    )
     # 挿絵生成のパラメータを名前を付けて保存しておくためのプリセット。
     # プロンプトチャンク用の presets とは別物なので、テーブルを分けている。
     conn.execute(
@@ -720,7 +743,8 @@ def list_story_scenes(conn: sqlite3.Connection, story_id: int) -> list[dict[str,
     rows = conn.execute(
         "SELECT * FROM story_scenes WHERE story_id = ? ORDER BY scene_index", (story_id,)
     ).fetchall()
-    return [dict(row) for row in rows]
+    by_scene = characters_by_scene(conn, story_id)
+    return [{**dict(row), "characters": by_scene.get(row["id"], [])} for row in rows]
 
 
 def update_scene_tags(
@@ -745,6 +769,73 @@ def update_scene_writing(conn: sqlite3.Connection, scene_id: int, seed_cue: str,
 def update_story_status(conn: sqlite3.Connection, story_id: int, status: str) -> None:
     conn.execute("UPDATE stories SET status = ? WHERE id = ?", (status, story_id))
     conn.commit()
+
+
+def list_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM characters ORDER BY name").fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_character(
+    conn: sqlite3.Connection, name: str, appearance_tags: str, notes: str | None = None
+) -> dict[str, Any]:
+    """
+    名前をキーに登録/更新する。抽出は同じ人物を何度も拾うので、上書きにして重複を作らない。
+    容姿タグが空で来た場合は既存の値を消さない(抽出で拾えなかっただけのことがあるため)。
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO characters (name, appearance_tags, notes, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            appearance_tags = CASE
+                WHEN excluded.appearance_tags = '' THEN characters.appearance_tags
+                ELSE excluded.appearance_tags
+            END,
+            notes = COALESCE(excluded.notes, characters.notes)
+        RETURNING id, name, appearance_tags, notes, created_at
+        """,
+        (name, appearance_tags, notes, now),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def delete_character(conn: sqlite3.Connection, character_id: int) -> None:
+    conn.execute("DELETE FROM characters WHERE id = ?", (character_id,))
+    conn.commit()
+
+
+def set_scene_characters(conn: sqlite3.Connection, scene_id: int, character_ids: list[int]) -> None:
+    conn.execute("DELETE FROM scene_characters WHERE scene_id = ?", (scene_id,))
+    conn.executemany(
+        "INSERT OR IGNORE INTO scene_characters (scene_id, character_id) VALUES (?, ?)",
+        [(scene_id, character_id) for character_id in character_ids],
+    )
+    conn.commit()
+
+
+def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, list[dict[str, Any]]]:
+    """物語内の scene_id → 登場キャラの一覧。"""
+    rows = conn.execute(
+        """
+        SELECT sc.scene_id, c.id, c.name, c.appearance_tags
+        FROM scene_characters sc
+        JOIN characters c ON c.id = sc.character_id
+        JOIN story_scenes s ON s.id = sc.scene_id
+        WHERE s.story_id = ?
+        ORDER BY c.name
+        """,
+        (story_id,),
+    ).fetchall()
+
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        result.setdefault(row["scene_id"], []).append(
+            {"id": row["id"], "name": row["name"], "appearance_tags": row["appearance_tags"]}
+        )
+    return result
 
 
 def list_image_presets(conn: sqlite3.Connection) -> list[dict[str, Any]]:

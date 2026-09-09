@@ -6,6 +6,7 @@ import MangaImageSettings, {
   DEFAULT_MANGA_IMAGE_SETTINGS,
   MangaImageSettingsValue,
 } from '../components/MangaImageSettings'
+import StoryCharacters, { SceneCharacter } from '../components/StoryCharacters'
 import './Story.css'
 
 interface StoryScene {
@@ -17,6 +18,7 @@ interface StoryScene {
   draft_prompt_tags: string
   seed_cue: string | null
   novelai_text: string | null
+  characters: SceneCharacter[]
 }
 
 interface StoryData {
@@ -484,6 +486,32 @@ export default function Story() {
     }
   }
 
+  async function runExtractCharacters() {
+    if (!story) return
+    setError(null)
+    const controller = new AbortController()
+    abortRef.current = controller
+    try {
+      setStepLabel('登場人物の抽出を開始しています...')
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/extract-characters`, {
+        method: 'POST',
+        signal: controller.signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      await pollJob(story.id, controller.signal)
+      await loadStory(story.id)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setError('キャンセルしました。')
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setStepLabel('')
+      abortRef.current = null
+    }
+  }
+
   async function runRetag() {
     if (!story) return
     setError(null)
@@ -787,6 +815,11 @@ export default function Story() {
                     {scene.draft_prompt_tags && (
                       <p className="story-scene-tags">タグ: {scene.draft_prompt_tags}</p>
                     )}
+                    {scene.characters.length > 0 && (
+                      <p className="story-scene-tags">
+                        登場: {scene.characters.map(c => c.name).join(', ')}
+                      </p>
+                    )}
                   </li>
                 ))}
               </ol>
@@ -816,6 +849,17 @@ export default function Story() {
                   />
                 </label>
               </div>
+            )}
+
+            {isWritten && (
+              <details className="story-characters-block">
+                <summary>登場人物（容姿の指定）</summary>
+                <StoryCharacters
+                  apiOrigin={API_ORIGIN}
+                  onChanged={() => { if (story) void loadStory(story.id) }}
+                  disabled={busy}
+                />
+              </details>
             )}
 
             {isWritten && (
@@ -866,6 +910,11 @@ export default function Story() {
               {untaggedCount > 0 && (
                 <button type="button" onClick={runRetag} disabled={busy}>
                   タグ付けを実行({untaggedCount}シーン未設定)
+                </button>
+              )}
+              {isWritten && (
+                <button type="button" onClick={runExtractCharacters} disabled={busy}>
+                  登場人物を抽出
                 </button>
               )}
               {isWritten && (

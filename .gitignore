@@ -17,6 +17,8 @@ node_modules/
 # Environment
 .env
 .env.local
+# 設定変更前に取るバックアップ。中身は .env と同じなのでコミットしない。
+.env.bak-*
 
 # Generated outputs (large binary files, not source code)
 outputs/
