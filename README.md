@@ -70,7 +70,9 @@ Open **two terminals**:
 
 ```bash
 # Terminal 1 — FastAPI backend (port 8000)
-uv run python -m uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000 --reload
+# --host 0.0.0.0 so devices on the same LAN (e.g. a phone) can reach it too;
+# use 127.0.0.1 instead if you only need local access.
+uv run python -m uvicorn python.server:app --app-dir src --host 0.0.0.0 --port 8000 --reload
 
 # Terminal 2 — Vite frontend (port 5173)
 npm run dev
@@ -78,6 +80,8 @@ npm run dev
 # Terminal 3 (optional) — vLLM server for AI assistant (requires NVIDIA GPU + Docker)
 docker compose up -d
 ```
+
+On Windows, `scripts/dev-ctl.ps1` starts both services without the `uv run`/`--reload` indirection that has been observed to leave a stuck listening socket behind on this platform — see the script's header comment for details.
 
 Open **http://localhost:5173** in your browser.
 
@@ -160,7 +164,15 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 │           ├── Home.tsx/css     # Dashboard
 │           └── ImageGenerate.tsx/css  # Image generation UI
 ├── scripts/
-│   └── generate_cat_garden.py  # Standalone SDK usage example
+│   ├── generate_cat_garden.py  # Standalone SDK usage example
+│   ├── example.user.js         # Tampermonkey-style userscript calling this app's backend
+│   ├── export-story.naiscript  # NovelAI in-app script: copies story text to the clipboard
+│   │                           # (install via NovelAI's own User Scripts modal, Alt+X)
+│   ├── story-import.user.js    # Tampermonkey userscript: reads that clipboard text and
+│   │                           # imports it into this app directly — pairs with the script
+│   │                           # above for a 2-click NovelAI → app story import, no manual
+│   │                           # copy/paste into the app needed
+│   └── dev-ctl.ps1             # Windows: start/stop/status for backend + frontend
 ├── tests/                       # pytest test files
 ├── docs/                        # Additional documentation
 │   ├── README_jp.md             # Japanese README

@@ -40,8 +40,8 @@ lint-fix = "ruff check --fix"
 check = "pyright"
 test = "pytest"
 pre-commit = ["fmt", "lint", "check"]
-serve = "uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000"
-serve-dev = "uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000 --reload"
+serve = "uvicorn python.server:app --app-dir src --host 0.0.0.0 --port 8000"
+serve-dev = "uvicorn python.server:app --app-dir src --host 0.0.0.0 --port 8000 --reload"
 mcp-server = "python scripts/run_mcp_server.py"
 
 [tool.ruff]
