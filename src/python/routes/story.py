@@ -141,9 +141,16 @@ def _story_response(story: dict[str, Any] | None) -> StoryResponse:
 _DRAFT_MAX_ATTEMPTS = 3
 _DRAFT_MIN_BODY_LENGTH = 20
 
-# タグ付けを1リクエストに詰め込む上限。長編は数百〜数千シーンになるため、
-# 全件を一度に送るとローカルLLMのコンテキストに収まらない。
-_TAG_BATCH_SIZE = 10
+# タグ付け1リクエストの大きさは、ローカルLLMのコンテキスト長に収まるよう決める。
+# 実機のOllamaは qwen3-vl:2b を context_length=4096 で載せており(/api/ps で確認)、
+# 日本語はほぼ1文字=1トークンなので、10シーン×300字を丸ごと送ると入力だけで
+# 3,000トークン超になり、出力枠と合わせて溢れる。英語の物語が通って日本語の物語で
+# タグが1件も付かなかったのはこれが原因だった。
+# そこで「1シーンあたりの文字数」「バッチのシーン数」「出力トークン数」の3つを
+# 絞り、合計が4096に収まるようにしている(8×150字≒1,200 + 指示文 + 出力1,024)。
+_TAG_BATCH_SIZE = 8
+_TAG_TEXT_CHARS = 150
+_TAG_MAX_TOKENS = 1024
 
 
 @dataclass
@@ -474,7 +481,10 @@ def _import_tags_system_prompt(n_scenes: int) -> str:
 
 
 def _format_scenes_for_tagging(scene_texts: list[str]) -> str:
-    return "\n\n".join(f"場面{i}:\n{text}" for i, text in enumerate(scene_texts, start=1))
+    """タグ付けに必要なのは場面の要旨だけなので、本文は先頭だけを送って入力量を抑える。"""
+    return "\n\n".join(
+        f"場面{i}:\n{text[:_TAG_TEXT_CHARS]}" for i, text in enumerate(scene_texts, start=1)
+    )
 
 
 def _parse_import_tags(tags_text: str, n_scenes: int) -> list[dict[str, Any]] | None:
@@ -568,7 +578,7 @@ async def _tag_scene_batch(batch_texts: list[str]) -> list[dict[str, Any]] | Non
                 {"role": "system", "content": _import_tags_system_prompt(len(batch_texts))},
                 {"role": "user", "content": _format_scenes_for_tagging(batch_texts)},
             ],
-            max_tokens=4096,
+            max_tokens=_TAG_MAX_TOKENS,
             json_schema=_import_tags_json_schema(len(batch_texts)),
         ):
             parts.append(delta)
@@ -590,6 +600,17 @@ async def _apply_tags(scenes: list[dict[str, Any]], texts: list[str]) -> int:
     finally:
         conn.close()
     return min(len(scenes), len(tags))
+
+
+# タグ付けが最初から一つも通らない場合、以降のバッチも通らないことがほとんどなので、
+# 長編で何十分も無駄に回さないよう早い段階で打ち切る。実機では qwen3-vl:2b が
+# 日本語入力に対して思考を延々と出し続け、出力枠を使い切って本文(JSON)を一度も
+# 返さないという状態を確認している(英語の物語では同じ設定で成功する)。
+_TAG_GIVE_UP_AFTER = 3
+
+
+def _should_give_up(batch_index: int, tagged: int) -> bool:
+    return tagged == 0 and batch_index >= _TAG_GIVE_UP_AFTER
 
 
 async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
@@ -629,13 +650,19 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
     job.message = f"{len(scene_texts)}シーン({pages}ページ相当)に分割しました。タグ付け中..."
 
     tagged = 0
+    gave_up = False
     for index, (batch_scenes, batch_texts) in enumerate(batches, start=1):
         job.message = f"タグ付け中 {index}/{len(batches)}"
         tagged += await _apply_tags(batch_scenes, batch_texts)
         job.progress = index
+        if _should_give_up(index, tagged):
+            gave_up = True
+            break
 
     job.message = f"{len(scene_texts)}シーンに分割し、{tagged}シーンにタグを付けました"
-    if tagged < len(scene_texts):
+    if gave_up:
+        job.message += "(タグ付けが連続で失敗したため中断しました。挿絵生成は本文だけでも実行できます)"
+    elif tagged < len(scene_texts):
         job.message += f"(未設定{len(scene_texts) - tagged}シーンは「タグ付けを実行」でやり直せます)"
 
 
@@ -841,12 +868,18 @@ async def _run_retag(job: _Job, untagged: list[dict[str, Any]]) -> None:
     job.message = f"タグ未設定の{len(untagged)}シーンにタグ付けします"
 
     tagged = 0
+    gave_up = False
     for index, batch in enumerate(batches, start=1):
         job.message = f"タグ付け中 {index}/{len(batches)}"
         tagged += await _apply_tags(batch, [scene["draft_text"] for scene in batch])
         job.progress = index
+        if _should_give_up(index, tagged):
+            gave_up = True
+            break
 
     job.message = f"{len(untagged)}シーン中{tagged}シーンにタグを付けました"
+    if gave_up:
+        job.message += "(連続で失敗したため中断しました)"
 
 
 @router.get("/{story_id}/job", response_model=StoryJobResponse | None)
