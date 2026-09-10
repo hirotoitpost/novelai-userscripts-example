@@ -35,7 +35,8 @@ _DEFAULT_NEGATIVE_PROMPT = (
 # 1コマに載せるセリフの上限文字数。
 _MAX_PANEL_TEXT_CHARS = 100
 
-_DIALOGUE_RE = re.compile(r"[「『]([^」』]*)[」』]")
+# ページ別の指標(routes/story.py)でも同じ定義を使うため公開している。
+DIALOGUE_RE = re.compile(r"[「『]([^」』]*)[」』]")
 
 
 def _panel_dialogue(text: str) -> str:
@@ -47,7 +48,7 @@ def _panel_dialogue(text: str) -> str:
     埋もれてしまい、4コマ指定が8コマで描かれ、全コマが同じ構図(同じバストショット)に
     なった。セリフだけに絞るとタグが相対的に効くようになる。
     """
-    lines = [match.group(1).strip() for match in _DIALOGUE_RE.finditer(text)]
+    lines = [match.group(1).strip() for match in DIALOGUE_RE.finditer(text)]
     return " ".join(line for line in lines if line)[:_MAX_PANEL_TEXT_CHARS]
 
 

@@ -41,6 +41,15 @@ interface StorySummary {
   final_image_path: string | null
 }
 
+interface PageStats {
+  page_index: number
+  scenes: number
+  dialogue_lines: number
+  scenes_with_characters: number
+  characters: string[]
+  generated: boolean
+}
+
 interface MangaPage {
   id: number
   page_index: number
@@ -206,6 +215,7 @@ export default function Story() {
   const [history, setHistory] = useState<StorySummary[]>([])
   const [story, setStory] = useState<StoryData | null>(null)
   const [mangaPages, setMangaPages] = useState<MangaPage[]>([])
+  const [pageStats, setPageStats] = useState<PageStats[]>([])
 
   const [stepLabel, setStepLabel] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -292,6 +302,9 @@ export default function Story() {
       const pages: MangaPage[] = pagesRes.ok ? await pagesRes.json() : []
       setStory(data)
       setMangaPages(pages)
+
+      const statsRes = await fetch(`${API_ORIGIN}/api/story/${id}/page-stats`).catch(() => null)
+      setPageStats(statsRes?.ok ? await statsRes.json() : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -928,6 +941,38 @@ export default function Story() {
                   />
                 </label>
               </div>
+            )}
+
+            {isWritten && pageStats.length > 0 && (
+              <details className="story-characters-block">
+                <summary>ページ別の指標（生成するページを選ぶ目安）</summary>
+                <p className="story-muted">
+                  登場人物が全コマに付いているページほど良い結果になりやすいようです（実機で2ページを
+                  比較した限り）。セリフ数は目安になりません — 会話が最も多いページが最も悪い結果でした。
+                  行をクリックするとその1ページを範囲に設定します。
+                </p>
+                <ul className="story-history-list">
+                  {pageStats.map(stat => (
+                    <li
+                      key={stat.page_index}
+                      className="story-history-item"
+                      onClick={() => {
+                        setPageFrom(stat.page_index + 1)
+                        setPageTo(stat.page_index + 1)
+                      }}
+                    >
+                      <span className="story-history-premise">
+                        P{stat.page_index + 1} ・ セリフ{stat.dialogue_lines} ・ キャラ
+                        {stat.scenes_with_characters}/{stat.scenes}コマ
+                        {stat.generated ? ' ・ 生成済み' : ''}
+                      </span>
+                      <span className="story-history-meta">
+                        {stat.characters.join(', ') || '登場人物の割り当てなし'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
 
             <div className="story-actions">

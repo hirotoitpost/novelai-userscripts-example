@@ -306,6 +306,17 @@ class StoryImportRequest(BaseModel):
     panels_per_page: int = Field(8, ge=1, le=12)
 
 
+class StoryPageStats(BaseModel):
+    """ページごとの中身の指標。どのページを生成する価値があるか判断するために使う。"""
+
+    page_index: int
+    scenes: int
+    dialogue_lines: int
+    scenes_with_characters: int
+    characters: list[str]
+    generated: bool
+
+
 class StoryLayoutRequest(BaseModel):
     """1ページのコマ数。変更すると既存シーンのページ割り当ても振り直す。"""
 

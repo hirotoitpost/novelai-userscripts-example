@@ -26,6 +26,7 @@ from novelai import AsyncNovelAI
 from ..client import get_client
 from ..db import (
     add_story_scenes,
+    characters_by_scene,
     create_manga_page,
     create_story,
     delete_character,
@@ -55,12 +56,13 @@ from ..models import (
     StoryImportRequest,
     StoryJobResponse,
     StoryLayoutRequest,
+    StoryPageStats,
     StoryResponse,
     StorySplitRequest,
     StorySummary,
     SetSceneCharactersRequest,
 )
-from ..novelai_image_v5 import generate_manga_page
+from ..novelai_image_v5 import DIALOGUE_RE, generate_manga_page
 from ..novelai_text import generate_kayra
 from .llm import sse_event, strip_think_tags, stream_llm_text
 
@@ -856,6 +858,59 @@ async def _run_illustrate(
         job.progress = i
 
     job.message = f"{len(targets)}ページの挿絵を生成しました"
+
+
+@router.get("/{story_id}/page-stats", response_model=list[StoryPageStats])
+async def get_page_stats(story_id: int) -> list[dict[str, Any]]:
+    """
+    ページごとのセリフ数と登場人物の充足度を返す。
+
+    1ページの生成には時間とAnlasがかかるので、全ページを機械的に流す前に当たりを
+    付けられるようにする。
+
+    実機で2ページを生成して比べた限りでは、識別できたのは登場人物の充足度だった。
+    悪かったページは全64ページで唯一キャラが4/8コマにしか付いておらず、コマ数が
+    増えて同じ構図の反復になった。一方セリフ数は当てにならない - むしろ悪かった方が
+    全ページ中で最多(40)で、良かったページは25だった。説明や議論の場面は会話量が
+    多くても絵の変化に乏しいためと思われる。2ページの比較でしかないので、
+    判断材料として出すに留め、良し悪しの決めつけはしない。
+    """
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+        if not scenes:
+            raise HTTPException(status_code=404, detail="story not found")
+        by_scene = characters_by_scene(conn, story_id)
+        generated = {page["page_index"] for page in list_manga_pages(conn, story_id)}
+    finally:
+        conn.close()
+
+    pages: dict[int, list[dict[str, Any]]] = {}
+    for scene in scenes:
+        pages.setdefault(scene["page_index"], []).append(scene)
+
+    result: list[dict[str, Any]] = []
+    for page_index in sorted(pages):
+        page_scenes = pages[page_index]
+        names: list[str] = []
+        for scene in page_scenes:
+            for character in by_scene.get(scene["id"], []):
+                if character["name"] not in names:
+                    names.append(character["name"])
+        result.append(
+            {
+                "page_index": page_index,
+                "scenes": len(page_scenes),
+                "dialogue_lines": sum(
+                    len(DIALOGUE_RE.findall(scene["novelai_text"] or scene["draft_text"]))
+                    for scene in page_scenes
+                ),
+                "scenes_with_characters": sum(1 for s in page_scenes if by_scene.get(s["id"])),
+                "characters": names,
+                "generated": page_index in generated,
+            }
+        )
+    return result
 
 
 @router.put("/{story_id}/layout", response_model=StoryResponse)
