@@ -72,7 +72,9 @@ def _file_date(path: Path) -> str:
 def _try_extract(path: Path) -> dict | None:
     try:
         img = Image.open(path).convert("RGBA")
-        return extract_image_metadata(np.asarray(img, dtype=np.uint8))
+        meta = extract_image_metadata(np.asarray(img, dtype=np.uint8))
+        # get_fec を渡していないので dict が返る。タプルは FEC も要求したときの形。
+        return meta if isinstance(meta, dict) else meta[0]
     except Exception:
         return None
 
@@ -221,7 +223,6 @@ async def batch_organize(req: OrganizeRequest) -> StreamingResponse:
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        input_dir = Path(req.input_path)
         output_dir = Path(req.output_path)
 
         png_files = _collect_pngs(req.input_path)

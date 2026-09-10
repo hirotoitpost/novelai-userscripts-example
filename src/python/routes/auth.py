@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 from fastapi.exceptions import HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 from ..auth_utils import login_with_credentials
 

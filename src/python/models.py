@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
 
+from novelai.constants.positions import PositionPreset
 from pydantic import BaseModel, Field
 
 ImageModelLiteral = Literal[
@@ -69,7 +70,7 @@ class CharacterReferenceRequest(BaseModel):
 class CharacterRequest(BaseModel):
     prompt: str
     negative_prompt: str = ""
-    position: Union[str, list[float]] = Field(default_factory=lambda: [0.5, 0.5])
+    position: Union[PositionPreset, tuple[float, float]] = (0.5, 0.5)
     enabled: bool = True
 
 

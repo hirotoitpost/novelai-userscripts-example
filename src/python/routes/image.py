@@ -3,9 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
-from typing import Any
-
-from typing import Annotated, AsyncGenerator
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -31,8 +29,6 @@ from novelai.types import (
 
 from ..client import get_client
 from ..db import delete_image_preset, get_connection, list_image_presets, save_image_preset
-
-ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 from ..models import (
     AnlasEstimateRequest,
     AnlasEstimateResponse,
@@ -41,6 +37,8 @@ from ..models import (
     ImagePresetCreateRequest,
     ImagePresetResponse,
 )
+
+ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
 router = APIRouter(prefix="/api/image", tags=["image"])
 
@@ -162,7 +160,7 @@ def _build_kwargs(req: GenerateImageRequest) -> dict[str, Any]:
             Character(
                 prompt=c.prompt,
                 negative_prompt=c.negative_prompt,
-                position=tuple(c.position) if isinstance(c.position, list) else c.position,
+                position=c.position,
                 enabled=c.enabled,
             )
             for c in req.characters

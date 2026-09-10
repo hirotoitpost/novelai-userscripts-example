@@ -57,7 +57,8 @@ def _render_caption_band(width: int, caption: str, font: ImageFont.FreeTypeFont 
     dummy = Image.new("RGB", (1, 1))
     draw = ImageDraw.Draw(dummy)
     lines = _wrap_to_pixel_width(caption, width - _CAPTION_PADDING * 2, font, draw)
-    line_height = max(draw.textbbox((0, 0), line, font=font)[3] for line in lines) + 6
+    # textbbox は float を返すが、以降はすべてピクセル座標なので整数に丸める。
+    line_height = int(max(draw.textbbox((0, 0), line, font=font)[3] for line in lines)) + 6
 
     band_height = _CAPTION_PADDING * 2 + line_height * len(lines)
     band = Image.new("RGB", (width, band_height), _CAPTION_BG)
