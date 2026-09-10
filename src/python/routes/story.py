@@ -488,7 +488,12 @@ def _import_tags_system_prompt(n_scenes: int) -> str:
         "(コンマ区切り)だけを付与してJSON形式で返してください。\n\n"
         f"- scenes配列にちょうど{n_scenes}個の要素を、渡された場面の順番通りに含める\n"
         "- title: その場面の短い日本語タイトル\n"
-        "- prompt_tags: その場面の情景を画像生成するための英語タグ(コンマ区切り)"
+        "- prompt_tags: その場面の情景を画像生成するための英語タグ(コンマ区切り)\n"
+        "- prompt_tags は英語のみ。日本語や中国語のタグは使わない\n"
+        "  悪い例: 女子高中生, 舐め, 少女，害羞，闭眼\n"
+        "  良い例: 1girl, school uniform, classroom, embarrassed, blush\n"
+        "- 人名はタグにしない(画像生成モデルは名前を解釈できない)。"
+        "その人物の見た目を表すタグに置き換える"
     )
 
 
@@ -517,10 +522,13 @@ def _parse_import_tags(tags_text: str, n_scenes: int) -> list[dict[str, Any]] | 
     for scene in scenes[:n_scenes]:
         if not isinstance(scene, dict):
             continue
+        # 英語で書けと指示してもCJKのタグが返ることがある(実機で64ページ中11ページ)。
+        # そのまま渡すとV5がコマを描き分けられず、同じ絵の繰り返しになるので落とす。
+        # 全部落ちたシーンはタグ空=未設定となり、/retag で付け直せる。
         result.append(
             {
                 "draft_title": (str(scene.get("title") or "")).strip() or None,
-                "draft_prompt_tags": (str(scene.get("prompt_tags") or "")).strip(),
+                "draft_prompt_tags": _english_tags_only(str(scene.get("prompt_tags") or "")),
             }
         )
     return result or None
@@ -601,17 +609,25 @@ async def _tag_scene_batch(batch_texts: list[str]) -> list[dict[str, Any]] | Non
 
 
 async def _apply_tags(scenes: list[dict[str, Any]], texts: list[str]) -> int:
-    """1バッチ分のタグ付けとDB反映。付けられたシーン数を返す(0なら丸ごと失敗)。"""
+    """
+    1バッチ分のタグ付けとDB反映。使えるタグが付いたシーン数を返す(0なら丸ごと失敗)。
+
+    書き込んだ行数ではなく中身のある行数を数える。CJKタグが落とされて空になった行を
+    成功に数えると、打ち切り判定が働かず、完了メッセージも実態より多く見える。
+    """
     tags = await _tag_scene_batch(texts)
     if not tags:
         return 0
+    applied = 0
     conn = get_connection()
     try:
         for scene, tag in zip(scenes, tags):
             update_scene_tags(conn, scene["id"], tag["draft_title"], tag["draft_prompt_tags"])
+            if tag["draft_prompt_tags"]:
+                applied += 1
     finally:
         conn.close()
-    return min(len(scenes), len(tags))
+    return applied
 
 
 # タグ付けが最初から一つも通らない場合、以降のバッチも通らないことがほとんどなので、
@@ -1093,11 +1109,15 @@ def _is_usable_character_name(name: str) -> bool:
     return True
 
 
-def _clean_appearance_tags(tags: str) -> str:
+def _english_tags_only(tags: str) -> str:
     """
     英語タグ以外を落とす。NovelAIのプロンプトは英語(danbooru系)前提なので、
     日本語や中国語のまま渡しても効かない。実機では「髪色茶色」「中等身材」といった
     出力が混ざったため、非ASCIIを多く含むタグは捨てる。
+
+    容姿タグと場面タグの両方で使う。場面タグが全部落ちて空になった場合、そのシーンは
+    「タグ未設定」として扱われ /retag の対象に戻る。CJKのまま画像生成に渡すより、
+    付け直させたほうがよい。
     """
     kept: list[str] = []
     for tag in tags.split(","):
@@ -1246,7 +1266,7 @@ async def _describe_appearance(name: str, passages: list[str]) -> str:
             data = json.loads(strip_think_tags("".join(parts)))
         except json.JSONDecodeError:
             continue
-        tags = _clean_appearance_tags(str(data.get("appearance_tags") or ""))
+        tags = _english_tags_only(str(data.get("appearance_tags") or ""))
         if tags:
             return tags
     return ""
