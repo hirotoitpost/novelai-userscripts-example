@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections import Counter
 from base64 import b64decode
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -962,62 +963,34 @@ async def list_stories_route(limit: int = 50) -> list[StorySummary]:
         conn.close()
 
 
-# 抽出は1回のリクエストで扱うシーン数を絞る。タグ付けと同じくローカルLLMの
-# コンテキストに収める必要があり、加えて「誰が出ているか」と「その人の容姿」の
-# 2種類を同時に返させるぶん出力も長くなる。
-_CHARACTER_BATCH_SIZE = 5
+# 登場人物の抽出は「全体から名前を確定 → 描写を探す → シーンへ割当」の順で行う。
+# 以前はシーン数件ずつ独立にLLMへ投げていたが、全体像が無いため同一人物が別名で
+# 何度も登録され(私/私は/我/我是)、容姿も数行の窓からの推測になっていた。
+# この順序ならLLMは「候補が人物か」「描写を英語タグに直す」という小さな判断だけを担い、
+# 名前の収集とシーンへの割当は決定的な処理で済む。
+
+# 敬称付きの呼びかけ。日本語の小説では人物名の手がかりとして最も精度が高い。
+_HONORIFIC_RE = re.compile(r"([一-龥ぁ-んァ-ヶーA-Za-z]{1,8})(さん|ちゃん|くん|君|様|さま|先輩|先生)(?![者間生])")
+# カタカナ表記の名前。一般語も拾うので後段の判定で落とす。
+_KATAKANA_RE = re.compile(r"[ァ-ヶー]{3,10}")
+# 「〜」と太郎は言った のような、会話文直後の話者位置。
+_SPEAKER_RE = re.compile(r"[」』]\s*と?([一-龥ぁ-んァ-ヶー]{2,6})(?:は|が)")
+
+# 固有名詞は作中で繰り返し現れる。1〜2回しか出ない語はまず人物名ではない。
+_MIN_NAME_OCCURRENCES = 3
+_MAX_NAME_CANDIDATES = 30
+
+# 容姿が書かれている箇所を探すための手がかり。
+_APPEARANCE_KEYWORDS = (
+    "髪", "瞳", "目", "背", "身長", "体型", "スタイル", "服", "着", "制服", "眼鏡", "メガネ",
+    "顔", "肌", "唇", "胸", "帽子", "スカート", "ドレス", "コート", "姿",
+)
+_APPEARANCE_PASSAGE_LIMIT = 3
+_APPEARANCE_PASSAGE_CHARS = 200
 
 
-def _character_json_schema(n_scenes: int) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "scenes": {
-                "type": "array",
-                "minItems": n_scenes,
-                "maxItems": n_scenes,
-                "items": {
-                    "type": "object",
-                    "properties": {"names": {"type": "string"}},
-                    "required": ["names"],
-                },
-            },
-            "characters": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "appearance_tags": {"type": "string"},
-                    },
-                    "required": ["name", "appearance_tags"],
-                },
-            },
-        },
-        "required": ["scenes", "characters"],
-    }
-
-
-def _character_system_prompt(n_scenes: int) -> str:
-    return (
-        "あなたは物語から登場人物を抽出するAIです。\n"
-        "渡された場面それぞれについて、そこに登場する人物の名前を挙げ、"
-        "さらに登場した人物の容姿を画像生成用の英語タグにしてJSONで返してください。\n\n"
-        f"- scenes配列にちょうど{n_scenes}個の要素を、渡された場面の順番通りに含める\n"
-        "- scenes[].names: その場面に登場する人物名をコンマ区切りで(該当なしなら空文字)\n"
-        "- 名前として挙げてよいのは固有名詞(人名・あだ名・「先生」のような固有の呼称)だけ\n"
-        "- 代名詞は絶対に名前として扱わない(私/僕/俺/あたし/彼/彼女/あなた/君/我 など)\n"
-        "- 「生徒達」「二人の女子」のような集団や、文になっている説明も名前にしない\n"
-        "- 名前が分からない人物はその場面では挙げない\n"
-        "- characters: この範囲で登場した人物の name と appearance_tags\n"
-        "- appearance_tags は必ず英語のタグをコンマ区切りで書く(日本語・中国語は使わない)\n"
-        '- 例: {"name": "サクラ", "appearance_tags": "1girl, long black hair, blue eyes, school uniform"}'
-    )
-
-
-# 一人称視点の作品では、代名詞がそのまま人物名として大量に返ってくることを実機で確認した
-# (私/彼女/我/我是/私は…が別々のキャラとして登録され、同一人物の容姿も矛盾していた)。
-# プロンプトで禁じても完全には従わないため、コード側でも弾く。
+# 一人称視点の作品では、代名詞がそのまま人物名として返ってくることを実機で確認した
+# (私/彼女/我/我是…が別々のキャラとして登録され、同一人物の容姿も矛盾していた)。
 _PRONOUN_NAMES = {
     "私", "私は", "わたし", "あたし", "僕", "ぼく", "俺", "おれ", "自分", "我", "我是", "我々",
     "彼", "彼女", "彼ら", "彼女ら", "あなた", "貴方", "君", "きみ", "お前", "おまえ",
@@ -1059,117 +1032,225 @@ def _clean_appearance_tags(tags: str) -> str:
     return ", ".join(kept)
 
 
-def _parse_characters(text: str, n_scenes: int) -> tuple[list[list[str]], dict[str, str]] | None:
-    """(場面ごとの人物名リスト, 人物名→容姿タグ) を返す。パースできなければ None。"""
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
+# 敬称を外した形。「美香」と「美香さん」、「美琴」と「美琴ちゃん」が別人として
+# 登録されるのを防ぐ(実データで確認)。「先生」のように敬称そのものが呼称になって
+# いる語は、外すと空になるのでそのまま残る。
+_HONORIFIC_SUFFIXES = ("さん", "ちゃん", "くん", "君", "様", "さま", "先輩")
 
-    raw_scenes = data.get("scenes")
-    if not isinstance(raw_scenes, list) or not raw_scenes:
-        return None
 
-    per_scene: list[list[str]] = []
-    for scene in raw_scenes[:n_scenes]:
-        names_text = scene.get("names") if isinstance(scene, dict) else None
-        names = [n.strip() for n in str(names_text or "").split(",") if n.strip()]
-        per_scene.append([n for n in names if _is_usable_character_name(n)])
+def _canonical_name(name: str) -> str:
+    for suffix in _HONORIFIC_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return name
 
-    appearances: dict[str, str] = {}
-    for entry in data.get("characters") or []:
-        if not isinstance(entry, dict):
+
+def _collect_name_candidates(text: str) -> list[dict[str, Any]]:
+    """
+    本文全体から人物名の候補を集める(LLMは使わない)。
+    敬称違いは1件にまとめ、{"name": 代表表記, "aliases": [表記...]} の形で
+    出現回数の多い順に返す。ここでは人物かどうかの判断はせず、候補を絞るだけ。
+    """
+    counts: Counter[str] = Counter()
+    for match in _HONORIFIC_RE.finditer(text):
+        counts[match.group(1) + match.group(2)] += 1
+    for match in _KATAKANA_RE.finditer(text):
+        counts[match.group(0)] += 1
+    for match in _SPEAKER_RE.finditer(text):
+        counts[match.group(1)] += 1
+
+    groups: dict[str, Counter[str]] = {}
+    for name, count in counts.items():
+        if count < _MIN_NAME_OCCURRENCES or not _is_usable_character_name(name):
             continue
-        tags = _clean_appearance_tags(str(entry.get("appearance_tags") or ""))
-        # name に「生徒達, 我」のように複数を詰めて返してくることがあるので分解する。
-        for name in str(entry.get("name") or "").split(","):
-            name = name.strip()
-            if _is_usable_character_name(name):
-                appearances[name] = tags
+        # 「ておいて」のような動詞語尾の誤検出を落とす。人物名なら漢字かカタカナを含む。
+        if not any("\u4e00" <= ch <= "\u9fff" or "\u30a1" <= ch <= "\u30f6" for ch in name):
+            continue
+        groups.setdefault(_canonical_name(name), Counter())[name] = count
 
-    return per_scene, appearances
+    ordered = sorted(groups.values(), key=lambda surfaces: -sum(surfaces.values()))
+    return [
+        {
+            "name": surfaces.most_common(1)[0][0],
+            # 長い表記から先に照合する(「美香さん」を「美香」より優先して数えるため)。
+            "aliases": sorted(surfaces, key=len, reverse=True),
+        }
+        for surfaces in ordered[:_MAX_NAME_CANDIDATES]
+    ]
+
+
+def _people_json_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {"people": {"type": "array", "items": {"type": "string"}}},
+        "required": ["people"],
+    }
+
+
+async def _confirm_people(candidates: list[str]) -> list[str]:
+    """
+    候補のうち人物を指すものだけを選ばせる。入力は語のリストだけなので小さく、
+    ローカルの小型モデルでも安定する。失敗したら敬称付きの候補だけを残す。
+    """
+    system = (
+        "あなたは小説の語彙から登場人物を見分けるAIです。\n"
+        "渡された語のうち、人物を指すものだけを people 配列に入れてJSONで返してください。\n\n"
+        "- 人名・あだ名・その人物を指す呼称(「先生」「お姉さん」など)は人物として扱う\n"
+        "- 身体の部位、行為、物、場所、地名、一般名詞は人物ではないので除外する\n"
+        "- 渡された語をそのままの表記で返す(語を作り変えない)"
+    )
+    for _ in range(_DRAFT_MAX_ATTEMPTS):
+        parts: list[str] = []
+        async for delta in stream_llm_text(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "\n".join(candidates)},
+            ],
+            max_tokens=_TAG_MAX_TOKENS,
+            json_schema=_people_json_schema(),
+        ):
+            parts.append(delta)
+        try:
+            data = json.loads(strip_think_tags("".join(parts)))
+        except json.JSONDecodeError:
+            continue
+        people = data.get("people")
+        if isinstance(people, list):
+            # 実在しない名前を作られても困るので、候補にあるものだけ採用する。
+            confirmed = [str(p).strip() for p in people if str(p).strip() in candidates]
+            if confirmed:
+                return confirmed
+
+    return [name for name in candidates if _HONORIFIC_RE.fullmatch(name)]
+
+
+def _appearance_passages(text: str, aliases: list[str]) -> list[str]:
+    """名前と容姿の語が同じ文に出てくる箇所を集める。無ければ空(推測はしない)。"""
+    passages: list[str] = []
+    for sentence in _SENTENCE_BOUNDARY_RE.split(text):
+        if any(alias in sentence for alias in aliases) and any(
+            word in sentence for word in _APPEARANCE_KEYWORDS
+        ):
+            passages.append(sentence.strip()[:_APPEARANCE_PASSAGE_CHARS])
+            if len(passages) >= _APPEARANCE_PASSAGE_LIMIT:
+                break
+    return passages
+
+
+async def _describe_appearance(name: str, passages: list[str]) -> str:
+    """本文の描写だけを根拠に容姿を英語タグへ直す。"""
+    system = (
+        "あなたは小説の描写を画像生成用のタグへ変換するAIです。\n"
+        f"「{name}」の容姿について、渡された本文に書かれている特徴だけを"
+        "英語のタグ(コンマ区切り)にして appearance_tags に入れ、JSONで返してください。\n\n"
+        "- 本文に書かれていない特徴は足さない\n"
+        "- 髪色・髪型・目の色・服装・年齢層など、絵に描ける特徴だけを挙げる\n"
+        "- 出力は英語のタグのみ(日本語や中国語は使わない)\n"
+        '- 例: {"appearance_tags": "1girl, long black hair, blue eyes, school uniform"}'
+    )
+    schema = {
+        "type": "object",
+        "properties": {"appearance_tags": {"type": "string"}},
+        "required": ["appearance_tags"],
+    }
+    for _ in range(_DRAFT_MAX_ATTEMPTS):
+        parts: list[str] = []
+        async for delta in stream_llm_text(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "\n".join(passages)},
+            ],
+            max_tokens=_TAG_MAX_TOKENS,
+            json_schema=schema,
+        ):
+            parts.append(delta)
+        try:
+            data = json.loads(strip_think_tags("".join(parts)))
+        except json.JSONDecodeError:
+            continue
+        tags = _clean_appearance_tags(str(data.get("appearance_tags") or ""))
+        if tags:
+            return tags
+    return ""
 
 
 @router.post("/{story_id}/extract-characters", response_model=StoryJobResponse)
 async def extract_characters(story_id: int) -> dict[str, Any]:
     """
-    本文から登場人物と容姿を抽出し、キャラとして登録してシーンに割り当てる。
-    キャラは物語をまたいで使い回せるよう名前で一意にしており、既に同名で登録済みなら
-    そちらを使う(AIアシスタントのキャラ生成で作った設定もそのまま流用できる)。
+    本文全体から登場人物を洗い出し、容姿の描写があれば対応付けて、登場するシーンへ
+    割り当てる。キャラは物語をまたいで使い回せるよう名前で一意にしているので、
+    既に同名で登録済みならそちらを使う(AIアシスタントのキャラ生成で作った設定も流用できる)。
     """
     conn = get_connection()
     try:
-        scenes = list_story_scenes(conn, story_id)
+        story = get_story(conn, story_id)
     finally:
         conn.close()
 
-    if not scenes:
+    if story is None or not story["scenes"]:
         raise HTTPException(status_code=404, detail="先にシーン分割を実行してください。")
 
     async def runner(job: _Job) -> None:
-        await _run_extract_characters(job, scenes)
+        await _run_extract_characters(job, story)
 
     return _job_response(_start_job(story_id, "characters", runner))
 
 
-async def _run_extract_characters(job: _Job, scenes: list[dict[str, Any]]) -> None:
-    batches = [
-        scenes[i : i + _CHARACTER_BATCH_SIZE] for i in range(0, len(scenes), _CHARACTER_BATCH_SIZE)
-    ]
-    job.total = len(batches)
-    found = 0
+async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
+    scenes = story["scenes"]
+    # 取り込んだ物語は raw_text が原文。ドラフト生成のものは無いのでシーンを繋ぐ。
+    source_text = story.get("raw_text") or "\n".join(scene["draft_text"] for scene in scenes)
 
-    for index, batch in enumerate(batches, start=1):
-        job.message = f"登場人物を抽出中 {index}/{len(batches)}"
-        texts = [scene["draft_text"][:_TAG_TEXT_CHARS] for scene in batch]
+    job.total = 3
+    job.message = "本文から名前の候補を集めています"
+    candidates = _collect_name_candidates(source_text)
+    if not candidates:
+        job.message = (
+            "名前の候補が見つかりませんでした"
+            "(固有名詞が出てこない作品では、キャラを手動で登録してください)"
+        )
+        return
+    job.progress = 1
 
-        parsed = None
-        for _ in range(_DRAFT_MAX_ATTEMPTS):
-            parts: list[str] = []
-            async for delta in stream_llm_text(
-                [
-                    {"role": "system", "content": _character_system_prompt(len(batch))},
-                    {"role": "user", "content": _format_scenes_for_tagging(texts)},
-                ],
-                max_tokens=_TAG_MAX_TOKENS,
-                json_schema=_character_json_schema(len(batch)),
-            ):
-                parts.append(delta)
-            parsed = _parse_characters(strip_think_tags("".join(parts)), len(batch))
-            if parsed is not None:
-                break
+    job.message = f"{len(candidates)}件の候補から人物を判定しています"
+    confirmed = await _confirm_people([c["name"] for c in candidates])
+    people = [c for c in candidates if c["name"] in confirmed]
+    if not people:
+        job.message = "候補から人物を判定できませんでした"
+        return
+    job.progress = 2
 
-        job.progress = index
-        if parsed is None:
-            if _should_give_up(index, found):
-                job.message = f"登場人物を抽出できませんでした({index}バッチ試行)"
-                return
-            continue
+    conn = get_connection()
+    try:
+        described = 0
+        for index, person in enumerate(people, start=1):
+            job.message = f"容姿の描写を探しています {index}/{len(people)}: {person['name']}"
+            passages = _appearance_passages(source_text, person["aliases"])
+            tags = await _describe_appearance(person["name"], passages) if passages else ""
+            if tags:
+                described += 1
+            person["id"] = save_character(conn, person["name"], tags)["id"]
 
-        per_scene, appearances = parsed
-        conn = get_connection()
-        try:
-            ids_by_name: dict[str, int] = {}
-            for name, tags in appearances.items():
-                ids_by_name[name] = save_character(conn, name, tags)["id"]
+        # 名前が本文に出るシーンへ割り当てる。既知の表記を探すだけなのでLLMは不要。
+        assigned = 0
+        for scene in scenes:
+            text = scene["novelai_text"] or scene["draft_text"]
+            character_ids = [
+                person["id"]
+                for person in people
+                if any(alias in text for alias in person["aliases"])
+            ]
+            if character_ids:
+                set_scene_characters(conn, scene["id"], character_ids)
+                assigned += 1
+    finally:
+        conn.close()
 
-            for scene, names in zip(batch, per_scene):
-                character_ids = []
-                for name in names:
-                    if name not in ids_by_name:
-                        # 場面側にだけ出てきた名前も、容姿は後で埋められるよう登録しておく。
-                        ids_by_name[name] = save_character(conn, name, "")["id"]
-                    character_ids.append(ids_by_name[name])
-                if character_ids:
-                    set_scene_characters(conn, scene["id"], character_ids)
-                    found += 1
-        finally:
-            conn.close()
-
-    job.message = f"{found}シーンに登場人物を割り当てました"
-
+    job.progress = 3
+    job.message = (
+        f"{len(people)}人を登録し(容姿の描写が見つかったのは{described}人)、"
+        f"{assigned}/{len(scenes)}シーンに割り当てました"
+    )
 
 @router.get("/characters", response_model=list[CharacterResponse])
 async def get_characters() -> list[dict[str, Any]]:
