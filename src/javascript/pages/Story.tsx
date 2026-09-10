@@ -486,6 +486,24 @@ export default function Story() {
     }
   }
 
+  /** 1ページのコマ数を変える。V5が描くコマ数に対して渡す内容が少ないと、
+   *  余ったコマが中身なしで埋められて同じ構図の反復になる。 */
+  async function changeLayout(panels: number) {
+    if (!story) return
+    setError(null)
+    try {
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/layout`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ panels_per_page: panels }),
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      await loadStory(story.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   async function runExtractCharacters() {
     if (!story) return
     setError(null)
@@ -869,6 +887,22 @@ export default function Story() {
                 onChange={setImageSettings}
                 disabled={busy}
               />
+            )}
+
+            {isWritten && (
+              <div className="story-row">
+                <label>
+                  1ページのコマ数(全{totalPages}ページ)
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={story.panels_per_page}
+                    disabled={busy}
+                    onChange={e => changeLayout(Number(e.target.value))}
+                  />
+                </label>
+              </div>
             )}
 
             {isWritten && (

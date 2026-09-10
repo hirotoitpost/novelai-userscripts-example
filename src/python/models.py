@@ -303,7 +303,13 @@ class StoryDraftCreateRequest(BaseModel):
 class StoryImportRequest(BaseModel):
     text: str = Field(min_length=1)
     n_scenes: int = Field(4, ge=1, le=20)
-    panels_per_page: int = Field(4, ge=1, le=8)
+    panels_per_page: int = Field(8, ge=1, le=12)
+
+
+class StoryLayoutRequest(BaseModel):
+    """1ページのコマ数。変更すると既存シーンのページ割り当ても振り直す。"""
+
+    panels_per_page: int = Field(ge=1, le=12)
 
 
 class StorySplitRequest(BaseModel):

@@ -40,6 +40,7 @@ from ..db import (
     update_scene_tags,
     update_scene_writing,
     update_story_final_image,
+    update_story_layout,
     update_story_scene_count,
     update_story_status,
 )
@@ -53,6 +54,7 @@ from ..models import (
     StoryIllustrateRequest,
     StoryImportRequest,
     StoryJobResponse,
+    StoryLayoutRequest,
     StoryResponse,
     StorySplitRequest,
     StorySummary,
@@ -854,6 +856,20 @@ async def _run_illustrate(
         job.progress = i
 
     job.message = f"{len(targets)}ページの挿絵を生成しました"
+
+
+@router.put("/{story_id}/layout", response_model=StoryResponse)
+async def set_story_layout(story_id: int, req: StoryLayoutRequest) -> StoryResponse:
+    """1ページのコマ数を変更する。既存シーンのページ割り当ても振り直す。"""
+    conn = get_connection()
+    try:
+        if get_story(conn, story_id) is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        update_story_layout(conn, story_id, req.panels_per_page)
+        result = get_story(conn, story_id)
+    finally:
+        conn.close()
+    return _story_response(result)
 
 
 @router.post("/{story_id}/retag", response_model=StoryJobResponse)

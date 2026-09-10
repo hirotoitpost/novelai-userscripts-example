@@ -864,6 +864,22 @@ def delete_image_preset(conn: sqlite3.Connection, preset_id: int) -> None:
     conn.commit()
 
 
+def update_story_layout(conn: sqlite3.Connection, story_id: int, panels_per_page: int) -> None:
+    """
+    1ページのコマ数を変え、既存シーンのページ割り当てを振り直す。
+
+    実機検証: 1216x1728 のページにV5は8コマ以上を描く。4シーンしか渡さないと
+    残りのコマは内容なしで埋められ、同じ構図の反復になった。8シーン渡すと
+    大小のコマが混ざった漫画らしいレイアウトになったため、後から調整できるようにする。
+    """
+    conn.execute("UPDATE stories SET panels_per_page = ? WHERE id = ?", (panels_per_page, story_id))
+    conn.execute(
+        "UPDATE story_scenes SET page_index = scene_index / ? WHERE story_id = ?",
+        (panels_per_page, story_id),
+    )
+    conn.commit()
+
+
 def update_story_scene_count(conn: sqlite3.Connection, story_id: int, n_scenes: int) -> None:
     """分割の結果として決まったシーン数を記録する(取り込み時の値は暫定値のため)。"""
     conn.execute("UPDATE stories SET n_scenes = ? WHERE id = ?", (n_scenes, story_id))
