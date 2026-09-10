@@ -12,7 +12,11 @@ export interface MangaImageSettingsValue {
   negative_prompt: string | null
   /** null ならページごとに別のシード(従来動作)、数値なら全ページ固定。 */
   seed: number | null
+  /** V5 の complexity タグ。公式は通常の画像に high を推奨。 */
+  complexity: Complexity
 }
+
+type Complexity = 'low' | 'medium' | 'high' | 'ultra'
 
 interface ImagePreset {
   id: number
@@ -32,7 +36,10 @@ export const DEFAULT_MANGA_IMAGE_SETTINGS: MangaImageSettingsValue = {
   cfg_rescale: 0.0,
   negative_prompt: null,
   seed: null,
+  complexity: 'high',
 }
+
+const COMPLEXITIES: Complexity[] = ['low', 'medium', 'high', 'ultra']
 
 const MODELS = ['nai-diffusion-5-full', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated']
 const SAMPLERS = [
@@ -111,7 +118,8 @@ export default function MangaImageSettings({ apiOrigin, value, onChange, disable
             onChange={e => {
               const preset = presets.find(p => String(p.id) === e.target.value)
               if (preset) {
-                onChange(preset.settings)
+                // complexity 追加前に保存したプリセットには欠けているので既定値で補う。
+                onChange({ ...DEFAULT_MANGA_IMAGE_SETTINGS, ...preset.settings })
                 setPresetName(preset.name)
               }
             }}
@@ -184,6 +192,18 @@ export default function MangaImageSettings({ apiOrigin, value, onChange, disable
           >
             {NOISE_SCHEDULES.map(n => (
               <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          複雑さ(V5)
+          <select
+            value={value.complexity}
+            disabled={disabled}
+            onChange={e => set('complexity', e.target.value as Complexity)}
+          >
+            {COMPLEXITIES.map(c => (
+              <option key={c} value={c}>{c}</option>
             ))}
           </select>
         </label>
