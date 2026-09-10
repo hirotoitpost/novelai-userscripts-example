@@ -315,6 +315,7 @@ class StoryPageStats(BaseModel):
     scenes_with_characters: int
     characters: list[str]
     generated: bool
+    seed: Optional[int] = None
 
 
 class StoryLayoutRequest(BaseModel):
@@ -454,4 +455,5 @@ class MangaPageResponse(BaseModel):
     page_index: int
     image_path: str
     scene_ids: list[int]
+    seed: Optional[int] = None
     created_at: str

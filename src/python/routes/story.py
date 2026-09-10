@@ -850,7 +850,12 @@ async def _run_illustrate(
         conn = get_connection()
         try:
             create_manga_page(
-                conn, story_id, page_index, f"outputs/manga/{filename}", [s["id"] for s in page_scenes]
+                conn,
+                story_id,
+                page_index,
+                f"outputs/manga/{filename}",
+                [s["id"] for s in page_scenes],
+                seed=seed,
             )
             update_story_status(conn, story_id, "illustrated")
         finally:
@@ -881,7 +886,7 @@ async def get_page_stats(story_id: int) -> list[dict[str, Any]]:
         if not scenes:
             raise HTTPException(status_code=404, detail="story not found")
         by_scene = characters_by_scene(conn, story_id)
-        generated = {page["page_index"] for page in list_manga_pages(conn, story_id)}
+        seeds = {page["page_index"]: page.get("seed") for page in list_manga_pages(conn, story_id)}
     finally:
         conn.close()
 
@@ -907,7 +912,8 @@ async def get_page_stats(story_id: int) -> list[dict[str, Any]]:
                 ),
                 "scenes_with_characters": sum(1 for s in page_scenes if by_scene.get(s["id"])),
                 "characters": names,
-                "generated": page_index in generated,
+                "generated": page_index in seeds,
+                "seed": seeds.get(page_index),
             }
         )
     return result

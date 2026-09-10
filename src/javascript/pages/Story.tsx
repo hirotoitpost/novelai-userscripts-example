@@ -48,6 +48,7 @@ interface PageStats {
   scenes_with_characters: number
   characters: string[]
   generated: boolean
+  seed: number | null
 }
 
 interface MangaPage {
@@ -569,6 +570,44 @@ export default function Story() {
     }
   }
 
+  /**
+   * 1ページだけシードを変えて引き直す。
+   * 同じ指標のページでもコマ数や構図の当たり外れが大きく、シードの影響が支配的だった
+   * (実機: 同条件のページが12コマで良好、32コマで反復、と割れた)。
+   */
+  async function regeneratePage(pageIndex: number) {
+    if (!story) return
+    setError(null)
+    const controller = new AbortController()
+    abortRef.current = controller
+    const seed = Math.floor(Math.random() * 4294967296)
+    try {
+      setStepLabel(`P${pageIndex + 1}をシード${seed}で再生成中...`)
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/illustrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          page_from: pageIndex,
+          page_to: pageIndex,
+          settings: { ...imageSettings, seed },
+        }),
+        signal: controller.signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      await pollJob(story.id, controller.signal)
+      await loadStory(story.id)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setError('キャンセルしました。')
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setStepLabel('')
+      abortRef.current = null
+    }
+  }
+
   async function runIllustrateAndExport() {
     if (!story) return
     setError(null)
@@ -968,7 +1007,18 @@ export default function Story() {
                       </span>
                       <span className="story-history-meta">
                         {stat.characters.join(', ') || '登場人物の割り当てなし'}
+                        {stat.seed !== null && ` ・ seed ${stat.seed}`}
                       </span>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={e => {
+                          e.stopPropagation()
+                          void regeneratePage(stat.page_index)
+                        }}
+                      >
+                        {stat.generated ? '別シードで再生成' : 'このページを生成'}
+                      </button>
                     </li>
                   ))}
                 </ul>

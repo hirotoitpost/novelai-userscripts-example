@@ -205,6 +205,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
+    _migrate_manga_pages(conn)
 
 
 _STORIES_EXTRA_COLUMNS = {
@@ -215,6 +216,18 @@ _STORIES_EXTRA_COLUMNS = {
     # /split で分割済みになった後もそのまま残す(参照用)。
     "raw_text": "TEXT",
 }
+
+
+# 生成に使ったシード。良いページが出たときに引き直しの当たりを再現できるようにする。
+_MANGA_PAGES_EXTRA_COLUMNS = {"seed": "INTEGER"}
+
+
+def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(manga_pages)")}
+    for column, column_type in _MANGA_PAGES_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE manga_pages ADD COLUMN {column} {column_type}")
+    conn.commit()
 
 
 def _migrate_stories(conn: sqlite3.Connection) -> None:
@@ -900,18 +913,23 @@ def list_stories(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, An
 
 
 def create_manga_page(
-    conn: sqlite3.Connection, story_id: int, page_index: int, image_path: str, scene_ids: list[int]
+    conn: sqlite3.Connection,
+    story_id: int,
+    page_index: int,
+    image_path: str,
+    scene_ids: list[int],
+    seed: int | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     row = conn.execute(
         """
-        INSERT INTO manga_pages (story_id, page_index, image_path, scene_ids, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO manga_pages (story_id, page_index, image_path, scene_ids, seed, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (story_id, page_index) DO UPDATE SET image_path = excluded.image_path,
-            scene_ids = excluded.scene_ids, created_at = excluded.created_at
-        RETURNING id, story_id, page_index, image_path, scene_ids, created_at
+            scene_ids = excluded.scene_ids, seed = excluded.seed, created_at = excluded.created_at
+        RETURNING id, story_id, page_index, image_path, scene_ids, seed, created_at
         """,
-        (story_id, page_index, image_path, json.dumps(scene_ids), now),
+        (story_id, page_index, image_path, json.dumps(scene_ids), seed, now),
     ).fetchone()
     conn.commit()
     result = dict(row)
