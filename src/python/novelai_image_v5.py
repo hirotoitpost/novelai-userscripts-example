@@ -27,9 +27,12 @@ _IMAGE_API_ADDRESS = "https://image.novelai.net"
 
 V5_MODEL = "nai-diffusion-5-full"
 
+# 実機検証: ポジティブに monochrome だけを入れてもセピア調で出てくることがあったため、
+# 色をネガティブ側からも外している。
 _DEFAULT_NEGATIVE_PROMPT = (
     ", lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, "
     "multiple views, very displeasing, too many watermarks, negative space, blank page, "
+    "sepia, colored, watercolor, "
 )
 
 # 1コマに載せるセリフの上限文字数。
@@ -64,7 +67,7 @@ def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
     # セリフは吹き出しの素材として両方渡す。地の文は渡さない(_panel_dialogue 参照)。
     n = len(panels)
     layout = f"{n}-panel comic layout" if n > 1 else "single panel manga illustration"
-    parts = [f"manga page, monochrome, comic panels with speech bubbles, {layout}"]
+    parts = [f"manga page, monochrome, greyscale, comic panels with speech bubbles, {layout}"]
 
     for i, panel in enumerate(panels, start=1):
         tags = panel.get("draft_prompt_tags", "").strip()
