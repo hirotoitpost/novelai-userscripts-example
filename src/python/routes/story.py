@@ -840,6 +840,7 @@ async def _run_illustrate(
             sampler=settings.sampler,
             noise_schedule=settings.noise_schedule,
             cfg_rescale=settings.cfg_rescale,
+            complexity=settings.complexity,
             seed=seed,
             **negative,
         )

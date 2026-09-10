@@ -354,6 +354,8 @@ class MangaImageSettings(BaseModel):
     noise_schedule: NoiseScheduleLiteral = "karras"
     cfg_rescale: float = Field(default=0.0, ge=0.0, le=1.0)
     negative_prompt: Optional[str] = None
+    # V5の新タグ。公式は「普通に良い絵なら high complexity」を推奨している。
+    complexity: Optional[Literal["low", "medium", "high", "ultra"]] = "high"
     # 未指定ならページごとに別のシードを使う(従来動作)。指定すると全ページで固定する。
     seed: Optional[int] = Field(default=None, ge=0, le=4294967295)
 

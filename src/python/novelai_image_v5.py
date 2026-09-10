@@ -35,49 +35,60 @@ _DEFAULT_NEGATIVE_PROMPT = (
     "sepia, colored, watercolor, "
 )
 
-# 1コマに載せるセリフの上限文字数。
+# セリフ1行の上限文字数と、1ページに載せる行数の上限。
 _MAX_PANEL_TEXT_CHARS = 100
+_MAX_TEXT_LINES = 12
 
 # ページ別の指標(routes/story.py)でも同じ定義を使うため公開している。
 DIALOGUE_RE = re.compile(r"[「『]([^」』]*)[」』]")
 
 
-def _panel_dialogue(text: str) -> str:
+def _panel_dialogue_lines(text: str) -> list[str]:
     """
     コマに描かせるセリフだけを取り出す。地の文は使わない。
 
     実機検証: 1コマ200字の地の文を4コマ分載せるとプロンプトが約1,500字になり、
     その大半が日本語の散文になる。すると絵の指示である英語タグもコマ割り指示も
-    埋もれてしまい、4コマ指定が8コマで描かれ、全コマが同じ構図(同じバストショット)に
-    なった。セリフだけに絞るとタグが相対的に効くようになる。
+    埋もれてしまい、4コマ指定が8コマで描かれ、全コマが同じ構図になった。
     """
     lines = [match.group(1).strip() for match in DIALOGUE_RE.finditer(text)]
-    return " ".join(line for line in lines if line)[:_MAX_PANEL_TEXT_CHARS]
+    return [line[:_MAX_PANEL_TEXT_CHARS] for line in lines if line]
 
 
-def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
+def build_manga_page_prompt(panels: list[dict[str, Any]], complexity: str | None = None) -> str:
     """
-    シーン(ページ内の各コマ)のリストから、V5に渡す「コマ割り指示付き」自然言語プロンプトを組み立てる。
+    シーン(ページ内の各コマ)のリストから、V5に渡す「コマ割り指示付き」プロンプトを組み立てる。
 
     panels: [{"draft_text": str, "draft_prompt_tags": str}, ...] (ページに含まれる順)
-    """
 
-    # 実機検証: セリフをコマ内容として渡すと、V5はそれを実際に読める吹き出しとして
-    # 描画してくれる("no text"指定は逆効果だった)。そのためタグは絵柄指定、
-    # セリフは吹き出しの素材として両方渡す。地の文は渡さない(_panel_dialogue 参照)。
+    セリフは公式が案内する "Text:" ブロックとしてプロンプト末尾に置く。V4.5の
+    リリースノートいわく「"Text:" はプロンプトの最後に来る必要がある。そうでないと、
+    後に続くタグや自然言語部分がそのまま画像に描かれる恐れがある」。以前はセリフを
+    コマ指定の中に混ぜ、その後ろに品質タグを置いていた(まさに警告されている形)。
+    引用符で囲むだけでこのブロックを用意するのは公式フロントエンドの機能であり、
+    このアプリはAPIを直接叩くため自前で組み立てる必要がある。
+    """
     n = len(panels)
     layout = f"{n}-panel comic layout" if n > 1 else "single panel manga illustration"
-    parts = [f"manga page, monochrome, greyscale, comic panels with speech bubbles, {layout}"]
+    parts = [f"manga page, monochrome, greyscale, comic panels with speech bubbles, {layout}, text"]
+    if complexity:
+        parts.append(f"{complexity} complexity")
 
     for i, panel in enumerate(panels, start=1):
         tags = panel.get("draft_prompt_tags", "").strip()
-        text = _panel_dialogue(panel.get("draft_text", ""))
-        description = ", ".join(d for d in (tags, text) if d)
-        if description:
-            parts.append(f"panel {i}: {description}")
+        if tags:
+            parts.append(f"panel {i}: {tags}")
 
     parts.append("very aesthetic, masterpiece")
-    return ", ".join(parts)
+    prompt = ", ".join(parts)
+
+    dialogue: list[str] = []
+    for panel in panels:
+        dialogue.extend(_panel_dialogue_lines(panel.get("draft_text", "")))
+    if dialogue:
+        # 複数のテキストは空行で区切る(公式の指定方法)。
+        prompt += ". Text: " + "\n\n".join(dialogue[:_MAX_TEXT_LINES])
+    return prompt
 
 
 # V5に渡せるキャラクター指定の上限。1ページに複数コマが入るため登場人物が増えがちだが、
@@ -92,14 +103,19 @@ def _build_character_prompts(
     """
     (characterPrompts, char_captions) を組み立てる。V4形式のリクエストでは同じ内容を
     この2箇所に入れる必要がある(SDKのCharacter指定が生成するボディと同じ形)。
-    位置は指定せず中央固定にしている(コマ割りはbase側のプロンプトで指示しているため)。
+
+    以前は全員を中央(0.5, 0.5)に置いて use_coords を切っていたが、V5のリリースノートは
+    位置指定について「モデルは設定した位置に忠実に従う」「コマ割りの誘導に使える」
+    「キャラクターの一貫性を高め、特徴の混ざりを抑える」と明記している。そこで横方向に
+    均等に振り分けて渡す。
     """
-    center = {"x": 0.5, "y": 0.5}
+    tags = character_tags[:_MAX_CHARACTER_PROMPTS]
     prompts: list[dict[str, Any]] = []
     captions: list[dict[str, Any]] = []
-    for tags in character_tags[:_MAX_CHARACTER_PROMPTS]:
-        prompts.append({"prompt": tags, "uc": "", "center": center, "enabled": True})
-        captions.append({"char_caption": tags, "centers": [center]})
+    for index, tag in enumerate(tags):
+        center = {"x": round((index + 1) / (len(tags) + 1), 3), "y": 0.5}
+        prompts.append({"prompt": tag, "uc": "", "center": center, "enabled": True})
+        captions.append({"char_caption": tag, "centers": [center]})
     return prompts, captions
 
 
@@ -132,7 +148,7 @@ def _build_v5_body(
         "qualityToggle": True,
         "v4_prompt": {
             "caption": {"base_caption": prompt, "char_captions": char_captions},
-            "use_coords": False,
+            "use_coords": True,
             "use_order": True,
         },
         "v4_negative_prompt": {
@@ -156,7 +172,7 @@ def _build_v5_body(
         "normalize_reference_strength_multiple": False,
         "characterPrompts": character_prompts,
         "params_version": 4,
-        "use_coords": False,
+        "use_coords": True,
     }
     return {
         "action": "generate",
@@ -182,6 +198,7 @@ async def generate_manga_page(
     seed: int = 0,
     negative_prompt: str = _DEFAULT_NEGATIVE_PROMPT,
     character_tags: list[str] | None = None,
+    complexity: str | None = None,
 ) -> bytes:
     """
     panelsからコマ割りプロンプトを組み立て、1枚の漫画ページ画像(PNGバイト列)を生成する。
@@ -190,7 +207,7 @@ async def generate_manga_page(
         リクエスト終了時に閉じられるクライアントではなくキーだけを受け取る。
     """
 
-    prompt = build_manga_page_prompt(panels)
+    prompt = build_manga_page_prompt(panels, complexity)
     body = _build_v5_body(
         prompt,
         negative_prompt,
