@@ -17,6 +17,7 @@ V5のコマ割り機能に専用APIパラメータは無く、通常の /ai/gene
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from typing import Any
 
@@ -31,8 +32,23 @@ _DEFAULT_NEGATIVE_PROMPT = (
     "multiple views, very displeasing, too many watermarks, negative space, blank page, "
 )
 
-# 1コマの説明にそのまま載せる本文の上限文字数。
-_MAX_PANEL_TEXT_CHARS = 200
+# 1コマに載せるセリフの上限文字数。
+_MAX_PANEL_TEXT_CHARS = 100
+
+_DIALOGUE_RE = re.compile(r"[「『]([^」』]*)[」』]")
+
+
+def _panel_dialogue(text: str) -> str:
+    """
+    コマに描かせるセリフだけを取り出す。地の文は使わない。
+
+    実機検証: 1コマ200字の地の文を4コマ分載せるとプロンプトが約1,500字になり、
+    その大半が日本語の散文になる。すると絵の指示である英語タグもコマ割り指示も
+    埋もれてしまい、4コマ指定が8コマで描かれ、全コマが同じ構図(同じバストショット)に
+    なった。セリフだけに絞るとタグが相対的に効くようになる。
+    """
+    lines = [match.group(1).strip() for match in _DIALOGUE_RE.finditer(text)]
+    return " ".join(line for line in lines if line)[:_MAX_PANEL_TEXT_CHARS]
 
 
 def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
@@ -42,19 +58,16 @@ def build_manga_page_prompt(panels: list[dict[str, Any]]) -> str:
     panels: [{"draft_text": str, "draft_prompt_tags": str}, ...] (ページに含まれる順)
     """
 
-    # 実機検証: novelai_text(セリフを含む本文)をそのままコマ内容として渡すと、
-    # V5はそのセリフを実際に読める吹き出しとして描画してくれる("no text"指定は逆効果だった)。
-    # そのためタグは絵柄指定、本文はセリフ素材として両方渡す。
+    # 実機検証: セリフをコマ内容として渡すと、V5はそれを実際に読める吹き出しとして
+    # 描画してくれる("no text"指定は逆効果だった)。そのためタグは絵柄指定、
+    # セリフは吹き出しの素材として両方渡す。地の文は渡さない(_panel_dialogue 参照)。
     n = len(panels)
     layout = f"{n}-panel comic layout" if n > 1 else "single panel manga illustration"
     parts = [f"manga page, monochrome, comic panels with speech bubbles, {layout}"]
 
     for i, panel in enumerate(panels, start=1):
         tags = panel.get("draft_prompt_tags", "").strip()
-        # 本文はセリフ素材として渡すだけなので、長いシーンをそのまま載せない。
-        # 分割条件によっては1シーンが数千字になり得るが、その長さのプロンプトは
-        # トークン上限を超えて後続のコマ指定ごと無視されてしまう。
-        text = panel.get("draft_text", "").strip()[:_MAX_PANEL_TEXT_CHARS]
+        text = _panel_dialogue(panel.get("draft_text", ""))
         description = ", ".join(d for d in (tags, text) if d)
         if description:
             parts.append(f"panel {i}: {description}")
