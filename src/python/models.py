@@ -359,6 +359,8 @@ class MangaImageSettings(BaseModel):
     complexity: Optional[Literal["low", "medium", "high", "ultra"]] = "high"
     # 未指定ならページごとに別のシードを使う(従来動作)。指定すると全ページで固定する。
     seed: Optional[int] = Field(default=None, ge=0, le=4294967295)
+    # 画像生成ページとプリセットを共用するために保持する。挿絵生成(V5独自ボディ)では未使用。
+    variety_boost: bool = False
 
 
 class StoryIllustrateRequest(BaseModel):

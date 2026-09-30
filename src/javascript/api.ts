@@ -38,7 +38,34 @@ export interface GenerateRequest {
   quality: boolean
   uc_preset: string
   n_samples: number
+  sampler?: string
+  noise_schedule?: string
+  cfg_rescale?: number
+  variety_boost?: boolean
   i2i?: I2iRequest
+}
+
+/** /api/image/presets の settings。挿絵パネル(MangaImageSettings)と共用。 */
+export interface ImagePresetSettings {
+  model: string
+  width: number
+  height: number
+  steps: number
+  scale: number
+  sampler: string
+  noise_schedule: string
+  cfg_rescale: number
+  negative_prompt: string | null
+  complexity?: string | null
+  seed: number | null
+  variety_boost?: boolean
+}
+
+export interface ImagePreset {
+  id: number
+  name: string
+  settings: ImagePresetSettings
+  created_at: string
 }
 
 export interface GenerateResponse {
