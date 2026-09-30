@@ -119,7 +119,16 @@ export default function ImageGenerate() {
 
   // プロンプトチャンク
   const promptRef                     = useRef<HTMLTextAreaElement>(null)
+  const negPromptRef                  = useRef<HTMLTextAreaElement>(null)
   const [chunksOpen,  setChunksOpen]  = useState(false)
+  // チャンクのボタンを押すと textarea のフォーカスが外れるので、最後のカーソル位置を覚えておく。
+  const caretRef                      = useRef<{ field: 'prompt' | 'neg'; start: number; end: number } | null>(null)
+  const [insertTarget, setInsertTarget] = useState<'prompt' | 'neg'>('prompt')
+
+  const rememberCaret = (field: 'prompt' | 'neg', ta: HTMLTextAreaElement) => {
+    caretRef.current = { field, start: ta.selectionStart, end: ta.selectionEnd }
+    if (field !== insertTarget) setInsertTarget(field)
+  }
 
   // AI設定パネルの開閉
   const [aiOpen,       setAiOpen]       = useState(true)
@@ -166,20 +175,31 @@ export default function ImageGenerate() {
 
   useEffect(() => { loadPresets() }, [loadPresets])
 
-  /** カーソル位置(未フォーカスなら末尾)にチャンクを挿入し、前後をカンマで区切る。 */
+  /**
+   * 最後にカーソルがあった欄(プロンプト/ネガティブ)のカーソル位置にチャンクを挿入する。
+   * 範囲選択中なら選択部分を置き換え、まだどちらにも触れていなければプロンプト末尾に足す。
+   * 前後のタグとはカンマで区切る。
+   */
   const insertChunk = (text: string) => {
-    const ta  = promptRef.current
-    const pos = ta ? ta.selectionEnd : prompt.length
-    const before = prompt.slice(0, pos)
-    const after  = prompt.slice(pos)
-    const lead   = before.trim() && !/,\s*$/.test(before) ? ', ' : ''
-    const trail  = after.trim() && !/^\s*,/.test(after) ? ', ' : ''
-    const next   = before + lead + text + trail + after
-    setPrompt(next)
+    const field   = caretRef.current?.field ?? 'prompt'
+    const value   = field === 'prompt' ? prompt : negPrompt
+    const setter  = field === 'prompt' ? setPrompt : setNegPrompt
+    const ref     = field === 'prompt' ? promptRef : negPromptRef
+    const start   = Math.min(caretRef.current?.start ?? value.length, value.length)
+    const end     = Math.min(caretRef.current?.end   ?? value.length, value.length)
+    const before  = value.slice(0, start)
+    const after   = value.slice(end)
+    // 既にあるカンマ・空白は活かし、足りない分だけ補って "a, X, b" の形にそろえる。
+    const lead  = !before.trim() ? '' : /,\s*$/.test(before) ? (/\s$/.test(before) ? '' : ' ') : ', '
+    const trail = !after.trim()  ? '' : /^\s*,/.test(after)  ? '' : (/^\s/.test(after) ? ',' : ', ')
+    setter(before + lead + text + trail + after)
+
+    // 次のチャンクも続けて同じ場所へ入るよう、挿入した直後にカーソルを進める。
     const caret = (before + lead + text).length
+    caretRef.current = { field, start: caret, end: caret }
     requestAnimationFrame(() => {
-      promptRef.current?.focus()
-      promptRef.current?.setSelectionRange(caret, caret)
+      ref.current?.focus()
+      ref.current?.setSelectionRange(caret, caret)
     })
   }
 
@@ -456,7 +476,8 @@ export default function ImageGenerate() {
               id="ig-prompt"
               className="ig-textarea ig-textarea--prompt"
               value={prompt}
-              onChange={e => setPrompt(e.target.value)}
+              onChange={e => { setPrompt(e.target.value); rememberCaret('prompt', e.target) }}
+              onSelect={e => rememberCaret('prompt', e.currentTarget)}
               onKeyDown={handleKeyDown}
               placeholder="1girl, masterpiece, best quality, ..."
               rows={5}
@@ -473,17 +494,26 @@ export default function ImageGenerate() {
             >
               プロンプトチャンク {chunksOpen ? '▼' : '▶'}
             </button>
-            {chunksOpen && <ChunkPicker onInsert={insertChunk} />}
+            {chunksOpen && (
+              <>
+                <p className="ig-chunk-note">
+                  挿入先: <strong>{insertTarget === 'prompt' ? 'プロンプト' : 'ネガティブプロンプト'}</strong> のカーソル位置
+                </p>
+                <ChunkPicker onInsert={insertChunk} />
+              </>
+            )}
           </section>
 
           {/* Negative prompt */}
           <section className="ig-section">
             <label className="ig-label" htmlFor="ig-neg-prompt">ネガティブプロンプト</label>
             <textarea
+              ref={negPromptRef}
               id="ig-neg-prompt"
               className="ig-textarea ig-textarea--neg"
               value={negPrompt}
-              onChange={e => setNegPrompt(e.target.value)}
+              onChange={e => { setNegPrompt(e.target.value); rememberCaret('neg', e.target) }}
+              onSelect={e => rememberCaret('neg', e.currentTarget)}
               placeholder="lowres, bad anatomy, ..."
               rows={3}
             />
