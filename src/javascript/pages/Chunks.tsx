@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { useChunkSync } from '../hooks/useChunkSync'
 import './Chunks.css'
 
 interface Situation {
@@ -25,17 +25,14 @@ interface DbChunk {
   exclusive_groups: ExclusiveGroup[]
 }
 
-const KEY_STORAGE = 'nai_encryption_key'
-
 export default function Chunks() {
-  const { token } = useAuth()
   const navigate = useNavigate()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [encryptionKey, setEncryptionKey] = useState<string | null>(() =>
-    localStorage.getItem(KEY_STORAGE)
-  )
+  const {
+    encryptionKey, computeKey: computeEncryptionKey, forgetKey, sync, loading, error,
+  } = useChunkSync()
 
   const [chunks, setChunks] = useState<DbChunk[]>([])
   const [situations, setSituations] = useState<Situation[]>([])
@@ -48,8 +45,6 @@ export default function Chunks() {
   const [categoryFilter, setCategoryFilter] = useState('all') // 'all' | containerId
   const [groupFilter, setGroupFilter] = useState('all') // 'all' | groupId
 
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
 
   const loadChunks = async () => {
     const res = await fetch('/api/chunks/imported')
@@ -76,48 +71,11 @@ export default function Chunks() {
   }, [])
 
   const computeKey = async () => {
-    setError(null)
-    setLoading(true)
-    try {
-      const res = await fetch('/api/chunks/encryption-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail ?? '鍵の計算に失敗しました')
-      localStorage.setItem(KEY_STORAGE, data.encryption_key)
-      setEncryptionKey(data.encryption_key)
-      setPassword('')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const forgetKey = () => {
-    localStorage.removeItem(KEY_STORAGE)
-    setEncryptionKey(null)
+    if (await computeEncryptionKey(email, password)) setPassword('')
   }
 
   const syncFromNovelAI = async () => {
-    if (!token || !encryptionKey) return
-    setError(null)
-    setLoading(true)
-    try {
-      const res = await fetch(
-        `/api/chunks/promptmacros?encryption_key=${encodeURIComponent(encryptionKey)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      )
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail ?? 'チャンクの取得に失敗しました')
-      await loadChunks()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
+    if ((await sync()) !== null) await loadChunks()
   }
 
   const addSituation = async () => {

@@ -450,6 +450,31 @@
   text-overflow: ellipsis;
 }
 
+.ig-chunk-import {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.ig-chunk-import-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.ig-chunk-import-row .ig-preset-btn { padding: 0.35rem 0.8rem; }
+.ig-chunk-import-row .ig-icon-btn { font-size: 0.75rem; }
+
+.ig-chunk-key-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+}
+.ig-chunk-key-form .ig-chunk-note { margin: 0; }
+.ig-chunk-key-form .ig-preset-btn { padding: 0.4rem 0.8rem; align-self: flex-end; }
+
 .ig-chunk-note {
   margin: 0.4rem 0 0;
   font-size: 0.75rem;
