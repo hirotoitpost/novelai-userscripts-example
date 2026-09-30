@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, KeyboardEvent, ReactNode } fr
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import ChunkPicker from '../components/ChunkPicker'
 import {
   apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
   ImagePreset, ImagePresetSettings,
@@ -116,6 +117,10 @@ export default function ImageGenerate() {
   const [cfgRescale,    setCfgRescale]    = useLocalStorage('nai_gen_cfg_rescale',    AI_DEFAULTS.cfgRescale)
   const [varietyBoost,  setVarietyBoost]  = useLocalStorage('nai_gen_variety_boost',  AI_DEFAULTS.varietyBoost)
 
+  // プロンプトチャンク
+  const promptRef                     = useRef<HTMLTextAreaElement>(null)
+  const [chunksOpen,  setChunksOpen]  = useState(false)
+
   // AI設定パネルの開閉
   const [aiOpen,       setAiOpen]       = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(true)
@@ -160,6 +165,23 @@ export default function ImageGenerate() {
   }, [token])
 
   useEffect(() => { loadPresets() }, [loadPresets])
+
+  /** カーソル位置(未フォーカスなら末尾)にチャンクを挿入し、前後をカンマで区切る。 */
+  const insertChunk = (text: string) => {
+    const ta  = promptRef.current
+    const pos = ta ? ta.selectionEnd : prompt.length
+    const before = prompt.slice(0, pos)
+    const after  = prompt.slice(pos)
+    const lead   = before.trim() && !/,\s*$/.test(before) ? ', ' : ''
+    const trail  = after.trim() && !/^\s*,/.test(after) ? ', ' : ''
+    const next   = before + lead + text + trail + after
+    setPrompt(next)
+    const caret = (before + lead + text).length
+    requestAnimationFrame(() => {
+      promptRef.current?.focus()
+      promptRef.current?.setSelectionRange(caret, caret)
+    })
+  }
 
   const resetAiSettings = () => {
     setSteps(AI_DEFAULTS.steps)
@@ -430,6 +452,7 @@ export default function ImageGenerate() {
               </button>
             </div>
             <textarea
+              ref={promptRef}
               id="ig-prompt"
               className="ig-textarea ig-textarea--prompt"
               value={prompt}
@@ -438,6 +461,19 @@ export default function ImageGenerate() {
               placeholder="1girl, masterpiece, best quality, ..."
               rows={5}
             />
+          </section>
+
+          {/* Prompt chunks */}
+          <section className="ig-section">
+            <button
+              type="button"
+              className="ig-advanced-toggle"
+              onClick={() => setChunksOpen(!chunksOpen)}
+              aria-expanded={chunksOpen}
+            >
+              プロンプトチャンク {chunksOpen ? '▼' : '▶'}
+            </button>
+            {chunksOpen && <ChunkPicker onInsert={insertChunk} />}
           </section>
 
           {/* Negative prompt */}
