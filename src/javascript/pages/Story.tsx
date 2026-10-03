@@ -7,6 +7,8 @@ import MangaImageSettings, {
   MangaImageSettingsValue,
 } from '../components/MangaImageSettings'
 import StoryCharacters, { SceneCharacter } from '../components/StoryCharacters'
+import MangaV2Studio from '../components/MangaV2Studio'
+import { useLocalStorage } from '../hooks/useLocalStorage'
 import './Story.css'
 
 interface StoryScene {
@@ -18,6 +20,8 @@ interface StoryScene {
   draft_prompt_tags: string
   seed_cue: string | null
   novelai_text: string | null
+  /** 漫画v2の効果音。null は未設定。 */
+  sfx: string[] | null
   characters: SceneCharacter[]
 }
 
@@ -221,6 +225,8 @@ export default function Story() {
   const [story, setStory] = useState<StoryData | null>(null)
   const [mangaPages, setMangaPages] = useState<MangaPage[]>([])
   const [pageStats, setPageStats] = useState<PageStats[]>([])
+  // v1: V5にコマ割り込みのページを描かせる / v2: コマごとに描かせ、コマ割り・吹き出しは自前
+  const [mangaMode, setMangaMode] = useLocalStorage<'v1' | 'v2'>('nai_story_manga_mode', 'v2')
 
   const [stepLabel, setStepLabel] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -657,6 +663,26 @@ export default function Story() {
     }
   }
 
+  /** 進捗表示・キャンセル・エラー表示を共通化して処理を走らせる(漫画v2から使う)。 */
+  async function runTask(label: string, task: (signal: AbortSignal) => Promise<void>) {
+    setError(null)
+    const controller = new AbortController()
+    abortRef.current = controller
+    try {
+      setStepLabel(label)
+      await task(controller.signal)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setError('キャンセルしました。')
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setStepLabel('')
+      abortRef.current = null
+    }
+  }
+
   function reset() {
     setStory(null)
     setMangaPages([])
@@ -969,6 +995,44 @@ export default function Story() {
             )}
 
             {isWritten && (
+              <div className="mv2-mode" role="radiogroup" aria-label="漫画の作り方">
+                <button
+                  type="button"
+                  className={mangaMode === 'v2' ? 'mv2-mode-active' : 'story-secondary'}
+                  aria-pressed={mangaMode === 'v2'}
+                  disabled={busy}
+                  onClick={() => setMangaMode('v2')}
+                >
+                  v2: コマごとに生成(コマ割り・吹き出しは自前)
+                </button>
+                <button
+                  type="button"
+                  className={mangaMode === 'v1' ? 'mv2-mode-active' : 'story-secondary'}
+                  aria-pressed={mangaMode === 'v1'}
+                  disabled={busy}
+                  onClick={() => setMangaMode('v1')}
+                >
+                  v1: V5でページごと生成
+                </button>
+              </div>
+            )}
+
+            {isWritten && mangaMode === 'v2' && (
+              <MangaV2Studio
+                apiOrigin={API_ORIGIN}
+                storyId={story.id}
+                scenes={story.scenes}
+                imageSettings={imageSettings}
+                token={token}
+                busy={busy}
+                runTask={runTask}
+                pollJob={signal => pollJob(story.id, signal)}
+                onChanged={() => loadStory(story.id)}
+                fileUrl={mangaFileUrl}
+              />
+            )}
+
+            {isWritten && mangaMode === 'v1' && (
               <div className="story-row">
                 <label>
                   1ページのコマ数(全{totalPages}ページ)
@@ -984,7 +1048,7 @@ export default function Story() {
               </div>
             )}
 
-            {isWritten && (
+            {isWritten && mangaMode === 'v1' && (
               <div className="story-row">
                 <label>
                   挿絵の開始ページ
@@ -1009,7 +1073,7 @@ export default function Story() {
               </div>
             )}
 
-            {isWritten && pageStats.length > 0 && (
+            {isWritten && mangaMode === 'v1' && pageStats.length > 0 && (
               <details className="story-characters-block">
                 <summary>ページ別の指標（生成するページを選ぶ目安）</summary>
                 <p className="story-muted">
@@ -1074,7 +1138,7 @@ export default function Story() {
                   登場人物を抽出
                 </button>
               )}
-              {isWritten && (
+              {isWritten && mangaMode === 'v1' && (
                 <button type="button" onClick={runIllustrateAndExport} disabled={busy}>
                   {mangaPages.length > 0 ? '挿絵を再生成 → 漫画化' : '挿絵を生成 → 漫画化'}
                 </button>
@@ -1092,7 +1156,7 @@ export default function Story() {
           </section>
         )}
 
-        {story && mangaPages.length > 0 && (
+        {story && mangaMode === 'v1' && mangaPages.length > 0 && (
           <section className="story-section">
             <h2>ページごとの挿絵</h2>
             <div className="story-pages-grid">
