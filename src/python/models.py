@@ -330,6 +330,9 @@ class StorySplitRequest(BaseModel):
 
     max_paragraphs: int = Field(6, ge=1, le=100)
     max_chars: int = Field(300, ge=50, le=5000)
+    # テストや事前確認用に、冒頭のこのシーン数だけを分割・タグ付けする。未指定なら最後まで。
+    # 残りは後でもう一度 /split を呼ぶと続きから分割される。
+    max_scenes: int | None = Field(None, ge=1, le=1000)
 
 
 # 挿絵(コマ割りページ)生成で選べるモデル。V5はこのリポジトリ独自のリクエスト組み立てで
@@ -442,6 +445,8 @@ class StoryResponse(BaseModel):
     created_at: str
     final_image_path: str | None = None
     raw_text: str | None = None
+    # raw_text のうち、まだシーンへ分割していない残りの文字数(冒頭だけ分割した場合に正)
+    unsplit_chars: int = 0
     scenes: list[StorySceneResponse]
 
 

@@ -29,6 +29,8 @@ interface StoryData {
   status: string
   final_image_path: string | null
   raw_text: string | null
+  // raw_text のうちまだシーンへ分割していない残りの文字数(冒頭だけ分割した場合に正)
+  unsplit_chars: number
   scenes: StoryScene[]
 }
 
@@ -196,6 +198,8 @@ export default function Story() {
   // シーン分割の条件。シーン数はこの上限から結果として決まる。
   const [maxParagraphs, setMaxParagraphs] = useState(6)
   const [maxChars, setMaxChars] = useState(300)
+  // テスト・事前確認用に冒頭だけ分割・タグ付けするシーン数。0なら最後まで。
+  const [headScenes, setHeadScenes] = useState(0)
   // 挿絵を生成するページ範囲(表示は1始まり)。
   const [pageFrom, setPageFrom] = useState(1)
   const [pageTo, setPageTo] = useState(5)
@@ -226,6 +230,9 @@ export default function Story() {
 
   const isWritten = (story?.scenes.length ?? 0) > 0 && story!.scenes.every(s => s.novelai_text)
   const isUnsplitImport = (story?.scenes.length ?? 0) === 0 && !!story?.raw_text
+  // 冒頭だけ分割済みで、本文の残りがまだシーンになっていない
+  const hasUnsplitRest = (story?.scenes.length ?? 0) > 0 && (story?.unsplit_chars ?? 0) > 0
+  const canSplit = isUnsplitImport || hasUnsplitRest
   const totalPages = story ? Math.max(...story.scenes.map(s => s.page_index + 1), 0) : 0
   const untaggedCount = story ? story.scenes.filter(s => !s.draft_prompt_tags).length : 0
 
@@ -379,7 +386,11 @@ export default function Story() {
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/split`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_paragraphs: maxParagraphs, max_chars: maxChars }),
+        body: JSON.stringify({
+          max_paragraphs: maxParagraphs,
+          max_chars: maxChars,
+          max_scenes: headScenes > 0 ? headScenes : null,
+        }),
         signal: controller.signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
@@ -895,7 +906,13 @@ export default function Story() {
               </ol>
             )}
 
-            {isUnsplitImport && (
+            {hasUnsplitRest && (
+              <p className="story-muted">
+                冒頭だけ分割済みです。本文の残り約{story.unsplit_chars.toLocaleString()}字はまだシーンになっていません。
+              </p>
+            )}
+
+            {canSplit && (
               <div className="story-row">
                 <label>
                   1シーンの段落数上限
@@ -916,6 +933,16 @@ export default function Story() {
                     step={50}
                     value={maxChars}
                     onChange={e => setMaxChars(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  冒頭だけ処理するシーン数(0で最後まで)
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={headScenes}
+                    onChange={e => setHeadScenes(Math.max(0, Number(e.target.value)))}
                   />
                 </label>
               </div>
@@ -1026,9 +1053,10 @@ export default function Story() {
             )}
 
             <div className="story-actions">
-              {isUnsplitImport && (
+              {canSplit && (
                 <button type="button" onClick={runSplit} disabled={busy}>
-                  シーン分割・タグ付けを実行
+                  {hasUnsplitRest ? '続きを分割・タグ付け' : 'シーン分割・タグ付けを実行'}
+                  {headScenes > 0 ? `(${headScenes}シーンまで)` : ''}
                 </button>
               )}
               {!isUnsplitImport && !isWritten && (

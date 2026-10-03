@@ -711,10 +711,13 @@ def create_story(
     return dict(row)
 
 
-def add_story_scenes(conn: sqlite3.Connection, story_id: int, scenes: list[dict[str, Any]]) -> None:
+def add_story_scenes(
+    conn: sqlite3.Connection, story_id: int, scenes: list[dict[str, Any]], start_index: int = 0
+) -> None:
     """
     scenes: [{"draft_title": str | None, "draft_text": str, "draft_prompt_tags": str, "novelai_text": str | None}, ...]
-    scene_index はリストの順番、page_index は stories.panels_per_page から自動算出する。
+    scene_index は start_index からのリストの順番、page_index は stories.panels_per_page から自動算出する。
+    start_index は既存シーンの後ろへ続きを追加する(冒頭だけ分割した物語の残りを分割する)ときに使う。
     novelai_text は、公式サイトからインポートした既に執筆済みの本文をそのまま使い、
     /write (Kayraによる自動執筆)をスキップする場合にのみ渡す。通常のドラフト生成
     フローでは省略し、NULLのまま/writeで埋める。
@@ -723,7 +726,7 @@ def add_story_scenes(conn: sqlite3.Connection, story_id: int, scenes: list[dict[
         "SELECT panels_per_page FROM stories WHERE id = ?", (story_id,)
     ).fetchone()["panels_per_page"]
 
-    for i, scene in enumerate(scenes):
+    for i, scene in enumerate(scenes, start=start_index):
         conn.execute(
             """
             INSERT INTO story_scenes

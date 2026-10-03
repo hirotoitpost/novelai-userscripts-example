@@ -147,7 +147,10 @@ def parse_story_draft(draft_text: str) -> list[dict[str, Any]]:
 def _story_response(story: dict[str, Any] | None) -> StoryResponse:
     if story is None:
         raise HTTPException(status_code=404, detail="story not found")
-    return StoryResponse.model_validate(story)
+    raw_text = story.get("raw_text") or ""
+    # 末尾の改行など空白だけの残りは「未分割」に数えない
+    unsplit = len(raw_text[_covered_length(raw_text, story["scenes"]) :].strip()) if story["scenes"] else 0
+    return StoryResponse.model_validate({**story, "unsplit_chars": unsplit})
 
 
 _DRAFT_MAX_ATTEMPTS = 3
@@ -431,6 +434,25 @@ def _split_into_units(text: str, max_chars: int) -> list[str]:
     return units
 
 
+def _covered_length(raw_text: str, scenes: list[dict[str, Any]]) -> int:
+    """
+    raw_text のうち、既存シーンの本文が覆っている先頭部分の長さ。
+
+    分割は本文を書き換えず、段落(または文)の単位を改行で繋いでシーンにしているので、
+    各シーンの draft_text を行ごとに先頭から順に探していけば、どこまで分割済みかが分かる。
+    冒頭だけ分割した物語の続きを分割する位置と、登場人物抽出の対象範囲に使う。
+    """
+    pos = 0
+    for scene in scenes:
+        for line in scene["draft_text"].split("\n"):
+            if not line:
+                continue
+            index = raw_text.find(line, pos)
+            if index >= 0:
+                pos = index + len(line)
+    return pos
+
+
 def _split_text_into_scenes(text: str, max_paragraphs: int, max_chars: int) -> list[str]:
     """
     本文を書き換えずに場面へ分割する。段落を順に詰めていき、段落数が max_paragraphs に
@@ -567,6 +589,9 @@ async def split_story(story_id: int, req: StorySplitRequest) -> dict[str, Any]:
 
     長編では数十分かかるため、処理はバックグラウンドで走らせて即座に返す。
     進捗は GET /{story_id}/job を見る。
+
+    max_scenes を指定すると冒頭のそのシーン数だけを処理する(テスト・事前確認用)。
+    その後もう一度呼ぶと、残りの本文を既存シーンの続きとして分割する。
     """
     conn = get_connection()
     try:
@@ -576,12 +601,13 @@ async def split_story(story_id: int, req: StorySplitRequest) -> dict[str, Any]:
 
     if story is None:
         raise HTTPException(status_code=404, detail="story not found")
-    if story["scenes"]:
-        raise HTTPException(status_code=409, detail="この物語は既に分割済みです。")
     if not story.get("raw_text"):
         raise HTTPException(
             status_code=400, detail="raw_text がありません(インポートされた物語ではない可能性があります)。"
         )
+    # 冒頭だけ分割済みなら続きから分割する。最後まで分割済みならやることが無い。
+    if story["scenes"] and not story["raw_text"][_covered_length(story["raw_text"], story["scenes"]) :].strip():
+        raise HTTPException(status_code=409, detail="この物語は既に最後まで分割済みです。")
 
     async def runner(job: _Job) -> None:
         await _run_split(job, story_id, req)
@@ -647,9 +673,14 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
         story = get_story(conn, story_id)
         if story is None:
             raise RuntimeError("story not found")
-        scene_texts = _split_text_into_scenes(story["raw_text"] or "", req.max_paragraphs, req.max_chars)
-        if not scene_texts:
+        raw_text = story["raw_text"] or ""
+        existing = story["scenes"]
+        remaining = raw_text[_covered_length(raw_text, existing) :] if existing else raw_text
+        all_texts = _split_text_into_scenes(remaining, req.max_paragraphs, req.max_chars)
+        if not all_texts:
             raise RuntimeError("本文からシーンを分割できませんでした。")
+        scene_texts = all_texts[: req.max_scenes] if req.max_scenes else all_texts
+        partial = len(scene_texts) < len(all_texts)
 
         # タグ付けはシーン数に比例して長くかかるので、先に本文だけのシーンを保存して
         # 物語として成立させておく。途中で止まっても分割結果は残り、タグが空でも
@@ -661,10 +692,12 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
                 {"draft_title": None, "draft_text": text, "draft_prompt_tags": "", "novelai_text": text}
                 for text in scene_texts
             ],
+            start_index=len(existing),
         )
-        update_story_scene_count(conn, story_id, len(scene_texts))
+        update_story_scene_count(conn, story_id, len(existing) + len(scene_texts))
         update_story_status(conn, story_id, "written")
-        scenes = list_story_scenes(conn, story_id)
+        # タグ付けは今回追加したシーンだけ
+        scenes = list_story_scenes(conn, story_id)[len(existing) :]
         panels_per_page = story["panels_per_page"]
     finally:
         conn.close()
@@ -688,6 +721,8 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
             break
 
     job.message = f"{len(scene_texts)}シーンに分割し、{tagged}シーンにタグを付けました"
+    if partial:
+        job.message += f"(冒頭のみ。残り約{len(all_texts) - len(scene_texts)}シーンは「続きを分割」で処理できます)"
     if gave_up:
         job.message += "(タグ付けが連続で失敗したため中断しました。挿絵生成は本文だけでも実行できます)"
     elif tagged < len(scene_texts):
@@ -1297,7 +1332,13 @@ async def extract_characters(story_id: int) -> dict[str, Any]:
 async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
     scenes = story["scenes"]
     # 取り込んだ物語は raw_text が原文。ドラフト生成のものは無いのでシーンを繋ぐ。
-    source_text = story.get("raw_text") or "\n".join(scene["draft_text"] for scene in scenes)
+    # 冒頭だけ分割した物語では、まだシーンになっていない残りの本文は対象にしない。
+    raw_text = story.get("raw_text")
+    source_text = (
+        raw_text[: _covered_length(raw_text, scenes)]
+        if raw_text
+        else "\n".join(scene["draft_text"] for scene in scenes)
+    )
 
     job.total = 3
     job.message = "本文から名前の候補を集めています"
