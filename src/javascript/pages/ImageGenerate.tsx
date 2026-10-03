@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import ChunkPicker from '../components/ChunkPicker'
+import { naiImageFilename } from '../downloadFilename'
 import {
   apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
   ImagePreset, ImagePresetSettings,
@@ -144,10 +145,18 @@ export default function ImageGenerate() {
   const [seed,         setSeed]         = useState<string>('')
   const [loading,      setLoading]      = useState(false)
   const [error,        setError]        = useState<string | null>(null)
-  const [result,       setResult]       = useState<{ src: string; format: string } | null>(null)
+  const [result,       setResult]       = useState<{ src: string; filename: string } | null>(null)
   const [preview,      setPreview]      = useState<string | null>(null)
   const [anlasEst,     setAnlasEst]     = useState<number | null>(null)
   const [anlasLoading, setAnlasLoading] = useState(false)
+
+  // 結果画像は Blob URL で保持する。data URL だとスマホの長押し保存で
+  // ファイル名が「ダウンロード」固定になるため、<a download> で包んで名前を付ける
+  // (Selection の DownloadableImage と同じ方式)。
+  useEffect(() => {
+    if (!result) return
+    return () => URL.revokeObjectURL(result.src)
+  }, [result])
 
   // Image-to-Image
   const i2iFileInputRef               = useRef<HTMLInputElement>(null)
@@ -411,7 +420,11 @@ export default function ImageGenerate() {
             if (eventType === 'intermediate') {
               setPreview(`data:image/png;base64,${img}`)
             } else if (eventType === 'final') {
-              setResult({ src: `data:image/png;base64,${img}`, format: 'png' })
+              const bytes = Uint8Array.from(atob(img), c => c.charCodeAt(0))
+              setResult({
+                src: URL.createObjectURL(new Blob([bytes], { type: 'image/png' })),
+                filename: naiImageFilename(),
+              })
             }
           }
         }
@@ -437,7 +450,7 @@ export default function ImageGenerate() {
     if (!result) return
     const a = document.createElement('a')
     a.href = result.src
-    a.download = `nai_${Date.now()}.${result.format}`
+    a.download = result.filename
     a.click()
   }
 
@@ -888,11 +901,13 @@ export default function ImageGenerate() {
 
           {!loading && result && (
             <div className="ig-result">
-              <img
-                className="ig-result-img"
-                src={result.src}
-                alt="生成された画像"
-              />
+              <a href={result.src} download={result.filename}>
+                <img
+                  className="ig-result-img"
+                  src={result.src}
+                  alt="生成された画像"
+                />
+              </a>
               <div className="ig-result-actions">
                 <button type="button" className="ig-action-btn" onClick={handleDownload}>
                   ↓ ダウンロード

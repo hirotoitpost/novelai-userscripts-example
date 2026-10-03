@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { formatForFilename, naiImageFilename } from '../downloadFilename'
 import './Selection.css'
 
 interface Situation {
@@ -128,22 +129,6 @@ const UC_PRESETS = [
 // 同じ巨大な base64 文字列を <img src> と <a href> の両方に置くと、
 // 長押しのコンテキストメニュー表示時にブラウザが二重に処理して固まることがあるため、
 // 表示・ダウンロードとも軽量な Blob URL 経由の参照にまとめる。
-
-// crypto.randomUUID() は secure context (https/localhost) 限定で、
-// LAN上のスマホからは http://<IP>:5173 でアクセスするため使えない。
-// 衝突しても実害が無いファイル名生成なので Math.random ベースの短縮IDで十分。
-function shortId(): string {
-  return Math.random().toString(16).slice(2, 10).padEnd(8, '0')
-}
-
-function formatForFilename(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return (
-    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
-  )
-}
-
 function DownloadableImage({ base64, alt, date }: { base64: string; alt: string; date?: Date }) {
   const [url, setUrl] = useState<string | null>(null)
 
@@ -155,7 +140,7 @@ function DownloadableImage({ base64, alt, date }: { base64: string; alt: string;
   }, [base64])
 
   // 画像内容(base64)ごとに一度だけ生成し、再レンダーのたびに名前が変わらないようにする
-  const filename = useMemo(() => `nai_${formatForFilename(date ?? new Date())}_${shortId()}.png`, [base64, date])
+  const filename = useMemo(() => naiImageFilename(date), [base64, date])
 
   if (!url) return null
   return (
