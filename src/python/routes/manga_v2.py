@@ -21,8 +21,10 @@ from ..client import get_client
 from ..db import (
     characters_by_scene,
     get_connection,
+    get_manga_v2_overrides,
     list_manga_panels,
     list_story_scenes,
+    set_manga_v2_overrides,
     update_character_reference,
     update_scene_sfx,
     update_story_final_image,
@@ -36,7 +38,7 @@ from ..manga_v2.compose import (
     page_png,
     split_dense_panels,
 )
-from ..manga_v2.layout import TEMPLATES, generation_size, panel_rects
+from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt
 from ..models import (
@@ -44,6 +46,7 @@ from ..models import (
     MangaV2ComposeRequest,
     MangaV2ComposeResponse,
     MangaV2Font,
+    MangaV2OverrideRequest,
     MangaV2Panel,
     MangaV2PanelsRequest,
     MangaV2SceneSfxRequest,
@@ -425,17 +428,19 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
     冒頭だけ試せるよう、絵がある最後のシーンまでを対象にする(途中の未生成コマは灰色)。
     """
     _require_template(req.template)
-    style = LetteringStyle(
-        font_path=resolve_font(req.font),
-        sfx_font_path=resolve_font(req.sfx_font, DEFAULT_SFX_FONT_ID),
-        bubble_opacity=req.bubble_opacity,
-    )
     conn = get_connection()
     try:
         scenes = list_story_scenes(conn, story_id)
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
+        overrides = get_manga_v2_overrides(conn, story_id)
     finally:
         conn.close()
+    style = LetteringStyle(
+        font_path=resolve_font(req.font),
+        sfx_font_path=resolve_font(req.sfx_font, DEFAULT_SFX_FONT_ID),
+        bubble_opacity=req.bubble_opacity,
+        overrides={key: (pos[0], pos[1]) for key, pos in overrides.items()},
+    )
     if not panels:
         raise HTTPException(status_code=400, detail="先にコマの絵を生成してください。")
 
@@ -444,11 +449,13 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         PanelContent(
             _PROJECT_ROOT / panels[s["id"]]["image_path"] if s["id"] in panels else None,
             *_lettering(s),
+            key=str(s["id"]),
         )
         for s in scenes
         if s["scene_index"] <= last
     ]
-    pages = compose_pages(req.template, split_dense_panels(contents, req.max_lines_per_panel), style)
+    composed = compose_pages(req.template, split_dense_panels(contents, req.max_lines_per_panel), style)
+    pages = [page for page, _ in composed]
 
     _PAGE_DIR.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex[:8]
@@ -466,4 +473,47 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         update_story_final_image(conn, story_id, final_path)
     finally:
         conn.close()
-    return {"pages": page_paths, "final_image_path": final_path}
+    return {
+        "pages": page_paths,
+        "final_image_path": final_path,
+        "page_width": PAGE_WIDTH,
+        "page_height": PAGE_HEIGHT,
+        "elements": [
+            [
+                {
+                    "key": e.key,
+                    "kind": e.kind,
+                    "text": e.text,
+                    "box": list(e.box),
+                    "panel": list(e.panel),
+                    "moved": e.key in overrides,
+                }
+                for e in elements
+            ]
+            for _, elements in composed
+        ],
+    }
+
+
+@router.put("/{story_id}/overrides", status_code=204)
+async def put_override(story_id: int, req: MangaV2OverrideRequest) -> None:
+    """吹き出し/描き文字を手で動かした位置を保存する(x, y が None なら自動配置に戻す)。"""
+    conn = get_connection()
+    try:
+        overrides = get_manga_v2_overrides(conn, story_id)
+        if req.x is None or req.y is None:
+            overrides.pop(req.key, None)
+        else:
+            overrides[req.key] = [round(req.x, 4), round(req.y, 4)]
+        set_manga_v2_overrides(conn, story_id, overrides)
+    finally:
+        conn.close()
+
+
+@router.delete("/{story_id}/overrides", status_code=204)
+async def clear_overrides(story_id: int) -> None:
+    conn = get_connection()
+    try:
+        set_manga_v2_overrides(conn, story_id, {})
+    finally:
+        conn.close()

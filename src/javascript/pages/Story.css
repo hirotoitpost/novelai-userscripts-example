@@ -478,6 +478,63 @@
   max-width: 100%;
 }
 
+.mv2-compose {
+  margin-top: 1rem;
+}
+
+.mv2-page-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.mv2-page-tabs button {
+  padding: 0.3rem 0.8rem !important;
+  margin-top: 0 !important;
+}
+
+.mv2-editor {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  margin: 0.5rem 0;
+  user-select: none;
+}
+
+.mv2-editor-page {
+  width: 100%;
+  display: block;
+  border-radius: 6px;
+}
+
+.mv2-handle {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed rgba(80, 160, 255, 0.85);
+  border-radius: 6px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.mv2-handle--sfx {
+  border-color: rgba(255, 150, 60, 0.9);
+}
+
+.mv2-handle--moved {
+  border-style: solid;
+}
+
+.mv2-handle--dragging {
+  cursor: grabbing;
+  background: rgba(123, 92, 246, 0.18);
+  z-index: 1;
+}
+
+.mv2-open {
+  color: #b8a4ff;
+  font-size: 0.85rem;
+}
+
 .mv2-sfx {
   display: flex;
   flex-direction: column;

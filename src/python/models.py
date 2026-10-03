@@ -547,6 +547,29 @@ class MangaV2ComposeRequest(BaseModel):
     max_lines_per_panel: int = Field(3, ge=0, le=10)
 
 
+class MangaV2Element(BaseModel):
+    """合成したページ上の吹き出し/描き文字。box と panel はページ座標 [x0, y0, x1, y1]。"""
+
+    key: str
+    kind: Literal["bubble", "sfx"]
+    text: str
+    box: list[int]
+    panel: list[int]
+    moved: bool = False
+
+
 class MangaV2ComposeResponse(BaseModel):
     pages: list[str]
     final_image_path: str
+    page_width: int
+    page_height: int
+    # pages と同じ順の、各ページに置いた要素
+    elements: list[list[MangaV2Element]]
+
+
+class MangaV2OverrideRequest(BaseModel):
+    """吹き出し/描き文字の手動配置。x, y はコマ内の左上位置(コマに対する割合)。None で自動配置に戻す。"""
+
+    key: str
+    x: Optional[float] = Field(None, ge=0.0, le=1.0)
+    y: Optional[float] = Field(None, ge=0.0, le=1.0)

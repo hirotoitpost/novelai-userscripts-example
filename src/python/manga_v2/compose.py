@@ -32,6 +32,19 @@ class PanelContent:
     sfx: list[str] = field(default_factory=list)
     # セリフが多いシーンを分けたときの2コマ目以降の番号。同じ絵を寄りで切り抜く(0は通常)。
     zoom_step: int = 0
+    # 手動配置(ドラッグ)の保存キーの元。シーンIDを入れる。
+    key: str = ""
+
+
+@dataclass
+class Element:
+    """ページ上に置いた吹き出し/描き文字。画面でドラッグして位置を直すために返す。"""
+
+    key: str
+    kind: str  # "bubble" | "sfx"
+    text: str
+    box: Rect
+    panel: Rect
 
 
 @dataclass
@@ -40,6 +53,8 @@ class LetteringStyle:
     sfx_font_path: Path
     # 吹き出しの白い地の不透明度(0で輪郭線だけ)
     bubble_opacity: float = 1.0
+    # 手動配置: Element.key → コマ内での左上の位置(コマの幅・高さに対する割合)
+    overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 # 寄りのコマの拡大率(1段ごと)と上限、切り抜く中心(横は段ごとに左右へ振る)
@@ -87,6 +102,7 @@ def split_dense_panels(panels: list[PanelContent], max_lines: int) -> list[Panel
                     lines[start : start + max_lines],
                     panel.sfx if step == 0 else [],
                     zoom_step=step,
+                    key=panel.key,
                 )
             )
     return result
@@ -153,7 +169,16 @@ _SHRINK_STEP_TEXT = 2
 _SHRINK_STEP_SFX = 8
 
 
-def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle) -> None:
+def _overridden_box(size: tuple[int, int], panel: Rect, position: tuple[float, float]) -> Rect:
+    """手動配置の位置(コマに対する割合)を、コマからはみ出さないページ座標にする。"""
+    x0, y0, x1, y1 = panel
+    bw, bh = size
+    left = min(max(round(x0 + position[0] * (x1 - x0)), x0), max(x1 - bw, x0))
+    top = min(max(round(y0 + position[1] * (y1 - y0)), y0), max(y1 - bh, y0))
+    return left, top, left + bw, top + bh
+
+
+def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle) -> list[Element]:
     x0, y0, x1, y1 = rect
     width, height = x1 - x0, y1 - y0
     draw = ImageDraw.Draw(page)
@@ -169,42 +194,60 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         lines = lines[: _MAX_BUBBLES - 1] + ["　".join(lines[_MAX_BUBBLES - 1 :])]
     placed: list[Rect] = []
     speaker = ((x0 + x1) / 2, y0 + height * 0.6)
+    elements: list[Element] = []
+    key_base = f"{content.key}:{content.zoom_step}"
     # 吹き出し・描き文字とも、既に置いたものと重なるなら文字を小さくして空きを探し直す。
-    # 最小サイズでも空きが無ければ、重なりが最小の位置に置く。
-    for line in lines:
+    # 最小サイズでも空きが無ければ、重なりが最小の位置に置く。手動で動かしたものはその位置に置く。
+    for index, line in enumerate(lines):
+        key = f"{key_base}:bubble:{index}"
+        override = style.overrides.get(key)
         text_size = _TEXT_SIZE
         while True:
             block, size = _fit_bubble(line, rect, text_size)
+            if override is not None:
+                box = _overridden_box(size, rect, override)
+                break
             box, free = _place(size, rect, placed)
             if free or text_size <= _TEXT_MIN_SIZE:
                 break
             text_size -= _SHRINK_STEP_TEXT
         placed.append(box)
+        elements.append(Element(key, "bubble", line, box, rect))
         draw_bubble(page, box, block, style.font_path, tail_toward=speaker, opacity=style.bubble_opacity)
 
-    for text in content.sfx:
-        if not text.strip():
-            continue
+    for index, text in enumerate(t for t in content.sfx if t.strip()):
+        key = f"{key_base}:sfx:{index}"
+        override = style.overrides.get(key)
         layout = fit_sfx(text, width, height)
         while True:
+            if override is not None:
+                box = _overridden_box((layout.width, layout.height), rect, override)
+                break
             box, free = _place((layout.width, layout.height), rect, placed, sfx=True)
             if free or layout.size <= SFX_MIN_SIZE:
                 break
             layout = fit_sfx(text, width, height, max_size=layout.size - _SHRINK_STEP_SFX)
         placed.append(box)
+        elements.append(Element(key, "sfx", text, box, rect))
         draw_sfx(page, box, layout, style.sfx_font_path)
 
     draw.rectangle(rect, outline=(0, 0, 0), width=_BORDER)
+    return elements
 
 
-def compose_page(rects: list[Rect], panels: list[PanelContent], style: LetteringStyle) -> Image.Image:
+def compose_page(
+    rects: list[Rect], panels: list[PanelContent], style: LetteringStyle
+) -> tuple[Image.Image, list[Element]]:
     page = Image.new("RGB", (PAGE_WIDTH, PAGE_HEIGHT), (255, 255, 255))
+    elements: list[Element] = []
     for rect, content in zip(rects, panels):
-        _draw_panel(page, rect, content, style)
-    return page
+        elements.extend(_draw_panel(page, rect, content, style))
+    return page, elements
 
 
-def compose_pages(template_id: str, panels: list[PanelContent], style: LetteringStyle) -> list[Image.Image]:
+def compose_pages(
+    template_id: str, panels: list[PanelContent], style: LetteringStyle
+) -> list[tuple[Image.Image, list[Element]]]:
     """シーン順のコマをテンプレートのコマ数ずつページに割り付ける。"""
     rects = panel_rects(template_id)
     per_page = len(rects)

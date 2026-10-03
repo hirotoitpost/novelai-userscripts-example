@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
 import { SceneCharacter } from './StoryCharacters'
+import MangaV2PageEditor, { MangaV2Element } from './MangaV2PageEditor'
 
 /** 漫画v2で使うシーンの項目(Story ページの StoryScene の一部)。 */
 export interface MangaV2Scene {
@@ -32,6 +33,13 @@ interface Panel {
   image_path: string
   seed: number | null
   created_at: string
+}
+
+interface ComposeResult {
+  pages: string[]
+  page_width: number
+  page_height: number
+  elements: MangaV2Element[][]
 }
 
 interface Props {
@@ -72,7 +80,8 @@ export default function MangaV2Studio({
   const [fonts, setFonts] = useState<FontOption[]>([])
   const [templates, setTemplates] = useState<TemplateOption[]>([])
   const [panels, setPanels] = useState<Panel[]>([])
-  const [composed, setComposed] = useState<string[]>([])
+  const [composed, setComposed] = useState<ComposeResult | null>(null)
+  const [editPage, setEditPage] = useState(0)
 
   const [template, setTemplate] = useLocalStorage('nai_manga_v2_template', 'grid4')
   const [font, setFont] = useLocalStorage('nai_manga_v2_font', 'yu-mincho-demibold')
@@ -107,7 +116,7 @@ export default function MangaV2Studio({
 
   useEffect(() => {
     loadPanels()
-    setComposed([])
+    setComposed(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiOrigin, storyId])
 
@@ -236,24 +245,51 @@ export default function MangaV2Studio({
     reader.readAsDataURL(file)
   }
 
+  async function requestCompose(signal: AbortSignal) {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/compose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template,
+        font,
+        sfx_font: sfxFont,
+        bubble_opacity: opacity / 100,
+        max_lines_per_panel: maxLines,
+      }),
+      signal,
+    })
+    if (!res.ok) throw new Error(await readErrorDetail(res))
+    const data: ComposeResult = await res.json()
+    setComposed(data)
+    setEditPage(page => Math.min(page, data.pages.length - 1))
+    await onChanged()
+  }
+
   function compose() {
-    return runTask('ページを合成しています...', async signal => {
-      const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/compose`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          template,
-          font,
-          sfx_font: sfxFont,
-          bubble_opacity: opacity / 100,
-          max_lines_per_panel: maxLines,
-        }),
-        signal,
-      })
-      if (!res.ok) throw new Error(await readErrorDetail(res))
-      const data: { pages: string[] } = await res.json()
-      setComposed(data.pages)
-      await onChanged()
+    return runTask('ページを合成しています...', requestCompose)
+  }
+
+  async function putOverride(key: string, x: number | null, y: number | null, signal: AbortSignal) {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/overrides`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, x, y }),
+      signal,
+    })
+    if (!res.ok) throw new Error(await readErrorDetail(res))
+  }
+
+  function moveElement(element: MangaV2Element, x: number, y: number) {
+    return runTask('位置を保存して合成し直しています...', async signal => {
+      await putOverride(element.key, x, y, signal)
+      await requestCompose(signal)
+    })
+  }
+
+  function resetElements(elements: MangaV2Element[]) {
+    return runTask('自動配置に戻して合成し直しています...', async signal => {
+      for (const element of elements) await putOverride(element.key, null, null, signal)
+      await requestCompose(signal)
     })
   }
 
@@ -476,13 +512,48 @@ export default function MangaV2Studio({
         カタカナだけのセリフ「ドキッ」も自動で描き文字になります。
       </p>
 
-      {composed.length > 0 && (
-        <div className="story-pages-grid">
-          {composed.map(path => (
-            <a key={path} href={fileUrl(path)} target="_blank" rel="noreferrer">
-              <img className="story-page-thumb" src={fileUrl(path)} alt="合成したページ" />
+      {composed && composed.pages.length > 0 && (
+        <div className="mv2-compose">
+          <div className="mv2-page-tabs">
+            {composed.pages.map((path, index) => (
+              <button
+                key={path}
+                type="button"
+                className={index === editPage ? 'mv2-mode-active' : 'story-secondary'}
+                onClick={() => setEditPage(index)}
+              >
+                P{index + 1}
+              </button>
+            ))}
+          </div>
+          <p className="story-muted">
+            吹き出し(青枠)・描き文字(橙枠)をドラッグすると、その位置で合成し直します。
+            手で動かしたもの(実線)はダブルクリックで自動配置に戻せます。
+          </p>
+          <MangaV2PageEditor
+            imageUrl={fileUrl(composed.pages[editPage])}
+            elements={composed.elements[editPage] ?? []}
+            pageWidth={composed.page_width}
+            pageHeight={composed.page_height}
+            busy={busy}
+            onMove={moveElement}
+            onReset={element => resetElements([element])}
+          />
+          <div className="story-actions">
+            <a className="mv2-open" href={fileUrl(composed.pages[editPage])} target="_blank" rel="noreferrer">
+              このページを開く
             </a>
-          ))}
+            {(composed.elements[editPage] ?? []).some(e => e.moved) && (
+              <button
+                type="button"
+                className="story-secondary"
+                disabled={busy}
+                onClick={() => resetElements((composed.elements[editPage] ?? []).filter(e => e.moved))}
+              >
+                このページの手動配置を戻す
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

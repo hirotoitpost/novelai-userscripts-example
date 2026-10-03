@@ -232,6 +232,8 @@ _STORIES_EXTRA_COLUMNS = {
     # 公式サイト等から取り込んだ、シーン分割・タグ付け前の生の本文。
     # /split で分割済みになった後もそのまま残す(参照用)。
     "raw_text": "TEXT",
+    # 漫画v2で手動配置(ドラッグ)した吹き出し・描き文字の位置。JSON {key: [x, y]}(コマに対する割合)
+    "manga_v2_overrides": "TEXT",
 }
 
 
@@ -269,6 +271,19 @@ def _migrate_characters(conn: sqlite3.Connection) -> None:
     for column, column_type in _CHARACTERS_EXTRA_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE characters ADD COLUMN {column} {column_type}")
+    conn.commit()
+
+
+def get_manga_v2_overrides(conn: sqlite3.Connection, story_id: int) -> dict[str, list[float]]:
+    row = conn.execute("SELECT manga_v2_overrides FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return json.loads(row["manga_v2_overrides"]) if row and row["manga_v2_overrides"] else {}
+
+
+def set_manga_v2_overrides(conn: sqlite3.Connection, story_id: int, overrides: dict[str, list[float]]) -> None:
+    conn.execute(
+        "UPDATE stories SET manga_v2_overrides = ? WHERE id = ?",
+        (json.dumps(overrides) if overrides else None, story_id),
+    )
     conn.commit()
 
 
