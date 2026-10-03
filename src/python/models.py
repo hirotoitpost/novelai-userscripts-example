@@ -378,7 +378,7 @@ class StoryJobResponse(BaseModel):
     """分割/挿絵生成のバックグラウンドジョブの進捗。"""
 
     story_id: int
-    kind: Literal["split", "illustrate", "characters"]
+    kind: Literal["split", "illustrate", "characters", "panels", "sfx"]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
     progress: int = 0
@@ -432,6 +432,8 @@ class StorySceneResponse(BaseModel):
     draft_prompt_tags: str
     seed_cue: str | None
     novelai_text: str | None
+    # 漫画v2の効果音(描き文字)。None は未設定。
+    sfx: list[str] | None = None
     characters: list[SceneCharacterResponse] = []
 
 
@@ -467,3 +469,68 @@ class MangaPageResponse(BaseModel):
     scene_ids: list[int]
     seed: Optional[int] = None
     created_at: str
+
+
+# ---- 漫画v2 (コマ単位の生成 + 自前のコマ割り・吹き出し) ----
+
+
+class MangaV2Font(BaseModel):
+    id: str
+    label: str
+
+
+class MangaV2Template(BaseModel):
+    id: str
+    label: str
+    panels: int
+
+
+class MangaV2Panel(BaseModel):
+    scene_id: int
+    scene_index: int
+    image_path: str
+    seed: Optional[int] = None
+    width: int
+    height: int
+    created_at: str
+
+
+class MangaV2PanelsRequest(BaseModel):
+    """コマ画像を生成するシーン範囲(0始まり)。scene_to 未指定なら最後まで。"""
+
+    scene_from: int = Field(0, ge=0)
+    scene_to: Optional[int] = Field(None, ge=0)
+    template: str = "grid4"
+    # 既に絵があるシーンを飛ばす。個別に描き直すときは False にする。
+    skip_existing: bool = True
+    # 漫画らしいモノクロが既定。カラーにしたい場合は True。
+    color: bool = False
+    # width/height はテンプレートのコマの形から決めるので使わない。
+    settings: MangaImageSettings = MangaImageSettings()
+
+
+class MangaV2SceneSfxRequest(BaseModel):
+    """シーンの効果音を手で設定する。None で未設定に戻す(AI提案の対象になる)。"""
+
+    sfx: Optional[list[str]] = Field(None, max_length=8)
+
+
+class MangaV2SuggestSfxRequest(BaseModel):
+    scene_from: int = Field(0, ge=0)
+    scene_to: Optional[int] = Field(None, ge=0)
+    # False なら効果音を設定済み(空を含む)のシーンは飛ばす
+    overwrite: bool = False
+
+
+class MangaV2ComposeRequest(BaseModel):
+    template: str = "grid4"
+    font: Optional[str] = None
+    # 効果音(描き文字)のフォント。未指定なら太い角ゴシック系。
+    sfx_font: Optional[str] = None
+    # 吹き出しの白い地の不透明度。0で輪郭線だけ(文字には白フチが付く)。
+    bubble_opacity: float = Field(1.0, ge=0.0, le=1.0)
+
+
+class MangaV2ComposeResponse(BaseModel):
+    pages: list[str]
+    final_image_path: str

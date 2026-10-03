@@ -202,10 +202,26 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 漫画v2: シーン1つ = コマ1つの絵。コマ割り・吹き出しは合成時に行うので、絵だけを持つ。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manga_panels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            scene_id INTEGER NOT NULL UNIQUE REFERENCES story_scenes(id) ON DELETE CASCADE,
+            image_path TEXT NOT NULL,
+            seed INTEGER,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
     _migrate_manga_pages(conn)
+    _migrate_story_scenes(conn)
 
 
 _STORIES_EXTRA_COLUMNS = {
@@ -227,6 +243,19 @@ def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
     for column, column_type in _MANGA_PAGES_EXTRA_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE manga_pages ADD COLUMN {column} {column_type}")
+    conn.commit()
+
+
+# 漫画v2で描き文字にする効果音(JSONの文字列配列)。NULL は未設定(AI提案の対象)、
+# 空配列は「このシーンには効果音を付けない」と決めた状態。
+_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT"}
+
+
+def _migrate_story_scenes(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(story_scenes)")}
+    for column, column_type in _STORY_SCENES_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE story_scenes ADD COLUMN {column} {column_type}")
     conn.commit()
 
 
@@ -760,7 +789,23 @@ def list_story_scenes(conn: sqlite3.Connection, story_id: int) -> list[dict[str,
         "SELECT * FROM story_scenes WHERE story_id = ? ORDER BY scene_index", (story_id,)
     ).fetchall()
     by_scene = characters_by_scene(conn, story_id)
-    return [{**dict(row), "characters": by_scene.get(row["id"], [])} for row in rows]
+    return [
+        {
+            **dict(row),
+            "sfx": json.loads(row["sfx"]) if row["sfx"] is not None else None,
+            "characters": by_scene.get(row["id"], []),
+        }
+        for row in rows
+    ]
+
+
+def update_scene_sfx(conn: sqlite3.Connection, scene_id: int, sfx: list[str] | None) -> None:
+    """None で未設定に戻す。"""
+    conn.execute(
+        "UPDATE story_scenes SET sfx = ? WHERE id = ?",
+        (json.dumps(sfx, ensure_ascii=False) if sfx is not None else None, scene_id),
+    )
+    conn.commit()
 
 
 def update_scene_tags(
@@ -950,3 +995,38 @@ def list_manga_pages(conn: sqlite3.Connection, story_id: int) -> list[dict[str, 
         d["scene_ids"] = json.loads(d["scene_ids"])
         result.append(d)
     return result
+
+
+def upsert_manga_panel(
+    conn: sqlite3.Connection,
+    story_id: int,
+    scene_id: int,
+    image_path: str,
+    seed: int | None,
+    width: int,
+    height: int,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (scene_id) DO UPDATE SET image_path = excluded.image_path, seed = excluded.seed,
+            width = excluded.width, height = excluded.height, created_at = excluded.created_at
+        """,
+        (story_id, scene_id, image_path, seed, width, height, now),
+    )
+    conn.commit()
+
+
+def list_manga_panels(conn: sqlite3.Connection, story_id: int) -> list[dict[str, Any]]:
+    """シーン順のコマ画像。scene_index も付けて返す。"""
+    rows = conn.execute(
+        """
+        SELECT p.*, s.scene_index FROM manga_panels p
+        JOIN story_scenes s ON s.id = p.scene_id
+        WHERE p.story_id = ? ORDER BY s.scene_index
+        """,
+        (story_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]

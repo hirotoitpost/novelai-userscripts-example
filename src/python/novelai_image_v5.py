@@ -208,6 +208,43 @@ async def generate_manga_page(
     """
 
     prompt = build_manga_page_prompt(panels, complexity)
+    return await generate_image_v5(
+        api_key,
+        prompt,
+        negative_prompt,
+        model=model,
+        width=width,
+        height=height,
+        steps=steps,
+        scale=scale,
+        sampler=sampler,
+        noise_schedule=noise_schedule,
+        cfg_rescale=cfg_rescale,
+        seed=seed,
+        character_tags=character_tags or [],
+    )
+
+
+async def generate_image_v5(
+    api_key: str,
+    prompt: str,
+    negative_prompt: str,
+    *,
+    model: str = V5_MODEL,
+    width: int,
+    height: int,
+    steps: int = 27,
+    scale: float = 7.0,
+    sampler: str = "k_euler_ancestral",
+    noise_schedule: str = "karras",
+    cfg_rescale: float = 0.0,
+    seed: int = 0,
+    character_tags: list[str] | None = None,
+) -> bytes:
+    """
+    組み立て済みのプロンプトで1枚生成し、PNGバイト列を返す。漫画ページ(コマ割り込み)にも、
+    漫画v2のコマ単位の画像にも使う。
+    """
     body = _build_v5_body(
         prompt,
         negative_prompt,
