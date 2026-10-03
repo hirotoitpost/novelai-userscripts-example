@@ -181,7 +181,7 @@ async def generate_image_tool(
     negative_prompt: str | None = None,
     model: str = "nai-diffusion-4-5-full",
     size: str = "portrait",
-    steps: int = 23,
+    steps: int = 27,
     scale: float = 5.0,
     seed: int | None = None,
     chunk_ids: list[str] | None = None,

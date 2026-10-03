@@ -190,7 +190,7 @@ async def generate_manga_page(
     model: str = V5_MODEL,
     width: int = 1216,
     height: int = 1728,
-    steps: int = 28,
+    steps: int = 27,
     scale: float = 7.0,
     sampler: str = "k_euler_ancestral",
     noise_schedule: str = "karras",

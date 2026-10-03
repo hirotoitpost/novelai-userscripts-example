@@ -325,7 +325,7 @@ async def stream_metadata_gen(req: MetadataGenRequest) -> StreamingResponse:
         "出力形式（JSONのみ、コードブロック不要）:\n"
         '{"prompt": "masterpiece, best quality, ...", "negative_prompt": "lowres, ...", '
         f'"model": "{req.target_model}", "size": "{req.size}", '
-        '"steps": 28, "scale": 6.0, "sampler": "k_euler_ancestral", '
+        '"steps": 27, "scale": 6.0, "sampler": "k_euler_ancestral", '
         '"noise_schedule": "karras", "quality": true, "uc_preset": "light", '
         '"cfg_rescale": 0.0, "variety_boost": false, '
         '"reasoning": "パラメータ選択の根拠（日本語）"}\n\n'

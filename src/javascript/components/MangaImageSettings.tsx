@@ -29,7 +29,7 @@ export const DEFAULT_MANGA_IMAGE_SETTINGS: MangaImageSettingsValue = {
   model: 'nai-diffusion-5-full',
   width: 1216,
   height: 1728,
-  steps: 28,
+  steps: 27,
   scale: 7.0,
   sampler: 'k_euler_ancestral',
   noise_schedule: 'karras',

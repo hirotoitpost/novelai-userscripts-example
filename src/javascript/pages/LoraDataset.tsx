@@ -69,7 +69,7 @@ export default function LoraDataset() {
   const [rootName,    setRootName]   = useState('training_data')
 
   const [model,        setModel]        = useLocalStorage('nai_lora_model', 'nai-diffusion-3')
-  const [steps,         setSteps]         = useLocalStorage('nai_lora_steps', 23)
+  const [steps,         setSteps]         = useLocalStorage('nai_lora_steps', 27)
   const [scale,         setScale]         = useLocalStorage('nai_lora_scale', 5.0)
   const [sampler,       setSampler]       = useLocalStorage('nai_lora_sampler', 'k_euler_ancestral')
   const [noiseSchedule, setNoiseSchedule] = useLocalStorage('nai_lora_noise_schedule', 'karras')

@@ -81,7 +81,7 @@ class GenerateImageRequest(BaseModel):
     negative_prompt: Optional[str] = None
     quality: bool = True
     uc_preset: UCPresetLiteral = "light"
-    steps: int = Field(23, ge=1, le=50)
+    steps: int = Field(27, ge=1, le=50)
     scale: float = Field(5.0, ge=0.0, le=10.0)
     sampler: SamplerLiteral = "k_euler_ancestral"
     noise_schedule: NoiseScheduleLiteral = "karras"
@@ -138,7 +138,7 @@ class LoraDatasetRequest(BaseModel):
     outfit_tag: str = Field("white dress", description="上半身/全身カットの衣装タグ。空文字で無効化")
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名")
     model: ImageModelLiteral = "nai-diffusion-3"
-    steps: int = Field(23, ge=1, le=50)
+    steps: int = Field(27, ge=1, le=50)
     scale: float = Field(5.0, ge=0.0, le=10.0)
     sampler: SamplerLiteral = "k_euler_ancestral"
     noise_schedule: NoiseScheduleLiteral = "karras"
@@ -352,7 +352,7 @@ class MangaImageSettings(BaseModel):
     model: MangaModelLiteral = "nai-diffusion-5-full"
     width: int = Field(default=1216, ge=512, le=2048)
     height: int = Field(default=1728, ge=512, le=2048)
-    steps: int = Field(default=28, ge=1, le=50)
+    steps: int = Field(default=27, ge=1, le=50)
     scale: float = Field(default=7.0, ge=0.0, le=10.0)
     sampler: SamplerLiteral = "k_euler_ancestral"
     noise_schedule: NoiseScheduleLiteral = "karras"

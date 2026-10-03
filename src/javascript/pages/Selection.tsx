@@ -172,7 +172,7 @@ export default function Selection() {
   const [negPrompt, setNegPrompt] = useState('')
   const [model, setModel] = useState<string>(MODELS[0].value)
   const [size, setSize] = useState<string>(SIZES[0].value)
-  const [steps, setSteps] = useState(23)
+  const [steps, setSteps] = useState(27)
   const [scale, setScale] = useState(5.0)
   const [seed, setSeed] = useState('')
   const [ucPreset, setUcPreset] = useState<string>(UC_PRESETS[0].value)

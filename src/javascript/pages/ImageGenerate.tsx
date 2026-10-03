@@ -43,7 +43,7 @@ const NOISE_SCHEDULES = ['karras', 'exponential', 'polyexponential'] as const
 const PRESET_MODELS = new Set(['nai-diffusion-5-full', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
 
 const AI_DEFAULTS = {
-  steps:         28,
+  steps:         27,
   scale:         6.0,
   sampler:       'k_euler_ancestral',
   noiseSchedule: 'karras',
