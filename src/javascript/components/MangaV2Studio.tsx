@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
+import { SceneCharacter } from './StoryCharacters'
 
 /** 漫画v2で使うシーンの項目(Story ページの StoryScene の一部)。 */
 export interface MangaV2Scene {
@@ -11,6 +12,7 @@ export interface MangaV2Scene {
   novelai_text: string | null
   /** null は未設定(AI提案の対象)、空配列は「効果音なし」と決めた状態。 */
   sfx: string[] | null
+  characters: SceneCharacter[]
 }
 
 interface FontOption {
@@ -77,6 +79,9 @@ export default function MangaV2Studio({
   const [sfxFont, setSfxFont] = useLocalStorage('nai_manga_v2_sfx_font', 'hg-soei-kakugothic-ub')
   const [opacity, setOpacity] = useLocalStorage('nai_manga_v2_bubble_opacity', 100)
   const [color, setColor] = useLocalStorage('nai_manga_v2_color', false)
+  const [useReference, setUseReference] = useLocalStorage('nai_manga_v2_use_reference', false)
+  const [refStrength, setRefStrength] = useLocalStorage('nai_manga_v2_ref_strength', 1.0)
+  const [refFidelity, setRefFidelity] = useLocalStorage('nai_manga_v2_ref_fidelity', 1.0)
   const [skipExisting, setSkipExisting] = useState(true)
   const [overwriteSfx, setOverwriteSfx] = useState(false)
   // 対象のシーン範囲(表示は1始まり)。既定は1ページ分。
@@ -116,6 +121,19 @@ export default function MangaV2Studio({
   const to = Math.max(from, Math.min(sceneTo, scenes.length))
   const targetScenes = scenes.filter(s => s.scene_index >= from - 1 && s.scene_index <= to - 1)
   const fontLabel = (id: string) => fonts.find(f => f.id === id)?.label ?? id
+  // この物語に出てくるキャラ(シーンへの割り当てから集める)
+  const storyCharacters = useMemo(() => {
+    const byId = new Map<number, SceneCharacter>()
+    for (const scene of scenes) for (const c of scene.characters) byId.set(c.id, c)
+    return [...byId.values()]
+  }, [scenes])
+  const referencedNames = storyCharacters.filter(c => c.reference_image_path).map(c => c.name)
+
+  const referenceOptions = {
+    use_character_reference: useReference,
+    reference_strength: refStrength,
+    reference_fidelity: refFidelity,
+  }
 
   async function startJob(path: string, body: unknown, signal: AbortSignal) {
     const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/${path}`, {
@@ -139,6 +157,7 @@ export default function MangaV2Studio({
             template,
             skip_existing: skipExisting,
             color,
+            ...referenceOptions,
             settings: imageSettings,
           },
           signal,
@@ -161,6 +180,7 @@ export default function MangaV2Studio({
             template,
             skip_existing: false,
             color,
+            ...referenceOptions,
             settings: { ...imageSettings, seed },
           },
           signal,
@@ -198,6 +218,21 @@ export default function MangaV2Studio({
     if (scene.sfx !== null && words.join('、') === current.join('、')) return
     if (scene.sfx === null && words.length === 0) return
     void saveSfx(scene, words)
+  }
+
+  async function setReference(characterId: number, body: { image?: string; scene_id?: number } | null) {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${characterId}/reference`, {
+      method: body ? 'PUT' : 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    })
+    if (res.ok) await onChanged()
+  }
+
+  function uploadReference(characterId: number, file: File) {
+    const reader = new FileReader()
+    reader.onload = () => void setReference(characterId, { image: reader.result as string })
+    reader.readAsDataURL(file)
   }
 
   function compose() {
@@ -272,6 +307,77 @@ export default function MangaV2Studio({
           セリフ「{fontLabel(font)}」/ 効果音「{fontLabel(sfxFont)}」。
         </p>
       </div>
+
+      <details className="story-characters-block" open={useReference}>
+        <summary>キャラ参照(登場人物の見た目をコマ間で揃える)</summary>
+        <label className="mv2-check">
+          <input type="checkbox" checked={useReference} disabled={busy}
+            onChange={e => setUseReference(e.target.checked)} />
+          キャラ参照を使う
+        </label>
+        <p className="story-muted">
+          参照画像のあるキャラが出るコマは <strong>V4.5 Full</strong> で生成します(V5はキャラ参照に未対応)。
+          1コマあたり <strong>+5 Anlas</strong>(Opusの無料枠の対象外)。1コマに使えるのは1人分です。
+        </p>
+        {useReference && (
+          <div className="story-row">
+            <label>
+              参照の強さ: {refStrength.toFixed(2)}
+              <input type="range" min={0} max={1} step={0.05} value={refStrength} disabled={busy}
+                onChange={e => setRefStrength(Number(e.target.value))} />
+            </label>
+            <label>
+              忠実度: {refFidelity.toFixed(2)}
+              <input type="range" min={0} max={1} step={0.05} value={refFidelity} disabled={busy}
+                onChange={e => setRefFidelity(Number(e.target.value))} />
+            </label>
+          </div>
+        )}
+        {storyCharacters.length === 0 ? (
+          <p className="story-muted">
+            シーンに登場人物が割り当てられていません。「登場人物を抽出」するか、登場人物を登録して割り当ててください。
+          </p>
+        ) : (
+          <ul className="mv2-refs">
+            {storyCharacters.map(c => (
+              <li key={c.id} className="mv2-ref">
+                {c.reference_image_path ? (
+                  <img className="mv2-ref-thumb" src={fileUrl(c.reference_image_path)} alt={`${c.name}の参照画像`} />
+                ) : (
+                  <div className="mv2-ref-thumb mv2-thumb--empty">なし</div>
+                )}
+                <div className="mv2-card-body">
+                  <div className="mv2-card-title">{c.name}</div>
+                  <select
+                    value=""
+                    disabled={busy || panels.length === 0}
+                    onChange={e => { if (e.target.value) void setReference(c.id, { scene_id: Number(e.target.value) }) }}
+                  >
+                    <option value="">コマの絵から選ぶ…</option>
+                    {panels.map(p => (
+                      <option key={p.scene_id} value={p.scene_id}>シーン{p.scene_index + 1}の絵</option>
+                    ))}
+                  </select>
+                  <label className="mv2-upload">
+                    画像をアップロード
+                    <input type="file" accept="image/*" disabled={busy}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) uploadReference(c.id, f); e.target.value = '' }} />
+                  </label>
+                  {c.reference_image_path && (
+                    <button type="button" className="story-secondary" disabled={busy}
+                      onClick={() => setReference(c.id, null)}>
+                      参照を外す
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {useReference && referencedNames.length > 0 && (
+          <p className="story-muted">参照あり: {referencedNames.join('、')}</p>
+        )}
+      </details>
 
       <div className="story-row">
         <label>

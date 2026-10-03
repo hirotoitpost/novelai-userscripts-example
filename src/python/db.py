@@ -222,6 +222,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_stories(conn)
     _migrate_manga_pages(conn)
     _migrate_story_scenes(conn)
+    _migrate_characters(conn)
 
 
 _STORIES_EXTRA_COLUMNS = {
@@ -256,6 +257,23 @@ def _migrate_story_scenes(conn: sqlite3.Connection) -> None:
     for column, column_type in _STORY_SCENES_EXTRA_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE story_scenes ADD COLUMN {column} {column_type}")
+    conn.commit()
+
+
+# 漫画v2のキャラ参照(NovelAIのCharacter Reference)に使う画像。
+_CHARACTERS_EXTRA_COLUMNS = {"reference_image_path": "TEXT"}
+
+
+def _migrate_characters(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(characters)")}
+    for column, column_type in _CHARACTERS_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE characters ADD COLUMN {column} {column_type}")
+    conn.commit()
+
+
+def update_character_reference(conn: sqlite3.Connection, character_id: int, image_path: str | None) -> None:
+    conn.execute("UPDATE characters SET reference_image_path = ? WHERE id = ?", (image_path, character_id))
     conn.commit()
 
 
@@ -881,7 +899,7 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     """物語内の scene_id → 登場キャラの一覧。"""
     rows = conn.execute(
         """
-        SELECT sc.scene_id, c.id, c.name, c.appearance_tags
+        SELECT sc.scene_id, c.id, c.name, c.appearance_tags, c.reference_image_path
         FROM scene_characters sc
         JOIN characters c ON c.id = sc.character_id
         JOIN story_scenes s ON s.id = sc.scene_id
@@ -894,7 +912,12 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     result: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
         result.setdefault(row["scene_id"], []).append(
-            {"id": row["id"], "name": row["name"], "appearance_tags": row["appearance_tags"]}
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "appearance_tags": row["appearance_tags"],
+                "reference_image_path": row["reference_image_path"],
+            }
         )
     return result
 

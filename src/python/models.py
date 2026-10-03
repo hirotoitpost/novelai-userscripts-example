@@ -402,6 +402,7 @@ class SceneCharacterResponse(BaseModel):
     id: int
     name: str
     appearance_tags: str
+    reference_image_path: Optional[str] = None
 
 
 class CharacterResponse(BaseModel):
@@ -410,6 +411,7 @@ class CharacterResponse(BaseModel):
     appearance_tags: str
     notes: Optional[str] = None
     created_at: str
+    reference_image_path: Optional[str] = None
 
 
 class CharacterSaveRequest(BaseModel):
@@ -505,8 +507,20 @@ class MangaV2PanelsRequest(BaseModel):
     skip_existing: bool = True
     # 漫画らしいモノクロが既定。カラーにしたい場合は True。
     color: bool = False
+    # 参照画像を登録したキャラが出るコマで、NovelAIのキャラ参照(Character Reference)を使う。
+    # V5は未対応(実機で500)なので、そのコマはV4.5 Fullで生成する。1コマあたり+5 Anlas。
+    use_character_reference: bool = False
+    reference_strength: float = Field(1.0, ge=0.0, le=1.0)
+    reference_fidelity: float = Field(1.0, ge=0.0, le=1.0)
     # width/height はテンプレートのコマの形から決めるので使わない。
     settings: MangaImageSettings = MangaImageSettings()
+
+
+class MangaV2CharacterReferenceRequest(BaseModel):
+    """キャラ参照の画像。アップロード画像(base64/data URL)か、生成済みのコマ(scene_id)のどちらか。"""
+
+    image: Optional[str] = None
+    scene_id: Optional[int] = None
 
 
 class MangaV2SceneSfxRequest(BaseModel):

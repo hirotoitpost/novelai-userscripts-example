@@ -16,12 +16,15 @@ V5のコマ割り機能に専用APIパラメータは無く、通常の /ai/gene
 
 from __future__ import annotations
 
+import base64
 import io
 import re
 import zipfile
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from PIL import Image
 
 _IMAGE_API_ADDRESS = "https://image.novelai.net"
 
@@ -225,6 +228,43 @@ async def generate_manga_page(
     )
 
 
+@dataclass(frozen=True)
+class CharacterReferenceInput:
+    """キャラ参照(Character Reference)。image_b64 は reference_image_b64 で整えたもの。"""
+
+    image_b64: str
+    strength: float = 1.0
+    fidelity: float = 1.0
+
+
+# 参照画像は 1024x1536 に縦横比を保って縮め、余白を黒で埋めて渡す(SDKの crop_and_resize と同じ)
+_REFERENCE_SIZE = (1024, 1536)
+
+
+def reference_image_b64(image_bytes: bytes) -> str:
+    with Image.open(io.BytesIO(image_bytes)) as src:
+        img = src.convert("RGB")
+    target_w, target_h = _REFERENCE_SIZE
+    scale = min(target_w / img.width, target_h / img.height)
+    img = img.resize((int(img.width * scale), int(img.height * scale)))
+    canvas = Image.new("RGB", _REFERENCE_SIZE, (0, 0, 0))
+    canvas.paste(img, ((target_w - img.width) // 2, (target_h - img.height) // 2))
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _apply_character_reference(parameters: dict[str, Any], ref: CharacterReferenceInput) -> None:
+    """SDK(converter._convert_character_references)が送るのと同じ形で director_reference_* を足す。"""
+    parameters["director_reference_images"] = [ref.image_b64]
+    parameters["director_reference_descriptions"] = [
+        {"caption": {"base_caption": "character&style", "char_captions": []}, "legacy_uc": False}
+    ]
+    parameters["director_reference_strength_values"] = [round(ref.strength, 2)]
+    parameters["director_reference_secondary_strength_values"] = [round(1 - ref.fidelity, 2)]
+    parameters["director_reference_information_extracted"] = [1.0]
+
+
 async def generate_image_v5(
     api_key: str,
     prompt: str,
@@ -240,10 +280,13 @@ async def generate_image_v5(
     cfg_rescale: float = 0.0,
     seed: int = 0,
     character_tags: list[str] | None = None,
+    character_reference: CharacterReferenceInput | None = None,
 ) -> bytes:
     """
     組み立て済みのプロンプトで1枚生成し、PNGバイト列を返す。漫画ページ(コマ割り込み)にも、
     漫画v2のコマ単位の画像にも使う。
+
+    character_reference は V4.5 のみ対応(V5に付けると500が返る。2026-10 実機で確認)。
     """
     body = _build_v5_body(
         prompt,
@@ -259,6 +302,8 @@ async def generate_image_v5(
         seed=seed,
         character_tags=character_tags or [],
     )
+    if character_reference is not None:
+        _apply_character_reference(body["parameters"], character_reference)
 
     headers = {"Authorization": f"Bearer {api_key}"}
     async with httpx.AsyncClient(headers=headers, timeout=180) as http_client:

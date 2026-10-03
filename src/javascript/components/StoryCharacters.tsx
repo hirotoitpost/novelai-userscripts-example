@@ -6,12 +6,15 @@ export interface Character {
   appearance_tags: string
   notes: string | null
   created_at: string
+  reference_image_path?: string | null
 }
 
 export interface SceneCharacter {
   id: number
   name: string
   appearance_tags: string
+  /** 漫画v2のキャラ参照に使う画像 */
+  reference_image_path?: string | null
 }
 
 interface Props {

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from typing import Annotated, Any
@@ -22,6 +23,7 @@ from ..db import (
     get_connection,
     list_manga_panels,
     list_story_scenes,
+    update_character_reference,
     update_scene_sfx,
     update_story_final_image,
     upsert_manga_panel,
@@ -31,6 +33,7 @@ from ..manga_v2.layout import TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt
 from ..models import (
+    MangaV2CharacterReferenceRequest,
     MangaV2ComposeRequest,
     MangaV2ComposeResponse,
     MangaV2Font,
@@ -41,7 +44,7 @@ from ..models import (
     MangaV2Template,
     StoryJobResponse,
 )
-from ..novelai_image_v5 import DIALOGUE_RE, generate_image_v5
+from ..novelai_image_v5 import DIALOGUE_RE, CharacterReferenceInput, generate_image_v5, reference_image_b64
 from .llm import stream_llm_text, strip_think_tags
 from .story import _MANGA_DIR, _PROJECT_ROOT, _Job, _job_response, _start_job
 
@@ -50,6 +53,9 @@ ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 router = APIRouter(prefix="/api/manga-v2", tags=["manga-v2"])
 
 _PANEL_DIR = _MANGA_DIR / "panels"
+_REFERENCE_DIR = _MANGA_DIR / "refs"
+# キャラ参照を使うコマの生成モデル。V5はキャラ参照に未対応(500が返る)。
+_REFERENCE_MODEL = "nai-diffusion-4-5-full"
 _PAGE_DIR = _MANGA_DIR / "v2"
 # characterPrompts の上限(V4系と同じ)
 _MAX_CHARACTERS = 4
@@ -99,6 +105,46 @@ async def get_fonts() -> list[dict[str, str]]:
 @router.get("/templates", response_model=list[MangaV2Template])
 async def get_templates() -> list[dict[str, Any]]:
     return [{"id": t.id, "label": t.label, "panels": len(t.panels)} for t in TEMPLATES.values()]
+
+
+@router.put("/characters/{character_id}/reference", status_code=204)
+async def put_character_reference(character_id: int, req: MangaV2CharacterReferenceRequest) -> None:
+    """キャラ参照の画像を登録する。アップロード画像か、生成済みのコマの絵を使う。"""
+    if req.image:
+        data = req.image.split(",", 1)[1] if req.image.startswith("data:") else req.image
+        try:
+            image_bytes = base64.b64decode(data)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="画像を読み取れませんでした。")
+    elif req.scene_id is not None:
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT image_path FROM manga_panels WHERE scene_id = ?", (req.scene_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise HTTPException(status_code=404, detail="そのシーンにはまだコマの絵がありません。")
+        image_bytes = (_PROJECT_ROOT / row["image_path"]).read_bytes()
+    else:
+        raise HTTPException(status_code=400, detail="image か scene_id を指定してください。")
+
+    _REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"char{character_id}_{uuid4().hex[:8]}.png"
+    (_REFERENCE_DIR / filename).write_bytes(image_bytes)
+    conn = get_connection()
+    try:
+        update_character_reference(conn, character_id, f"outputs/manga/refs/{filename}")
+    finally:
+        conn.close()
+
+
+@router.delete("/characters/{character_id}/reference", status_code=204)
+async def delete_character_reference(character_id: int) -> None:
+    conn = get_connection()
+    try:
+        update_character_reference(conn, character_id, None)
+    finally:
+        conn.close()
 
 
 @router.put("/scenes/{scene_id}/sfx", status_code=204)
@@ -288,6 +334,24 @@ async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: Clie
     return _job_response(_start_job(story_id, "panels", runner))
 
 
+def _scene_reference(
+    characters: list[dict[str, Any]], req: MangaV2PanelsRequest
+) -> CharacterReferenceInput | None:
+    """
+    シーンに出るキャラのうち、参照画像があるものを1人分だけ使う(複数枚の同時指定は未検証)。
+    シーンへの割り当て順(名前順)で最初の1人になる。
+    """
+    for character in characters:
+        path = character.get("reference_image_path")
+        if path and (_PROJECT_ROOT / path).is_file():
+            return CharacterReferenceInput(
+                image_b64=reference_image_b64((_PROJECT_ROOT / path).read_bytes()),
+                strength=req.reference_strength,
+                fidelity=req.reference_fidelity,
+            )
+    return None
+
+
 async def _run_panels(
     job: _Job, story_id: int, req: MangaV2PanelsRequest, api_key: str, targets: list[dict[str, Any]]
 ) -> None:
@@ -312,11 +376,14 @@ async def _run_panels(
             if c["appearance_tags"].strip()
         ][:_MAX_CHARACTERS]
         seed = settings.seed if settings.seed is not None else story_id * 1000 + scene["scene_index"]
+        reference = _scene_reference(characters.get(scene["id"], []), req) if req.use_character_reference else None
+        if reference is not None:
+            job.message += "(キャラ参照あり・V4.5)"
         image = await generate_image_v5(
             api_key,
             build_panel_prompt(scene["draft_prompt_tags"], color=req.color, complexity=settings.complexity),
             negative,
-            model=settings.model,
+            model=_REFERENCE_MODEL if reference is not None else settings.model,
             width=width,
             height=height,
             steps=settings.steps,
@@ -326,6 +393,7 @@ async def _run_panels(
             cfg_rescale=settings.cfg_rescale,
             seed=seed,
             character_tags=character_tags,
+            character_reference=reference,
         )
         filename = f"story{story_id}_scene{scene['scene_index']}_{uuid4().hex[:8]}.png"
         (_PANEL_DIR / filename).write_bytes(image)
