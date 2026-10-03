@@ -287,7 +287,7 @@ def draw_bubble(
 # 描き文字の大きさ(コマの短辺に対する割合)と上限・下限
 _SFX_SIZE_RATIO = 0.16
 _SFX_MAX_SIZE = 130
-_SFX_MIN_SIZE = 40
+SFX_MIN_SIZE = 40
 # 1列に並べる最大文字数。長い効果音は2列以上にする。
 _SFX_MAX_ROWS = 6
 _SFX_COLUMN_GAP = 1.05
@@ -309,13 +309,13 @@ class SfxLayout:
         return round(max((len(c) for c in self.columns), default=0) * self.size * _SFX_CHAR_STEP + self.size * 0.4)
 
 
-def fit_sfx(text: str, panel_w: int, panel_h: int) -> SfxLayout:
-    size = max(min(round(min(panel_w, panel_h) * _SFX_SIZE_RATIO), _SFX_MAX_SIZE), _SFX_MIN_SIZE)
+def fit_sfx(text: str, panel_w: int, panel_h: int, max_size: int = _SFX_MAX_SIZE) -> SfxLayout:
+    size = max(min(round(min(panel_w, panel_h) * _SFX_SIZE_RATIO), max_size), SFX_MIN_SIZE)
     chars = "".join(ch for ch in text if ch not in _SPACES)
     while True:
         columns = [chars[i : i + _SFX_MAX_ROWS] for i in range(0, len(chars), _SFX_MAX_ROWS)] or [""]
         layout = SfxLayout(columns, size)
-        if size <= _SFX_MIN_SIZE or (layout.height <= panel_h * 0.85 and layout.width <= panel_w * 0.6):
+        if size <= SFX_MIN_SIZE or (layout.height <= panel_h * 0.85 and layout.width <= panel_w * 0.6):
             return layout
         size -= 4
 

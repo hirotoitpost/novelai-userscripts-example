@@ -9,7 +9,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from .layout import PAGE_HEIGHT, PAGE_WIDTH, Rect, panel_rects
-from .lettering import TextBlock, bubble_size, draw_bubble, draw_sfx, fit_sfx, fit_text
+from .lettering import SFX_MIN_SIZE, TextBlock, bubble_size, draw_bubble, draw_sfx, fit_sfx, fit_text
 
 _BORDER = 4
 _BUBBLE_MARGIN = 14
@@ -59,11 +59,11 @@ def _overlap_area(a: Rect, b: Rect) -> int:
     return max(w, 0) * max(h, 0)
 
 
-def _place(size: tuple[int, int], panel: Rect, placed: list[Rect], *, sfx: bool = False) -> Rect:
+def _place(size: tuple[int, int], panel: Rect, placed: list[Rect], *, sfx: bool = False) -> tuple[Rect, bool]:
     """
     吹き出しの置き場所。日本の漫画は右から読むので、コマの上辺に沿って右から左へ、
     次に下辺に沿って右から左へ探し、既存の吹き出しと重ならない最初の位置に置く。
-    どこにも空きが無ければ重なりが最小の位置にする。
+    どこにも空きが無ければ重なりが最小の位置にする。2つ目の戻り値は重ならずに置けたか。
 
     描き文字(sfx=True)は吹き出しと取り合わないよう、コマの中ほど・左側から探す。
     """
@@ -92,17 +92,22 @@ def _place(size: tuple[int, int], panel: Rect, placed: list[Rect], *, sfx: bool 
             candidates.append((left_limit, top, left_limit + bw, top + bh))
     for candidate in candidates:
         if not any(_overlaps(candidate, other) for other in placed):
-            return candidate
-    return min(candidates, key=lambda c: sum(_overlap_area(c, other) for other in placed))
+            return candidate, True
+    return min(candidates, key=lambda c: sum(_overlap_area(c, other) for other in placed)), False
 
 
-def _fit_bubble(text: str, panel: Rect) -> tuple[TextBlock, tuple[int, int]]:
+def _fit_bubble(text: str, panel: Rect, text_size: int = _TEXT_SIZE) -> tuple[TextBlock, tuple[int, int]]:
     pw, ph = panel[2] - panel[0], panel[3] - panel[1]
     # 楕円の倍率と余白を見込んで、文字ブロックの上限をコマの大きさから決める
     max_text_w = int((pw * 0.45) / 1.45)
-    max_text_h = min(int((ph - _BUBBLE_MARGIN * 2 - 20) / 1.3), _TEXT_SIZE * _MAX_ROWS)
-    block = fit_text(text, max_text_w, max_text_h, _TEXT_SIZE, _TEXT_MIN_SIZE)
+    max_text_h = min(int((ph - _BUBBLE_MARGIN * 2 - 20) / 1.3), text_size * _MAX_ROWS)
+    block = fit_text(text, max_text_w, max_text_h, text_size, _TEXT_MIN_SIZE)
     return block, bubble_size(block)
+
+
+# 空きが無いときに文字を小さくして置き直す刻み
+_SHRINK_STEP_TEXT = 2
+_SHRINK_STEP_SFX = 8
 
 
 def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle) -> None:
@@ -121,9 +126,16 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         lines = lines[: _MAX_BUBBLES - 1] + ["　".join(lines[_MAX_BUBBLES - 1 :])]
     placed: list[Rect] = []
     speaker = ((x0 + x1) / 2, y0 + height * 0.6)
+    # 吹き出し・描き文字とも、既に置いたものと重なるなら文字を小さくして空きを探し直す。
+    # 最小サイズでも空きが無ければ、重なりが最小の位置に置く。
     for line in lines:
-        block, size = _fit_bubble(line, rect)
-        box = _place(size, rect, placed)
+        text_size = _TEXT_SIZE
+        while True:
+            block, size = _fit_bubble(line, rect, text_size)
+            box, free = _place(size, rect, placed)
+            if free or text_size <= _TEXT_MIN_SIZE:
+                break
+            text_size -= _SHRINK_STEP_TEXT
         placed.append(box)
         draw_bubble(page, box, block, style.font_path, tail_toward=speaker, opacity=style.bubble_opacity)
 
@@ -131,7 +143,11 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         if not text.strip():
             continue
         layout = fit_sfx(text, width, height)
-        box = _place((layout.width, layout.height), rect, placed, sfx=True)
+        while True:
+            box, free = _place((layout.width, layout.height), rect, placed, sfx=True)
+            if free or layout.size <= SFX_MIN_SIZE:
+                break
+            layout = fit_sfx(text, width, height, max_size=layout.size - _SHRINK_STEP_SFX)
         placed.append(box)
         draw_sfx(page, box, layout, style.sfx_font_path)
 
