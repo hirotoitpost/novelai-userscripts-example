@@ -28,7 +28,14 @@ from ..db import (
     update_story_final_image,
     upsert_manga_panel,
 )
-from ..manga_v2.compose import LetteringStyle, PanelContent, compose_pages, concat_pages, page_png
+from ..manga_v2.compose import (
+    LetteringStyle,
+    PanelContent,
+    compose_pages,
+    concat_pages,
+    page_png,
+    split_dense_panels,
+)
 from ..manga_v2.layout import TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt
@@ -441,7 +448,7 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         for s in scenes
         if s["scene_index"] <= last
     ]
-    pages = compose_pages(req.template, contents, style)
+    pages = compose_pages(req.template, split_dense_panels(contents, req.max_lines_per_panel), style)
 
     _PAGE_DIR.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex[:8]

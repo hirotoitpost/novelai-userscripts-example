@@ -30,6 +30,8 @@ class PanelContent:
     dialogue: list[str] = field(default_factory=list)
     # 吹き出しを使わず描き文字にする効果音・オノマトペ
     sfx: list[str] = field(default_factory=list)
+    # セリフが多いシーンを分けたときの2コマ目以降の番号。同じ絵を寄りで切り抜く(0は通常)。
+    zoom_step: int = 0
 
 
 @dataclass
@@ -40,13 +42,54 @@ class LetteringStyle:
     bubble_opacity: float = 1.0
 
 
-def _cover(img: Image.Image, width: int, height: int) -> Image.Image:
-    """縦横比を保ったまま width×height を覆うよう拡大し、はみ出しを切り落とす。"""
-    scale = max(width / img.width, height / img.height)
+# 寄りのコマの拡大率(1段ごと)と上限、切り抜く中心(横は段ごとに左右へ振る)
+_ZOOM_PER_STEP = 0.45
+_MAX_ZOOM = 2.2
+_ZOOM_FOCUS_X = (0.5, 0.5, 0.42, 0.58)
+_ZOOM_FOCUS_Y = 0.35
+
+
+def _cover(img: Image.Image, width: int, height: int, zoom_step: int = 0) -> Image.Image:
+    """
+    縦横比を保ったまま width×height を覆うよう拡大し、はみ出しを切り落とす。
+    zoom_step > 0 なら更に拡大して上寄りの中央付近(人物の顔がありやすい)を切り抜く。
+    """
+    zoom = min(1 + _ZOOM_PER_STEP * zoom_step, _MAX_ZOOM)
+    scale = max(width / img.width, height / img.height) * zoom
     resized = img.resize((max(round(img.width * scale), width), max(round(img.height * scale), height)))
-    left = (resized.width - width) // 2
-    top = round((resized.height - height) * _CROP_VERTICAL_BIAS)
+    if zoom_step == 0:
+        left = (resized.width - width) // 2
+        top = round((resized.height - height) * _CROP_VERTICAL_BIAS)
+    else:
+        fx = _ZOOM_FOCUS_X[zoom_step % len(_ZOOM_FOCUS_X)]
+        left = min(max(round(resized.width * fx - width / 2), 0), resized.width - width)
+        top = min(max(round(resized.height * _ZOOM_FOCUS_Y - height / 2), 0), resized.height - height)
     return resized.crop((left, top, left + width, top + height))
+
+
+def split_dense_panels(panels: list[PanelContent], max_lines: int) -> list[PanelContent]:
+    """
+    セリフが max_lines を超えるシーンを複数のコマに分ける(0なら分けない)。
+    分けたコマには同じ絵の寄りを使うので、追加の生成は要らない。効果音は最初のコマに置く。
+    """
+    if max_lines <= 0:
+        return panels
+    result: list[PanelContent] = []
+    for panel in panels:
+        lines = [line for line in panel.dialogue if line.strip()]
+        if len(lines) <= max_lines:
+            result.append(panel)
+            continue
+        for step, start in enumerate(range(0, len(lines), max_lines)):
+            result.append(
+                PanelContent(
+                    panel.image_path,
+                    lines[start : start + max_lines],
+                    panel.sfx if step == 0 else [],
+                    zoom_step=step,
+                )
+            )
+    return result
 
 
 def _overlaps(a: Rect, b: Rect) -> bool:
@@ -116,7 +159,7 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
     draw = ImageDraw.Draw(page)
     if content.image_path is not None and content.image_path.is_file():
         with Image.open(content.image_path) as src:
-            page.paste(_cover(src.convert("RGB"), width, height), (x0, y0))
+            page.paste(_cover(src.convert("RGB"), width, height, content.zoom_step), (x0, y0))
     else:
         draw.rectangle(rect, fill=(225, 225, 225))
         draw.text((x0 + 12, y0 + 10), "(未生成)", fill=(120, 120, 120))

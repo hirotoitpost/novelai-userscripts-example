@@ -79,6 +79,7 @@ export default function MangaV2Studio({
   const [sfxFont, setSfxFont] = useLocalStorage('nai_manga_v2_sfx_font', 'hg-soei-kakugothic-ub')
   const [opacity, setOpacity] = useLocalStorage('nai_manga_v2_bubble_opacity', 100)
   const [color, setColor] = useLocalStorage('nai_manga_v2_color', false)
+  const [maxLines, setMaxLines] = useLocalStorage('nai_manga_v2_max_lines', 3)
   const [useReference, setUseReference] = useLocalStorage('nai_manga_v2_use_reference', false)
   const [refStrength, setRefStrength] = useLocalStorage('nai_manga_v2_ref_strength', 1.0)
   const [refFidelity, setRefFidelity] = useLocalStorage('nai_manga_v2_ref_fidelity', 1.0)
@@ -245,6 +246,7 @@ export default function MangaV2Studio({
           font,
           sfx_font: sfxFont,
           bubble_opacity: opacity / 100,
+          max_lines_per_panel: maxLines,
         }),
         signal,
       })
@@ -297,6 +299,13 @@ export default function MangaV2Studio({
               onChange={e => setOpacity(Number(e.target.value))}
             />
           </label>
+          <label>
+            1コマのセリフ上限(超えたら同じ絵の寄りでコマを足す・0で分けない)
+            <input type="number" min={0} max={10} value={maxLines} disabled={busy}
+              onChange={e => setMaxLines(Math.max(0, Number(e.target.value)))} />
+          </label>
+        </div>
+        <div className="story-row">
           <label className="mv2-check">
             <input type="checkbox" checked={color} disabled={busy} onChange={e => setColor(e.target.checked)} />
             カラーで描く(オフならモノクロ)
