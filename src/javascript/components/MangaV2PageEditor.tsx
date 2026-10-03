@@ -3,7 +3,7 @@ import { PointerEvent as ReactPointerEvent, useRef, useState } from 'react'
 /** 合成したページ上の吹き出し/描き文字(座標はページのピクセル)。 */
 export interface MangaV2Element {
   key: string
-  kind: 'bubble' | 'sfx'
+  kind: 'bubble' | 'sfx' | 'narration'
   text: string
   box: [number, number, number, number]
   panel: [number, number, number, number]

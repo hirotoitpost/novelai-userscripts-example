@@ -26,6 +26,7 @@ from ..db import (
     list_story_scenes,
     set_manga_v2_overrides,
     update_character_reference,
+    update_scene_narration,
     update_scene_sfx,
     update_story_final_image,
     upsert_manga_panel,
@@ -49,6 +50,7 @@ from ..models import (
     MangaV2OverrideRequest,
     MangaV2Panel,
     MangaV2PanelsRequest,
+    MangaV2SceneNarrationRequest,
     MangaV2SceneSfxRequest,
     MangaV2SuggestSfxRequest,
     MangaV2Template,
@@ -300,6 +302,143 @@ async def suggest_sfx(story_id: int, req: MangaV2SuggestSfxRequest) -> dict[str,
     return _job_response(_start_job(story_id, "sfx", runner))
 
 
+@router.put("/scenes/{scene_id}/narration", status_code=204)
+async def put_scene_narration(scene_id: int, req: MangaV2SceneNarrationRequest) -> None:
+    conn = get_connection()
+    try:
+        update_scene_narration(conn, scene_id, None if req.narration is None else req.narration.strip())
+    finally:
+        conn.close()
+
+
+# ---- ナレーションのAI作成 ----
+
+_NARRATION_TEXT_CHARS = 300
+_NARRATION_MAX_CHARS = 40
+_NARRATION_BATCH_SIZE = 6
+_NARRATION_MAX_TOKENS = 768
+
+
+def _narration_source(scene: dict[str, Any]) -> str:
+    """セリフ(「」『』)と《効果音》を除いた地の文。"""
+    text = scene["novelai_text"] or scene["draft_text"] or ""
+    text = _SFX_MARK_RE.sub("", DIALOGUE_RE.sub("", text))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _narration_json_schema(n_scenes: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "scenes": {
+                "type": "array",
+                "minItems": n_scenes,
+                "maxItems": n_scenes,
+                "items": {
+                    "type": "object",
+                    "properties": {"narration": {"type": "string"}},
+                    "required": ["narration"],
+                },
+            }
+        },
+        "required": ["scenes"],
+    }
+
+
+def _narration_system_prompt(n_scenes: int) -> str:
+    return (
+        "あなたは小説を漫画にするときの、ナレーション(コマの隅に入る四角い枠の文)を書くアシスタントです。\n"
+        "場面ごとの地の文(セリフは除いてあります)が渡されます。各場面のナレーションをJSON形式で返してください。\n\n"
+        f"- scenes配列にちょうど{n_scenes}個の要素を、渡された場面の順番通りに含める\n"
+        f"- narration: 日本語で1〜2文、{_NARRATION_MAX_CHARS}文字以内。時間・場所・状況や心情を短く\n"
+        "- 地の文に書かれていないことは足さない。絵を見ればわかる細かい描写は省く\n"
+        "- 地の文がほとんど無い場面や、ナレーションが要らない場面は空文字にする\n"
+        "  良い例: その日、私は廃校を訪れた。 / 夕暮れの庭に、見知らぬ少女が立っていた。"
+    )
+
+
+def _parse_narration(text: str, n_scenes: int) -> list[str] | None:
+    try:
+        scenes = json.loads(text).get("scenes")
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(scenes, list) or not scenes:
+        return None
+    result: list[str] = []
+    for scene in scenes[:n_scenes]:
+        value = scene.get("narration") if isinstance(scene, dict) else ""
+        narration = str(value or "").strip().strip("「」『』\"")
+        # 長すぎるものは文の切れ目で詰める(枠に収まらないため)
+        if len(narration) > _NARRATION_MAX_CHARS * 2:
+            narration = narration[: _NARRATION_MAX_CHARS * 2].rsplit("。", 1)[0] + "。"
+        result.append(narration)
+    return result
+
+
+async def _suggest_narration_batch(texts: list[str]) -> list[str] | None:
+    for _ in range(_SFX_MAX_ATTEMPTS):
+        parts: list[str] = []
+        async for delta in stream_llm_text(
+            [
+                {"role": "system", "content": _narration_system_prompt(len(texts))},
+                {
+                    "role": "user",
+                    "content": "\n\n".join(
+                        f"場面{i}:\n{t[:_NARRATION_TEXT_CHARS] or '(地の文なし)'}" for i, t in enumerate(texts, 1)
+                    ),
+                },
+            ],
+            max_tokens=_NARRATION_MAX_TOKENS,
+            json_schema=_narration_json_schema(len(texts)),
+        ):
+            parts.append(delta)
+        parsed = _parse_narration(strip_think_tags("".join(parts)), len(texts))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+@router.post("/{story_id}/suggest-narration", response_model=StoryJobResponse)
+async def suggest_narration(story_id: int, req: MangaV2SuggestSfxRequest) -> dict[str, Any]:
+    """ローカルLLMに地の文からナレーションを作らせ、シーンに保存する(バックグラウンドジョブ)。"""
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+    finally:
+        conn.close()
+    if not scenes:
+        raise HTTPException(status_code=404, detail="先にシーン分割を実行してください。")
+    targets = [
+        s
+        for s in scenes
+        if s["scene_index"] >= req.scene_from
+        and (req.scene_to is None or s["scene_index"] <= req.scene_to)
+        and (req.overwrite or s["narration"] is None)
+    ]
+    if not targets:
+        raise HTTPException(status_code=400, detail="対象のシーンがありません(範囲内はナレーションを設定済みです)。")
+
+    async def runner(job: _Job) -> None:
+        batches = [targets[i : i + _NARRATION_BATCH_SIZE] for i in range(0, len(targets), _NARRATION_BATCH_SIZE)]
+        job.total = len(batches)
+        written = 0
+        for index, batch in enumerate(batches, start=1):
+            job.message = f"ナレーションを書いています {index}/{len(batches)}"
+            results = await _suggest_narration_batch([_narration_source(s) for s in batch])
+            if results:
+                conn = get_connection()
+                try:
+                    for scene, narration in zip(batch, results):
+                        update_scene_narration(conn, scene["id"], narration)
+                        written += bool(narration)
+                finally:
+                    conn.close()
+            job.progress = index
+        job.message = f"{len(targets)}シーン中{written}シーンにナレーションを付けました"
+
+    return _job_response(_start_job(story_id, "narration", runner))
+
+
 @router.get("/{story_id}/panels", response_model=list[MangaV2Panel])
 async def get_panels(story_id: int) -> list[dict[str, Any]]:
     conn = get_connection()
@@ -450,6 +589,7 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
             _PROJECT_ROOT / panels[s["id"]]["image_path"] if s["id"] in panels else None,
             *_lettering(s),
             key=str(s["id"]),
+            narration=s.get("narration") or "",
         )
         for s in scenes
         if s["scene_index"] <= last

@@ -9,7 +9,17 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from .layout import PAGE_HEIGHT, PAGE_WIDTH, Rect, panel_rects
-from .lettering import SFX_MIN_SIZE, TextBlock, bubble_size, draw_bubble, draw_sfx, fit_sfx, fit_text
+from .lettering import (
+    SFX_MIN_SIZE,
+    TextBlock,
+    bubble_size,
+    draw_bubble,
+    draw_narration,
+    draw_sfx,
+    fit_sfx,
+    fit_text,
+    narration_size,
+)
 
 _BORDER = 4
 _BUBBLE_MARGIN = 14
@@ -18,6 +28,9 @@ _TEXT_SIZE = 26
 _TEXT_MIN_SIZE = 16
 # 1列の最大文字数。長い列は読みにくく吹き出しも細長くなるので、超える分は次の列へ送る。
 _MAX_ROWS = 11
+# ナレーションの文字サイズと、コマ幅に対する枠の最大幅
+_NARRATION_SIZE = 22
+_NARRATION_MAX_WIDTH = 0.4
 # 1コマに置く吹き出しの上限。超えた分は最後の吹き出しにまとめる。
 _MAX_BUBBLES = 4
 # 切り抜きの縦位置(0=上端, 0.5=中央)。人物の頭が切れにくいよう上寄りにする。
@@ -34,6 +47,8 @@ class PanelContent:
     zoom_step: int = 0
     # 手動配置(ドラッグ)の保存キーの元。シーンIDを入れる。
     key: str = ""
+    # ナレーション枠の文(空なら出さない)
+    narration: str = ""
 
 
 @dataclass
@@ -41,7 +56,7 @@ class Element:
     """ページ上に置いた吹き出し/描き文字。画面でドラッグして位置を直すために返す。"""
 
     key: str
-    kind: str  # "bubble" | "sfx"
+    kind: str  # "bubble" | "sfx" | "narration"
     text: str
     box: Rect
     panel: Rect
@@ -103,6 +118,7 @@ def split_dense_panels(panels: list[PanelContent], max_lines: int) -> list[Panel
                     panel.sfx if step == 0 else [],
                     zoom_step=step,
                     key=panel.key,
+                    narration=panel.narration if step == 0 else "",
                 )
             )
     return result
@@ -118,13 +134,16 @@ def _overlap_area(a: Rect, b: Rect) -> int:
     return max(w, 0) * max(h, 0)
 
 
-def _place(size: tuple[int, int], panel: Rect, placed: list[Rect], *, sfx: bool = False) -> tuple[Rect, bool]:
+def _place(
+    size: tuple[int, int], panel: Rect, placed: list[Rect], *, sfx: bool = False, narration: bool = False
+) -> tuple[Rect, bool]:
     """
     吹き出しの置き場所。日本の漫画は右から読むので、コマの上辺に沿って右から左へ、
     次に下辺に沿って右から左へ探し、既存の吹き出しと重ならない最初の位置に置く。
     どこにも空きが無ければ重なりが最小の位置にする。2つ目の戻り値は重ならずに置けたか。
 
     描き文字(sfx=True)は吹き出しと取り合わないよう、コマの中ほど・左側から探す。
+    ナレーション(narration=True)はコマの左上の角に置く(右上は吹き出しが使う)。空きが無ければ左下。
     """
     bw, bh = size
     px0, py0, px1, py1 = panel
@@ -133,7 +152,10 @@ def _place(size: tuple[int, int], panel: Rect, placed: list[Rect], *, sfx: bool 
     top_row, bottom_row = py0 + _BUBBLE_MARGIN, py1 - _BUBBLE_MARGIN - bh
     step = max(bw // 4, 8)
     candidates: list[Rect] = []
-    if sfx:
+    if narration:
+        # コマの枠にぴったり付ける(余白なし)のがナレーションらしい
+        candidates = [(px0, py0, px0 + bw, py0 + bh), (px0, py1 - bh, px0 + bw, py1)]
+    elif sfx:
         middle_row = (py0 + py1 - bh) // 2
         for top in (middle_row, bottom_row, top_row):
             x0 = left_limit
@@ -196,6 +218,25 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
     speaker = ((x0 + x1) / 2, y0 + height * 0.6)
     elements: list[Element] = []
     key_base = f"{content.key}:{content.zoom_step}"
+    narration_box: Rect | None = None
+    narration_block: TextBlock | None = None
+    if content.narration.strip():
+        # ナレーションは先に場所を取り、吹き出しはそれを避けて置く。描くのは最後(枠線が上に来るように)。
+        key = f"{key_base}:narration:0"
+        narration_block = fit_text(
+            content.narration.strip(),
+            int(width * _NARRATION_MAX_WIDTH),
+            min(int(height * 0.7), _NARRATION_SIZE * _MAX_ROWS),
+            _NARRATION_SIZE,
+            _TEXT_MIN_SIZE,
+        )
+        size = narration_size(narration_block)
+        override = style.overrides.get(key)
+        narration_box = (
+            _overridden_box(size, rect, override) if override is not None else _place(size, rect, placed, narration=True)[0]
+        )
+        placed.append(narration_box)
+        elements.append(Element(key, "narration", content.narration.strip(), narration_box, rect))
     # 吹き出し・描き文字とも、既に置いたものと重なるなら文字を小さくして空きを探し直す。
     # 最小サイズでも空きが無ければ、重なりが最小の位置に置く。手動で動かしたものはその位置に置く。
     for index, line in enumerate(lines):
@@ -230,6 +271,9 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         placed.append(box)
         elements.append(Element(key, "sfx", text, box, rect))
         draw_sfx(page, box, layout, style.sfx_font_path)
+
+    if narration_box is not None and narration_block is not None:
+        draw_narration(page, narration_box, narration_block, style.font_path)
 
     draw.rectangle(rect, outline=(0, 0, 0), width=_BORDER)
     return elements

@@ -251,7 +251,8 @@ def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
 
 # 漫画v2で描き文字にする効果音(JSONの文字列配列)。NULL は未設定(AI提案の対象)、
 # 空配列は「このシーンには効果音を付けない」と決めた状態。
-_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT"}
+# narration は漫画v2のナレーション枠の文。NULL は未設定、空文字は「ナレーションなし」。
+_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT", "narration": "TEXT"}
 
 
 def _migrate_story_scenes(conn: sqlite3.Connection) -> None:
@@ -830,6 +831,12 @@ def list_story_scenes(conn: sqlite3.Connection, story_id: int) -> list[dict[str,
         }
         for row in rows
     ]
+
+
+def update_scene_narration(conn: sqlite3.Connection, scene_id: int, narration: str | None) -> None:
+    """None で未設定に戻す。"""
+    conn.execute("UPDATE story_scenes SET narration = ? WHERE id = ?", (narration, scene_id))
+    conn.commit()
 
 
 def update_scene_sfx(conn: sqlite3.Connection, scene_id: int, sfx: list[str] | None) -> None:

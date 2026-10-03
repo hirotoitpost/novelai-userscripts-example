@@ -160,6 +160,21 @@ def fit_text(text: str, max_width: int, max_height: int, size: int, min_size: in
     while size > min_size and (block.width > max_width or block.height > max_height):
         size -= 1
         block = TextBlock(layout_columns(text, max_height // size), size)
+    return _balanced(text, block)
+
+
+def _balanced(text: str, block: TextBlock) -> TextBlock:
+    """
+    列の長さを揃える。上限いっぱいに詰めると最後の列に1〜2字だけ残ることがある
+    (例:「過去と現在を重ねて考え/た」)ので、同じ列数に収まる範囲で1列の字数を減らす。
+    """
+    if len(block.columns) < 2:
+        return block
+    longest = max(len(c) for c in block.columns)
+    for rows in range(-(-sum(len(c) for c in block.columns) // len(block.columns)), longest):
+        columns = layout_columns(text, rows)
+        if len(columns) <= len(block.columns):
+            return TextBlock(columns, block.size)
     return block
 
 
@@ -280,6 +295,24 @@ def draw_bubble(
     # 地が透けるほど背景の線と文字が混ざるので、白フチを付けて読めるようにする
     stroke = 0 if opacity >= 0.95 else max(2, block.size // 10)
     draw_text_block(img, block, (cx, cy), font_path, stroke=stroke)
+
+
+# ---- ナレーション ----
+
+_NARRATION_PAD = 12
+_NARRATION_BORDER = 2
+
+
+def narration_size(block: TextBlock) -> tuple[int, int]:
+    return block.width + _NARRATION_PAD * 2, block.height + _NARRATION_PAD * 2
+
+
+def draw_narration(img: Image.Image, box: tuple[int, int, int, int], block: TextBlock, font_path: Path) -> None:
+    """地の文を入れる四角い枠(白地・細い黒枠)。吹き出しと違って透過させない。"""
+    draw = ImageDraw.Draw(img)
+    draw.rectangle(box, fill=(255, 255, 255), outline=(0, 0, 0), width=_NARRATION_BORDER)
+    x0, y0, x1, y1 = box
+    draw_text_block(img, block, ((x0 + x1) / 2, (y0 + y1) / 2), font_path)
 
 
 # ---- 効果音(描き文字) ----

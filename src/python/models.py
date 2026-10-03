@@ -378,7 +378,7 @@ class StoryJobResponse(BaseModel):
     """分割/挿絵生成のバックグラウンドジョブの進捗。"""
 
     story_id: int
-    kind: Literal["split", "illustrate", "characters", "panels", "sfx"]
+    kind: Literal["split", "illustrate", "characters", "panels", "sfx", "narration"]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
     progress: int = 0
@@ -436,6 +436,8 @@ class StorySceneResponse(BaseModel):
     novelai_text: str | None
     # 漫画v2の効果音(描き文字)。None は未設定。
     sfx: list[str] | None = None
+    # 漫画v2のナレーション。None は未設定、空文字はなし。
+    narration: str | None = None
     characters: list[SceneCharacterResponse] = []
 
 
@@ -529,6 +531,12 @@ class MangaV2SceneSfxRequest(BaseModel):
     sfx: Optional[list[str]] = Field(None, max_length=8)
 
 
+class MangaV2SceneNarrationRequest(BaseModel):
+    """シーンのナレーションを手で設定する。None で未設定に戻す(AI作成の対象になる)。"""
+
+    narration: Optional[str] = Field(None, max_length=80)
+
+
 class MangaV2SuggestSfxRequest(BaseModel):
     scene_from: int = Field(0, ge=0)
     scene_to: Optional[int] = Field(None, ge=0)
@@ -551,7 +559,7 @@ class MangaV2Element(BaseModel):
     """合成したページ上の吹き出し/描き文字。box と panel はページ座標 [x0, y0, x1, y1]。"""
 
     key: str
-    kind: Literal["bubble", "sfx"]
+    kind: Literal["bubble", "sfx", "narration"]
     text: str
     box: list[int]
     panel: list[int]

@@ -13,6 +13,8 @@ export interface MangaV2Scene {
   novelai_text: string | null
   /** null は未設定(AI提案の対象)、空配列は「効果音なし」と決めた状態。 */
   sfx: string[] | null
+  /** null は未設定(AI作成の対象)、空文字は「ナレーションなし」。 */
+  narration: string | null
   characters: SceneCharacter[]
 }
 
@@ -99,6 +101,7 @@ export default function MangaV2Studio({
   const [sceneTo, setSceneTo] = useState(4)
   // 効果音の編集中の値(scene_id → 入力文字列)
   const [sfxDrafts, setSfxDrafts] = useState<Record<number, string>>({})
+  const [narrationDrafts, setNarrationDrafts] = useState<Record<number, string>>({})
 
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
 
@@ -123,6 +126,7 @@ export default function MangaV2Studio({
   // 物語を読み直したら、保存済みの効果音を入力欄に反映する(編集途中のものは保たない)
   useEffect(() => {
     setSfxDrafts(Object.fromEntries(scenes.map(s => [s.id, (s.sfx ?? []).join('、')])))
+    setNarrationDrafts(Object.fromEntries(scenes.map(s => [s.id, s.narration ?? ''])))
   }, [scenes])
 
   const perPage = templates.find(t => t.id === template)?.panels ?? 4
@@ -210,6 +214,32 @@ export default function MangaV2Studio({
       )
       await onChanged()
     })
+  }
+
+  function suggestNarration() {
+    return runTask('ナレーションをAIに書かせています...', async signal => {
+      await startJob(
+        'suggest-narration',
+        { scene_from: from - 1, scene_to: to - 1, overwrite: overwriteSfx },
+        signal,
+      )
+      await onChanged()
+    })
+  }
+
+  async function saveNarration(scene: MangaV2Scene, narration: string | null) {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${scene.id}/narration`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ narration }),
+    })
+    if (res.ok) await onChanged()
+  }
+
+  function saveNarrationDraft(scene: MangaV2Scene) {
+    const value = (narrationDrafts[scene.id] ?? '').trim()
+    if (scene.narration === null ? value === '' : value === scene.narration) return
+    void saveNarration(scene, value)
   }
 
   async function saveSfx(scene: MangaV2Scene, sfx: string[] | null) {
@@ -443,7 +473,7 @@ export default function MangaV2Studio({
         </label>
         <label className="mv2-check">
           <input type="checkbox" checked={overwriteSfx} onChange={e => setOverwriteSfx(e.target.checked)} />
-          効果音を設定済みのシーンもAIで上書き
+          効果音・ナレーションを設定済みのシーンもAIで上書き
         </label>
       </div>
 
@@ -453,6 +483,9 @@ export default function MangaV2Studio({
         </button>
         <button type="button" onClick={suggestSfx} disabled={busy}>
           効果音をAIに提案させる
+        </button>
+        <button type="button" onClick={suggestNarration} disabled={busy}>
+          ナレーションをAIに書かせる
         </button>
         <button type="button" onClick={compose} disabled={busy || panels.length === 0}>
           ページを合成
@@ -491,6 +524,18 @@ export default function MangaV2Studio({
                     onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
                   />
                 </label>
+                <label className="mv2-sfx">
+                  ナレーション(80字まで)
+                  <textarea
+                    rows={2}
+                    maxLength={80}
+                    value={narrationDrafts[scene.id] ?? ''}
+                    placeholder={scene.narration === null ? '未設定(AI作成の対象)' : 'なし'}
+                    disabled={busy}
+                    onChange={e => setNarrationDrafts({ ...narrationDrafts, [scene.id]: e.target.value })}
+                    onBlur={() => saveNarrationDraft(scene)}
+                  />
+                </label>
                 <div className="mv2-card-actions">
                   <button type="button" onClick={() => redrawPanel(scene)} disabled={busy}>
                     {panel ? '描き直す' : '描く'}
@@ -499,6 +544,12 @@ export default function MangaV2Studio({
                     <button type="button" className="story-secondary" disabled={busy}
                       onClick={() => saveSfx(scene, null)}>
                       効果音を未設定に戻す
+                    </button>
+                  )}
+                  {scene.narration !== null && (
+                    <button type="button" className="story-secondary" disabled={busy}
+                      onClick={() => saveNarration(scene, null)}>
+                      ナレーションを未設定に戻す
                     </button>
                   )}
                 </div>
@@ -527,7 +578,7 @@ export default function MangaV2Studio({
             ))}
           </div>
           <p className="story-muted">
-            吹き出し(青枠)・描き文字(橙枠)をドラッグすると、その位置で合成し直します。
+            吹き出し(青枠)・描き文字(橙枠)・ナレーション(緑枠)をドラッグすると、その位置で合成し直します。
             手で動かしたもの(実線)はダブルクリックで自動配置に戻せます。
           </p>
           <MangaV2PageEditor

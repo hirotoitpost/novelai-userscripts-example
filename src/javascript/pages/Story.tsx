@@ -22,6 +22,8 @@ interface StoryScene {
   novelai_text: string | null
   /** 漫画v2の効果音。null は未設定。 */
   sfx: string[] | null
+  /** 漫画v2のナレーション。null は未設定。 */
+  narration: string | null
   characters: SceneCharacter[]
 }
 
