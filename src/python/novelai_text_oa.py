@@ -17,6 +17,9 @@ from dataclasses import dataclass
 import httpx
 
 _TEXT_API = "https://text.novelai.net/oa/v1/completions"
+_CHAT_API = "https://text.novelai.net/oa/v1/chat/completions"
+# タグ付けなどの指示に従わせる用途は、調整なしの汎用モデル(全プラン)を使う
+INSTRUCT_MODEL = "glm-4-6"
 
 
 @dataclass(frozen=True)
@@ -92,3 +95,31 @@ async def stream_completion(
                 choices = json.loads(payload).get("choices") or []
                 if choices and choices[0].get("text"):
                     yield choices[0]["text"]
+
+
+async def stream_chat(
+    api_key: str,
+    messages: list[dict[str, str]],
+    *,
+    model: str = INSTRUCT_MODEL,
+    max_tokens: int = 1024,
+    temperature: float = 0.4,
+) -> AsyncGenerator[str, None]:
+    """チャット形式で指示に答えさせる(ストリーミング)。非ストリーミングは本文が空で返るため使わない。"""
+    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": True}
+    headers = {"Authorization": f"Bearer {api_key}"}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=30)) as client:
+        async with client.stream("POST", _CHAT_API, json=body, headers=headers) as response:
+            if response.status_code != 200:
+                detail = (await response.aread()).decode("utf-8", "replace")
+                raise RuntimeError(f"NovelAI chat API error {response.status_code}: {detail[:300]}")
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    return
+                choices = json.loads(payload).get("choices") or []
+                content = (choices[0].get("delta") or {}).get("content") if choices else None
+                if content:
+                    yield content

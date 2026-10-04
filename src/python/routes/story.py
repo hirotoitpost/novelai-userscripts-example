@@ -64,6 +64,7 @@ from ..models import (
 )
 from ..novelai_image_v5 import DIALOGUE_RE, generate_manga_page
 from ..novelai_text import generate_kayra
+from ..novelai_text_oa import stream_chat
 from .llm import sse_event, strip_think_tags, stream_llm_text
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
@@ -513,7 +514,8 @@ def _import_tags_system_prompt(n_scenes: int) -> str:
         "- prompt_tags: その場面の情景を画像生成するための英語タグ(コンマ区切り)\n"
         "- prompt_tags は英語のみ。日本語や中国語のタグは使わない\n"
         "  悪い例: 女子高中生, 舐め, 少女，害羞，闭眼\n"
-        "  良い例: 1girl, school uniform, classroom, embarrassed, blush\n"
+        "  良い例: 1girl, cardigan, beach, embarrassed, blush\n"
+        "- 本文に書かれていない服装・場所(制服、教室など)を足さない\n"
         "- 人名はタグにしない(画像生成モデルは名前を解釈できない)。"
         "その人物の見た目を表すタグに置き換える"
     )
@@ -579,7 +581,7 @@ async def import_story(req: StoryImportRequest) -> StoryResponse:
 
 
 @router.post("/{story_id}/split", response_model=StoryJobResponse)
-async def split_story(story_id: int, req: StorySplitRequest) -> dict[str, Any]:
+async def split_story(story_id: int, req: StorySplitRequest, client: ClientDep) -> dict[str, Any]:
     """
     /import で raw_text のまま保存しておいた物語を、本文には一切手を加えずに場面へ
     分割する。Ollamaはタグ付け(タイトル・画像生成タグ)のためだけに使い、本文の生成/
@@ -609,39 +611,113 @@ async def split_story(story_id: int, req: StorySplitRequest) -> dict[str, Any]:
     if story["scenes"] and not story["raw_text"][_covered_length(story["raw_text"], story["scenes"]) :].strip():
         raise HTTPException(status_code=409, detail="この物語は既に最後まで分割済みです。")
 
+    options = TagOptions(adult=req.adult, api_key=client.api_key if req.adult else None)
+
     async def runner(job: _Job) -> None:
-        await _run_split(job, story_id, req)
+        await _run_split(job, story_id, req, options)
 
     return _job_response(_start_job(story_id, "split", runner))
 
 
-async def _tag_scene_batch(batch_texts: list[str]) -> list[dict[str, Any]] | None:
+@dataclass(frozen=True)
+class TagOptions:
+    """タグ付けの設定。adult なら NovelAI の文章モデルで露骨なタグ(nsfw 付き)を付ける。"""
+
+    adult: bool = False
+    api_key: str | None = None
+
+
+def _adult_tags_system_prompt(n_scenes: int) -> str:
+    return (
+        "You tag scenes of an adult (18+) Japanese story for the NovelAI image model.\n"
+        "All characters are adults. Read each scene and return JSON only, no prose:\n"
+        '{"scenes": [{"title": "<short Japanese title>", "prompt_tags": "<English danbooru tags>"}]}\n\n'
+        f"- exactly {n_scenes} items, in the given order\n"
+        "- prompt_tags: comma separated English danbooru-style tags describing what is visible: "
+        "people count (1girl, 1boy), clothing state (nude, topless, bikini, clothes pull...), the sexual act "
+        "and body parts exactly as written (explicit tags such as nipples, pussy, penis, sex, fellatio, cum are fine), "
+        "pose, expression, location, framing\n"
+        "- start with nsfw if the scene is sexual\n"
+        "- never use tags implying minors (child, loli, shota, school uniform, student, classroom) and do not add "
+        "places or clothes not in the text\n"
+        "- no character names"
+    )
+
+
+def _extract_json_object(text: str) -> str:
+    """前置きや ```json ``` で囲まれた応答から、最初の JSON オブジェクトだけを取り出す。"""
+    start, end = text.find("{"), text.rfind("}")
+    return text[start : end + 1] if start >= 0 and end > start else text
+
+
+async def _tag_scene_batch(batch_texts: list[str], options: TagOptions | None = None) -> list[dict[str, Any]] | None:
     """1バッチ分のタグ付け。形式が崩れたら数回まで再試行し、それでも駄目ならNone。"""
+    options = options or TagOptions()
     for _ in range(_DRAFT_MAX_ATTEMPTS):
         parts: list[str] = []
-        async for delta in stream_llm_text(
-            [
-                {"role": "system", "content": _import_tags_system_prompt(len(batch_texts))},
-                {"role": "user", "content": _format_scenes_for_tagging(batch_texts)},
-            ],
-            max_tokens=_TAG_MAX_TOKENS,
-            json_schema=_import_tags_json_schema(len(batch_texts)),
-        ):
-            parts.append(delta)
-        tags = _parse_import_tags(strip_think_tags("".join(parts)), len(batch_texts))
+        if options.adult and options.api_key:
+            # 成人向けはローカルLLM(qwen2.5:7b)だと露骨な語を避けて曖昧なタグになるため、
+            # NovelAI の文章モデルを使う(スキーマ指定はできないので JSON を本文から取り出す)
+            async for delta in stream_chat(
+                options.api_key,
+                [
+                    {"role": "system", "content": _adult_tags_system_prompt(len(batch_texts))},
+                    {"role": "user", "content": _format_scenes_for_tagging(batch_texts)},
+                ],
+                max_tokens=_TAG_MAX_TOKENS * 2,
+            ):
+                parts.append(delta)
+        else:
+            async for delta in stream_llm_text(
+                [
+                    {"role": "system", "content": _import_tags_system_prompt(len(batch_texts))},
+                    {"role": "user", "content": _format_scenes_for_tagging(batch_texts)},
+                ],
+                max_tokens=_TAG_MAX_TOKENS,
+                json_schema=_import_tags_json_schema(len(batch_texts)),
+            ):
+                parts.append(delta)
+        tags = _parse_import_tags(_extract_json_object(strip_think_tags("".join(parts))), len(batch_texts))
         if tags is not None:
+            for tag in tags:
+                tag["draft_prompt_tags"] = sanitize_scene_tags(tag["draft_prompt_tags"], adult=options.adult)
             return tags
     return None
 
 
-async def _apply_tags(scenes: list[dict[str, Any]], texts: list[str]) -> int:
+# 未成年を思わせるタグ。成人向けの場面では必ず取り除く(性的な場面に子どもを描かない)
+_MINOR_TAGS = re.compile(
+    r"^(child|children|kid|kids|loli|lolita|shota|toddler|baby|young girl|little girl|young boy|little boy|"
+    r"school uniform|serafuku|student|schoolgirl|schoolboy|classroom|elementary school|middle school|high school|"
+    r"randoseru|children with cameras|petite child|underage|teen|teenager)$",
+    re.IGNORECASE,
+)
+_SEXUAL_HINT = re.compile(
+    r"\b(nsfw|nude|naked|sex|penis|pussy|nipples|fellatio|cum|vaginal|anal|masturbation|fingering|intercourse|"
+    r"topless|bottomless|erection|ejaculation|orgasm)\b",
+    re.IGNORECASE,
+)
+
+
+def sanitize_scene_tags(tags: str, *, adult: bool) -> str:
+    """成人向け、または性的な語を含むタグから未成年を思わせるタグを除く。成人向けなら先頭に nsfw を付ける。"""
+    items = [t.strip() for t in tags.split(",") if t.strip()]
+    sexual = adult or any(_SEXUAL_HINT.search(t) for t in items)
+    if sexual:
+        items = [t for t in items if not _MINOR_TAGS.match(t)]
+    if adult and items and "nsfw" not in (t.lower() for t in items) and any(_SEXUAL_HINT.search(t) for t in items):
+        items.insert(0, "nsfw")
+    return ", ".join(items)
+
+
+async def _apply_tags(scenes: list[dict[str, Any]], texts: list[str], options: TagOptions | None = None) -> int:
     """
     1バッチ分のタグ付けとDB反映。使えるタグが付いたシーン数を返す(0なら丸ごと失敗)。
 
     書き込んだ行数ではなく中身のある行数を数える。CJKタグが落とされて空になった行を
     成功に数えると、打ち切り判定が働かず、完了メッセージも実態より多く見える。
     """
-    tags = await _tag_scene_batch(texts)
+    tags = await _tag_scene_batch(texts, options)
     if not tags:
         return 0
     applied = 0
@@ -667,7 +743,7 @@ def _should_give_up(batch_index: int, tagged: int) -> bool:
     return tagged == 0 and batch_index >= _TAG_GIVE_UP_AFTER
 
 
-async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
+async def _run_split(job: _Job, story_id: int, req: StorySplitRequest, options: TagOptions | None = None) -> None:
     conn = get_connection()
     try:
         story = get_story(conn, story_id)
@@ -714,7 +790,7 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest) -> None:
     gave_up = False
     for index, (batch_scenes, batch_texts) in enumerate(batches, start=1):
         job.message = f"タグ付け中 {index}/{len(batches)}"
-        tagged += await _apply_tags(batch_scenes, batch_texts)
+        tagged += await _apply_tags(batch_scenes, batch_texts, options)
         job.progress = index
         if _should_give_up(index, tagged):
             gave_up = True
@@ -986,10 +1062,11 @@ async def set_story_layout(story_id: int, req: StoryLayoutRequest) -> StoryRespo
 
 
 @router.post("/{story_id}/retag", response_model=StoryJobResponse)
-async def retag_story(story_id: int) -> dict[str, Any]:
+async def retag_story(story_id: int, client: ClientDep, adult: bool = False, all: bool = False) -> dict[str, Any]:  # noqa: A002
     """
     タグが空のシーンにだけタグ付けをやり直す。分割は先にDBへ書き込む方式なので、
     タグ付けの途中で中断/キャンセルするとタグ無しのシーンが残る。その埋め直し用。
+    all=True なら全シーンのタグを付け直す。adult=True なら成人向けのタグ(NovelAI の文章モデル)。
     """
     conn = get_connection()
     try:
@@ -999,17 +1076,18 @@ async def retag_story(story_id: int) -> dict[str, Any]:
 
     if not scenes:
         raise HTTPException(status_code=404, detail="story not found")
-    untagged = [scene for scene in scenes if not scene["draft_prompt_tags"]]
+    untagged = scenes if all else [scene for scene in scenes if not scene["draft_prompt_tags"]]
     if not untagged:
         raise HTTPException(status_code=409, detail="タグ付けされていないシーンはありません。")
+    options = TagOptions(adult=adult, api_key=client.api_key if adult else None)
 
     async def runner(job: _Job) -> None:
-        await _run_retag(job, untagged)
+        await _run_retag(job, untagged, options)
 
     return _job_response(_start_job(story_id, "split", runner))
 
 
-async def _run_retag(job: _Job, untagged: list[dict[str, Any]]) -> None:
+async def _run_retag(job: _Job, untagged: list[dict[str, Any]], options: TagOptions | None = None) -> None:
     batches = [untagged[i : i + _TAG_BATCH_SIZE] for i in range(0, len(untagged), _TAG_BATCH_SIZE)]
     job.total = len(batches)
     job.message = f"タグ未設定の{len(untagged)}シーンにタグ付けします"
@@ -1018,7 +1096,7 @@ async def _run_retag(job: _Job, untagged: list[dict[str, Any]]) -> None:
     gave_up = False
     for index, batch in enumerate(batches, start=1):
         job.message = f"タグ付け中 {index}/{len(batches)}"
-        tagged += await _apply_tags(batch, [scene["draft_text"] for scene in batch])
+        tagged += await _apply_tags(batch, [scene["draft_text"] for scene in batch], options)
         job.progress = index
         if _should_give_up(index, tagged):
             gave_up = True

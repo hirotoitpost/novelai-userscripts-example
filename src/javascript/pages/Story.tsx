@@ -230,6 +230,8 @@ export default function Story() {
   // v1: V5にコマ割り込みのページを描かせる / v2: コマごとに描かせ、コマ割り・吹き出しは自前
   // 登場人物の抽出で、登録済みキャラの容姿タグも抽出結果で置き換えるか(既定は残す)
   const [overwriteAppearance, setOverwriteAppearance] = useLocalStorage('nai_story_overwrite_appearance', false)
+  // 成人向け: タグ付けを NovelAI の文章モデルで行い、露骨なタグ(nsfw 付き)にする
+  const [adultTags, setAdultTags] = useLocalStorage('nai_story_adult_tags', false)
   const [mangaMode, setMangaMode] = useLocalStorage<'v1' | 'v2'>('nai_story_manga_mode', 'v2')
 
   const [stepLabel, setStepLabel] = useState('')
@@ -404,6 +406,7 @@ export default function Story() {
           max_paragraphs: maxParagraphs,
           max_chars: maxChars,
           max_scenes: headScenes > 0 ? headScenes : null,
+          adult: adultTags,
         }),
         signal: controller.signal,
       })
@@ -569,14 +572,15 @@ export default function Story() {
     }
   }
 
-  async function runRetag() {
+  async function runRetag(all = false) {
     if (!story) return
+    if (all && !window.confirm('全シーンのタグを付け直します。手で直したタグも置き換わります。よろしいですか?')) return
     setError(null)
     const controller = new AbortController()
     abortRef.current = controller
     try {
       setStepLabel('タグ付けを開始しています...')
-      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/retag`, {
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/retag?adult=${adultTags}&all=${all}`, {
         method: 'POST',
         signal: controller.signal,
       })
@@ -1136,9 +1140,21 @@ export default function Story() {
                   本編執筆(NovelAI公式)
                 </button>
               )}
+              {(canSplit || (story?.scenes.length ?? 0) > 0) && (
+                <label className="story-check" title="NovelAI の文章モデル(GLM-4.6)で露骨なタグを付けます。文章生成の残量を使います。">
+                  <input type="checkbox" checked={adultTags} disabled={busy}
+                    onChange={e => setAdultTags(e.target.checked)} />
+                  成人向けのタグ(NovelAI)
+                </label>
+              )}
               {untaggedCount > 0 && (
-                <button type="button" onClick={runRetag} disabled={busy}>
+                <button type="button" onClick={() => void runRetag()} disabled={busy}>
                   タグ付けを実行({untaggedCount}シーン未設定)
+                </button>
+              )}
+              {(story?.scenes.length ?? 0) > 0 && untaggedCount === 0 && (
+                <button type="button" className="story-secondary" onClick={() => void runRetag(true)} disabled={busy}>
+                  全シーンのタグを付け直す
                 </button>
               )}
               {isWritten && (

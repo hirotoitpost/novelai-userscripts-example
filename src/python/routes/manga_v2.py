@@ -74,7 +74,7 @@ from ..manga_v2.stamps import (
 )
 from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
-from ..manga_v2.prompt import build_panel_negative, build_panel_prompt
+from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
 from ..models import (
     MangaV2CatalogFont,
     MangaV2SfxFontRequest,
@@ -833,7 +833,7 @@ async def _run_panels(
 ) -> None:
     settings = req.settings
     rects = panel_rects(req.template)
-    negative = build_panel_negative(settings.negative_prompt, color=req.color)
+    # 性的な場面は場面ごとに未成年対策のネガティブを足すので、ここでは基本形だけ作る
     conn = get_connection()
     try:
         characters = characters_by_scene(conn, story_id)
@@ -855,10 +855,11 @@ async def _run_panels(
         reference = _scene_reference(characters.get(scene["id"], []), req) if req.use_character_reference else None
         if reference is not None:
             job.message += "(キャラ参照あり・V4.5)"
+        sexual = is_sexual(scene["draft_prompt_tags"])
         image = await generate_image_v5(
             api_key,
             build_panel_prompt(scene["draft_prompt_tags"], color=req.color, complexity=settings.complexity),
-            negative,
+            build_panel_negative(settings.negative_prompt, color=req.color, sexual=sexual),
             model=_REFERENCE_MODEL if reference is not None else settings.model,
             width=width,
             height=height,

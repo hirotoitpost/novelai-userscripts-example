@@ -330,6 +330,8 @@ class StorySplitRequest(BaseModel):
 
     max_paragraphs: int = Field(6, ge=1, le=100)
     max_chars: int = Field(300, ge=50, le=5000)
+    # 成人向け: 露骨な英語タグ(nsfw 付き)を NovelAI の文章モデル(GLM-4.6)で付ける
+    adult: bool = False
     # テストや事前確認用に、冒頭のこのシーン数だけを分割・タグ付けする。未指定なら最後まで。
     # 残りは後でもう一度 /split を呼ぶと続きから分割される。
     max_scenes: int | None = Field(None, ge=1, le=1000)

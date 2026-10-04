@@ -16,9 +16,21 @@ _NO_TEXT_NEGATIVE = (
 _MONOCHROME_NEGATIVE = ", sepia, colored, watercolor"
 
 
+# 性的な場面のネガティブ。未成年に見える絵にならないようにする
+_ADULT_SAFETY_NEGATIVE = ", child, loli, shota, young, petite, flat chest, school uniform, student"
+
+
+def is_sexual(tags: str) -> bool:
+    from ..routes.story import _SEXUAL_HINT  # 循環 import を避けて遅延で読む
+
+    return bool(_SEXUAL_HINT.search(tags))
+
+
 def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None) -> str:
+    from ..routes.story import sanitize_scene_tags
+
     parts = ["manga style" if color else "manga style, monochrome, greyscale, screentone"]
-    tags = scene_tags.strip().strip(",")
+    tags = sanitize_scene_tags(scene_tags.strip().strip(","), adult=False)
     if tags:
         parts.append(tags)
     if complexity:
@@ -27,8 +39,10 @@ def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None) 
     return ", ".join(parts)
 
 
-def build_panel_negative(custom: str | None, *, color: bool) -> str:
+def build_panel_negative(custom: str | None, *, color: bool, sexual: bool = False) -> str:
     negative = (custom.strip() if custom and custom.strip() else _QUALITY_NEGATIVE) + _NO_TEXT_NEGATIVE
     if not color:
         negative += _MONOCHROME_NEGATIVE
+    if sexual:
+        negative += _ADULT_SAFETY_NEGATIVE
     return negative
