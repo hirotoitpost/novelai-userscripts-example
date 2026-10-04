@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -17,6 +18,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import FileResponse
 from PIL import Image
 from novelai import AsyncNovelAI
 
@@ -26,10 +28,19 @@ from ..db import (
     get_connection,
     get_manga_v2_overrides,
     get_manga_v2_sfx_fonts,
+    get_manga_v2_sfx_stamps,
+    delete_stamp,
+    delete_stamp_source,
+    get_stamp,
+    list_stamp_sources,
+    list_stamps,
+    replace_stamp_source,
+    update_stamp_label,
     list_manga_panels,
     list_story_scenes,
     set_manga_v2_overrides,
     set_manga_v2_sfx_fonts,
+    set_manga_v2_sfx_stamps,
     update_character_reference,
     update_scene_narration,
     update_scene_sfx,
@@ -45,12 +56,19 @@ from ..manga_v2.compose import (
     split_dense_panels,
 )
 from ..manga_v2.fonts import CATALOG, CATALOG_BY_ID, LICENSE_NAME, download_font
+from ..manga_v2.stamps import STAMP_DIR, SheetSource, fetch_pixiv_sheets, is_stamp_sheet, pixiv_artwork_id, split_sheet
 from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt
 from ..models import (
     MangaV2CatalogFont,
     MangaV2SfxFontRequest,
+    MangaV2SfxStampRequest,
+    MangaV2Stamp,
+    MangaV2StampImportRequest,
+    MangaV2StampLabelRequest,
+    MangaV2StampSource,
+    MangaV2StampUploadRequest,
     MangaV2CharacterReferenceRequest,
     MangaV2ComposeRequest,
     MangaV2ComposeResponse,
@@ -160,6 +178,167 @@ def get_font_preview(font: str, text: str = "ドドド") -> Response:
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return Response(content=buf.getvalue(), media_type="image/png", headers={"Cache-Control": "max-age=3600"})
+
+
+# ---- 描き文字スタンプ ----
+
+
+def _save_stamps(source: SheetSource, sheets: list[Image.Image]) -> int:
+    """シートを切り分けて data/stamps/<source>/ に保存し、DBの取り込み元ごと入れ替える。"""
+    target = STAMP_DIR / source.key
+    if target.exists():
+        for old in target.glob("*.png"):
+            old.unlink()
+    target.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for sheet_index, sheet in enumerate(sheets):
+        for index, stamp in enumerate(split_sheet(sheet)):
+            name = f"s{sheet_index:02d}_{index:03d}.png"
+            stamp.save(target / name)
+            rows.append(
+                {
+                    "sheet": sheet_index,
+                    "idx": index,
+                    "image_path": f"data/stamps/{source.key}/{name}",
+                    "width": stamp.width,
+                    "height": stamp.height,
+                }
+            )
+    conn = get_connection()
+    try:
+        replace_stamp_source(conn, source.key, source.title, source.author, source.url, rows)
+    finally:
+        conn.close()
+    return len(rows)
+
+
+@router.post("/stamps/import", response_model=MangaV2StampSource)
+async def import_stamps(req: MangaV2StampImportRequest) -> dict[str, Any]:
+    """pixiv の素材作品を取り込む。透過の素材シートだけを1語ずつのスタンプに切り分ける。"""
+    artwork_id = pixiv_artwork_id(req.url)
+    if artwork_id is None:
+        raise HTTPException(status_code=400, detail="pixiv の作品URL(https://www.pixiv.net/artworks/...)を指定してください。")
+    try:
+        source, sheets = await fetch_pixiv_sheets(artwork_id)
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=502, detail=f"pixiv から取得できませんでした: {exc}")
+    if not sheets:
+        raise HTTPException(status_code=400, detail="透過の素材シートが見つかりませんでした。")
+    await asyncio.to_thread(_save_stamps, source, sheets)
+    return _stamp_source(source.key)
+
+
+@router.post("/stamps/upload", response_model=MangaV2StampSource)
+async def upload_stamps(req: MangaV2StampUploadRequest) -> dict[str, Any]:
+    """手元の素材シート(透過PNG)を取り込む。"""
+    data = req.image.split(",", 1)[1] if req.image.startswith("data:") else req.image
+    try:
+        sheet = Image.open(io.BytesIO(base64.b64decode(data)))
+        sheet.load()
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="画像を読み取れませんでした。")
+    if not is_stamp_sheet(sheet):
+        raise HTTPException(status_code=400, detail="背景が透過した素材シート(PNG)を指定してください。")
+    source = SheetSource(key=f"upload-{uuid4().hex[:8]}", title=req.title, author=req.author, url=req.url)
+    await asyncio.to_thread(_save_stamps, source, [sheet])
+    return _stamp_source(source.key)
+
+
+def _stamp_source(key: str) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return next(s for s in list_stamp_sources(conn) if s["key"] == key)
+    finally:
+        conn.close()
+
+
+@router.get("/stamp-sources", response_model=list[MangaV2StampSource])
+async def get_stamp_sources() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_stamp_sources(conn)
+    finally:
+        conn.close()
+
+
+@router.delete("/stamp-sources/{key}", status_code=204)
+async def remove_stamp_source(key: str) -> None:
+    conn = get_connection()
+    try:
+        delete_stamp_source(conn, key)
+    finally:
+        conn.close()
+    target = STAMP_DIR / key
+    if target.is_dir() and target.resolve().parent == STAMP_DIR.resolve():
+        for file in target.glob("*.png"):
+            file.unlink()
+        target.rmdir()
+
+
+@router.get("/stamps", response_model=list[MangaV2Stamp])
+async def get_stamps(source: str | None = None) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_stamps(conn, source)
+    finally:
+        conn.close()
+
+
+@router.get("/stamps/{stamp_id}/image")
+async def get_stamp_image(stamp_id: int) -> FileResponse:
+    conn = get_connection()
+    try:
+        stamp = get_stamp(conn, stamp_id)
+    finally:
+        conn.close()
+    if stamp is None or not (_PROJECT_ROOT / stamp["image_path"]).is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(_PROJECT_ROOT / stamp["image_path"], media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
+
+@router.put("/stamps/{stamp_id}", status_code=204)
+async def put_stamp_label(stamp_id: int, req: MangaV2StampLabelRequest) -> None:
+    conn = get_connection()
+    try:
+        update_stamp_label(conn, stamp_id, req.label.strip())
+    finally:
+        conn.close()
+
+
+@router.delete("/stamps/{stamp_id}", status_code=204)
+async def remove_stamp(stamp_id: int) -> None:
+    """切り分けに失敗した塊(2語がくっついた等)を一覧から消す。"""
+    conn = get_connection()
+    try:
+        stamp = get_stamp(conn, stamp_id)
+        delete_stamp(conn, stamp_id)
+    finally:
+        conn.close()
+    if stamp is not None:
+        (_PROJECT_ROOT / stamp["image_path"]).unlink(missing_ok=True)
+
+
+@router.get("/{story_id}/sfx-stamps")
+async def get_sfx_stamps(story_id: int) -> dict[str, int]:
+    conn = get_connection()
+    try:
+        return get_manga_v2_sfx_stamps(conn, story_id)
+    finally:
+        conn.close()
+
+
+@router.put("/{story_id}/sfx-stamps", status_code=204)
+async def put_sfx_stamp(story_id: int, req: MangaV2SfxStampRequest) -> None:
+    conn = get_connection()
+    try:
+        stamps = get_manga_v2_sfx_stamps(conn, story_id)
+        if req.stamp_id is None:
+            stamps.pop(req.word, None)
+        else:
+            stamps[req.word] = req.stamp_id
+        set_manga_v2_sfx_stamps(conn, story_id, stamps)
+    finally:
+        conn.close()
 
 
 @router.get("/templates", response_model=list[MangaV2Template])
@@ -621,6 +800,11 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
         overrides = get_manga_v2_overrides(conn, story_id)
         sfx_fonts = get_manga_v2_sfx_fonts(conn, story_id)
+        stamp_paths = {
+            word: _PROJECT_ROOT / stamp["image_path"]
+            for word, stamp_id in get_manga_v2_sfx_stamps(conn, story_id).items()
+            if (stamp := get_stamp(conn, stamp_id)) is not None
+        }
     finally:
         conn.close()
     installed = {f.id: f.path for f in available_fonts()}
@@ -631,6 +815,7 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         overrides={key: (pos[0], pos[1]) for key, pos in overrides.items()},
         # 消したフォントを指していても合成は止めず、既定の効果音フォントで描く
         sfx_font_paths={word: installed[fid] for word, fid in sfx_fonts.items() if fid in installed},
+        sfx_stamps=stamp_paths,
     )
     if not panels:
         raise HTTPException(status_code=400, detail="先にコマの絵を生成してください。")

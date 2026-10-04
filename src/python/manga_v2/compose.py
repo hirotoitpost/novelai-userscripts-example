@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw
 from .layout import PAGE_HEIGHT, PAGE_WIDTH, Rect, panel_rects
 from .lettering import (
     SFX_MIN_SIZE,
+    draw_stamp,
     TextBlock,
     bubble_size,
     draw_bubble,
@@ -72,6 +73,8 @@ class LetteringStyle:
     overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
     # 効果音の文字列ごとのフォント(無ければ sfx_font_path)
     sfx_font_paths: dict[str, Path] = field(default_factory=dict)
+    # 効果音の文字列ごとのスタンプ画像。フォントより優先する。
+    sfx_stamps: dict[str, Path] = field(default_factory=dict)
 
 
 # 寄りのコマの拡大率(1段ごと)と上限、切り抜く中心(横は段ごとに左右へ振る)
@@ -202,6 +205,30 @@ def _overridden_box(size: tuple[int, int], panel: Rect, position: tuple[float, f
     return left, top, left + bw, top + bh
 
 
+# スタンプの大きさ(コマの高さ・幅に対する上限)。空きが無ければこの刻みで縮める。
+_STAMP_MAX_H = 0.55
+_STAMP_MAX_W = 0.4
+_STAMP_SHRINK = 0.85
+_STAMP_MIN_H = 0.2
+
+
+def _place_stamp(
+    natural: tuple[int, int], panel: Rect, placed: list[Rect], override: tuple[float, float] | None
+) -> Rect:
+    """スタンプの縦横比のまま、コマに収まる大きさで描き文字と同じ探し方で置き場所を決める。"""
+    pw, ph = panel[2] - panel[0], panel[3] - panel[1]
+    sw, sh = natural
+    ratio = min(ph * _STAMP_MAX_H / sh, pw * _STAMP_MAX_W / sw)
+    while True:
+        size = (max(1, round(sw * ratio)), max(1, round(sh * ratio)))
+        if override is not None:
+            return _overridden_box(size, panel, override)
+        box, free = _place(size, panel, placed, sfx=True)
+        if free or size[1] <= ph * _STAMP_MIN_H:
+            return box
+        ratio *= _STAMP_SHRINK
+
+
 def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle) -> list[Element]:
     x0, y0, x1, y1 = rect
     width, height = x1 - x0, y1 - y0
@@ -261,6 +288,15 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
     for index, text in enumerate(t for t in content.sfx if t.strip()):
         key = f"{key_base}:sfx:{index}"
         override = style.overrides.get(key)
+        stamp_path = style.sfx_stamps.get(text)
+        if stamp_path is not None and stamp_path.is_file():
+            with Image.open(stamp_path) as stamp:
+                stamp.load()
+                box = _place_stamp(stamp.size, rect, placed, override)
+                placed.append(box)
+                elements.append(Element(key, "sfx", text, box, rect))
+                draw_stamp(page, box, stamp)
+            continue
         layout = fit_sfx(text, width, height)
         while True:
             if override is not None:

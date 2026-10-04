@@ -217,6 +217,33 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 描き文字スタンプ(素材集のシートを1語ずつに切り出したもの)と、その取り込み元。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stamp_sources (
+            key TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL,
+            url TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stamps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_key TEXT NOT NULL REFERENCES stamp_sources(key) ON DELETE CASCADE,
+            sheet INTEGER NOT NULL,
+            idx INTEGER NOT NULL,
+            image_path TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -236,6 +263,8 @@ _STORIES_EXTRA_COLUMNS = {
     "manga_v2_overrides": "TEXT",
     # 漫画v2で効果音ごとに使うフォント。JSON {効果音の文字列: フォントID}
     "manga_v2_sfx_fonts": "TEXT",
+    # 漫画v2で効果音ごとに使うスタンプ。JSON {効果音の文字列: スタンプID}
+    "manga_v2_sfx_stamps": "TEXT",
 }
 
 
@@ -300,6 +329,84 @@ def set_manga_v2_sfx_fonts(conn: sqlite3.Connection, story_id: int, fonts: dict[
         "UPDATE stories SET manga_v2_sfx_fonts = ? WHERE id = ?",
         (json.dumps(fonts, ensure_ascii=False) if fonts else None, story_id),
     )
+    conn.commit()
+
+
+def get_manga_v2_sfx_stamps(conn: sqlite3.Connection, story_id: int) -> dict[str, int]:
+    row = conn.execute("SELECT manga_v2_sfx_stamps FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return json.loads(row["manga_v2_sfx_stamps"]) if row and row["manga_v2_sfx_stamps"] else {}
+
+
+def set_manga_v2_sfx_stamps(conn: sqlite3.Connection, story_id: int, stamps: dict[str, int]) -> None:
+    conn.execute(
+        "UPDATE stories SET manga_v2_sfx_stamps = ? WHERE id = ?",
+        (json.dumps(stamps, ensure_ascii=False) if stamps else None, story_id),
+    )
+    conn.commit()
+
+
+def replace_stamp_source(
+    conn: sqlite3.Connection, key: str, title: str, author: str, url: str, stamps: list[dict[str, Any]]
+) -> None:
+    """取り込み元ごと入れ替える(同じ素材を取り込み直したときに重複させない)。"""
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("DELETE FROM stamps WHERE source_key = ?", (key,))
+    conn.execute(
+        """
+        INSERT INTO stamp_sources (key, title, author, url, created_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET title = excluded.title, author = excluded.author, url = excluded.url
+        """,
+        (key, title, author, url, now),
+    )
+    conn.executemany(
+        """
+        INSERT INTO stamps (source_key, sheet, idx, image_path, width, height, label, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, '', ?)
+        """,
+        [(key, s["sheet"], s["idx"], s["image_path"], s["width"], s["height"], now) for s in stamps],
+    )
+    conn.commit()
+
+
+def list_stamp_sources(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT src.*, COUNT(s.id) AS count FROM stamp_sources src
+        LEFT JOIN stamps s ON s.source_key = src.key
+        GROUP BY src.key ORDER BY src.created_at
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_stamps(conn: sqlite3.Connection, source_key: str | None = None) -> list[dict[str, Any]]:
+    if source_key:
+        rows = conn.execute(
+            "SELECT * FROM stamps WHERE source_key = ? ORDER BY sheet, idx", (source_key,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM stamps ORDER BY source_key, sheet, idx").fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_stamp(conn: sqlite3.Connection, stamp_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM stamps WHERE id = ?", (stamp_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_stamp_label(conn: sqlite3.Connection, stamp_id: int, label: str) -> None:
+    conn.execute("UPDATE stamps SET label = ? WHERE id = ?", (label, stamp_id))
+    conn.commit()
+
+
+def delete_stamp(conn: sqlite3.Connection, stamp_id: int) -> None:
+    conn.execute("DELETE FROM stamps WHERE id = ?", (stamp_id,))
+    conn.commit()
+
+
+def delete_stamp_source(conn: sqlite3.Connection, key: str) -> None:
+    conn.execute("DELETE FROM stamps WHERE source_key = ?", (key,))
+    conn.execute("DELETE FROM stamp_sources WHERE key = ?", (key,))
     conn.commit()
 
 

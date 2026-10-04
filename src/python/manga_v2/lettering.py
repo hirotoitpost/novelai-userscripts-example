@@ -320,6 +320,29 @@ def draw_narration(img: Image.Image, box: tuple[int, int, int, int], block: Text
     draw_text_block(img, block, ((x0 + x1) / 2, (y0 + y1) / 2), font_path)
 
 
+# ---- 描き文字スタンプ ----
+
+
+def draw_stamp(img: Image.Image, box: tuple[int, int, int, int], stamp: Image.Image) -> None:
+    """
+    スタンプ(透過PNG)を box に収まるよう縮めて置く。素材は黒一色が多く暗い背景で
+    見えなくなるので、描き文字と同じく白フチを付ける。
+    """
+    x0, y0, x1, y1 = box
+    fitted = stamp.convert("RGBA")
+    fitted.thumbnail((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+    stroke = max(3, min(fitted.size) // 25)
+    alpha = fitted.getchannel("A")
+    pad = stroke + 2
+    halo = Image.new("L", (fitted.width + pad * 2, fitted.height + pad * 2), 0)
+    halo.paste(alpha, (pad, pad))
+    halo = halo.filter(ImageFilter.MaxFilter(stroke * 2 + 1))
+    left = x0 + (x1 - x0 - fitted.width) // 2
+    top = y0 + (y1 - y0 - fitted.height) // 2
+    img.paste((255, 255, 255), (left - pad, top - pad), halo)
+    img.paste(fitted, (left, top), fitted)
+
+
 # ---- 効果音(描き文字) ----
 
 # 描き文字の大きさ(コマの短辺に対する割合)と上限・下限

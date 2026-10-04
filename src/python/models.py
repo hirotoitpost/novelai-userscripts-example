@@ -501,6 +501,53 @@ class MangaV2SfxFontRequest(BaseModel):
     font: Optional[str] = None
 
 
+class MangaV2StampSource(BaseModel):
+    """スタンプの取り込み元(クレジット表示用)。"""
+
+    key: str
+    title: str
+    author: str
+    url: str
+    count: int
+    created_at: str
+
+
+class MangaV2Stamp(BaseModel):
+    id: int
+    source_key: str
+    sheet: int
+    idx: int
+    width: int
+    height: int
+    label: str
+
+
+class MangaV2StampImportRequest(BaseModel):
+    """pixiv の作品URL(素材シートを1語ずつのスタンプに切り分ける)。"""
+
+    url: str = Field(min_length=1)
+
+
+class MangaV2StampUploadRequest(BaseModel):
+    """手元の素材シート(透過PNG)を取り込む。BOOTH等で入手した素材向け。"""
+
+    image: str
+    title: str = Field(min_length=1, max_length=100)
+    author: str = Field("", max_length=100)
+    url: str = Field("", max_length=500)
+
+
+class MangaV2StampLabelRequest(BaseModel):
+    label: str = Field("", max_length=30)
+
+
+class MangaV2SfxStampRequest(BaseModel):
+    """効果音の文字列ごとのスタンプ。stamp_id が None なら外す。"""
+
+    word: str = Field(min_length=1, max_length=20)
+    stamp_id: Optional[int] = None
+
+
 class MangaV2Template(BaseModel):
     id: str
     label: str

@@ -4,6 +4,7 @@ import { MangaImageSettingsValue } from './MangaImageSettings'
 import { SceneCharacter } from './StoryCharacters'
 import MangaV2PageEditor, { MangaV2Element } from './MangaV2PageEditor'
 import MangaV2SfxFonts from './MangaV2SfxFonts'
+import MangaV2Stamps from './MangaV2Stamps'
 
 /** 漫画v2で使うシーンの項目(Story ページの StoryScene の一部)。 */
 export interface MangaV2Scene {
@@ -485,6 +486,14 @@ export default function MangaV2Studio({
         onSuggest={suggestSfxFonts}
         onFontsChanged={loadFonts}
         refreshKey={sfxFontsKey}
+      />
+
+      <MangaV2Stamps
+        apiOrigin={apiOrigin}
+        storyId={storyId}
+        words={[...new Set(targetScenes.flatMap(s => s.sfx ?? []))]}
+        busy={busy}
+        runTask={runTask}
       />
 
       <div className="story-row">
