@@ -70,6 +70,8 @@ class LetteringStyle:
     bubble_opacity: float = 1.0
     # 手動配置: Element.key → コマ内での左上の位置(コマの幅・高さに対する割合)
     overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # 効果音の文字列ごとのフォント(無ければ sfx_font_path)
+    sfx_font_paths: dict[str, Path] = field(default_factory=dict)
 
 
 # 寄りのコマの拡大率(1段ごと)と上限、切り抜く中心(横は段ごとに左右へ振る)
@@ -270,7 +272,7 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
             layout = fit_sfx(text, width, height, max_size=layout.size - _SHRINK_STEP_SFX)
         placed.append(box)
         elements.append(Element(key, "sfx", text, box, rect))
-        draw_sfx(page, box, layout, style.sfx_font_path)
+        draw_sfx(page, box, layout, style.sfx_font_paths.get(text, style.sfx_font_path))
 
     if narration_box is not None and narration_block is not None:
         draw_narration(page, narration_box, narration_block, style.font_path)

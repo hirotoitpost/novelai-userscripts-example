@@ -3,6 +3,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
 import { SceneCharacter } from './StoryCharacters'
 import MangaV2PageEditor, { MangaV2Element } from './MangaV2PageEditor'
+import MangaV2SfxFonts from './MangaV2SfxFonts'
 
 /** 漫画v2で使うシーンの項目(Story ページの StoryScene の一部)。 */
 export interface MangaV2Scene {
@@ -84,6 +85,7 @@ export default function MangaV2Studio({
   const [panels, setPanels] = useState<Panel[]>([])
   const [composed, setComposed] = useState<ComposeResult | null>(null)
   const [editPage, setEditPage] = useState(0)
+  const [sfxFontsKey, setSfxFontsKey] = useState(0)
 
   const [template, setTemplate] = useLocalStorage('nai_manga_v2_template', 'grid4')
   const [font, setFont] = useLocalStorage('nai_manga_v2_font', 'yu-mincho-demibold')
@@ -105,9 +107,14 @@ export default function MangaV2Studio({
 
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
 
-  useEffect(() => {
+  function loadFonts() {
     fetch(`${apiOrigin}/api/manga-v2/fonts`).then(r => r.json()).then(setFonts).catch(() => {})
+  }
+
+  useEffect(() => {
+    loadFonts()
     fetch(`${apiOrigin}/api/manga-v2/templates`).then(r => r.json()).then(setTemplates).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiOrigin])
 
   function loadPanels() {
@@ -213,6 +220,20 @@ export default function MangaV2Studio({
         signal,
       )
       await onChanged()
+    })
+  }
+
+  function suggestSfxFonts() {
+    return runTask('効果音に合うフォントをAIに選ばせています...', async signal => {
+      try {
+        await startJob(
+          'suggest-sfx-fonts',
+          { scene_from: from - 1, scene_to: to - 1, overwrite: overwriteSfx },
+          signal,
+        )
+      } finally {
+        setSfxFontsKey(key => key + 1)
+      }
     })
   }
 
@@ -453,6 +474,18 @@ export default function MangaV2Studio({
           <p className="story-muted">参照あり: {referencedNames.join('、')}</p>
         )}
       </details>
+
+      <MangaV2SfxFonts
+        apiOrigin={apiOrigin}
+        storyId={storyId}
+        words={[...new Set(targetScenes.flatMap(s => s.sfx ?? []))]}
+        fonts={fonts}
+        busy={busy}
+        runTask={runTask}
+        onSuggest={suggestSfxFonts}
+        onFontsChanged={loadFonts}
+        refreshKey={sfxFontsKey}
+      />
 
       <div className="story-row">
         <label>

@@ -14,6 +14,8 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
+from .fonts import CATALOG
+
 # 選べるフォント。PCに入っているものだけを候補として返す。
 _FONT_DIR = Path("C:/Windows/Fonts")
 _FONT_CANDIDATES: list[tuple[str, str, str]] = [
@@ -53,11 +55,14 @@ class FontChoice:
 
 
 def available_fonts() -> list[FontChoice]:
-    return [
+    """PCに入っている日本語フォントと、ダウンロード済みの描き文字向けフォント(fonts.CATALOG)。"""
+    system = [
         FontChoice(font_id, label, _FONT_DIR / filename)
         for font_id, label, filename in _FONT_CANDIDATES
         if (_FONT_DIR / filename).is_file()
     ]
+    downloaded = [FontChoice(f.id, f.label, f.path) for f in CATALOG if f.installed]
+    return system + downloaded
 
 
 def resolve_font(font_id: str | None, default_id: str = DEFAULT_FONT_ID) -> Path:

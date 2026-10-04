@@ -378,7 +378,7 @@ class StoryJobResponse(BaseModel):
     """分割/挿絵生成のバックグラウンドジョブの進捗。"""
 
     story_id: int
-    kind: Literal["split", "illustrate", "characters", "panels", "sfx", "narration"]
+    kind: Literal["split", "illustrate", "characters", "panels", "sfx", "narration", "sfx_fonts"]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
     progress: int = 0
@@ -481,6 +481,24 @@ class MangaPageResponse(BaseModel):
 class MangaV2Font(BaseModel):
     id: str
     label: str
+
+
+class MangaV2CatalogFont(BaseModel):
+    """描き文字向けにダウンロードできるフォント(Google Fonts / SIL OFL)。"""
+
+    id: str
+    label: str
+    mood: str
+    installed: bool
+    license: str
+    source_url: str
+
+
+class MangaV2SfxFontRequest(BaseModel):
+    """効果音の文字列ごとのフォント。font が None なら指定を外す(既定の効果音フォントに戻る)。"""
+
+    word: str = Field(min_length=1, max_length=20)
+    font: Optional[str] = None
 
 
 class MangaV2Template(BaseModel):

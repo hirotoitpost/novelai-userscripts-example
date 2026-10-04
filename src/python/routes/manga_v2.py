@@ -9,12 +9,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import re
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Response
+from PIL import Image
 from novelai import AsyncNovelAI
 
 from ..client import get_client
@@ -22,9 +25,11 @@ from ..db import (
     characters_by_scene,
     get_connection,
     get_manga_v2_overrides,
+    get_manga_v2_sfx_fonts,
     list_manga_panels,
     list_story_scenes,
     set_manga_v2_overrides,
+    set_manga_v2_sfx_fonts,
     update_character_reference,
     update_scene_narration,
     update_scene_sfx,
@@ -39,10 +44,13 @@ from ..manga_v2.compose import (
     page_png,
     split_dense_panels,
 )
+from ..manga_v2.fonts import CATALOG, CATALOG_BY_ID, LICENSE_NAME, download_font
 from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
-from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, resolve_font
+from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt
 from ..models import (
+    MangaV2CatalogFont,
+    MangaV2SfxFontRequest,
     MangaV2CharacterReferenceRequest,
     MangaV2ComposeRequest,
     MangaV2ComposeResponse,
@@ -112,6 +120,46 @@ def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
 @router.get("/fonts", response_model=list[MangaV2Font])
 async def get_fonts() -> list[dict[str, str]]:
     return [{"id": f.id, "label": f.label} for f in available_fonts()]
+
+
+@router.get("/font-catalog", response_model=list[MangaV2CatalogFont])
+async def get_font_catalog() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": f.id,
+            "label": f.label,
+            "mood": f.mood,
+            "installed": f.installed,
+            "license": LICENSE_NAME,
+            "source_url": f.source_url,
+        }
+        for f in CATALOG
+    ]
+
+
+@router.post("/font-catalog/{font_id}/download", status_code=204)
+async def post_font_download(font_id: str) -> None:
+    font = CATALOG_BY_ID.get(font_id)
+    if font is None:
+        raise HTTPException(status_code=404, detail="一覧にないフォントです。")
+    try:
+        await download_font(font)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"ダウンロードに失敗しました: {exc}")
+
+
+@router.get("/font-preview")
+def get_font_preview(font: str, text: str = "ドドド") -> Response:
+    """効果音を指定フォントの描き文字で描いた見本(PNG、白地)。フォント選びの比較用。"""
+    fonts = {f.id: f.path for f in available_fonts()}
+    if font not in fonts:
+        raise HTTPException(status_code=404, detail="そのフォントは使えません(未ダウンロード)。")
+    layout = fit_sfx(text[:12], 640, 480)
+    image = Image.new("RGB", (max(layout.width + 40, 120), layout.height + 40), (255, 255, 255))
+    draw_sfx(image, (20, 20, 20 + layout.width, 20 + layout.height), layout, fonts[font])
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png", headers={"Cache-Control": "max-age=3600"})
 
 
 @router.get("/templates", response_model=list[MangaV2Template])
@@ -572,13 +620,17 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         scenes = list_story_scenes(conn, story_id)
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
         overrides = get_manga_v2_overrides(conn, story_id)
+        sfx_fonts = get_manga_v2_sfx_fonts(conn, story_id)
     finally:
         conn.close()
+    installed = {f.id: f.path for f in available_fonts()}
     style = LetteringStyle(
         font_path=resolve_font(req.font),
         sfx_font_path=resolve_font(req.sfx_font, DEFAULT_SFX_FONT_ID),
         bubble_opacity=req.bubble_opacity,
         overrides={key: (pos[0], pos[1]) for key, pos in overrides.items()},
+        # 消したフォントを指していても合成は止めず、既定の効果音フォントで描く
+        sfx_font_paths={word: installed[fid] for word, fid in sfx_fonts.items() if fid in installed},
     )
     if not panels:
         raise HTTPException(status_code=400, detail="先にコマの絵を生成してください。")
@@ -633,6 +685,135 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
             for _, elements in composed
         ],
     }
+
+
+# ---- 効果音ごとのフォント ----
+
+
+@router.get("/{story_id}/sfx-fonts")
+async def get_sfx_fonts(story_id: int) -> dict[str, str]:
+    conn = get_connection()
+    try:
+        return get_manga_v2_sfx_fonts(conn, story_id)
+    finally:
+        conn.close()
+
+
+@router.put("/{story_id}/sfx-fonts", status_code=204)
+async def put_sfx_font(story_id: int, req: MangaV2SfxFontRequest) -> None:
+    conn = get_connection()
+    try:
+        fonts = get_manga_v2_sfx_fonts(conn, story_id)
+        if req.font:
+            fonts[req.word] = req.font
+        else:
+            fonts.pop(req.word, None)
+        set_manga_v2_sfx_fonts(conn, story_id, fonts)
+    finally:
+        conn.close()
+
+
+_SFX_FONT_BATCH_SIZE = 20
+
+
+def _sfx_font_system_prompt(fonts: list[Any]) -> str:
+    catalog = "\n".join(f"- {f.id}: {f.mood}" for f in fonts)
+    return (
+        "あなたは漫画の描き文字(効果音)に合うフォントを選ぶアシスタントです。\n"
+        "効果音の一覧が渡されます。それぞれに、次のフォントの中から最も雰囲気が合うものを1つ選び、"
+        "JSON形式で返してください。fontには必ず下のIDのどれかを書くこと。\n\n"
+        f"{catalog}"
+    )
+
+
+def _sfx_font_json_schema(font_ids: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "choices": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"word": {"type": "string"}, "font": {"type": "string", "enum": font_ids}},
+                    "required": ["word", "font"],
+                },
+            }
+        },
+        "required": ["choices"],
+    }
+
+
+async def _choose_sfx_fonts(words: list[str], fonts: list[Any]) -> dict[str, str]:
+    font_ids = [f.id for f in fonts]
+    for _ in range(_SFX_MAX_ATTEMPTS):
+        parts: list[str] = []
+        async for delta in stream_llm_text(
+            [
+                {"role": "system", "content": _sfx_font_system_prompt(fonts)},
+                {"role": "user", "content": "効果音: " + "、".join(words)},
+            ],
+            max_tokens=_SFX_MAX_TOKENS,
+            json_schema=_sfx_font_json_schema(font_ids),
+        ):
+            parts.append(delta)
+        try:
+            choices = json.loads(strip_think_tags("".join(parts))).get("choices")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if not isinstance(choices, list):
+            continue
+        result = {
+            str(c.get("word", "")).strip(): str(c.get("font", ""))
+            for c in choices
+            if isinstance(c, dict) and str(c.get("word", "")).strip() in words and c.get("font") in font_ids
+        }
+        if result:
+            return result
+    return {}
+
+
+@router.post("/{story_id}/suggest-sfx-fonts", response_model=StoryJobResponse)
+async def suggest_sfx_fonts(story_id: int, req: MangaV2SuggestSfxRequest) -> dict[str, Any]:
+    """範囲内のシーンの効果音それぞれに、ダウンロード済みの描き文字フォントから合うものをAIに選ばせる。"""
+    fonts = [f for f in CATALOG if f.installed]
+    if not fonts:
+        raise HTTPException(status_code=400, detail="先に描き文字フォントをダウンロードしてください。")
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+        current = get_manga_v2_sfx_fonts(conn, story_id)
+    finally:
+        conn.close()
+    words: list[str] = []
+    for scene in scenes:
+        if scene["scene_index"] < req.scene_from or (req.scene_to is not None and scene["scene_index"] > req.scene_to):
+            continue
+        for word in _lettering(scene)[1]:
+            if word not in words and (req.overwrite or word not in current):
+                words.append(word)
+    if not words:
+        raise HTTPException(status_code=400, detail="フォントを選ぶ効果音がありません(範囲内は選択済みです)。")
+
+    async def runner(job: _Job) -> None:
+        batches = [words[i : i + _SFX_FONT_BATCH_SIZE] for i in range(0, len(words), _SFX_FONT_BATCH_SIZE)]
+        job.total = len(batches)
+        chosen = 0
+        for index, batch in enumerate(batches, start=1):
+            job.message = f"効果音のフォントを選んでいます {index}/{len(batches)}"
+            result = await _choose_sfx_fonts(batch, fonts)
+            if result:
+                conn = get_connection()
+                try:
+                    mapping = get_manga_v2_sfx_fonts(conn, story_id)
+                    mapping.update(result)
+                    set_manga_v2_sfx_fonts(conn, story_id, mapping)
+                finally:
+                    conn.close()
+                chosen += len(result)
+            job.progress = index
+        job.message = f"{len(words)}個の効果音のうち{chosen}個にフォントを選びました"
+
+    return _job_response(_start_job(story_id, "sfx_fonts", runner))
 
 
 @router.put("/{story_id}/overrides", status_code=204)

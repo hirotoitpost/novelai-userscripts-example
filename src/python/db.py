@@ -234,6 +234,8 @@ _STORIES_EXTRA_COLUMNS = {
     "raw_text": "TEXT",
     # 漫画v2で手動配置(ドラッグ)した吹き出し・描き文字の位置。JSON {key: [x, y]}(コマに対する割合)
     "manga_v2_overrides": "TEXT",
+    # 漫画v2で効果音ごとに使うフォント。JSON {効果音の文字列: フォントID}
+    "manga_v2_sfx_fonts": "TEXT",
 }
 
 
@@ -284,6 +286,19 @@ def set_manga_v2_overrides(conn: sqlite3.Connection, story_id: int, overrides: d
     conn.execute(
         "UPDATE stories SET manga_v2_overrides = ? WHERE id = ?",
         (json.dumps(overrides) if overrides else None, story_id),
+    )
+    conn.commit()
+
+
+def get_manga_v2_sfx_fonts(conn: sqlite3.Connection, story_id: int) -> dict[str, str]:
+    row = conn.execute("SELECT manga_v2_sfx_fonts FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return json.loads(row["manga_v2_sfx_fonts"]) if row and row["manga_v2_sfx_fonts"] else {}
+
+
+def set_manga_v2_sfx_fonts(conn: sqlite3.Connection, story_id: int, fonts: dict[str, str]) -> None:
+    conn.execute(
+        "UPDATE stories SET manga_v2_sfx_fonts = ? WHERE id = ?",
+        (json.dumps(fonts, ensure_ascii=False) if fonts else None, story_id),
     )
     conn.commit()
 
