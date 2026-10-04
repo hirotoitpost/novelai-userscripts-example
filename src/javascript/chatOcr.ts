@@ -15,7 +15,8 @@ export interface OcrBlock {
   cut_bottom: boolean
 }
 
-const CACHE_KEY = 'nai_chat_ocr_cache_v1'
+// 読み取り方を変えたら上げる(古い結果を使わないように)。v2: 濁点の補完
+const CACHE_KEY = 'nai_chat_ocr_cache_v2'
 // 1枚あたり数百バイト〜数KB。古いものから捨てる
 const CACHE_LIMIT = 400
 const PARALLEL = 2
@@ -137,4 +138,11 @@ export async function mergeScreenshots(
     'つなぎ合わせ',
   )
   return res.json()
+}
+
+// 古い版の読み取り結果は使わないので消しておく
+try {
+  localStorage.removeItem('nai_chat_ocr_cache_v1')
+} catch {
+  // 使えない環境では何もしない
 }

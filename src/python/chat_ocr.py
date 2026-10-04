@@ -10,7 +10,9 @@
 - 続けて撮ったスクショは重なっているので、merge_pages() で重複を除いてつなぐ。
   スクロールで戻って撮った分も、既に読んだ発言と一致すれば捨てる。
 
-濁点付きの母音(「あ゛」など)は認識できず、濁点が落ちたり別の文字になったりする。
+濁点付きの母音(「あ゛」など)は文字認識では読めず、濁点が落ちる(文字の後ろに隙間が残る)か
+「”」になる。そこで1文字ずつの位置を取り、かなの直後の隙間に濁点らしい画素があれば「゛」を補う
+(_restore_dakuten)。
 """
 
 from __future__ import annotations
@@ -107,17 +109,77 @@ def _classify(img: np.ndarray, x0: int, x1: int, y0: int, y1: int, width: int) -
     return None
 
 
+DAKUTEN = "゛"  # ゛
+_KANA_CHAR_RE = re.compile(r"[ぁ-ゖァ-ヺ]")
+
+
+def _has_dakuten(img: np.ndarray, x0: int, x1: int, y0: int, y1: int) -> bool:
+    """文字の後ろの隙間に、濁点(上寄りの小さな2画)が描かれているか。
+
+    実測(台詞の吹き出し): 濁点のある隙間は上半分の明るい画素が 2〜5%、空白は 0〜1%。
+    地の文は絵の上に白文字なので、真っ白な画素だけで見る(絵の明るい部分を拾わないように)。
+    """
+    region = img[y0:y1, x0:x1].astype(int)
+    if region.size == 0 or region.shape[0] < 4 or region.shape[1] < 3:
+        return False
+    luma = region.mean(axis=2)
+    spread = region.max(axis=2) - region.min(axis=2)
+    half = region.shape[0] // 2
+    on_bubble = float(np.median(luma)) < 70 and float(np.percentile(luma, 75)) < 90
+    if on_bubble:
+        mark = (luma > 150) & (spread < 50)
+        upper, lower = mark[:half].mean(), mark[half:].mean()
+        return upper >= 0.015 and lower <= upper * 1.5 + 0.01
+    mark = (luma > 235) & (spread < 25)
+    upper, lower = mark[:half].mean(), mark[half:].mean()
+    return upper >= 0.02 and lower <= upper * 1.5
+
+
+def _restore_dakuten(img: np.ndarray, top: int, words, fallback: str) -> str:
+    """1文字ずつの位置から、落ちた濁点を補った行の文字列を作る。"""
+    if not words:
+        return fallback
+    chars = []
+    for ch, _score, box in words:
+        xs = [p[0] for p in box]
+        ys = [p[1] for p in box]
+        chars.append((ch, int(min(xs)), int(max(xs)), int(min(ys)) + top, int(max(ys)) + top))
+    widths = sorted(c[2] - c[1] for c in chars)
+    char_width = max(widths[len(widths) // 2], 1)
+    y0 = min(c[3] for c in chars)
+    y1 = max(c[4] for c in chars)
+    out = []
+    for i, (ch, _x0, x1, _cy0, _cy1) in enumerate(chars):
+        out.append(ch)
+        if not _KANA_CHAR_RE.fullmatch(ch):
+            continue
+        if i + 1 < len(chars):
+            gap_end = chars[i + 1][1]
+        else:
+            # 行末: 絵の上(地の文)では右側の絵を拾うので、吹き出しの中だけ見る
+            line_bg = img[y0:y1, max(0, chars[0][1] - 12):chars[0][1]].astype(int)
+            if line_bg.size == 0 or float(np.median(line_bg.mean(axis=2))) >= 70:
+                continue
+            gap_end = min(x1 + char_width, img.shape[1])
+        if gap_end - x1 >= char_width * 0.5 and _has_dakuten(img, x1, gap_end, y0, y1):
+            out.append(DAKUTEN)
+    return "".join(out)
+
+
 def _rows_from_ocr(img: np.ndarray, top: int, result) -> list[_Row]:
     """OCR の結果を行にまとめる。同じ高さに分かれて検出された断片は1行につなぐ。"""
     width = img.shape[1]
     boxes = []
     if result.boxes is None or result.txts is None:
         return []
-    for box, text, score in zip(result.boxes, result.txts, result.scores):
+    word_results = result.word_results or [None] * len(result.txts)
+    for box, text, score, words in zip(result.boxes, result.txts, result.scores, word_results):
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
         x0, x1 = int(min(xs)), int(max(xs))
         y0, y1 = int(min(ys)) + top, int(max(ys)) + top
+        if _japanese_ratio(text) >= 0.6:
+            text = _restore_dakuten(img, top, words, text)
         text = text.strip()
         if not text or x0 > width * RIGHT_EDGE_X or _UI_TEXT_RE.search(text):
             continue
@@ -162,6 +224,8 @@ def _fix_kana(text: str) -> str:
         text = re.sub(rf"(?<=[{_KATAKANA}]){wrong}|{wrong}(?=[{_KATAKANA}])", right, text)
     # 「な一んだ」→「なーんだ」(かなの隣の漢数字の一は長音)
     text = re.sub(rf"(?<=[{_KANA}])一|一(?=[{_KANA}])", "ー", text)
+    # 濁点が「”」「"」と読まれる(「お ” と」→「お゛と」)
+    text = re.sub(rf"(?<=[{_KANA}])\s?[”\"](?!」)", DAKUTEN, text)
     # 三点リーダが「....」と半角で読まれる
     text = re.sub(r"\.{3,}", "……", text)
     # 「ほおおおつ……」「……つ、」→「っ」(感嘆の小さい「っ」が大きく読まれる)
@@ -216,7 +280,7 @@ def read_screenshot(data: bytes) -> list[ChatBlock]:
     top, bottom = int(height * CONTENT_TOP), int(height * CONTENT_BOTTOM)
     crop = np.ascontiguousarray(img[top:bottom, :, ::-1])  # RapidOCR は BGR
     with _engine_lock:
-        result = _get_engine()(crop)
+        result = _get_engine()(crop, return_word_box=True)
     return _blocks_from_rows(_rows_from_ocr(img, top, result), top, bottom)
 
 
