@@ -361,9 +361,12 @@ def replace_stamp_source(
     conn.executemany(
         """
         INSERT INTO stamps (source_key, sheet, idx, image_path, width, height, label, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, '', ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        [(key, s["sheet"], s["idx"], s["image_path"], s["width"], s["height"], now) for s in stamps],
+        [
+            (key, s["sheet"], s["idx"], s["image_path"], s["width"], s["height"], s.get("label", ""), now)
+            for s in stamps
+        ],
     )
     conn.commit()
 

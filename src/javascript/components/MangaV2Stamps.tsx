@@ -122,6 +122,25 @@ export default function MangaV2Stamps({ apiOrigin, storyId, words, busy, runTask
     reader.readAsDataURL(file)
   }
 
+  function uploadZip(file: File) {
+    const reader = new FileReader()
+    reader.onload = () => void runTask('素材集(ZIP)を取り込んでいます...', async signal => {
+      const res = await fetch(`${apiOrigin}/api/manga-v2/stamps/upload-zip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zip: reader.result, ...upload }),
+        signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      const added: StampSource = await res.json()
+      setSource(added.key)
+      setSheet(0)
+      loadSources()
+      loadStamps()
+    })
+    reader.readAsDataURL(file)
+  }
+
   async function removeSource(key: string) {
     if (!window.confirm('この取り込み元のスタンプをすべて削除しますか?')) return
     await fetch(`${apiOrigin}/api/manga-v2/stamp-sources/${encodeURIComponent(key)}`, { method: 'DELETE' })
@@ -193,16 +212,24 @@ export default function MangaV2Stamps({ apiOrigin, storyId, words, busy, runTask
       </div>
 
       <details className="mv2-upload-block">
-        <summary>手元の素材シート(透過PNG)を取り込む</summary>
+        <summary>手元の素材を取り込む(透過PNGのシート / 1語1ファイルのZIP)</summary>
+        <p className="story-muted">
+          ZIPはファイル名の数字より前を読みにします(例: くちゅ1_0007.png →「くちゅ」)。素材名を空にするとZIP内のフォルダ名を使います。
+        </p>
         <div className="story-row">
           <label>素材名<input type="text" value={upload.title} onChange={e => setUpload({ ...upload, title: e.target.value })} /></label>
           <label>作者<input type="text" value={upload.author} onChange={e => setUpload({ ...upload, author: e.target.value })} /></label>
           <label>入手先URL<input type="url" value={upload.url} onChange={e => setUpload({ ...upload, url: e.target.value })} /></label>
         </div>
         <label className="mv2-upload">
-          シート画像を選ぶ
+          シート画像を選ぶ(素材名が必要)
           <input type="file" accept="image/png" disabled={busy || !upload.title.trim()}
             onChange={e => { const f = e.target.files?.[0]; if (f) uploadSheet(f); e.target.value = '' }} />
+        </label>
+        <label className="mv2-upload">
+          素材集のZIPを選ぶ
+          <input type="file" accept=".zip,application/zip" disabled={busy}
+            onChange={e => { const f = e.target.files?.[0]; if (f) uploadZip(f); e.target.value = '' }} />
         </label>
       </details>
 

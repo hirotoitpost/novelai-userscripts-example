@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,6 +92,86 @@ def split_sheet(image: Image.Image) -> list[Image.Image]:
         rgba.crop((max(x0 - pad, 0), max(y0 - pad, 0), min(x1 + pad, rgba.width), min(y1 + pad, rgba.height)))
         for x0, y0, x1, y1 in boxes
     ]
+
+
+# 1語1ファイルの素材集のファイル名。「くちゅ1_0007.png」= 読み「くちゅ」・デザイン1・色違い7
+_ZIP_NAME_RE = re.compile(r"^(?P<label>.+?)(?P<design>\d+)?(?:_(?P<variant>\d+))?\.png$", re.IGNORECASE)
+_TRIM_PADDING = 8
+
+
+@dataclass
+class ZipStamp:
+    label: str
+    design: int
+    variant: int
+    image: Image.Image
+
+
+def _zip_entry_name(info: zipfile.ZipInfo) -> str:
+    """Windowsで作られたZIPはファイル名がShift_JISのことが多い(UTF-8フラグが無い)。"""
+    if info.flag_bits & 0x800:
+        return info.filename
+    try:
+        return info.filename.encode("cp437").decode("cp932")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return info.filename
+
+
+def trim(image: Image.Image) -> Image.Image:
+    """透明な余白を切り落とす(1920x1080 のキャンバスに1語だけ描かれた素材向け)。"""
+    rgba = image.convert("RGBA")
+    box = rgba.getchannel("A").point(lambda v: 255 if v > _ALPHA_THRESHOLD else 0).getbbox()
+    if box is None:
+        return rgba
+    x0, y0, x1, y1 = box
+    return rgba.crop(
+        (
+            max(x0 - _TRIM_PADDING, 0),
+            max(y0 - _TRIM_PADDING, 0),
+            min(x1 + _TRIM_PADDING, rgba.width),
+            min(y1 + _TRIM_PADDING, rgba.height),
+        )
+    )
+
+
+def stamps_from_zip(data: bytes) -> tuple[str, list[ZipStamp]]:
+    """ZIP内のPNGを1枚1スタンプとして読み、(フォルダ名, スタンプ一覧)を返す。"""
+    folder = ""
+    stamps: list[ZipStamp] = []
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            path = _zip_entry_name(info)
+            name = path.rsplit("/", 1)[-1]
+            match = _ZIP_NAME_RE.match(name)
+            if match is None or name.startswith("."):
+                continue
+            if "/" in path and not folder:
+                folder = path.split("/", 1)[0]
+            image = Image.open(io.BytesIO(archive.read(info)))
+            image.load()
+            stamps.append(
+                ZipStamp(
+                    label=match.group("label").strip(" _-"),
+                    design=int(match.group("design") or 0),
+                    variant=int(match.group("variant") or 0),
+                    image=trim(image),
+                )
+            )
+    stamps.sort(key=lambda s: (s.label, s.design, s.variant))
+    return folder, stamps
+
+
+def is_monochrome(image: Image.Image) -> bool:
+    """インク部分がほぼ無彩色(黒・白・灰)か。モノクロ漫画には色付きの素材より合う。"""
+    rgba = np.asarray(image.convert("RGBA")).astype(np.int16)
+    opaque = rgba[..., 3] > _ALPHA_THRESHOLD
+    if not opaque.any():
+        return True
+    rgb = rgba[..., :3][opaque]
+    chroma = rgb.max(axis=1) - rgb.min(axis=1)
+    return float((chroma > 40).mean()) < 0.05
 
 
 def pixiv_artwork_id(url: str) -> str | None:

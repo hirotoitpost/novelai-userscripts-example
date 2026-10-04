@@ -528,6 +528,15 @@ class MangaV2StampImportRequest(BaseModel):
     url: str = Field(min_length=1)
 
 
+class MangaV2StampZipRequest(BaseModel):
+    """1語1ファイルの素材集(透過PNGのZIP)。ファイル名(例: くちゅ1_0007.png)から読みを付ける。"""
+
+    zip: str
+    title: str = Field("", max_length=100)
+    author: str = Field("", max_length=100)
+    url: str = Field("", max_length=500)
+
+
 class MangaV2StampUploadRequest(BaseModel):
     """手元の素材シート(透過PNG)を取り込む。BOOTH等で入手した素材向け。"""
 

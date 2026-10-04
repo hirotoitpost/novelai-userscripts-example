@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import re
 import unicodedata
+import zipfile
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -57,7 +59,17 @@ from ..manga_v2.compose import (
     split_dense_panels,
 )
 from ..manga_v2.fonts import CATALOG, CATALOG_BY_ID, LICENSE_NAME, download_font
-from ..manga_v2.stamps import STAMP_DIR, SheetSource, fetch_pixiv_sheets, is_stamp_sheet, pixiv_artwork_id, split_sheet
+from ..manga_v2.stamps import (
+    STAMP_DIR,
+    SheetSource,
+    ZipStamp,
+    fetch_pixiv_sheets,
+    is_monochrome,
+    is_stamp_sheet,
+    pixiv_artwork_id,
+    split_sheet,
+    stamps_from_zip,
+)
 from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt
@@ -70,6 +82,7 @@ from ..models import (
     MangaV2StampLabelRequest,
     MangaV2StampSource,
     MangaV2StampUploadRequest,
+    MangaV2StampZipRequest,
     MangaV2CharacterReferenceRequest,
     MangaV2ComposeRequest,
     MangaV2ComposeResponse,
@@ -242,6 +255,52 @@ async def upload_stamps(req: MangaV2StampUploadRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="背景が透過した素材シート(PNG)を指定してください。")
     source = SheetSource(key=f"upload-{uuid4().hex[:8]}", title=req.title, author=req.author, url=req.url)
     await asyncio.to_thread(_save_stamps, source, [sheet])
+    return _stamp_source(source.key)
+
+
+def _save_zip_stamps(source: SheetSource, stamps: list[ZipStamp]) -> int:
+    """1語1ファイルの素材を保存する。sheet=デザイン番号、idx=色違いの番号、読みはファイル名から。"""
+    target = STAMP_DIR / source.key
+    target.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for number, stamp in enumerate(stamps):
+        name = f"z{number:04d}.png"
+        stamp.image.save(target / name)
+        rows.append(
+            {
+                "sheet": stamp.design,
+                "idx": stamp.variant,
+                "image_path": f"data/stamps/{source.key}/{name}",
+                "width": stamp.image.width,
+                "height": stamp.image.height,
+                "label": stamp.label,
+            }
+        )
+    conn = get_connection()
+    try:
+        replace_stamp_source(conn, source.key, source.title, source.author, source.url, rows)
+    finally:
+        conn.close()
+    return len(rows)
+
+
+@router.post("/stamps/upload-zip", response_model=MangaV2StampSource)
+async def upload_stamp_zip(req: MangaV2StampZipRequest) -> dict[str, Any]:
+    """
+    1語1ファイルの素材集(透過PNGのZIP)を取り込む。ファイル名の数字より前を読みにする
+    (「くちゅ1_0007.png」→「くちゅ」)。同じ素材集を取り込み直すと入れ替わる。
+    """
+    data = req.zip.split(",", 1)[1] if req.zip.startswith("data:") else req.zip
+    try:
+        folder, stamps = await asyncio.to_thread(stamps_from_zip, base64.b64decode(data))
+    except (ValueError, OSError, zipfile.BadZipFile):
+        raise HTTPException(status_code=400, detail="ZIPを読み取れませんでした。")
+    if not stamps:
+        raise HTTPException(status_code=400, detail="ZIPにPNGの素材が見つかりませんでした。")
+    title = req.title.strip() or folder or "ZIP素材"
+    key = "zip-" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:10]
+    source = SheetSource(key=key, title=title, author=req.author, url=req.url)
+    await asyncio.to_thread(_save_zip_stamps, source, stamps)
     return _stamp_source(source.key)
 
 
@@ -958,6 +1017,20 @@ async def _choose_sfx_fonts(words: list[str], fonts: list[Any]) -> dict[str, str
     return {}
 
 
+_MONOCHROME_CACHE: dict[str, bool] = {}
+
+
+def _stamp_is_monochrome(stamp: dict[str, Any]) -> bool:
+    path = stamp["image_path"]
+    if path not in _MONOCHROME_CACHE:
+        try:
+            with Image.open(_PROJECT_ROOT / path) as image:
+                _MONOCHROME_CACHE[path] = is_monochrome(image)
+        except OSError:
+            _MONOCHROME_CACHE[path] = False
+    return _MONOCHROME_CACHE[path]
+
+
 def normalize_reading(text: str) -> str:
     """
     効果音の読みを比べるための正規化。ひらがな/カタカナ、促音・長音・三点リーダ・
@@ -996,9 +1069,13 @@ async def suggest_sfx_fonts(story_id: int, req: MangaV2SuggestSfxRequest) -> dic
 
     # 読みが一致するスタンプ。表記まで同じもの(「ビクッ」に「ビクッ」)を優先し、無ければ
     # 正規化して一致するもの(「ビクッ」に「ビク」)。同じ読みが複数あれば先に取り込んだもの。
+    # 色違いの素材集では同じ読みのスタンプが何十個もあるので、モノクロ漫画に合う
+    # 無彩色(黒・白)のものを先に並べておく(先に見つかったものを採用するため)。
     stamp_by_label: dict[str, int] = {}
     stamp_by_reading: dict[str, int] = {}
-    for stamp in labeled:
+    # 初回は画像を開いて判定するので、イベントループを塞がないようスレッドで並べ替える
+    ordered = await asyncio.to_thread(sorted, labeled, key=lambda st: not _stamp_is_monochrome(st))
+    for stamp in ordered:
         stamp_by_label.setdefault(stamp["label"], stamp["id"])
         stamp_by_reading.setdefault(normalize_reading(stamp["label"]), stamp["id"])
     stamp_choices = {
