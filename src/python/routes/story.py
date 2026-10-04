@@ -638,6 +638,12 @@ def _adult_tags_system_prompt(n_scenes: int) -> str:
         "and body parts exactly as written (explicit tags such as nipples, pussy, penis, sex, fellatio, cum are fine), "
         "pose, expression, location, framing\n"
         "- start with nsfw if the scene is sexual\n"
+        "- whenever genitals are visible or involved, include explicit, uncensored; for a woman's genitals also "
+        "pussy, and add related tags that fit the scene and character: pussy juice (aroused/wet), pubic hair "
+        "(mature woman, unless shaved), clitoris (close-up, touching), anus (from behind, spread, all fours), "
+        "spread legs, spread pussy, focus pussy, cumdrip, cum in pussy, vaginal, penis, testicles\n"
+        "- if clothes are pulled aside or removed, say so (bikini pull, panties aside, clothes lift, nude) so the "
+        "genitals are not hidden\n"
         "- never use tags implying minors (child, loli, shota, school uniform, student, classroom) and do not add "
         "places or clothes not in the text\n"
         "- no character names"
@@ -699,15 +705,40 @@ _SEXUAL_HINT = re.compile(
 )
 
 
+# 性器が見える/関わる場面の語。これがあれば explicit, uncensored を必ず付ける(付けないと布や構図で
+# 隠されがち)。女性器が関わる語なら pussy も付ける。チャンクの実データ(191件)でも
+# explicit, uncensored, pussy, pussy juice, spread legs, pubic hair の組み合わせで使われている。
+_GENITAL_HINT = re.compile(
+    r"\b(pussy|vagina|vaginal|clitoris|labia|anus|anal|penis|testicles|sex|intercourse|penetration|creampie|"
+    r"cum in pussy|cumdrip|fingering|cunnilingus|spread legs|pubic hair|pussy juice)\b",
+    re.IGNORECASE,
+)
+_FEMALE_GENITAL_HINT = re.compile(
+    r"\b(pussy|vagina|vaginal|clitoris|labia|sex|intercourse|penetration|creampie|cum in pussy|cumdrip|"
+    r"fingering|cunnilingus|spread legs|pubic hair|pussy juice)\b",
+    re.IGNORECASE,
+)
+
+
 def sanitize_scene_tags(tags: str, *, adult: bool) -> str:
-    """成人向け、または性的な語を含むタグから未成年を思わせるタグを除く。成人向けなら先頭に nsfw を付ける。"""
+    """
+    成人向け、または性的な語を含むタグから未成年を思わせるタグを除く。成人向けなら先頭に nsfw を付け、
+    性器が関わる場面には explicit, uncensored(女性器なら pussy も)を足す。
+    """
     items = [t.strip() for t in tags.split(",") if t.strip()]
     sexual = adult or any(_SEXUAL_HINT.search(t) for t in items)
     if sexual:
         items = [t for t in items if not _MINOR_TAGS.match(t)]
-    if adult and items and "nsfw" not in (t.lower() for t in items) and any(_SEXUAL_HINT.search(t) for t in items):
+    lower = [t.lower() for t in items]
+    if adult and any(_GENITAL_HINT.search(t) for t in items):
+        extra = [t for t in ("explicit", "uncensored") if t not in lower]
+        if any(_FEMALE_GENITAL_HINT.search(t) for t in items) and "pussy" not in lower:
+            extra.append("pussy")
+        items = [items[0], *extra, *items[1:]] if lower[0] == "nsfw" else [*extra, *items]
+        lower = [t.lower() for t in items]
+    if adult and items and "nsfw" not in lower and any(_SEXUAL_HINT.search(t) for t in items):
         items.insert(0, "nsfw")
-    return ", ".join(items)
+    return ", ".join(dict.fromkeys(items))
 
 
 async def _apply_tags(scenes: list[dict[str, Any]], texts: list[str], options: TagOptions | None = None) -> int:
