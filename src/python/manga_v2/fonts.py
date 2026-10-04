@@ -75,6 +75,15 @@ CATALOG: list[CatalogFont] = [
                 "古風な明朝。和風・時代もの・怪談(ギィ…、カァー)"),
     CatalogFont("shippori-antique-b1", "Shippori Antique B1", "shipporiantiqueb1", "ShipporiAntiqueB1-Regular.ttf",
                 "レトロな丸みのある書体。懐かしさ・穏やかな情景(チリン、サァァ)"),
+    # 筆文字
+    CatalogFont("yuji-boku", "Yuji Boku", "yujiboku", "YujiBoku-Regular.ttf",
+                "太く荒々しい毛筆。豪快・力強い一撃・怒り(ドォン、ズバァッ、ゴゴゴ)"),
+    CatalogFont("yuji-syuku", "Yuji Syuku", "yujisyuku", "YujiSyuku-Regular.ttf",
+                "端正な毛筆の楷書。和風・厳か・緊張感(カッ、シン…、ザッ)"),
+    CatalogFont("yuji-mai", "Yuji Mai", "yujimai", "YujiMai-Regular.ttf",
+                "流れるような細い毛筆。しなやか・風・水の音(ヒュウ、サラサラ、ポチャン)"),
+    CatalogFont("zen-kurenaido", "Zen Kurenaido", "zenkurenaido", "ZenKurenaido-Regular.ttf",
+                "筆ペン風の手書き。素朴・日常の音・感情のこもった小さな音(トクン、ふぅ)"),
 ]
 CATALOG_BY_ID = {font.id: font for font in CATALOG}
 

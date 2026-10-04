@@ -98,7 +98,6 @@ export default function MangaV2SfxFonts({
   const preview = (fontId: string, text: string) =>
     `${apiOrigin}/api/manga-v2/font-preview?font=${encodeURIComponent(fontId)}&text=${encodeURIComponent(text)}`
   const allWords = [...new Set([...words, ...Object.keys(mapping)])]
-  const installedCount = catalog.filter(f => f.installed).length
 
   return (
     <details className="story-characters-block">
@@ -137,8 +136,8 @@ export default function MangaV2SfxFonts({
         {catalog.some(f => !f.installed) && (
           <button type="button" disabled={busy} onClick={downloadAll}>まとめてダウンロード</button>
         )}
-        <button type="button" disabled={busy || installedCount === 0} onClick={() => void onSuggest()}>
-          効果音のフォントをAIに選ばせる
+        <button type="button" disabled={busy} onClick={() => void onSuggest()}>
+          描き文字をAIに選ばせる(スタンプ優先)
         </button>
       </div>
 
@@ -161,7 +160,8 @@ export default function MangaV2SfxFonts({
         </ul>
       )}
       <p className="story-muted">
-        AIが選ぶのはダウンロード済みの書体からです。選んだ結果はこの物語に保存され、合成し直すと反映されます。
+        読みが一致するスタンプがあればスタンプを、無ければダウンロード済みの書体からAIが選びます。
+        選んだ結果はこの物語に保存され、合成し直すと反映されます(スタンプの割り当ては下の「描き文字スタンプ」で確認)。
       </p>
     </details>
   )

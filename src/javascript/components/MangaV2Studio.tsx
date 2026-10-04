@@ -225,7 +225,7 @@ export default function MangaV2Studio({
   }
 
   function suggestSfxFonts() {
-    return runTask('効果音に合うフォントをAIに選ばせています...', async signal => {
+    return runTask('描き文字(スタンプ・フォント)をAIに選ばせています...', async signal => {
       try {
         await startJob(
           'suggest-sfx-fonts',
@@ -494,6 +494,7 @@ export default function MangaV2Studio({
         words={[...new Set(targetScenes.flatMap(s => s.sfx ?? []))]}
         busy={busy}
         runTask={runTask}
+        refreshKey={sfxFontsKey}
       />
 
       <div className="story-row">

@@ -13,6 +13,7 @@ import base64
 import io
 import json
 import re
+import unicodedata
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -957,16 +958,29 @@ async def _choose_sfx_fonts(words: list[str], fonts: list[Any]) -> dict[str, str
     return {}
 
 
+def normalize_reading(text: str) -> str:
+    """
+    効果音の読みを比べるための正規化。ひらがな/カタカナ、促音・長音・三点リーダ・
+    記号の違いは同じとみなす(「ギィ……」と「ぎぃ」、「ドキッ」と「ドキ」を同じ語として扱う)。
+    """
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in text)
+    return re.sub(r"[っーｰ〜~…・.!！?？♥♡\s]", "", text)
+
+
 @router.post("/{story_id}/suggest-sfx-fonts", response_model=StoryJobResponse)
 async def suggest_sfx_fonts(story_id: int, req: MangaV2SuggestSfxRequest) -> dict[str, Any]:
-    """範囲内のシーンの効果音それぞれに、ダウンロード済みの描き文字フォントから合うものをAIに選ばせる。"""
+    """
+    範囲内のシーンの効果音それぞれの描き文字を決める。読みが一致するスタンプがあれば
+    スタンプを割り当て、無ければダウンロード済みの描き文字フォントから合うものをAIに選ばせる。
+    """
     fonts = [f for f in CATALOG if f.installed]
-    if not fonts:
-        raise HTTPException(status_code=400, detail="先に描き文字フォントをダウンロードしてください。")
     conn = get_connection()
     try:
         scenes = list_story_scenes(conn, story_id)
-        current = get_manga_v2_sfx_fonts(conn, story_id)
+        current_fonts = get_manga_v2_sfx_fonts(conn, story_id)
+        current_stamps = get_manga_v2_sfx_stamps(conn, story_id)
+        labeled = [st for st in list_stamps(conn) if st["label"]]
     finally:
         conn.close()
     words: list[str] = []
@@ -974,13 +988,38 @@ async def suggest_sfx_fonts(story_id: int, req: MangaV2SuggestSfxRequest) -> dic
         if scene["scene_index"] < req.scene_from or (req.scene_to is not None and scene["scene_index"] > req.scene_to):
             continue
         for word in _lettering(scene)[1]:
-            if word not in words and (req.overwrite or word not in current):
+            decided = word in current_fonts or word in current_stamps
+            if word not in words and (req.overwrite or not decided):
                 words.append(word)
     if not words:
-        raise HTTPException(status_code=400, detail="フォントを選ぶ効果音がありません(範囲内は選択済みです)。")
+        raise HTTPException(status_code=400, detail="描き文字を選ぶ効果音がありません(範囲内は選択済みです)。")
+
+    # 読みが一致するスタンプ。表記まで同じもの(「ビクッ」に「ビクッ」)を優先し、無ければ
+    # 正規化して一致するもの(「ビクッ」に「ビク」)。同じ読みが複数あれば先に取り込んだもの。
+    stamp_by_label: dict[str, int] = {}
+    stamp_by_reading: dict[str, int] = {}
+    for stamp in labeled:
+        stamp_by_label.setdefault(stamp["label"], stamp["id"])
+        stamp_by_reading.setdefault(normalize_reading(stamp["label"]), stamp["id"])
+    stamp_choices = {
+        w: stamp_by_label.get(w) or stamp_by_reading[normalize_reading(w)]
+        for w in words
+        if w in stamp_by_label or normalize_reading(w) in stamp_by_reading
+    }
+    font_words = [w for w in words if w not in stamp_choices]
+    if font_words and not fonts:
+        raise HTTPException(status_code=400, detail="一致するスタンプの無い効果音があります。先に描き文字フォントをダウンロードしてください。")
 
     async def runner(job: _Job) -> None:
-        batches = [words[i : i + _SFX_FONT_BATCH_SIZE] for i in range(0, len(words), _SFX_FONT_BATCH_SIZE)]
+        if stamp_choices:
+            conn = get_connection()
+            try:
+                mapping = get_manga_v2_sfx_stamps(conn, story_id)
+                mapping.update(stamp_choices)
+                set_manga_v2_sfx_stamps(conn, story_id, mapping)
+            finally:
+                conn.close()
+        batches = [font_words[i : i + _SFX_FONT_BATCH_SIZE] for i in range(0, len(font_words), _SFX_FONT_BATCH_SIZE)]
         job.total = len(batches)
         chosen = 0
         for index, batch in enumerate(batches, start=1):
@@ -992,11 +1031,18 @@ async def suggest_sfx_fonts(story_id: int, req: MangaV2SuggestSfxRequest) -> dic
                     mapping = get_manga_v2_sfx_fonts(conn, story_id)
                     mapping.update(result)
                     set_manga_v2_sfx_fonts(conn, story_id, mapping)
+                    # フォントに決めた語は、以前のスタンプの割り当てを外す(上書き時)
+                    stamps = get_manga_v2_sfx_stamps(conn, story_id)
+                    for word in result:
+                        stamps.pop(word, None)
+                    set_manga_v2_sfx_stamps(conn, story_id, stamps)
                 finally:
                     conn.close()
                 chosen += len(result)
             job.progress = index
-        job.message = f"{len(words)}個の効果音のうち{chosen}個にフォントを選びました"
+        job.message = (
+            f"{len(words)}個の効果音のうち、スタンプ{len(stamp_choices)}個・フォント{chosen}個を選びました"
+        )
 
     return _job_response(_start_job(story_id, "sfx_fonts", runner))
 

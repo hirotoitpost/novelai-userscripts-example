@@ -626,6 +626,26 @@
   border-color: #ff5c8a !important;
 }
 
+.mv2-stamp-label {
+  font-size: 0.7rem;
+  color: #9a9ac0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mv2-stamp-label-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0a0a14;
+  border: 1px solid #2a2a50;
+  border-radius: 4px;
+  color: #e8e8ff;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+}
+
 .mv2-stamp img {
   max-width: 100%;
   max-height: 100%;
