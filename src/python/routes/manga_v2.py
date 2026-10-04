@@ -32,6 +32,8 @@ from ..db import (
     get_manga_v2_overrides,
     get_manga_v2_sfx_fonts,
     get_manga_v2_sfx_stamps,
+    adult_stamp_sources,
+    set_stamp_source_adult,
     delete_stamp,
     delete_stamp_source,
     get_stamp,
@@ -81,6 +83,7 @@ from ..models import (
     MangaV2StampImportRequest,
     MangaV2StampLabelRequest,
     MangaV2StampSource,
+    MangaV2StampSourceUpdate,
     MangaV2StampUploadRequest,
     MangaV2StampZipRequest,
     MangaV2CharacterReferenceRequest,
@@ -236,7 +239,7 @@ def _save_stamps(source: SheetSource, sheets: list[Image.Image]) -> int:
             )
     conn = get_connection()
     try:
-        replace_stamp_source(conn, source.key, source.title, source.author, source.url, rows)
+        replace_stamp_source(conn, source.key, source.title, source.author, source.url, rows, source.adult)
     finally:
         conn.close()
     return len(rows)
@@ -294,7 +297,7 @@ def _save_zip_stamps(source: SheetSource, stamps: list[ZipStamp]) -> int:
         )
     conn = get_connection()
     try:
-        replace_stamp_source(conn, source.key, source.title, source.author, source.url, rows)
+        replace_stamp_source(conn, source.key, source.title, source.author, source.url, rows, source.adult)
     finally:
         conn.close()
     return len(rows)
@@ -315,7 +318,7 @@ async def upload_stamp_zip(req: MangaV2StampZipRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="ZIPにPNGの素材が見つかりませんでした。")
     title = req.title.strip() or folder or "ZIP素材"
     key = "zip-" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:10]
-    source = SheetSource(key=key, title=title, author=req.author, url=req.url)
+    source = SheetSource(key=key, title=title, author=req.author, url=req.url, adult=req.adult)
     await asyncio.to_thread(_save_zip_stamps, source, stamps)
     return _stamp_source(source.key)
 
@@ -333,6 +336,16 @@ async def get_stamp_sources() -> list[dict[str, Any]]:
     conn = get_connection()
     try:
         return list_stamp_sources(conn)
+    finally:
+        conn.close()
+
+
+@router.put("/stamp-sources/{key}", status_code=204)
+async def put_stamp_source(key: str, req: MangaV2StampSourceUpdate) -> None:
+    """成人向けの素材かどうか。成人向けの素材は描き文字の自動選択で既定では使わない。"""
+    conn = get_connection()
+    try:
+        set_stamp_source_adult(conn, key, req.adult)
     finally:
         conn.close()
 
@@ -1069,7 +1082,8 @@ async def suggest_sfx_fonts(story_id: int, req: MangaV2SuggestSfxRequest) -> dic
         scenes = list_story_scenes(conn, story_id)
         current_fonts = get_manga_v2_sfx_fonts(conn, story_id)
         current_stamps = get_manga_v2_sfx_stamps(conn, story_id)
-        labeled = [st for st in list_stamps(conn) if st["label"]]
+        excluded = set() if req.include_adult else adult_stamp_sources(conn)
+        labeled = [st for st in list_stamps(conn) if st["label"] and st["source_key"] not in excluded]
     finally:
         conn.close()
     words: list[str] = []

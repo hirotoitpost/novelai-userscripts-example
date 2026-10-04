@@ -266,6 +266,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_manga_pages(conn)
     _migrate_story_scenes(conn)
     _migrate_characters(conn)
+    _migrate_stamp_sources(conn)
 
 
 _STORIES_EXTRA_COLUMNS = {
@@ -281,6 +282,8 @@ _STORIES_EXTRA_COLUMNS = {
     "manga_v2_sfx_fonts": "TEXT",
     # 漫画v2で効果音ごとに使うスタンプ。JSON {効果音の文字列: スタンプID}
     "manga_v2_sfx_stamps": "TEXT",
+    # 物語エディタのメモリ(世界観・登場人物)。登場人物の抽出で容姿の手がかりに使う。
+    "memory": "TEXT",
 }
 
 
@@ -348,6 +351,31 @@ def set_manga_v2_sfx_fonts(conn: sqlite3.Connection, story_id: int, fonts: dict[
     conn.commit()
 
 
+_STAMP_SOURCES_EXTRA_COLUMNS = {"adult": "INTEGER NOT NULL DEFAULT 0"}
+
+
+def _migrate_stamp_sources(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(stamp_sources)")}
+    for column, column_type in _STAMP_SOURCES_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE stamp_sources ADD COLUMN {column} {column_type}")
+    conn.commit()
+
+
+def set_stamp_source_adult(conn: sqlite3.Connection, key: str, adult: bool) -> None:
+    conn.execute("UPDATE stamp_sources SET adult = ? WHERE key = ?", (int(adult), key))
+    conn.commit()
+
+
+def adult_stamp_sources(conn: sqlite3.Connection) -> set[str]:
+    return {row["key"] for row in conn.execute("SELECT key FROM stamp_sources WHERE adult = 1")}
+
+
+def set_story_memory(conn: sqlite3.Connection, story_id: int, memory: str) -> None:
+    conn.execute("UPDATE stories SET memory = ? WHERE id = ?", (memory, story_id))
+    conn.commit()
+
+
 def get_manga_v2_sfx_stamps(conn: sqlite3.Connection, story_id: int) -> dict[str, int]:
     row = conn.execute("SELECT manga_v2_sfx_stamps FROM stories WHERE id = ?", (story_id,)).fetchone()
     return json.loads(row["manga_v2_sfx_stamps"]) if row and row["manga_v2_sfx_stamps"] else {}
@@ -362,17 +390,24 @@ def set_manga_v2_sfx_stamps(conn: sqlite3.Connection, story_id: int, stamps: dic
 
 
 def replace_stamp_source(
-    conn: sqlite3.Connection, key: str, title: str, author: str, url: str, stamps: list[dict[str, Any]]
+    conn: sqlite3.Connection,
+    key: str,
+    title: str,
+    author: str,
+    url: str,
+    stamps: list[dict[str, Any]],
+    adult: bool = False,
 ) -> None:
     """取り込み元ごと入れ替える(同じ素材を取り込み直したときに重複させない)。"""
     now = datetime.now(timezone.utc).isoformat()
     conn.execute("DELETE FROM stamps WHERE source_key = ?", (key,))
     conn.execute(
         """
-        INSERT INTO stamp_sources (key, title, author, url, created_at) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (key) DO UPDATE SET title = excluded.title, author = excluded.author, url = excluded.url
+        INSERT INTO stamp_sources (key, title, author, url, adult, created_at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET title = excluded.title, author = excluded.author, url = excluded.url,
+            adult = MAX(stamp_sources.adult, excluded.adult)
         """,
-        (key, title, author, url, now),
+        (key, title, author, url, int(adult), now),
     )
     conn.executemany(
         """

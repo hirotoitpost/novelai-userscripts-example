@@ -42,8 +42,20 @@ TEMPLATES: dict[str, Template] = {
             "上に大ゴマ+下に2コマ",
             ((0.0, 0.0, 1.0, 0.55), (0.5, 0.55, 1.0, 1.0), (0.0, 0.55, 0.5, 1.0)),
         ),
+        Template("stack2", "上下2コマ", ((0.0, 0.0, 1.0, 0.5), (0.0, 0.5, 1.0, 1.0))),
+        Template("single1", "1ページ1コマ", ((0.0, 0.0, 1.0, 1.0),)),
     )
 }
+
+# 最後のページでコマが余るときに使うテンプレート(コマ数 → テンプレート)。空きゴマを残さず、
+# 最後のコマを大きく見せる(締めのコマは大ゴマの方が収まりが良い)。
+_FILL_TEMPLATES = {1: "single1", 2: "stack2", 3: "tri3"}
+
+
+def fill_template(template_id: str, n_panels: int) -> str:
+    if n_panels >= len(TEMPLATES[template_id].panels):
+        return template_id
+    return _FILL_TEMPLATES.get(n_panels, template_id)
 
 
 def panel_rects(template_id: str) -> list[Rect]:

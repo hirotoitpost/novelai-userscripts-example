@@ -15,7 +15,16 @@ from fastapi.responses import StreamingResponse
 from novelai import AsyncNovelAI
 
 from ..client import get_client
-from ..db import create_draft, create_story, delete_draft, get_connection, get_draft, list_drafts, update_draft
+from ..db import (
+    create_draft,
+    create_story,
+    delete_draft,
+    get_connection,
+    get_draft,
+    list_drafts,
+    set_story_memory,
+    update_draft,
+)
 from ..models import (
     WriterDraft,
     WriterDraftSummary,
@@ -153,6 +162,8 @@ async def draft_to_story(draft_id: int, req: WriterToStoryRequest) -> dict[str, 
             conn, _premise_label(draft["title"], draft["text"]), 4, req.panels_per_page, raw_text=draft["text"]
         )
         update_draft(conn, draft_id, {"story_id": story["id"]})
+        # メモリ(登場人物の容姿など)は本文に書かれていないことが多いので、登場人物の抽出用に渡す
+        set_story_memory(conn, story["id"], draft["memory"])
     finally:
         conn.close()
     return {"story_id": story["id"]}

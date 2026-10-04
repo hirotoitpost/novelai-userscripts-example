@@ -46,6 +46,7 @@ class SheetSource:
     title: str
     author: str
     url: str
+    adult: bool = False
 
 
 def is_stamp_sheet(image: Image.Image) -> bool:
@@ -200,5 +201,8 @@ async def fetch_pixiv_sheets(artwork_id: str) -> tuple[SheetSource, list[Image.I
         title=body.get("title", ""),
         author=body.get("userName", ""),
         url=f"https://www.pixiv.net/artworks/{artwork_id}",
+        # pixiv の年齢制限(xRestrict: 1=R-18, 2=R-18G)と R-18 タグで判定する
+        adult=bool(body.get("xRestrict"))
+        or any(t.get("tag") in ("R-18", "R18", "R-18G") for t in (body.get("tags") or {}).get("tags", [])),
     )
     return source, sheets

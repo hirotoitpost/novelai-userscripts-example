@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from .layout import PAGE_HEIGHT, PAGE_WIDTH, Rect, panel_rects
+from .layout import PAGE_HEIGHT, PAGE_WIDTH, Rect, fill_template, panel_rects
 from .lettering import (
     SFX_MIN_SIZE,
     draw_stamp,
@@ -330,10 +330,16 @@ def compose_page(
 def compose_pages(
     template_id: str, panels: list[PanelContent], style: LetteringStyle
 ) -> list[tuple[Image.Image, list[Element]]]:
-    """シーン順のコマをテンプレートのコマ数ずつページに割り付ける。"""
-    rects = panel_rects(template_id)
-    per_page = len(rects)
-    return [compose_page(rects, panels[i : i + per_page], style) for i in range(0, len(panels), per_page)]
+    """
+    シーン順のコマをテンプレートのコマ数ずつページに割り付ける。最後のページのコマが
+    足りないときは、空きゴマを残さないよう少ないコマ数のテンプレートに切り替える。
+    """
+    per_page = len(panel_rects(template_id))
+    pages = []
+    for i in range(0, len(panels), per_page):
+        chunk = panels[i : i + per_page]
+        pages.append(compose_page(panel_rects(fill_template(template_id, len(chunk))), chunk, style))
+    return pages
 
 
 _PAGE_GAP = 40

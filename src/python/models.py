@@ -509,7 +509,12 @@ class MangaV2StampSource(BaseModel):
     author: str
     url: str
     count: int
+    adult: bool = False
     created_at: str
+
+
+class MangaV2StampSourceUpdate(BaseModel):
+    adult: bool
 
 
 class MangaV2Stamp(BaseModel):
@@ -532,6 +537,7 @@ class MangaV2StampZipRequest(BaseModel):
     """1語1ファイルの素材集(透過PNGのZIP)。ファイル名(例: くちゅ1_0007.png)から読みを付ける。"""
 
     zip: str
+    adult: bool = False
     title: str = Field("", max_length=100)
     author: str = Field("", max_length=100)
     url: str = Field("", max_length=500)
@@ -614,6 +620,8 @@ class MangaV2SceneNarrationRequest(BaseModel):
 class MangaV2SuggestSfxRequest(BaseModel):
     scene_from: int = Field(0, ge=0)
     scene_to: Optional[int] = Field(None, ge=0)
+    # 描き文字の自動選択で、成人向けの素材のスタンプも候補にする
+    include_adult: bool = False
     # False なら効果音を設定済み(空を含む)のシーンは飛ばす
     overwrite: bool = False
 
@@ -626,7 +634,7 @@ class MangaV2ComposeRequest(BaseModel):
     # 吹き出しの白い地の不透明度。0で輪郭線だけ(文字には白フチが付く)。
     bubble_opacity: float = Field(1.0, ge=0.0, le=1.0)
     # 1コマのセリフの上限。超えるシーンは同じ絵の寄りのコマを足して分ける。0で分けない。
-    max_lines_per_panel: int = Field(3, ge=0, le=10)
+    max_lines_per_panel: int = Field(2, ge=0, le=10)
 
 
 class MangaV2Element(BaseModel):

@@ -6,6 +6,7 @@ interface StampSource {
   author: string
   url: string
   count: number
+  adult: boolean
 }
 
 interface Stamp {
@@ -141,6 +142,15 @@ export default function MangaV2Stamps({ apiOrigin, storyId, words, busy, runTask
     reader.readAsDataURL(file)
   }
 
+  async function setAdult(key: string, adult: boolean) {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/stamp-sources/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adult }),
+    })
+    if (res.ok) loadSources()
+  }
+
   async function removeSource(key: string) {
     if (!window.confirm('この取り込み元のスタンプをすべて削除しますか?')) return
     await fetch(`${apiOrigin}/api/manga-v2/stamp-sources/${encodeURIComponent(key)}`, { method: 'DELETE' })
@@ -239,6 +249,10 @@ export default function MangaV2Stamps({ apiOrigin, storyId, words, busy, runTask
             <li key={s.key}>
               <a href={s.url || undefined} target="_blank" rel="noreferrer">{s.title}</a>
               {s.author && ` / ${s.author}`}(スタンプ{s.count}個)
+              <label className="mv2-check">
+                <input type="checkbox" checked={s.adult} disabled={busy} onChange={e => void setAdult(s.key, e.target.checked)} />
+                成人向け
+              </label>
               <button type="button" className="story-secondary" disabled={busy} onClick={() => void removeSource(s.key)}>削除</button>
             </li>
           ))}

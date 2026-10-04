@@ -8,7 +8,11 @@ _QUALITY_NEGATIVE = (
 )
 # コマ割りと吹き出しはこちらで描くので、絵に含まれると二重になる。ユーザーが
 # ネガティブを指定した場合も必ず足す。
-_NO_TEXT_NEGATIVE = ", text, english text, japanese text, speech bubble, comic, multiple views, panels, border, frame"
+# 実機で「あいさつ・感謝」のような場面に看板や張り紙風の偽の文字が描かれたので、文字を連想させる語も入れる。
+_NO_TEXT_NEGATIVE = (
+    ", text, english text, japanese text, speech bubble, comic, multiple views, panels, border, frame"
+    ", typography, letters, writing, signage, sign, title, logo, poster, caption, watermark text"
+)
 _MONOCHROME_NEGATIVE = ", sepia, colored, watercolor"
 
 

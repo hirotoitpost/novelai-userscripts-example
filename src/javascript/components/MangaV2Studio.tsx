@@ -93,12 +93,14 @@ export default function MangaV2Studio({
   const [sfxFont, setSfxFont] = useLocalStorage('nai_manga_v2_sfx_font', 'hg-soei-kakugothic-ub')
   const [opacity, setOpacity] = useLocalStorage('nai_manga_v2_bubble_opacity', 100)
   const [color, setColor] = useLocalStorage('nai_manga_v2_color', false)
-  const [maxLines, setMaxLines] = useLocalStorage('nai_manga_v2_max_lines', 3)
+  const [maxLines, setMaxLines] = useLocalStorage('nai_manga_v2_max_lines_v2', 2)
   const [useReference, setUseReference] = useLocalStorage('nai_manga_v2_use_reference', false)
   const [refStrength, setRefStrength] = useLocalStorage('nai_manga_v2_ref_strength', 1.0)
   const [refFidelity, setRefFidelity] = useLocalStorage('nai_manga_v2_ref_fidelity', 1.0)
   const [skipExisting, setSkipExisting] = useState(true)
   const [overwriteSfx, setOverwriteSfx] = useState(false)
+  // 描き文字の自動選択で成人向け素材のスタンプも使うか(既定は使わない)
+  const [includeAdult, setIncludeAdult] = useLocalStorage('nai_manga_v2_include_adult', false)
   // 対象のシーン範囲(表示は1始まり)。既定は1ページ分。
   const [sceneFrom, setSceneFrom] = useState(1)
   const [sceneTo, setSceneTo] = useState(4)
@@ -229,7 +231,7 @@ export default function MangaV2Studio({
       try {
         await startJob(
           'suggest-sfx-fonts',
-          { scene_from: from - 1, scene_to: to - 1, overwrite: overwriteSfx },
+          { scene_from: from - 1, scene_to: to - 1, overwrite: overwriteSfx, include_adult: includeAdult },
           signal,
         )
       } finally {
@@ -517,6 +519,10 @@ export default function MangaV2Studio({
         <label className="mv2-check">
           <input type="checkbox" checked={overwriteSfx} onChange={e => setOverwriteSfx(e.target.checked)} />
           効果音・ナレーションを設定済みのシーンもAIで上書き
+        </label>
+        <label className="mv2-check">
+          <input type="checkbox" checked={includeAdult} onChange={e => setIncludeAdult(e.target.checked)} />
+          描き文字の自動選択に成人向けのスタンプも使う
         </label>
       </div>
 

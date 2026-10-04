@@ -132,7 +132,8 @@ def layout_columns(text: str, rows: int) -> list[str]:
             continue
         # 1列に収まらない長い断片は文字単位で折り返す
         for ch in phrase:
-            if len(current) >= rows and not (ch in _NO_LINE_START and len(current) <= rows):
+            # 行頭禁則の文字(「……。」の「。」など)は何文字続いても前の列にぶら下げる
+            if len(current) >= rows and ch not in _NO_LINE_START:
                 columns.append(current)
                 current = ""
             current += ch

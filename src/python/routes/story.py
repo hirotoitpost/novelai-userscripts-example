@@ -1178,6 +1178,46 @@ def _canonical_name(name: str) -> str:
     return name
 
 
+# メモリの人物設定の行。「名前(読み) 説明」「名前: 説明」の形(行頭の「登場人物:」は外す)。
+_MEMORY_CHARACTER_RE = re.compile(r"^([^\s(（:：、。]{1,12})(?:[(（]([^)）]{1,20})[)）])?[\s　:：]+(.+)$")
+_MEMORY_SECTION_RE = re.compile(r"^(?:登場人物|キャラクター|人物)[:：\s　]*")
+
+
+def _memory_characters(memory: str) -> dict[str, dict[str, Any]]:
+    """
+    メモリから人物設定を取り出す: {名前: {"aliases": [...], "description": 説明}}。
+    容姿の語を含む行だけを人物とみなす(「舞台: 港町」「文体: 三人称」を除くため)。
+    """
+    result: dict[str, dict[str, Any]] = {}
+    for raw in memory.splitlines():
+        line = _MEMORY_SECTION_RE.sub("", raw.strip())
+        match = _MEMORY_CHARACTER_RE.match(line)
+        if not match:
+            continue
+        name, reading, description = match.group(1), match.group(2), match.group(3)
+        if not any(word in description for word in _APPEARANCE_KEYWORDS) or not _is_usable_character_name(name):
+            continue
+        aliases = [name] + ([reading] if reading and reading != name else [])
+        result[name] = {"aliases": aliases, "description": f"{name}: {description}"}
+    return result
+
+
+def _merge_candidates(defined: dict[str, dict[str, Any]], found: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """メモリの人物を先頭に置き、本文から拾った候補のうち同じ人物の表記はそちらへまとめる。"""
+    merged = [{"name": name, "aliases": list(info["aliases"])} for name, info in defined.items()]
+    for candidate in found:
+        owner = next((m for m in merged if _canonical_name(candidate["name"]) in map(_canonical_name, m["aliases"])), None)
+        if owner is None:
+            merged.append(candidate)
+            continue
+        for alias in candidate["aliases"]:
+            if alias not in owner["aliases"]:
+                owner["aliases"].append(alias)
+    for person in merged:
+        person["aliases"].sort(key=len, reverse=True)
+    return merged
+
+
 def _collect_name_candidates(text: str) -> list[dict[str, Any]]:
     """
     本文全体から人物名の候補を集める(LLMは使わない)。
@@ -1279,7 +1319,10 @@ async def _describe_appearance(name: str, passages: list[str]) -> str:
         "- 本文に書かれていない特徴は足さない\n"
         "- 髪色・髪型・目の色・服装・年齢層など、絵に描ける特徴だけを挙げる\n"
         "- 出力は英語のタグのみ(日本語や中国語は使わない)\n"
-        '- 例: {"appearance_tags": "1girl, long black hair, blue eyes, school uniform"}'
+        "- 人間なら 1girl / 1boy などの人数タグを先頭に付ける。動物・人外なら人数タグは付けず、"
+        "fox, cat などの種族タグを先頭に置く\n"
+        '- 例(人間): {"appearance_tags": "1girl, long black hair, blue eyes, school uniform"}\n'
+        '- 例(動物): {"appearance_tags": "small white fox, animal, golden eyes, red collar"}'
     )
     schema = {
         "type": "object",
@@ -1301,10 +1344,26 @@ async def _describe_appearance(name: str, passages: list[str]) -> str:
             data = json.loads(strip_think_tags("".join(parts)))
         except json.JSONDecodeError:
             continue
-        tags = _english_tags_only(str(data.get("appearance_tags") or ""))
+        tags = _drop_people_count_for_animals(_english_tags_only(str(data.get("appearance_tags") or "")))
         if tags:
             return tags
     return ""
+
+
+_ANIMAL_WORDS = ("fox", "cat", "dog", "wolf", "rabbit", "bird", "animal", "dragon", "kitsune")
+_PEOPLE_COUNT_RE = re.compile(r"^\d+(?:girls?|boys?|others?)$")
+
+
+def _drop_people_count_for_animals(tags: str) -> str:
+    """
+    動物のキャラに 1girl / 1boy が付くと人間(獣耳の少女など)で描かれてしまう。プロンプトで
+    指示しても小さいモデルは付けてくる(実機の qwen2.5:7b で「1girl, small white fox」)ので、
+    動物の語があれば人数タグを落とす。
+    """
+    items = [t.strip() for t in tags.split(",") if t.strip()]
+    if not any(word in t.lower() for t in items for word in _ANIMAL_WORDS):
+        return tags
+    return ", ".join(t for t in items if not _PEOPLE_COUNT_RE.match(t.lower()))
 
 
 @router.post("/{story_id}/extract-characters", response_model=StoryJobResponse)
@@ -1339,10 +1398,14 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
         if raw_text
         else "\n".join(scene["draft_text"] for scene in scenes)
     )
+    # 物語エディタから来た物語は、メモリの1行1人の人物設定(「源三(げんぞう) 七十歳の店主。白髪…」)を
+    # 名前と容姿の一次情報として使う。本文からの候補探しはひらがなの名前(こはく)を拾えず、
+    # 容姿も本文には書かれていないことが多いため。
+    defined = _memory_characters(story.get("memory") or "")
 
     job.total = 3
     job.message = "本文から名前の候補を集めています"
-    candidates = _collect_name_candidates(source_text)
+    candidates = _merge_candidates(defined, _collect_name_candidates(source_text))
     if not candidates:
         job.message = (
             "名前の候補が見つかりませんでした"
@@ -1352,8 +1415,9 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
     job.progress = 1
 
     job.message = f"{len(candidates)}件の候補から人物を判定しています"
-    confirmed = await _confirm_people([c["name"] for c in candidates])
-    people = [c for c in candidates if c["name"] in confirmed]
+    # メモリで人物として定義した名前はLLMの判定にかけない(判定は本文から拾った候補だけ)
+    confirmed = await _confirm_people([c["name"] for c in candidates if c["name"] not in defined])
+    people = [c for c in candidates if c["name"] in confirmed or c["name"] in defined]
     if not people:
         job.message = "候補から人物を判定できませんでした"
         return
@@ -1365,6 +1429,8 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
         for index, person in enumerate(people, start=1):
             job.message = f"容姿の描写を探しています {index}/{len(people)}: {person['name']}"
             passages = _appearance_passages(source_text, person["aliases"])
+            if person["name"] in defined:
+                passages = [defined[person["name"]]["description"], *passages][:_APPEARANCE_PASSAGE_LIMIT]
             tags = await _describe_appearance(person["name"], passages) if passages else ""
             if tags:
                 described += 1
