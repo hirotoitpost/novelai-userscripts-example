@@ -1386,11 +1386,14 @@ def _drop_people_count_for_animals(tags: str) -> str:
 
 
 @router.post("/{story_id}/extract-characters", response_model=StoryJobResponse)
-async def extract_characters(story_id: int) -> dict[str, Any]:
+async def extract_characters(story_id: int, overwrite_appearance: bool = False) -> dict[str, Any]:
     """
     本文全体から登場人物を洗い出し、容姿の描写があれば対応付けて、登場するシーンへ
     割り当てる。キャラは物語をまたいで使い回せるよう名前で一意にしているので、
     既に同名で登録済みならそちらを使う(AIアシスタントのキャラ生成で作った設定も流用できる)。
+
+    overwrite_appearance=False(既定)なら、登録済みで容姿タグがあるキャラの容姿は変えない
+    (手で直したタグを守るため。容姿が空のキャラだけ埋める)。True なら抽出結果で上書きする。
     """
     conn = get_connection()
     try:
@@ -1402,12 +1405,12 @@ async def extract_characters(story_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="先にシーン分割を実行してください。")
 
     async def runner(job: _Job) -> None:
-        await _run_extract_characters(job, story)
+        await _run_extract_characters(job, story, overwrite_appearance)
 
     return _job_response(_start_job(story_id, "characters", runner))
 
 
-async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
+async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_appearance: bool = False) -> None:
     scenes = story["scenes"]
     # 取り込んだ物語は raw_text が原文。ドラフト生成のものは無いのでシーンを繋ぐ。
     # 冒頭だけ分割した物語では、まだシーンになっていない残りの本文は対象にしない。
@@ -1444,8 +1447,16 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
 
     conn = get_connection()
     try:
+        existing = {c["name"]: c for c in list_characters(conn)}
         described = 0
+        kept = 0
         for index, person in enumerate(people, start=1):
+            current = existing.get(person["name"])
+            if not overwrite_appearance and current and current["appearance_tags"].strip():
+                # 容姿は登録済みのものを使う(LLMにも問い合わせない)
+                person["id"] = current["id"]
+                kept += 1
+                continue
             job.message = f"容姿の描写を探しています {index}/{len(people)}: {person['name']}"
             passages = _appearance_passages(source_text, person["aliases"])
             if person["name"] in defined:
@@ -1472,8 +1483,9 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any]) -> None:
 
     job.progress = 3
     job.message = (
-        f"{len(people)}人を登録し(容姿の描写が見つかったのは{described}人)、"
-        f"{assigned}/{len(scenes)}シーンに割り当てました"
+        f"{len(people)}人を登録し(容姿の描写が見つかったのは{described}人"
+        + (f"、登録済みの容姿をそのまま使ったのは{kept}人" if kept else "")
+        + f")、{assigned}/{len(scenes)}シーンに割り当てました"
     )
 
 @router.get("/characters", response_model=list[CharacterResponse])

@@ -228,6 +228,8 @@ export default function Story() {
   const [mangaPages, setMangaPages] = useState<MangaPage[]>([])
   const [pageStats, setPageStats] = useState<PageStats[]>([])
   // v1: V5にコマ割り込みのページを描かせる / v2: コマごとに描かせ、コマ割り・吹き出しは自前
+  // 登場人物の抽出で、登録済みキャラの容姿タグも抽出結果で置き換えるか(既定は残す)
+  const [overwriteAppearance, setOverwriteAppearance] = useLocalStorage('nai_story_overwrite_appearance', false)
   const [mangaMode, setMangaMode] = useLocalStorage<'v1' | 'v2'>('nai_story_manga_mode', 'v2')
 
   const [stepLabel, setStepLabel] = useState('')
@@ -548,7 +550,7 @@ export default function Story() {
     abortRef.current = controller
     try {
       setStepLabel('登場人物の抽出を開始しています...')
-      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/extract-characters`, {
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/extract-characters?overwrite_appearance=${overwriteAppearance}`, {
         method: 'POST',
         signal: controller.signal,
       })
@@ -1138,6 +1140,13 @@ export default function Story() {
                 <button type="button" onClick={runRetag} disabled={busy}>
                   タグ付けを実行({untaggedCount}シーン未設定)
                 </button>
+              )}
+              {isWritten && (
+                <label className="story-check">
+                  <input type="checkbox" checked={overwriteAppearance} disabled={busy}
+                    onChange={e => setOverwriteAppearance(e.target.checked)} />
+                  登録済みの容姿も上書き
+                </label>
               )}
               {isWritten && (
                 <button type="button" onClick={runExtractCharacters} disabled={busy}>

@@ -779,3 +779,19 @@
     flex-direction: column;
   }
 }
+
+.story-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: #9a9ac0;
+}
+
+.story-section .story-check input[type='checkbox'] {
+  -webkit-appearance: auto;
+  appearance: auto;
+  accent-color: #7b5cf6;
+  width: auto;
+  margin: 0;
+}
