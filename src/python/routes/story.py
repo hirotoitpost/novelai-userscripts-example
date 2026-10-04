@@ -1179,7 +1179,15 @@ def _canonical_name(name: str) -> str:
 
 
 # メモリの人物設定の行。「名前(読み) 説明」「名前: 説明」の形(行頭の「登場人物:」は外す)。
-_MEMORY_CHARACTER_RE = re.compile(r"^([^\s(（:：、。]{1,12})(?:[(（]([^)）]{1,20})[)）])?[\s　:：]+(.+)$")
+# メモリの人物設定の行。「名前(読み) 説明」「名前: 説明」の形(行頭の「登場人物:」は外す)。
+# 姓と名を空白で区切った「矢野 栄子(やの えいこ) 説明」も受け付け、名だけの表記(本文の「栄子」)も
+# 同じ人物として扱う。名は4文字まで・直後に読みか区切りが来る場合だけ(「源三 七十歳の店主」を
+# 姓名と取り違えないため)。
+_MEMORY_CHARACTER_RE = re.compile(
+    r"^(?P<family>[^\s(（:：、。]{1,8})"
+    r"(?:[ 　](?P<given>[^\s(（:：、。]{1,4})(?=[(（:：\s　]))?"
+    r"(?:[(（](?P<reading>[^)）]{1,20})[)）])?[\s　:：]+(?P<description>.+)$"
+)
 _MEMORY_SECTION_RE = re.compile(r"^(?:登場人物|キャラクター|人物)[:：\s　]*")
 
 
@@ -1187,6 +1195,7 @@ def _memory_characters(memory: str) -> dict[str, dict[str, Any]]:
     """
     メモリから人物設定を取り出す: {名前: {"aliases": [...], "description": 説明}}。
     容姿の語を含む行だけを人物とみなす(「舞台: 港町」「文体: 三人称」を除くため)。
+    姓名を空白で区切って書いた人物は、姓名続き・名だけ・読み(名の読みも)を別名にする。
     """
     result: dict[str, dict[str, Any]] = {}
     for raw in memory.splitlines():
@@ -1194,10 +1203,20 @@ def _memory_characters(memory: str) -> dict[str, dict[str, Any]]:
         match = _MEMORY_CHARACTER_RE.match(line)
         if not match:
             continue
-        name, reading, description = match.group(1), match.group(2), match.group(3)
+        family, given = match.group("family"), match.group("given")
+        reading, description = match.group("reading"), match.group("description")
+        name = family + (given or "")
         if not any(word in description for word in _APPEARANCE_KEYWORDS) or not _is_usable_character_name(name):
             continue
-        aliases = [name] + ([reading] if reading and reading != name else [])
+        aliases = [name]
+        if given:
+            aliases += [f"{family} {given}", given]
+        if reading:
+            parts = reading.split()
+            aliases.append("".join(parts))
+            if given and len(parts) == 2:
+                aliases.append(parts[1])
+        aliases = list(dict.fromkeys(a for a in aliases if a))
         result[name] = {"aliases": aliases, "description": f"{name}: {description}"}
     return result
 
