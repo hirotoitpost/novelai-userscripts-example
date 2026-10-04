@@ -130,6 +130,22 @@ def _is_katakana_sfx(line: str) -> bool:
     return bool(_KATAKANA_SFX_RE.fullmatch(line)) and bool(_HAS_KATAKANA_RE.search(line))
 
 
+# 地の文の中の「」(店名・書名・強調。例: 古書店「時雨堂」の店主)はセリフではない。
+# セリフの「」は行頭か、文の切れ目の直後から始まる。
+_SPOKEN_PREFIX = set("\n。！？!?」』　 ")
+
+
+def _is_spoken(text: str, start: int, end: int) -> bool:
+    if start > 0 and text[start - 1] not in _SPOKEN_PREFIX:
+        return False
+    # 『』の直後に助詞が続くものは書名・作品名(『星の旅人』という本)。「」は「…」と言った、
+    # のようにセリフでも助詞が続くので対象にしない。
+    return not (text[start] == "『" and end < len(text) and text[end] in _TITLE_PARTICLES)
+
+
+_TITLE_PARTICLES = set("のとをがはにもで")
+
+
 def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
     """
     シーンから (吹き出しにするセリフ, 描き文字にする効果音) を取り出す。
@@ -140,7 +156,7 @@ def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
     sfx: list[str] = [m.group(1).strip() for m in _SFX_MARK_RE.finditer(text) if m.group(1).strip()]
     for match in DIALOGUE_RE.finditer(text):
         line = match.group(1).strip()
-        if not line:
+        if not line or not _is_spoken(text, match.start(), match.end()):
             continue
         (sfx if _is_katakana_sfx(line) else dialogue).append(line)
     for extra in scene.get("sfx") or []:
