@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections import Counter
 from base64 import b64decode
 from dataclasses import dataclass, field
@@ -47,6 +48,7 @@ from ..db import (
 )
 from ..keystore_crypto import decrypt_keystore, decrypt_object
 from ..manga_export import assemble_manga
+from ..notify import notify_job_finished
 from ..models import (
     CharacterResponse,
     CharacterSaveRequest,
@@ -191,6 +193,8 @@ class _Job:
 # 物語ごとに同時に1ジョブだけ。プロセス内メモリなので再起動で消えるが、
 # 途中結果はDBへ逐次書き込むので処理そのものは失われない。
 _jobs: dict[int, _Job] = {}
+# 送信中の通知タスク(参照を持たないと途中で GC されることがある)
+_notify_tasks: set[asyncio.Task[None]] = set()
 
 
 def _job_response(job: _Job) -> dict[str, Any]:
@@ -214,6 +218,7 @@ def _start_job(story_id: int, kind: str, runner: Callable[[_Job], Awaitable[None
     _jobs[story_id] = job
 
     async def wrapper() -> None:
+        started = time.monotonic()
         try:
             await runner(job)
             if job.status == "running":
@@ -225,6 +230,18 @@ def _start_job(story_id: int, kind: str, runner: Callable[[_Job], Awaitable[None
         except Exception as exc:  # noqa: BLE001 ジョブの失敗は状態として持たせる
             job.status = "error"
             job.detail = str(exc)
+        finally:
+            # キャンセル中でも通知だけは送り切る(スマホを見ていない間に終わることが多い)
+            notice = notify_job_finished(
+                story_id,
+                kind,
+                job.status,
+                job.detail if job.status == "error" else job.message,
+                time.monotonic() - started,
+            )
+            notify_task = asyncio.get_running_loop().create_task(notice)
+            _notify_tasks.add(notify_task)
+            notify_task.add_done_callback(_notify_tasks.discard)
 
     job.task = asyncio.create_task(wrapper())
     return job

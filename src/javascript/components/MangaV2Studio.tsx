@@ -54,7 +54,7 @@ interface Props {
   token: string | null
   busy: boolean
   /** 進捗表示・キャンセル・エラー表示を Story ページ側に任せて処理を走らせる。 */
-  runTask: (label: string, task: (signal: AbortSignal) => Promise<void>) => Promise<void>
+  runTask: (label: string, task: (signal: AbortSignal) => Promise<string | void>) => Promise<void>
   /** 物語のバックグラウンドジョブが終わるまで待つ(進捗は Story ページに出る)。 */
   pollJob: (signal: AbortSignal) => Promise<void>
   /** シーン(効果音)や完成画像が変わったので物語を読み直す。 */
@@ -174,7 +174,7 @@ export default function MangaV2Studio({
   }
 
   function generatePanels() {
-    return runTask(`シーン${from}〜${to}のコマの絵を生成しています...`, async signal => {
+    return runTask(`コマの絵の生成(シーン${from}〜${to})`, async signal => {
       try {
         await startJob(
           'panels',
@@ -197,7 +197,7 @@ export default function MangaV2Studio({
 
   function redrawPanel(scene: MangaV2Scene) {
     const seed = Math.floor(Math.random() * 4294967296)
-    return runTask(`シーン${scene.scene_index + 1}を描き直しています...`, async signal => {
+    return runTask(`シーン${scene.scene_index + 1}の描き直し`, async signal => {
       try {
         await startJob(
           'panels',
@@ -219,7 +219,7 @@ export default function MangaV2Studio({
   }
 
   function suggestSfx() {
-    return runTask('効果音をAIに提案させています...', async signal => {
+    return runTask('効果音のAI提案', async signal => {
       await startJob(
         'suggest-sfx',
         { scene_from: from - 1, scene_to: to - 1, overwrite: overwriteSfx },
@@ -230,7 +230,7 @@ export default function MangaV2Studio({
   }
 
   function suggestSfxFonts() {
-    return runTask('描き文字(スタンプ・フォント)をAIに選ばせています...', async signal => {
+    return runTask('描き文字(スタンプ・フォント)のAI選択', async signal => {
       try {
         await startJob(
           'suggest-sfx-fonts',
@@ -244,7 +244,7 @@ export default function MangaV2Studio({
   }
 
   function suggestNarration() {
-    return runTask('ナレーションをAIに書かせています...', async signal => {
+    return runTask('ナレーションのAI作成', async signal => {
       await startJob(
         'suggest-narration',
         { scene_from: from - 1, scene_to: to - 1, overwrite: overwriteSfx },
@@ -325,7 +325,7 @@ export default function MangaV2Studio({
   }
 
   function compose() {
-    return runTask('ページを合成しています...', requestCompose)
+    return runTask('ページの合成', requestCompose)
   }
 
   async function putOverride(key: string, x: number | null, y: number | null, signal: AbortSignal) {
@@ -339,14 +339,14 @@ export default function MangaV2Studio({
   }
 
   function moveElement(element: MangaV2Element, x: number, y: number) {
-    return runTask('位置を保存して合成し直しています...', async signal => {
+    return runTask('位置の保存と再合成', async signal => {
       await putOverride(element.key, x, y, signal)
       await requestCompose(signal)
     })
   }
 
   function scaleElement(element: MangaV2Element, scale: number | null) {
-    return runTask('大きさを保存して合成し直しています...', async signal => {
+    return runTask('大きさの保存と再合成', async signal => {
       const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/scales`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -359,7 +359,7 @@ export default function MangaV2Studio({
   }
 
   function resetElements(elements: MangaV2Element[]) {
-    return runTask('自動配置に戻して合成し直しています...', async signal => {
+    return runTask('自動配置に戻して再合成', async signal => {
       for (const element of elements) await putOverride(element.key, null, null, signal)
       await requestCompose(signal)
     })

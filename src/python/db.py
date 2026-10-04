@@ -260,6 +260,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 処理終了のプッシュ通知(Web Push)を受け取るブラウザ。endpoint はブラウザごとに一意。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            endpoint TEXT PRIMARY KEY,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -1316,4 +1328,26 @@ def update_draft(conn: sqlite3.Connection, draft_id: int, fields: dict[str, Any]
 
 def delete_draft(conn: sqlite3.Connection, draft_id: int) -> None:
     conn.execute("DELETE FROM story_drafts WHERE id = ?", (draft_id,))
+    conn.commit()
+
+
+def upsert_push_subscription(conn: sqlite3.Connection, endpoint: str, p256dh: str, auth: str, user_agent: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(endpoint) DO UPDATE SET
+            p256dh = excluded.p256dh, auth = excluded.auth, user_agent = excluded.user_agent
+        """,
+        (endpoint, p256dh, auth, user_agent, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def list_push_subscriptions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [dict(row) for row in conn.execute("SELECT * FROM push_subscriptions").fetchall()]
+
+
+def delete_push_subscription(conn: sqlite3.Connection, endpoint: str) -> None:
+    conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
     conn.commit()

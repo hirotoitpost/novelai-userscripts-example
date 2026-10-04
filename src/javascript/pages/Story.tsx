@@ -9,6 +9,8 @@ import MangaImageSettings, {
 import StoryCharacters, { SceneCharacter } from '../components/StoryCharacters'
 import MangaV2Studio from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
+import NotificationToggle from '../components/NotificationToggle'
 import './Story.css'
 
 interface StoryScene {
@@ -165,6 +167,20 @@ async function postSSE<T>(
   throw new Error('サーバーからの応答が途中で終了しました')
 }
 
+/** ジョブがサーバー側でキャンセル済みだったことを表す。エラー扱いにしない。 */
+class TaskCancelled extends Error {}
+
+/** サーバーのジョブの種類 → 表示名(src/python/notify.py の JOB_KIND_LABELS と揃える) */
+const JOB_KIND_LABELS: Record<string, string> = {
+  split: 'シーン分割・タグ付け',
+  illustrate: '挿絵の生成',
+  characters: '登場人物の抽出',
+  sfx: '効果音の提案',
+  narration: 'ナレーションの作成',
+  panels: 'コマの絵の生成',
+  sfx_fonts: '描き文字の選択',
+}
+
 function mangaFileUrl(path: string): string {
   return `${API_ORIGIN}/api/story/manga-file?path=${encodeURIComponent(path)}`
 }
@@ -234,11 +250,11 @@ export default function Story() {
   const [adultTags, setAdultTags] = useLocalStorage('nai_story_adult_tags', false)
   const [mangaMode, setMangaMode] = useLocalStorage<'v1' | 'v2'>('nai_story_manga_mode', 'v2')
 
-  const [stepLabel, setStepLabel] = useState('')
   const [error, setError] = useState<string | null>(null)
 
+  const task = useTaskStatus()
   const abortRef = useRef<AbortController | null>(null)
-  const busy = stepLabel !== ''
+  const busy = task.busy
 
   const isWritten = (story?.scenes.length ?? 0) > 0 && story!.scenes.every(s => s.novelai_text)
   const isUnsplitImport = (story?.scenes.length ?? 0) === 0 && !!story?.raw_text
@@ -283,12 +299,45 @@ export default function Story() {
       const job = res.ok ? await res.json() : null
       if (!job) return
 
-      setStepLabel(job.total > 0 ? `${job.message} (${job.progress}/${job.total})` : job.message)
+      task.update(job.message, job.progress, job.total, `nai-job-${storyId}`)
       if (job.status === 'done') return
       if (job.status === 'error') throw new Error(job.detail ?? '処理に失敗しました')
-      if (job.status === 'cancelled') throw new Error('キャンセルしました。途中までの結果は残っています。')
+      if (job.status === 'cancelled') throw new TaskCancelled('キャンセルしました。途中までの結果は残っています。')
 
       await new Promise(resolve => setTimeout(resolve, 2000))
+    }
+  }
+
+  /**
+   * 処理を走らせ、進捗と結果をダイアログに出す。キャンセル・エラー表示もここで共通化する
+   * (漫画v2からも使う)。work が文字列を返したら、それを完了時のメッセージにする。
+   */
+  async function runTask(
+    label: string,
+    work: (signal: AbortSignal) => Promise<string | void>,
+    cancelMessage = 'キャンセルしました。',
+  ) {
+    setError(null)
+    const controller = new AbortController()
+    abortRef.current = controller
+    task.start(label)
+    try {
+      const result = await work(controller.signal)
+      task.finish('done', result || undefined)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setError(cancelMessage)
+        task.finish('cancelled', cancelMessage)
+      } else if (e instanceof TaskCancelled) {
+        setError(e.message)
+        task.finish('cancelled', e.message)
+      } else {
+        const message = e instanceof Error ? e.message : String(e)
+        setError(message)
+        task.finish('error', message)
+      }
+    } finally {
+      abortRef.current = null
     }
   }
 
@@ -298,20 +347,11 @@ export default function Story() {
     const job = res?.ok ? await res.json() : null
     if (!job || job.status !== 'running') return
 
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      await pollJob(id, controller.signal)
+    await runTask(JOB_KIND_LABELS[job.kind] ?? '処理', async signal => {
+      await pollJob(id, signal)
       await loadStory(id)
       loadHistory()
-    } catch (e) {
-      if (!(e instanceof DOMException && e.name === 'AbortError')) {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+    })
   }
 
   async function loadStory(id: number) {
@@ -340,44 +380,31 @@ export default function Story() {
     void resumeJobIfRunning(id)
   }
 
-  async function createDraft() {
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
-    setStepLabel('Ollamaでシーン分割ドラフトを作成中...')
-    try {
+  function createDraft() {
+    return runTask('シーン分割ドラフトの作成(Ollama)', async signal => {
       const data = await postSSE<StoryData>(
         '/api/story/draft',
-        controller.signal,
-        setStepLabel,
+        signal,
+        message => task.update(message),
         { premise, n_scenes: nScenes, panels_per_page: panelsPerPage },
       )
       setStory(data)
       setMangaPages([])
       loadHistory()
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+      return `${data.scenes.length}シーンのドラフトを作成しました`
+    })
   }
 
-  async function importStory(text: string = importText) {
+  function importStory(text: string = importText) {
     // シーン分割・タグ付けは行わず、本文をそのままDBへ保存するだけなのでOllama呼び出しが
     // 無く即座に終わる。SSEにする必要はないため通常のfetchで十分。
-    setError(null)
     setImportText(text)
-    setStepLabel('物語を取り込み中...')
-    try {
+    return runTask('物語の取り込み', async signal => {
       const res = await fetch(`${API_ORIGIN}/api/story/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, n_scenes: nScenes, panels_per_page: panelsPerPage }),
+        signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
       const data: StoryData = await res.json()
@@ -385,20 +412,13 @@ export default function Story() {
       setMangaPages([])
       setImportText('')
       loadHistory()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setStepLabel('')
-    }
+      return `${text.length.toLocaleString()}文字の本文を取り込みました`
+    })
   }
 
-  async function runSplit() {
+  function runSplit() {
     if (!story) return
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      setStepLabel('シーン分割を開始しています...')
+    return runTask('シーン分割・タグ付け', async signal => {
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/split`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -408,22 +428,13 @@ export default function Story() {
           max_scenes: headScenes > 0 ? headScenes : null,
           adult: adultTags,
         }),
-        signal: controller.signal,
+        signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
-      await pollJob(story.id, controller.signal)
+      await pollJob(story.id, signal)
       await loadStory(story.id)
       loadHistory()
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+    })
   }
 
   async function computeRemoteKey() {
@@ -480,52 +491,51 @@ export default function Story() {
     void importStory(remote.text)
   }
 
-  async function importAllRemoteStories() {
+  function importAllRemoteStories() {
     const importable = (remoteStories ?? []).filter(r => r.text)
     if (importable.length === 0) return
-    setError(null)
-    const failed: string[] = []
-    for (let i = 0; i < importable.length; i++) {
-      const remote = importable[i]
-      setStepLabel(`一括取り込み中(${i + 1}/${importable.length}): ${remote.title}`)
+    return runTask('公式サイトの物語を一括取り込み', async signal => {
+      const failed: string[] = []
       try {
-        const res = await fetch(`${API_ORIGIN}/api/story/import`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: remote.text, n_scenes: nScenes, panels_per_page: panelsPerPage }),
-        })
-        if (!res.ok) throw new Error(await readErrorDetail(res))
-      } catch (e) {
-        failed.push(`${remote.title}(${e instanceof Error ? e.message : String(e)})`)
+        for (let i = 0; i < importable.length; i++) {
+          const remote = importable[i]
+          task.update(`取り込み中: ${remote.title}`, i, importable.length)
+          try {
+            const res = await fetch(`${API_ORIGIN}/api/story/import`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: remote.text, n_scenes: nScenes, panels_per_page: panelsPerPage }),
+              signal,
+            })
+            if (!res.ok) throw new Error(await readErrorDetail(res))
+          } catch (e) {
+            if (e instanceof DOMException && e.name === 'AbortError') throw e
+            failed.push(`${remote.title}(${e instanceof Error ? e.message : String(e)})`)
+          }
+        }
+        task.update('取り込みが終わりました', importable.length, importable.length)
+      } finally {
+        loadHistory()
       }
-    }
-    setStepLabel('')
-    if (failed.length > 0) {
-      setError(`${importable.length - failed.length}/${importable.length}件取り込みました。失敗: ${failed.join(', ')}`)
-    }
-    loadHistory()
+      if (failed.length > 0) {
+        throw new Error(`${importable.length - failed.length}/${importable.length}件取り込みました。失敗: ${failed.join(', ')}`)
+      }
+      return `${importable.length}件の物語を取り込みました`
+    })
   }
 
-  async function runWrite() {
+  function runWrite() {
     if (!story) return
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      setStepLabel('NovelAI公式(Kayra)で本文を執筆中...')
-      const written = await postSSE<StoryData>(`/api/story/${story.id}/write`, controller.signal, setStepLabel)
-      setStory(written)
-      loadHistory()
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。途中まで進んだシーンはそのまま残っています。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+    return runTask(
+      '本編の執筆(NovelAI公式 Kayra)',
+      async signal => {
+        const written = await postSSE<StoryData>(`/api/story/${story.id}/write`, signal, message => task.update(message))
+        setStory(written)
+        loadHistory()
+        return `${written.scenes.length}シーンの本文を書き終えました`
+      },
+      'キャンセルしました。途中まで進んだシーンはそのまま残っています。',
+    )
   }
 
   /** 1ページのコマ数を変える。V5が描くコマ数に対して渡す内容が少ないと、
@@ -546,57 +556,31 @@ export default function Story() {
     }
   }
 
-  async function runExtractCharacters() {
+  function runExtractCharacters() {
     if (!story) return
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      setStepLabel('登場人物の抽出を開始しています...')
+    return runTask('登場人物の抽出', async signal => {
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/extract-characters?overwrite_appearance=${overwriteAppearance}`, {
         method: 'POST',
-        signal: controller.signal,
+        signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
-      await pollJob(story.id, controller.signal)
+      await pollJob(story.id, signal)
       await loadStory(story.id)
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+    })
   }
 
-  async function runRetag(all = false) {
+  function runRetag(all = false) {
     if (!story) return
     if (all && !window.confirm('全シーンのタグを付け直します。手で直したタグも置き換わります。よろしいですか?')) return
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      setStepLabel('タグ付けを開始しています...')
+    return runTask(all ? '全シーンのタグの付け直し' : 'タグ付け', async signal => {
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/retag?adult=${adultTags}&all=${all}`, {
         method: 'POST',
-        signal: controller.signal,
+        signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
-      await pollJob(story.id, controller.signal)
+      await pollJob(story.id, signal)
       await loadStory(story.id)
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+    })
   }
 
   /**
@@ -604,14 +588,10 @@ export default function Story() {
    * 同じ指標のページでもコマ数や構図の当たり外れが大きく、シードの影響が支配的だった
    * (実機: 同条件のページが12コマで良好、32コマで反復、と割れた)。
    */
-  async function regeneratePage(pageIndex: number) {
+  function regeneratePage(pageIndex: number) {
     if (!story) return
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
     const seed = Math.floor(Math.random() * 4294967296)
-    try {
-      setStepLabel(`P${pageIndex + 1}をシード${seed}で再生成中...`)
+    return runTask(`P${pageIndex + 1}の再生成(シード${seed})`, async signal => {
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/illustrate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -620,79 +600,38 @@ export default function Story() {
           page_to: pageIndex,
           settings: { ...imageSettings, seed },
         }),
-        signal: controller.signal,
+        signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
-      await pollJob(story.id, controller.signal)
+      await pollJob(story.id, signal)
       await loadStory(story.id)
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+    })
   }
 
-  async function runIllustrateAndExport() {
+  function runIllustrateAndExport() {
     if (!story) return
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      const from = Math.max(1, Math.min(pageFrom, totalPages))
-      const to = Math.max(from, Math.min(pageTo, totalPages))
-      setStepLabel(`挿絵生成を開始しています(${from}〜${to}ページ)...`)
+    const from = Math.max(1, Math.min(pageFrom, totalPages))
+    const to = Math.max(from, Math.min(pageTo, totalPages))
+    return runTask(`挿絵の生成 → 漫画化(${from}〜${to}ページ)`, async signal => {
       const startRes = await fetch(`${API_ORIGIN}/api/story/${story.id}/illustrate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ page_from: from - 1, page_to: to - 1, settings: imageSettings }),
-        signal: controller.signal,
+        signal,
       })
       if (!startRes.ok) throw new Error(await readErrorDetail(startRes))
-      await pollJob(story.id, controller.signal)
+      await pollJob(story.id, signal)
 
-      setStepLabel('全ページを1枚の漫画に合成中...')
+      task.update('全ページを1枚の漫画に合成中...')
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/export-manga`, {
         method: 'POST',
-        signal: controller.signal,
+        signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
       await loadStory(story.id)
       loadHistory()
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
-  }
-
-  /** 進捗表示・キャンセル・エラー表示を共通化して処理を走らせる(漫画v2から使う)。 */
-  async function runTask(label: string, task: (signal: AbortSignal) => Promise<void>) {
-    setError(null)
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      setStepLabel(label)
-      await task(controller.signal)
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('キャンセルしました。')
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setStepLabel('')
-      abortRef.current = null
-    }
+      return `${from}〜${to}ページの挿絵を生成し、1枚の漫画にまとめました`
+    })
   }
 
   function reset() {
@@ -716,6 +655,7 @@ export default function Story() {
           前提からOllamaでシーン分割ドラフトを作り、各シーンをNovelAI公式(Kayra)に書き継がせ、
           NovelAI Diffusion V5でページごとにコマ割り済みの挿絵を生成し、最後に1枚の漫画へまとめます。
         </p>
+        <NotificationToggle />
 
         {error && <div className="story-error">{error}</div>}
 
@@ -762,7 +702,6 @@ export default function Story() {
                   </button>
                 )}
               </div>
-              {stepLabel && <p className="story-step">{stepLabel}</p>}
             </section>
 
             <section className="story-section">
@@ -890,7 +829,6 @@ export default function Story() {
                   </button>
                 )}
               </div>
-              {stepLabel && <p className="story-step">{stepLabel}</p>}
             </section>
 
             {history.length > 0 && (
@@ -1183,7 +1121,6 @@ export default function Story() {
                 最初からやり直す
               </button>
             </div>
-            {stepLabel && <p className="story-step">{stepLabel}</p>}
           </section>
         )}
 
@@ -1211,6 +1148,14 @@ export default function Story() {
           </section>
         )}
       </div>
+
+      <TaskStatusDialog
+        status={task.status}
+        minimized={task.minimized}
+        onMinimize={task.setMinimized}
+        onCancel={() => void cancel()}
+        onClose={task.dismiss}
+      />
     </div>
   )
 }

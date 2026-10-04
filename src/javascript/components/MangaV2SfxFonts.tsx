@@ -21,7 +21,7 @@ interface Props {
   words: string[]
   fonts: FontOption[]
   busy: boolean
-  runTask: (label: string, task: (signal: AbortSignal) => Promise<void>) => Promise<void>
+  runTask: (label: string, task: (signal: AbortSignal) => Promise<string | void>) => Promise<void>
   /** AIにフォントを選ばせるジョブを走らせる(範囲・上書き設定は呼び出し側が持つ) */
   onSuggest: () => Promise<void>
   /** フォントをダウンロードしたので、フォント一覧を読み直す */
@@ -66,7 +66,7 @@ export default function MangaV2SfxFonts({
   useEffect(loadMapping, [apiOrigin, storyId, refreshKey])
 
   function download(font: CatalogFont) {
-    return runTask(`${font.label} をダウンロードしています...`, async signal => {
+    return runTask(`フォントのダウンロード(${font.label})`, async signal => {
       const res = await fetch(`${apiOrigin}/api/manga-v2/font-catalog/${font.id}/download`, { method: 'POST', signal })
       if (!res.ok) throw new Error(await readErrorDetail(res))
       loadCatalog()
@@ -76,7 +76,7 @@ export default function MangaV2SfxFonts({
 
   function downloadAll() {
     const missing = catalog.filter(f => !f.installed)
-    return runTask(`描き文字フォントを${missing.length}個ダウンロードしています...`, async signal => {
+    return runTask(`描き文字フォントのダウンロード(${missing.length}個)`, async signal => {
       for (const font of missing) {
         const res = await fetch(`${apiOrigin}/api/manga-v2/font-catalog/${font.id}/download`, { method: 'POST', signal })
         if (!res.ok) throw new Error(`${font.label}: ${await readErrorDetail(res)}`)

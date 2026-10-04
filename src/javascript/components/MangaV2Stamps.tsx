@@ -23,7 +23,7 @@ interface Props {
   /** 対象範囲のシーンに設定されている効果音 */
   words: string[]
   busy: boolean
-  runTask: (label: string, task: (signal: AbortSignal) => Promise<void>) => Promise<void>
+  runTask: (label: string, task: (signal: AbortSignal) => Promise<string | void>) => Promise<void>
   /** 値が変わると割り当てを読み直す(AIが描き文字を選んだ後など) */
   refreshKey: number
 }
@@ -87,7 +87,7 @@ export default function MangaV2Stamps({ apiOrigin, storyId, words, busy, runTask
   useEffect(loadMapping, [apiOrigin, storyId, refreshKey])
 
   function importFromPixiv() {
-    return runTask('素材をpixivから取り込んで切り分けています...', async signal => {
+    return runTask('素材の取り込み(pixiv)と切り分け', async signal => {
       const res = await fetch(`${apiOrigin}/api/manga-v2/stamps/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -106,7 +106,7 @@ export default function MangaV2Stamps({ apiOrigin, storyId, words, busy, runTask
 
   function uploadSheet(file: File) {
     const reader = new FileReader()
-    reader.onload = () => void runTask('素材シートを切り分けています...', async signal => {
+    reader.onload = () => void runTask('素材シートの切り分け', async signal => {
       const res = await fetch(`${apiOrigin}/api/manga-v2/stamps/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -125,7 +125,7 @@ export default function MangaV2Stamps({ apiOrigin, storyId, words, busy, runTask
 
   function uploadZip(file: File) {
     const reader = new FileReader()
-    reader.onload = () => void runTask('素材集(ZIP)を取り込んでいます...', async signal => {
+    reader.onload = () => void runTask('素材集(ZIP)の取り込み', async signal => {
       const res = await fetch(`${apiOrigin}/api/manga-v2/stamps/upload-zip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
