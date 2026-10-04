@@ -8,9 +8,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from .detect import detect_heads
 from .layout import PAGE_HEIGHT, PAGE_WIDTH, Rect, fill_template, panel_rects
 from .lettering import (
     SFX_MIN_SIZE,
+    bubble_shape,
     draw_stamp,
     TextBlock,
     bubble_size,
@@ -84,10 +86,16 @@ _ZOOM_FOCUS_X = (0.5, 0.5, 0.42, 0.58)
 _ZOOM_FOCUS_Y = 0.35
 
 
-def _cover(img: Image.Image, width: int, height: int, zoom_step: int = 0) -> Image.Image:
+def _cover(
+    img: Image.Image, width: int, height: int, zoom_step: int = 0, heads: list[Rect] | None = None
+) -> tuple[Image.Image, float, int, int]:
     """
     縦横比を保ったまま width×height を覆うよう拡大し、はみ出しを切り落とす。
-    zoom_step > 0 なら更に拡大して上寄りの中央付近(人物の顔がありやすい)を切り抜く。
+    zoom_step > 0 なら更に拡大して寄りにする。頭が見つかっていればその辺りを、無ければ
+    上寄りの中央付近(人物の顔がありやすい)を切り抜く。寄りの段ごとに別の頭を中心にする。
+
+    戻り値は (切り抜いた画像, 拡大率, 切り抜きの左端, 上端)。元画像の座標をコマの座標へ
+    直すのに使う(コマ座標 = 元座標 × 拡大率 − 左端/上端)。
     """
     zoom = min(1 + _ZOOM_PER_STEP * zoom_step, _MAX_ZOOM)
     scale = max(width / img.width, height / img.height) * zoom
@@ -96,10 +104,16 @@ def _cover(img: Image.Image, width: int, height: int, zoom_step: int = 0) -> Ima
         left = (resized.width - width) // 2
         top = round((resized.height - height) * _CROP_VERTICAL_BIAS)
     else:
-        fx = _ZOOM_FOCUS_X[zoom_step % len(_ZOOM_FOCUS_X)]
-        left = min(max(round(resized.width * fx - width / 2), 0), resized.width - width)
-        top = min(max(round(resized.height * _ZOOM_FOCUS_Y - height / 2), 0), resized.height - height)
-    return resized.crop((left, top, left + width, top + height))
+        if heads:
+            hx0, hy0, hx1, hy1 = heads[(zoom_step - 1) % len(heads)]
+            fx = (hx0 + hx1) / 2 * scale
+            fy = (hy0 + hy1) / 2 * scale + height * 0.1  # 顔の少し下を中心にして頭上を空ける
+        else:
+            fx = resized.width * _ZOOM_FOCUS_X[zoom_step % len(_ZOOM_FOCUS_X)]
+            fy = resized.height * _ZOOM_FOCUS_Y
+        left = min(max(round(fx - width / 2), 0), resized.width - width)
+        top = min(max(round(fy - height / 2), 0), resized.height - height)
+    return resized.crop((left, top, left + width, top + height)), scale, left, top
 
 
 def split_dense_panels(panels: list[PanelContent], max_lines: int) -> list[PanelContent]:
@@ -140,12 +154,20 @@ def _overlap_area(a: Rect, b: Rect) -> int:
 
 
 def _place(
-    size: tuple[int, int], panel: Rect, placed: list[Rect], *, sfx: bool = False, narration: bool = False
+    size: tuple[int, int],
+    panel: Rect,
+    placed: list[Rect],
+    *,
+    sfx: bool = False,
+    narration: bool = False,
+    heads: list[Rect] | None = None,
 ) -> tuple[Rect, bool]:
     """
     吹き出しの置き場所。日本の漫画は右から読むので、コマの上辺に沿って右から左へ、
     次に下辺に沿って右から左へ探し、既存の吹き出しと重ならない最初の位置に置く。
     どこにも空きが無ければ重なりが最小の位置にする。2つ目の戻り値は重ならずに置けたか。
+    heads(絵の中の頭の位置)を渡すと、頭に被らない位置を優先し、被るしかなければ
+    被る面積が最小の位置にする(この場合も「重ならずに置けた」には数えない)。
 
     描き文字(sfx=True)は吹き出しと取り合わないよう、コマの中ほど・左側から探す。
     ナレーション(narration=True)はコマの左上の角に置く(右上は吹き出しが使う)。空きが無ければ左下。
@@ -176,19 +198,46 @@ def _place(
                 candidates.append((x1 - bw, top, x1, top + bh))
                 x1 -= step
             candidates.append((left_limit, top, left_limit + bw, top + bh))
-    for candidate in candidates:
-        if not any(_overlaps(candidate, other) for other in placed):
+    heads = heads or []
+    free = [c for c in candidates if not any(_overlaps(c, other) for other in placed)]
+    for candidate in free:
+        if not any(_overlaps(candidate, head) for head in heads):
             return candidate, True
-    return min(candidates, key=lambda c: sum(_overlap_area(c, other) for other in placed)), False
+    if free:
+        return min(free, key=lambda c: sum(_overlap_area(c, head) for head in heads)), False
+    return min(
+        candidates,
+        key=lambda c: (sum(_overlap_area(c, o) for o in placed), sum(_overlap_area(c, h) for h in heads)),
+    ), False
 
 
-def _fit_bubble(text: str, panel: Rect, text_size: int = _TEXT_SIZE) -> tuple[TextBlock, tuple[int, int]]:
+def _covers_head(box: Rect, heads: list[Rect]) -> bool:
+    """頭の面積の1割以上を覆っているか(縁を少しかすめる程度は気にしない)。"""
+    return any(_overlap_area(box, h) > 0.1 * (h[2] - h[0]) * (h[3] - h[1]) for h in heads)
+
+
+def _speaker_point(box: Rect, heads: list[Rect], default: tuple[float, float]) -> tuple[float, float]:
+    """しっぽを向ける先: 吹き出しに一番近い頭の口元あたり。頭が無ければ既定の位置。"""
+    if not heads:
+        return default
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    hx0, hy0, hx1, hy1 = min(heads, key=lambda h: ((h[0] + h[2]) / 2 - cx) ** 2 + ((h[1] + h[3]) / 2 - cy) ** 2)
+    return (hx0 + hx1) / 2, hy0 + (hy1 - hy0) * 0.7
+
+
+def _fit_bubble(
+    text: str, panel: Rect, text_size: int = _TEXT_SIZE, shape: str = "ellipse"
+) -> tuple[TextBlock, tuple[int, int]]:
     pw, ph = panel[2] - panel[0], panel[3] - panel[1]
     # 楕円の倍率と余白を見込んで、文字ブロックの上限をコマの大きさから決める
     max_text_w = int((pw * 0.45) / 1.45)
     max_text_h = min(int((ph - _BUBBLE_MARGIN * 2 - 20) / 1.3), text_size * _MAX_ROWS)
     block = fit_text(text, max_text_w, max_text_h, text_size, _TEXT_MIN_SIZE)
-    return block, bubble_size(block)
+    return block, bubble_size(block, shape)
+
+
+# 頭に被らざるを得ない吹き出しの、白い地の不透明度の上限(絵が透けて見えるようにする)
+_OVER_HEAD_OPACITY = 0.55
 
 
 # 空きが無いときに文字を小さくして置き直す刻み
@@ -213,7 +262,11 @@ _STAMP_MIN_H = 0.2
 
 
 def _place_stamp(
-    natural: tuple[int, int], panel: Rect, placed: list[Rect], override: tuple[float, float] | None
+    natural: tuple[int, int],
+    panel: Rect,
+    placed: list[Rect],
+    override: tuple[float, float] | None,
+    heads: list[Rect] | None = None,
 ) -> Rect:
     """スタンプの縦横比のまま、コマに収まる大きさで描き文字と同じ探し方で置き場所を決める。"""
     pw, ph = panel[2] - panel[0], panel[3] - panel[1]
@@ -223,7 +276,7 @@ def _place_stamp(
         size = (max(1, round(sw * ratio)), max(1, round(sh * ratio)))
         if override is not None:
             return _overridden_box(size, panel, override)
-        box, free = _place(size, panel, placed, sfx=True)
+        box, free = _place(size, panel, placed, sfx=True, heads=heads)
         if free or size[1] <= ph * _STAMP_MIN_H:
             return box
         ratio *= _STAMP_SHRINK
@@ -233,9 +286,22 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
     x0, y0, x1, y1 = rect
     width, height = x1 - x0, y1 - y0
     draw = ImageDraw.Draw(page)
+    # 絵の中の頭の位置(ページ座標)。吹き出し・描き文字はここを避ける
+    heads: list[Rect] = []
     if content.image_path is not None and content.image_path.is_file():
+        source_heads = detect_heads(content.image_path)
         with Image.open(content.image_path) as src:
-            page.paste(_cover(src.convert("RGB"), width, height, content.zoom_step), (x0, y0))
+            picture, scale, left, top = _cover(src.convert("RGB"), width, height, content.zoom_step, source_heads)
+        page.paste(picture, (x0, y0))
+        for hx0, hy0, hx1, hy1 in source_heads:
+            box = (
+                max(round(hx0 * scale - left) + x0, x0),
+                max(round(hy0 * scale - top) + y0, y0),
+                min(round(hx1 * scale - left) + x0, x1),
+                min(round(hy1 * scale - top) + y0, y1),
+            )
+            if box[2] > box[0] and box[3] > box[1]:
+                heads.append(box)
     else:
         draw.rectangle(rect, fill=(225, 225, 225))
         draw.text((x0 + 12, y0 + 10), "(未生成)", fill=(120, 120, 120))
@@ -262,7 +328,9 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         size = narration_size(narration_block)
         override = style.overrides.get(key)
         narration_box = (
-            _overridden_box(size, rect, override) if override is not None else _place(size, rect, placed, narration=True)[0]
+            _overridden_box(size, rect, override)
+            if override is not None
+            else _place(size, rect, placed, narration=True, heads=heads)[0]
         )
         placed.append(narration_box)
         elements.append(Element(key, "narration", content.narration.strip(), narration_box, rect))
@@ -271,19 +339,40 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
     for index, line in enumerate(lines):
         key = f"{key_base}:bubble:{index}"
         override = style.overrides.get(key)
+        shape, text = bubble_shape(line)
+        # 空きが無ければ、まず同じ大きさの角丸の四角(場所を取らない)を試し、それでも駄目なら
+        # 文字を小さくして探し直す。最後まで空きが無ければ、頭への被りが最小の位置にする。
+        shapes = [shape] if shape in ("box", "cloud") else [shape, "box"]
+        best: tuple[Rect, TextBlock, str] | None = None
         text_size = _TEXT_SIZE
-        while True:
-            block, size = _fit_bubble(line, rect, text_size)
-            if override is not None:
-                box = _overridden_box(size, rect, override)
-                break
-            box, free = _place(size, rect, placed)
-            if free or text_size <= _TEXT_MIN_SIZE:
-                break
+        while best is None:
+            for candidate_shape in shapes:
+                block, size = _fit_bubble(text, rect, text_size, candidate_shape)
+                if override is not None:
+                    best = (_overridden_box(size, rect, override), block, candidate_shape)
+                    break
+                box, free = _place(size, rect, placed, heads=heads)
+                if free:
+                    best = (box, block, candidate_shape)
+                    break
+            if best is None and text_size <= _TEXT_MIN_SIZE:
+                block, size = _fit_bubble(text, rect, text_size, shape)
+                best = (_place(size, rect, placed, heads=heads)[0], block, shape)
             text_size -= _SHRINK_STEP_TEXT
+        box, block, final_shape = best
         placed.append(box)
         elements.append(Element(key, "bubble", line, box, rect))
-        draw_bubble(page, box, block, style.font_path, tail_toward=speaker, opacity=style.bubble_opacity)
+        # 頭に被ってしまう吹き出しだけ地を透かし、絵が見えるようにする
+        opacity = min(style.bubble_opacity, _OVER_HEAD_OPACITY) if _covers_head(box, heads) else style.bubble_opacity
+        draw_bubble(
+            page,
+            box,
+            block,
+            style.font_path,
+            tail_toward=_speaker_point(box, heads, speaker),
+            opacity=opacity,
+            shape=final_shape,
+        )
 
     for index, text in enumerate(t for t in content.sfx if t.strip()):
         key = f"{key_base}:sfx:{index}"
@@ -292,7 +381,7 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         if stamp_path is not None and stamp_path.is_file():
             with Image.open(stamp_path) as stamp:
                 stamp.load()
-                box = _place_stamp(stamp.size, rect, placed, override)
+                box = _place_stamp(stamp.size, rect, placed, override, heads)
                 placed.append(box)
                 elements.append(Element(key, "sfx", text, box, rect))
                 draw_stamp(page, box, stamp)
@@ -302,7 +391,7 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
             if override is not None:
                 box = _overridden_box((layout.width, layout.height), rect, override)
                 break
-            box, free = _place((layout.width, layout.height), rect, placed, sfx=True)
+            box, free = _place((layout.width, layout.height), rect, placed, sfx=True, heads=heads)
             if free or layout.size <= SFX_MIN_SIZE:
                 break
             layout = fit_sfx(text, width, height, max_size=layout.size - _SHRINK_STEP_SFX)

@@ -16,6 +16,7 @@ dependencies = [
     "mcp[cli]>=2.1.1",
     "sentencepiece>=0.2.0",
     "scipy>=1.15.3",
+    "onnxruntime>=1.24.3",
 ]
 
 [build-system]

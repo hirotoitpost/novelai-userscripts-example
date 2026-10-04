@@ -8,10 +8,13 @@ Pillow の縦書き(direction="ttb")は libraqm が要り、Windows の標準ビ
 
 from __future__ import annotations
 
+import math
 import random
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from .fonts import CATALOG
@@ -227,22 +230,91 @@ def draw_text_block(
                 draw.text((x, y), ch, font=font, fill=(0, 0, 0), **outline)
 
 
-# 吹き出し(楕円)の内側に文字ブロックを収めるための倍率。楕円に内接する長方形は
-# 外接長方形の約0.7倍なので、文字ブロックの1/0.7倍強の楕円にする。
-_BUBBLE_SCALE_X = 1.45
-_BUBBLE_SCALE_Y = 1.3
+# 吹き出しの形ごとの、文字ブロックに対する外接長方形の倍率(横, 縦)。楕円に内接する長方形は
+# 外接長方形の約0.7倍なので、楕円は文字ブロックの1/0.7倍強にする。トゲ・雲はトゲや
+# こぶの分だけ大きく、角丸の四角は余白だけで済むので小さい(狭い場所に入れやすい)。
+_BUBBLE_SCALES: dict[str, tuple[float, float]] = {
+    "ellipse": (1.45, 1.3),
+    "whisper": (1.45, 1.3),
+    "burst": (1.75, 1.6),
+    "cloud": (1.75, 1.6),
+    "box": (1.12, 1.1),
+}
+BUBBLE_SHAPES = tuple(_BUBBLE_SCALES)
 _BUBBLE_PAD = 10
 _OUTLINE = 3
+_WHISPER_OUTLINE = 2
 
 
 # 1列だけのセリフでも楕円が細くなりすぎないよう、幅は高さのこの割合以上にする
 _BUBBLE_MIN_ASPECT = 0.5
 
+# セリフの内容から形を決める規則
+_THOUGHT_RE = re.compile(r"^[（(](.+)[）)]$", re.DOTALL)
+_ELLIPSIS_CHARS = set("…‥・。、")
 
-def bubble_size(block: TextBlock) -> tuple[int, int]:
-    height = round(block.height * _BUBBLE_SCALE_Y + _BUBBLE_PAD * 2)
-    width = round(block.width * _BUBBLE_SCALE_X + _BUBBLE_PAD * 2)
+
+def bubble_shape(text: str) -> tuple[str, str]:
+    """
+    セリフから (形, 吹き出しに書く文字) を決める。
+    - （…）で囲んだ心の声 → 雲形(括弧は外す)
+    - 「！」で終わる短い叫び、または「！」が2つ以上 → トゲ
+    - 三点リーダばかりの小声・ため息 → 点線の小さな吹き出し
+    - それ以外 → 楕円
+    """
+    stripped = text.strip()
+    thought = _THOUGHT_RE.match(stripped)
+    if thought:
+        return "cloud", thought.group(1).strip()
+    marks = sum(stripped.count(c) for c in "!！")
+    if marks >= 2 or "!?" in stripped or "！？" in stripped or (stripped.endswith(("!", "！")) and len(stripped) <= 10):
+        return "burst", stripped
+    # 「……」「うん……」のように中身がほとんど無いものだけ。「綺麗ね……」は普通の吹き出し
+    body = [c for c in stripped if c not in _ELLIPSIS_CHARS and c not in "?？!！ 　"]
+    if len(body) <= 2:
+        return "whisper", stripped
+    return "ellipse", stripped
+
+
+def bubble_size(block: TextBlock, shape: str = "ellipse") -> tuple[int, int]:
+    scale_x, scale_y = _BUBBLE_SCALES.get(shape, _BUBBLE_SCALES["ellipse"])
+    height = round(block.height * scale_y + _BUBBLE_PAD * 2)
+    width = round(block.width * scale_x + _BUBBLE_PAD * 2)
     return max(width, round(height * _BUBBLE_MIN_ASPECT)), height
+
+
+def _ellipse_points(cx: float, cy: float, rx: float, ry: float, n: int, start: float = 0.0) -> list[tuple[float, float]]:
+    return [
+        (cx + rx * math.cos(start + 2 * math.pi * i / n), cy + ry * math.sin(start + 2 * math.pi * i / n))
+        for i in range(n)
+    ]
+
+
+def _draw_body(shape_draw: ImageDraw.ImageDraw, shape: str, x0: float, y0: float, x1: float, y1: float, seed: str) -> None:
+    """吹き出し本体の形を白(255)で塗る。座標はマスク画像上のもの。"""
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
+    if shape == "box":
+        shape_draw.rounded_rectangle((x0, y0, x1, y1), radius=min(rx, ry) * 0.35, fill=255)
+    elif shape == "burst":
+        # 外周のトゲ。文字列から決まる乱数で長さを揺らすので、同じセリフは毎回同じ形になる
+        rng = random.Random(seed)
+        n = max(14, round((rx + ry) * math.pi / 34))
+        points = []
+        for i in range(n * 2):
+            angle = math.pi * i / n
+            r = (1.0 if i % 2 == 0 else 0.78) * (rng.uniform(0.9, 1.0) if i % 2 == 0 else 1.0)
+            points.append((cx + rx * r * math.cos(angle), cy + ry * r * math.sin(angle)))
+        shape_draw.polygon(points, fill=255)
+    elif shape == "cloud":
+        # 楕円の縁にこぶ(円)を並べる
+        bump = min(rx, ry) * 0.3
+        shape_draw.ellipse((x0 + bump * 0.6, y0 + bump * 0.6, x1 - bump * 0.6, y1 - bump * 0.6), fill=255)
+        n = max(8, round((rx + ry) * math.pi / (bump * 1.4)))
+        for px, py in _ellipse_points(cx, cy, rx - bump, ry - bump, n):
+            shape_draw.ellipse((px - bump, py - bump, px + bump, py + bump), fill=255)
+    else:
+        shape_draw.ellipse((x0, y0, x1, y1), fill=255)
 
 
 def draw_bubble(
@@ -252,13 +324,14 @@ def draw_bubble(
     font_path: Path,
     tail_toward: tuple[float, float] | None = None,
     opacity: float = 1.0,
+    shape: str = "ellipse",
 ) -> None:
     """
-    box(外接長方形)に楕円の吹き出しを描き、中央に縦書きで文字を置く。
+    box(外接長方形)に吹き出しを描き、中央に縦書きで文字を置く。shape は BUBBLE_SHAPES のどれか。
 
     opacity は白い地の不透明度(0で輪郭線だけ)。輪郭線と文字は常に不透明。
-    楕円としっぽを1つの形(マスク)にまとめてから輪郭を取るので、地を透かしても
-    しっぽの付け根に楕円の線が残らない。
+    本体としっぽを1つの形(マスク)にまとめてから輪郭を取るので、地を透かしても
+    しっぽの付け根に本体の線が残らない。雲形(心の声)はしっぽの代わりに小さな丸を並べる。
     """
     x0, y0, x1, y1 = box
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -269,26 +342,42 @@ def draw_bubble(
     margin = round(tail_len) + _OUTLINE * 4
     ox, oy = x0 - margin, y0 - margin
     mask = Image.new("L", (x1 - x0 + margin * 2, y1 - y0 + margin * 2), 0)
-    shape = ImageDraw.Draw(mask)
-    shape.ellipse((margin, margin, margin + x1 - x0, margin + y1 - y0), fill=255)
+    shape_draw = ImageDraw.Draw(mask)
+    _draw_body(shape_draw, shape, margin, margin, margin + x1 - x0, margin + y1 - y0, "".join(block.columns))
     if tail_toward is not None:
         tx, ty = tail_toward
         dx, dy = tx - cx, ty - cy
         length = max((dx * dx + dy * dy) ** 0.5, 1)
         ux, uy = dx / length, dy / length
         edge = 1 / max(((ux / rx) ** 2 + (uy / ry) ** 2) ** 0.5, 1e-6)
-        # 付け根は楕円の少し内側から出し、形の継ぎ目ができないようにする
-        ex = cx + ux * (edge - _OUTLINE * 3) - ox
-        ey = cy + uy * (edge - _OUTLINE * 3) - oy
-        tip = (ex + ux * (tail_len + _OUTLINE * 3), ey + uy * (tail_len + _OUTLINE * 3))
-        base_half = min(rx, ry) * 0.16
-        px, py = -uy, ux
-        shape.polygon(
-            [(ex + px * base_half, ey + py * base_half), tip, (ex - px * base_half, ey - py * base_half)],
-            fill=255,
-        )
-    inner = mask.filter(ImageFilter.MinFilter(_OUTLINE * 2 + 1))
+        if shape == "cloud":
+            # 心の声: 話し手へ向かって小さくなる丸を2つ
+            for distance, radius in ((edge + tail_len * 0.35, min(rx, ry) * 0.12), (edge + tail_len * 0.85, min(rx, ry) * 0.07)):
+                bx, by = cx + ux * distance - ox, cy + uy * distance - oy
+                shape_draw.ellipse((bx - radius, by - radius, bx + radius, by + radius), fill=255)
+        else:
+            # 付け根は本体の少し内側から出し、形の継ぎ目ができないようにする
+            inset = edge * (0.75 if shape == "burst" else 1.0) - _OUTLINE * 3
+            ex = cx + ux * inset - ox
+            ey = cy + uy * inset - oy
+            tip_len = tail_len + _OUTLINE * 3 + edge - inset
+            tip = (ex + ux * tip_len, ey + uy * tip_len)
+            base_half = min(rx, ry) * 0.16
+            px, py = -uy, ux
+            shape_draw.polygon(
+                [(ex + px * base_half, ey + py * base_half), tip, (ex - px * base_half, ey - py * base_half)],
+                fill=255,
+            )
+    outline_width = _WHISPER_OUTLINE if shape == "whisper" else _OUTLINE
+    inner = mask.filter(ImageFilter.MinFilter(outline_width * 2 + 1))
     outline = ImageChops.subtract(mask, inner)
+    if shape == "whisper":
+        # 小声は点線にする(中心からの角度で輪郭を間引く)
+        h, w = outline.height, outline.width
+        yy, xx = np.mgrid[0:h, 0:w]
+        angle = np.arctan2(yy - (cy - oy), (xx - (cx - ox)) * (ry / max(rx, 1)))
+        dashes = (np.floor((angle + math.pi) / (2 * math.pi) * max(24, round((rx + ry) / 6))) % 2 == 0)
+        outline = Image.fromarray((np.asarray(outline) * dashes).astype(np.uint8))
 
     region = (ox, oy, ox + mask.width, oy + mask.height)
     if opacity < 0.95:

@@ -149,19 +149,29 @@ def _is_spoken(text: str, start: int, end: int) -> bool:
 _TITLE_PARTICLES = set("のとをがはにもで")
 
 
+_THOUGHT_LINE_RE = re.compile(r"^[ 　]*（([^）\n]{1,80})）[ 　]*$", re.MULTILINE)
+
+
 def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
     """
     シーンから (吹き出しにするセリフ, 描き文字にする効果音) を取り出す。
     効果音は本文中の《》・カタカナだけのセリフに、シーンに設定した効果音(手入力やAI提案)を足す。
     """
     text = scene["novelai_text"] or scene["draft_text"] or ""
-    dialogue: list[str] = []
     sfx: list[str] = [m.group(1).strip() for m in _SFX_MARK_RE.finditer(text) if m.group(1).strip()]
+    spoken: list[tuple[int, str]] = []
     for match in DIALOGUE_RE.finditer(text):
         line = match.group(1).strip()
         if not line or not _is_spoken(text, match.start(), match.end()):
             continue
-        (sfx if _is_katakana_sfx(line) else dialogue).append(line)
+        if _is_katakana_sfx(line):
+            sfx.append(line)
+        else:
+            spoken.append((match.start(), line))
+    # 1行まるごと（…）の独白は心の声。括弧ごと渡すと雲形の吹き出しになる
+    for match in _THOUGHT_LINE_RE.finditer(text):
+        spoken.append((match.start(), f"（{match.group(1).strip()}）"))
+    dialogue = [line for _, line in sorted(spoken)]
     for extra in scene.get("sfx") or []:
         if extra.strip() and extra.strip() not in sfx:
             sfx.append(extra.strip())
