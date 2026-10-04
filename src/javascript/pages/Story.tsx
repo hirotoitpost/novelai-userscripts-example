@@ -11,6 +11,7 @@ import MangaV2Studio from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import NotificationToggle from '../components/NotificationToggle'
+import { mergeScreenshots, readScreenshots, sortScreenshots } from '../chatOcr'
 import './Story.css'
 
 interface StoryScene {
@@ -228,7 +229,13 @@ export default function Story() {
   const [imageSettings, setImageSettings] = useState<MangaImageSettingsValue>(
     DEFAULT_MANGA_IMAGE_SETTINGS
   )
-  const [importText, setImportText] = useState('')
+  // 取り込み欄の本文。OCR の結果などをページの読み込み直し(スマホが裏でタブを破棄した後に
+  // 通知から戻ったとき等)で失わないよう保存しておく。インポートしたら空にする。
+  const [importText, setImportText] = useLocalStorage('nai_story_import_text', '', 300)
+  // 開いた時点で前回の内容が残っていたか(「まだインポートしていません」と知らせる)
+  const [importRestored] = useState(() => importText.trim().length > 0)
+  // スクリーンショットを選んだときの受け取り状況(選んでも何も起きない、を見分けるため)
+  const [ocrPicked, setOcrPicked] = useState<string | null>(null)
 
   const [remoteEmail, setRemoteEmail] = useState('')
   const [remotePassword, setRemotePassword] = useState('')
@@ -277,6 +284,20 @@ export default function Story() {
     const fromEditor = Number(new URLSearchParams(window.location.search).get('story'))
     if (fromEditor > 0) void openStory(fromEditor)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 想定外のエラーで黙って止まらないよう、画面に出す(スマホでは開発者ツールを見られない)
+  useEffect(() => {
+    const show = (message: string) => setError(`予期しないエラー: ${message}`)
+    const onError = (e: ErrorEvent) => show(e.message)
+    const onRejection = (e: PromiseRejectionEvent) =>
+      show(e.reason instanceof Error ? e.reason.message : String(e.reason))
+    window.addEventListener('error', onError)
+    window.addEventListener('unhandledrejection', onRejection)
+    return () => {
+      window.removeEventListener('error', onError)
+      window.removeEventListener('unhandledrejection', onRejection)
+    }
   }, [])
 
   async function cancel() {
@@ -485,6 +506,27 @@ export default function Story() {
     } finally {
       setRemoteLoading(false)
     }
+  }
+
+  /**
+   * チャットのスクリーンショットを OCR し、重なりを除いてつないだ本文を取り込み欄に入れる。
+   * 1枚 2 秒ほど。途中で止まっても、同じ画像を選び直せば読み取り済みの分は飛ばす(chatOcr.ts)。
+   * 取り込み(インポート)は内容を確認してから手で行う。
+   */
+  function readScreenshotFiles(picked: File[]) {
+    if (picked.length === 0) return
+    const files = sortScreenshots(picked)
+    return runTask(`スクリーンショットの読み取り(${files.length}枚)`, async signal => {
+      const pages = await readScreenshots(API_ORIGIN, files, signal, (done, cached, current) => {
+        const skipped = cached > 0 ? `(読み取り済み${cached}枚は飛ばします)` : ''
+        task.update(current ? `読み取り中: ${current}${skipped}` : `準備中${skipped}`, done, files.length)
+      })
+      task.update('重なっている部分をつないでいます...', files.length, files.length)
+      const data = await mergeScreenshots(API_ORIGIN, pages, signal)
+      if (!data.text) throw new Error('文字を読み取れませんでした。チャット画面のスクリーンショットか確認してください。')
+      setImportText(data.text)
+      return `${files.length}枚から${data.blocks.length}個の発言を読み取りました。取り込み欄で確認・修正してから「インポート」を押してください。`
+    })
   }
 
   function importRemoteStory(remote: RemoteStory) {
@@ -790,6 +832,42 @@ export default function Story() {
                 )}
               </div>
 
+              <div className="story-ocr">
+                <label className="story-ocr-pick">
+                  📷 チャットのスクリーンショットから読み取る(複数選択できます)
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    disabled={busy}
+                    onChange={e => {
+                      // value を空にすると files も空になるので、先に取り出す
+                      const picked = Array.from(e.currentTarget.files ?? [])
+                      e.currentTarget.value = ''
+                      setOcrPicked(picked.length > 0 ? `${picked.length}枚を受け取りました` : '画像を受け取れませんでした(選択が空でした)')
+                      try {
+                        void readScreenshotFiles(picked)
+                      } catch (err) {
+                        setOcrPicked(`読み取りを始められませんでした: ${err instanceof Error ? err.message : String(err)}`)
+                      }
+                    }}
+                  />
+                </label>
+                {ocrPicked && <p className="story-ocr-picked">{ocrPicked}</p>}
+                <p className="story-muted">
+                  キャラの台詞(左の吹き出し)・地の文・自分の発言(右の赤い吹き出し)を読み分け、撮った順に
+                  重なりを除いてつなぎ、下の欄に入れます。台詞は「」で囲みます。濁点付きの「あ゛」などは
+                  読み取れないので、確認して直してから「インポート」を押してください。
+                  途中で止まったときは、同じ画像を選び直すと読み取り済みの分を飛ばして続きから読みます。
+                </p>
+              </div>
+
+              {importRestored && importText.trim() && (
+                <p className="story-restored">
+                  前回の内容(スクリーンショットの読み取り結果など)を復元しました。まだインポートしていません。
+                  確認して「インポート」を押してください。
+                </p>
+              )}
               <textarea
                 className="story-premise"
                 placeholder="ここに物語本文を貼り付け..."

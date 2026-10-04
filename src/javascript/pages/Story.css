@@ -840,3 +840,43 @@
   width: auto;
   margin: 0;
 }
+
+.story-ocr {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px dashed #3a3a6a;
+  border-radius: 8px;
+}
+
+.story-ocr-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #c8c8e8;
+}
+
+.story-ocr-pick input {
+  max-width: 100%;
+  color: #9a9ac0;
+}
+
+.story-ocr .story-muted {
+  margin: 0.5rem 0 0;
+}
+
+.story-restored {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  background: #1a2a20;
+  border: 1px solid #3ecf8e;
+  border-radius: 8px;
+  color: #a8f0cc;
+  font-size: 0.82rem;
+}
+
+.story-ocr-picked {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  color: #b8a4ff;
+}

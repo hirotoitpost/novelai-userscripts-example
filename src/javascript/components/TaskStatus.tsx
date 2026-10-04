@@ -121,6 +121,35 @@ export function useTaskStatus() {
 
   useEffect(() => clearAutoClose, [])
 
+  // 処理中は画面を消さない。スマホは画面が消えるとページが止まり、通信も切れる
+  // (OCR で72枚を読ませたとき、17枚目で止まって結果ごと失われた)。
+  const running = status?.state === 'running'
+  useEffect(() => {
+    if (!running || !('wakeLock' in navigator)) return
+    let lock: WakeLockSentinel | null = null
+    let stopped = false
+    const acquire = async () => {
+      try {
+        const next = await navigator.wakeLock.request('screen')
+        if (stopped) void next.release()
+        else lock = next
+      } catch {
+        // 電池残量が少ない・非対応などで断られたら、そのまま続ける
+      }
+    }
+    // タブを切り替えると自動で解除されるので、戻ってきたら取り直す
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && (!lock || lock.released)) void acquire()
+    }
+    void acquire()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      stopped = true
+      document.removeEventListener('visibilitychange', onVisible)
+      void lock?.release()
+    }
+  }, [running])
+
   // タブのタイトルに進捗を出す(スマホのタブ一覧や、別タブで作業中でも見える)
   useEffect(() => {
     const base = document.title.replace(/^(⏳|✅|⚠️|⏹️)[^|]*\| /, '')
