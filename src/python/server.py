@@ -20,6 +20,7 @@ from .routes.lora_dataset import router as lora_dataset_router
 from .routes.metadata import router as metadata_router
 from .routes.story import router as story_router
 from .routes.user import router as user_router
+from .routes.writer import router as writer_router
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _env_path = _PROJECT_ROOT / ".env"
@@ -60,6 +61,7 @@ app.include_router(lora_dataset_router)
 app.include_router(metadata_router)
 app.include_router(story_router)
 app.include_router(user_router)
+app.include_router(writer_router)
 
 
 if __name__ == "__main__":

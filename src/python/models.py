@@ -655,3 +655,62 @@ class MangaV2OverrideRequest(BaseModel):
     key: str
     x: Optional[float] = Field(None, ge=0.0, le=1.0)
     y: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+
+# ---- 物語エディタ(NovelAI と対話しながら物語を書く) ----
+
+
+class WriterModel(BaseModel):
+    id: str
+    label: str
+    note: str
+    default: bool
+
+
+class WriterSettings(BaseModel):
+    model: Optional[str] = None
+    max_tokens: int = Field(200, ge=10, le=1000)
+    temperature: float = Field(1.0, ge=0.0, le=2.0)
+    top_p: float = Field(0.95, ge=0.0, le=1.0)
+
+
+class WriterDraftSummary(BaseModel):
+    id: int
+    title: str
+    story_id: Optional[int] = None
+    length: int
+    preview: str
+    updated_at: str
+
+
+class WriterDraft(BaseModel):
+    id: int
+    title: str
+    memory: str
+    author_note: str
+    text: str
+    settings: WriterSettings
+    story_id: Optional[int] = None
+    created_at: str
+    updated_at: str
+
+
+class WriterDraftUpdate(BaseModel):
+    title: Optional[str] = Field(None, max_length=200)
+    memory: Optional[str] = None
+    author_note: Optional[str] = None
+    text: Optional[str] = None
+    settings: Optional[WriterSettings] = None
+
+
+class WriterGenerateRequest(BaseModel):
+    """生成に使う本文・メモリ・作者メモ。保存を待たずに今の入力内容で生成できるよう、毎回送る。"""
+
+    text: str = ""
+    memory: str = ""
+    author_note: str = ""
+    settings: WriterSettings = WriterSettings()
+
+
+class WriterToStoryRequest(BaseModel):
+    panels_per_page: int = Field(4, ge=1, le=12)

@@ -66,6 +66,19 @@ export default function Home() {
         <div className="home-cards">
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/writer')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/writer')}
+          >
+            <div className="home-card-icon">✍️</div>
+            <h2>物語エディタ</h2>
+            <p>NovelAI の最新モデル(Xialong)と対話しながら物語を書き、そのまま漫画にできます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/generate')}
             role="button"
             tabIndex={0}

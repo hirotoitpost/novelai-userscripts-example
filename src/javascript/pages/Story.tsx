@@ -253,6 +253,10 @@ export default function Story() {
 
   useEffect(() => {
     loadHistory()
+    // 物語エディタから「漫画にする」で来たときは、その物語を開く(/story?story=ID)
+    const fromEditor = Number(new URLSearchParams(window.location.search).get('story'))
+    if (fromEditor > 0) void openStory(fromEditor)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function cancel() {

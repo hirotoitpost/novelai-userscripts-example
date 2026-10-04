@@ -244,6 +244,22 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 物語エディタ(NovelAIと対話しながら書く)の下書き。書き上げたら stories へ送る。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS story_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL DEFAULT '',
+            memory TEXT NOT NULL DEFAULT '',
+            author_note TEXT NOT NULL DEFAULT '',
+            text TEXT NOT NULL DEFAULT '',
+            settings TEXT NOT NULL DEFAULT '{}',
+            story_id INTEGER REFERENCES stories(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -1200,3 +1216,54 @@ def list_manga_panels(conn: sqlite3.Connection, story_id: int) -> list[dict[str,
         (story_id,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ---- 物語エディタの下書き ----
+
+
+def _draft_row(row: sqlite3.Row) -> dict[str, Any]:
+    draft = dict(row)
+    draft["settings"] = json.loads(draft["settings"] or "{}")
+    return draft
+
+
+def create_draft(conn: sqlite3.Connection, title: str = "") -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        "INSERT INTO story_drafts (title, created_at, updated_at) VALUES (?, ?, ?) RETURNING *",
+        (title, now, now),
+    ).fetchone()
+    conn.commit()
+    return _draft_row(row)
+
+
+def get_draft(conn: sqlite3.Connection, draft_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM story_drafts WHERE id = ?", (draft_id,)).fetchone()
+    return _draft_row(row) if row else None
+
+
+def list_drafts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, title, story_id, created_at, updated_at, LENGTH(text) AS length,
+               SUBSTR(text, 1, 60) AS preview
+        FROM story_drafts ORDER BY updated_at DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_draft(conn: sqlite3.Connection, draft_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
+    allowed = {"title", "memory", "author_note", "text", "settings", "story_id"}
+    values = {k: (json.dumps(v, ensure_ascii=False) if k == "settings" else v) for k, v in fields.items() if k in allowed}
+    if values:
+        values["updated_at"] = datetime.now(timezone.utc).isoformat()
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        conn.execute(f"UPDATE story_drafts SET {assignments} WHERE id = ?", (*values.values(), draft_id))
+        conn.commit()
+    return get_draft(conn, draft_id)
+
+
+def delete_draft(conn: sqlite3.Connection, draft_id: int) -> None:
+    conn.execute("DELETE FROM story_drafts WHERE id = ?", (draft_id,))
+    conn.commit()

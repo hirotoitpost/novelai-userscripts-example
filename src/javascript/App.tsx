@@ -13,6 +13,7 @@ import DbStatus from './pages/DbStatus'
 import Selection from './pages/Selection'
 import Story from './pages/Story'
 import StoryLibrary from './pages/StoryLibrary'
+import Writer from './pages/Writer'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -66,6 +67,10 @@ function AppRoutes() {
       <Route
         path="/story"
         element={<ProtectedRoute><Story /></ProtectedRoute>}
+      />
+      <Route
+        path="/writer"
+        element={<ProtectedRoute><Writer /></ProtectedRoute>}
       />
       <Route
         path="/story-library"
