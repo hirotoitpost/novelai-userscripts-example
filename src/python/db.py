@@ -1272,6 +1272,21 @@ def create_draft(conn: sqlite3.Connection, title: str = "") -> dict[str, Any]:
     return _draft_row(row)
 
 
+def duplicate_draft(conn: sqlite3.Connection, draft_id: int, title: str) -> dict[str, Any] | None:
+    """下書きを丸ごと(本文・メモリ・作者メモ・設定)別の下書きとして複製する。漫画化の紐付けは引き継がない。"""
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO story_drafts (title, memory, author_note, text, settings, created_at, updated_at)
+        SELECT ?, memory, author_note, text, settings, ?, ? FROM story_drafts WHERE id = ?
+        RETURNING *
+        """,
+        (title, now, now, draft_id),
+    ).fetchone()
+    conn.commit()
+    return _draft_row(row) if row else None
+
+
 def get_draft(conn: sqlite3.Connection, draft_id: int) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM story_drafts WHERE id = ?", (draft_id,)).fetchone()
     return _draft_row(row) if row else None

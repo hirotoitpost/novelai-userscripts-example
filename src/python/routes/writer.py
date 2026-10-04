@@ -19,6 +19,7 @@ from ..db import (
     create_draft,
     create_story,
     delete_draft,
+    duplicate_draft,
     get_connection,
     get_draft,
     list_drafts,
@@ -29,6 +30,7 @@ from ..models import (
     WriterDraft,
     WriterDraftSummary,
     WriterDraftUpdate,
+    WriterDuplicateRequest,
     WriterGenerateRequest,
     WriterModel,
     WriterToStoryRequest,
@@ -89,6 +91,18 @@ async def put_draft(draft_id: int, req: WriterDraftUpdate) -> dict[str, Any]:
     conn = get_connection()
     try:
         return update_draft(conn, draft_id, fields)  # type: ignore[return-value]
+    finally:
+        conn.close()
+
+
+@router.post("/drafts/{draft_id}/duplicate", response_model=WriterDraft)
+async def post_duplicate(draft_id: int, req: WriterDuplicateRequest) -> dict[str, Any]:
+    """別名で保存: 今の下書きを複製する(加筆前を残しておき、複製の方に書き足す使い方)。"""
+    source = _require_draft(draft_id)
+    title = (req.title or "").strip() or f"{source['title'] or '(無題)'} (コピー)"
+    conn = get_connection()
+    try:
+        return duplicate_draft(conn, draft_id, title)  # type: ignore[return-value]
     finally:
         conn.close()
 

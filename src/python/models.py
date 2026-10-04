@@ -733,5 +733,11 @@ class WriterGenerateRequest(BaseModel):
     settings: WriterSettings = WriterSettings()
 
 
+class WriterDuplicateRequest(BaseModel):
+    """別名で保存。title を省略すると「元のタイトル (コピー)」。"""
+
+    title: Optional[str] = Field(None, max_length=200)
+
+
 class WriterToStoryRequest(BaseModel):
     panels_per_page: int = Field(4, ge=1, le=12)

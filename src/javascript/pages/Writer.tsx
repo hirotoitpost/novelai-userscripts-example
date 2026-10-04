@@ -147,6 +147,28 @@ export default function Writer() {
     loadDrafts()
   }
 
+  /** 別名で保存: 今の内容を保存してから複製し、複製の方を開く(元の下書きは加筆前のまま残る) */
+  async function saveAs() {
+    if (!draft) return
+    const title = window.prompt('別名で保存します。新しい下書きの名前:', `${draft.title || '(無題)'} (続き)`)
+    if (title === null) return
+    if (dirty.current) await save(draft)
+    const res = await fetch(`${API_ORIGIN}/api/writer/drafts/${draft.id}/duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    })
+    if (!res.ok) {
+      setError(await readErrorDetail(res))
+      return
+    }
+    const copy: Draft = await res.json()
+    setDraft(copy)
+    setUndoStack([])
+    setStatus(`「${copy.title}」として保存しました(元の下書きはそのまま残っています)`)
+    loadDrafts()
+  }
+
   async function removeDraft(id: number) {
     if (!window.confirm('この下書きを削除しますか?')) return
     await fetch(`${API_ORIGIN}/api/writer/drafts/${id}`, { method: 'DELETE' })
@@ -337,6 +359,9 @@ export default function Writer() {
                 <span className="writer-status">
                   {draft.text.length.toLocaleString()}字 {status && `・ ${status}`}
                 </span>
+                <button type="button" onClick={() => void saveAs()} disabled={generating}>
+                  別名で保存
+                </button>
                 <button type="button" className="writer-manga" onClick={() => void toManga()} disabled={generating || !draft.text.trim()}>
                   漫画にする →
                 </button>
