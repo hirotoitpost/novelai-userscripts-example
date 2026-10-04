@@ -22,6 +22,7 @@ from ..db import (
     duplicate_draft,
     get_connection,
     get_draft,
+    get_story,
     list_drafts,
     set_story_memory,
     update_draft,
@@ -162,16 +163,24 @@ def _premise_label(title: str, text: str) -> str:
 
 
 @router.post("/drafts/{draft_id}/to-story")
-async def draft_to_story(draft_id: int, req: WriterToStoryRequest) -> dict[str, int]:
+async def draft_to_story(draft_id: int, req: WriterToStoryRequest) -> dict[str, Any]:
     """
     書き上げた本文を「物語 → 漫画」へ送る。取り込み(/api/story/import)と同じく本文を
     そのまま raw_text として保存するので、物語ページでシーン分割から先に進められる。
+
+    この下書きから作った物語が既にあり、本文が変わっていなければ、その物語を開くだけにする
+    (押すたびに新しい物語ができると、生成済みのコマの絵が別の物語に取り残される)。
+    本文が変わっていれば新しい物語を作る(前の物語と絵はそのまま残る)。
     """
     draft = _require_draft(draft_id)
     if not draft["text"].strip():
         raise HTTPException(status_code=400, detail="本文がありません。")
     conn = get_connection()
     try:
+        if draft.get("story_id"):
+            existing = get_story(conn, draft["story_id"])
+            if existing is not None and (existing.get("raw_text") or "") == draft["text"]:
+                return {"story_id": existing["id"], "reused": True}
         story = create_story(
             conn, _premise_label(draft["title"], draft["text"]), 4, req.panels_per_page, raw_text=draft["text"]
         )
@@ -180,4 +189,4 @@ async def draft_to_story(draft_id: int, req: WriterToStoryRequest) -> dict[str, 
         set_story_memory(conn, story["id"], draft["memory"])
     finally:
         conn.close()
-    return {"story_id": story["id"]}
+    return {"story_id": story["id"], "reused": False}
