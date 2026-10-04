@@ -91,6 +91,7 @@ from ..models import (
     MangaV2ComposeResponse,
     MangaV2Font,
     MangaV2OverrideRequest,
+    MangaV2ScaleRequest,
     MangaV2Panel,
     MangaV2PanelsRequest,
     MangaV2SceneNarrationRequest,
@@ -911,7 +912,10 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         font_path=resolve_font(req.font),
         sfx_font_path=resolve_font(req.sfx_font, DEFAULT_SFX_FONT_ID),
         bubble_opacity=req.bubble_opacity,
-        overrides={key: (pos[0], pos[1]) for key, pos in overrides.items()},
+        overrides={key: (pos[0], pos[1]) for key, pos in overrides.items() if not key.startswith(_SCALE_PREFIX)},
+        scales={key[len(_SCALE_PREFIX) :]: pos[0] for key, pos in overrides.items() if key.startswith(_SCALE_PREFIX)},
+        text_scale=req.text_scale,
+        sfx_scale=req.sfx_scale,
         # 消したフォントを指していても合成は止めず、既定の効果音フォントで描く
         sfx_font_paths={word: installed[fid] for word, fid in sfx_fonts.items() if fid in installed},
         sfx_stamps=stamp_paths,
@@ -963,6 +967,7 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
                     "box": list(e.box),
                     "panel": list(e.panel),
                     "moved": e.key in overrides,
+                    "scale": overrides[_SCALE_PREFIX + e.key][0] if _SCALE_PREFIX + e.key in overrides else None,
                 }
                 for e in elements
             ]
@@ -1162,6 +1167,25 @@ async def suggest_sfx_fonts(story_id: int, req: MangaV2SuggestSfxRequest) -> dic
         )
 
     return _job_response(_start_job(story_id, "sfx_fonts", runner))
+
+
+# 個別の大きさは、位置の手動配置と同じ保存先(stories.manga_v2_overrides)に、この接頭辞を付けたキーで持つ
+_SCALE_PREFIX = "scale:"
+
+
+@router.put("/{story_id}/scales", status_code=204)
+async def put_scale(story_id: int, req: MangaV2ScaleRequest) -> None:
+    """吹き出し/描き文字1つの大きさを保存する(scale が None なら自動に戻す)。"""
+    conn = get_connection()
+    try:
+        overrides = get_manga_v2_overrides(conn, story_id)
+        if req.scale is None:
+            overrides.pop(_SCALE_PREFIX + req.key, None)
+        else:
+            overrides[_SCALE_PREFIX + req.key] = [round(req.scale, 3)]
+        set_manga_v2_overrides(conn, story_id, overrides)
+    finally:
+        conn.close()
 
 
 @router.put("/{story_id}/overrides", status_code=204)

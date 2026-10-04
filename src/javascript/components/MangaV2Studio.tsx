@@ -94,6 +94,9 @@ export default function MangaV2Studio({
   const [opacity, setOpacity] = useLocalStorage('nai_manga_v2_bubble_opacity', 100)
   const [color, setColor] = useLocalStorage('nai_manga_v2_color', false)
   const [maxLines, setMaxLines] = useLocalStorage('nai_manga_v2_max_lines_v2', 2)
+  // 文字の大きさの全体の倍率(%)。コマの大きさ・叫び/小声による自動調整に、さらに掛ける
+  const [textScale, setTextScale] = useLocalStorage('nai_manga_v2_text_scale', 100)
+  const [sfxScale, setSfxScale] = useLocalStorage('nai_manga_v2_sfx_scale', 100)
   const [useReference, setUseReference] = useLocalStorage('nai_manga_v2_use_reference', false)
   const [refStrength, setRefStrength] = useLocalStorage('nai_manga_v2_ref_strength', 1.0)
   const [refFidelity, setRefFidelity] = useLocalStorage('nai_manga_v2_ref_fidelity', 1.0)
@@ -309,6 +312,8 @@ export default function MangaV2Studio({
         sfx_font: sfxFont,
         bubble_opacity: opacity / 100,
         max_lines_per_panel: maxLines,
+        text_scale: textScale / 100,
+        sfx_scale: sfxScale / 100,
       }),
       signal,
     })
@@ -336,6 +341,19 @@ export default function MangaV2Studio({
   function moveElement(element: MangaV2Element, x: number, y: number) {
     return runTask('位置を保存して合成し直しています...', async signal => {
       await putOverride(element.key, x, y, signal)
+      await requestCompose(signal)
+    })
+  }
+
+  function scaleElement(element: MangaV2Element, scale: number | null) {
+    return runTask('大きさを保存して合成し直しています...', async signal => {
+      const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/scales`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: element.key, scale }),
+        signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
       await requestCompose(signal)
     })
   }
@@ -376,6 +394,22 @@ export default function MangaV2Studio({
             </select>
           </label>
         </div>
+        <div className="story-row">
+          <label>
+            セリフの文字の大きさ: {textScale}%
+            <input type="range" min={50} max={200} step={5} value={textScale} disabled={busy}
+              onChange={e => setTextScale(Number(e.target.value))} />
+          </label>
+          <label>
+            描き文字・スタンプの大きさ: {sfxScale}%
+            <input type="range" min={50} max={200} step={5} value={sfxScale} disabled={busy}
+              onChange={e => setSfxScale(Number(e.target.value))} />
+          </label>
+        </div>
+        <p className="story-muted">
+          文字はコマの大きさ(大ゴマほど大きく)と内容(叫びは大きく、小声は小さく)で自動調整され、
+          そこに上の倍率が掛かります。1つずつ変えたいときは、合成後のページで要素をタップしてください。
+        </p>
         <div className="story-row">
           <label>
             吹き出しの不透明度: {opacity}%{opacity === 0 ? '(輪郭のみ)' : ''}
@@ -638,6 +672,7 @@ export default function MangaV2Studio({
             busy={busy}
             onMove={moveElement}
             onReset={element => resetElements([element])}
+            onScale={scaleElement}
           />
           <div className="story-actions">
             <a className="mv2-open" href={fileUrl(composed.pages[editPage])} target="_blank" rel="noreferrer">

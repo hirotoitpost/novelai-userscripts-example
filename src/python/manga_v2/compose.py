@@ -77,6 +77,11 @@ class LetteringStyle:
     sfx_font_paths: dict[str, Path] = field(default_factory=dict)
     # 効果音の文字列ごとのスタンプ画像。フォントより優先する。
     sfx_stamps: dict[str, Path] = field(default_factory=dict)
+    # 文字の大きさの倍率。text_scale はセリフ・ナレーション、sfx_scale は描き文字とスタンプの全体設定、
+    # scales は Element.key ごとの個別の調整(画面で選んで大きく/小さくしたもの)
+    text_scale: float = 1.0
+    sfx_scale: float = 1.0
+    scales: dict[str, float] = field(default_factory=dict)
 
 
 # 寄りのコマの拡大率(1段ごと)と上限、切り抜く中心(横は段ごとに左右へ振る)
@@ -226,14 +231,30 @@ def _speaker_point(box: Rect, heads: list[Rect], default: tuple[float, float]) -
 
 
 def _fit_bubble(
-    text: str, panel: Rect, text_size: int = _TEXT_SIZE, shape: str = "ellipse"
+    text: str, panel: Rect, text_size: int = _TEXT_SIZE, shape: str = "ellipse", min_size: int = _TEXT_MIN_SIZE
 ) -> tuple[TextBlock, tuple[int, int]]:
     pw, ph = panel[2] - panel[0], panel[3] - panel[1]
-    # 楕円の倍率と余白を見込んで、文字ブロックの上限をコマの大きさから決める
-    max_text_w = int((pw * 0.45) / 1.45)
+    # 楕円の倍率と余白を見込んで、文字ブロックの上限をコマの大きさから決める。
+    # 文字を大きくした分は横幅の上限も広げる(広げないと列が増えられず、結局縮んでしまう)
+    widen = min(max(text_size / _TEXT_SIZE, 1.0), 1.6)
+    max_text_w = int((pw * 0.45 * widen) / 1.45)
     max_text_h = min(int((ph - _BUBBLE_MARGIN * 2 - 20) / 1.3), text_size * _MAX_ROWS)
-    block = fit_text(text, max_text_w, max_text_h, text_size, _TEXT_MIN_SIZE)
+    block = fit_text(text, max_text_w, max_text_h, text_size, min_size)
     return block, bubble_size(block, shape)
+
+
+# 文字の大きさの自動調整。基準は 2×2 テンプレートのコマ(約 540×790)で、大ゴマほど大きく、
+# 小さいコマほど小さくする(面積の平方根に比例、範囲は 0.85〜1.3 倍)。
+_REFERENCE_PANEL_AREA = 540 * 790
+_PANEL_FACTOR_RANGE = (0.85, 1.3)
+# 吹き出しの形ごとの補正: 叫びは大きく、小声は小さく
+_SHAPE_TEXT_FACTOR = {"burst": 1.15, "whisper": 0.85}
+
+
+def _panel_factor(panel: Rect) -> float:
+    area = (panel[2] - panel[0]) * (panel[3] - panel[1])
+    low, high = _PANEL_FACTOR_RANGE
+    return min(max((area / _REFERENCE_PANEL_AREA) ** 0.5, low), high)
 
 
 # 頭に被らざるを得ない吹き出しの、白い地の不透明度の上限(絵が透けて見えるようにする)
@@ -267,17 +288,24 @@ def _place_stamp(
     placed: list[Rect],
     override: tuple[float, float] | None,
     heads: list[Rect] | None = None,
+    scale: float = 1.0,
+    fixed: bool = False,
 ) -> Rect:
-    """スタンプの縦横比のまま、コマに収まる大きさで描き文字と同じ探し方で置き場所を決める。"""
+    """
+    スタンプの縦横比のまま、コマに収まる大きさで描き文字と同じ探し方で置き場所を決める。
+    scale は大きさの倍率。fixed(個別に大きさを決めた)なら空きが無くても縮めない。
+    """
     pw, ph = panel[2] - panel[0], panel[3] - panel[1]
     sw, sh = natural
-    ratio = min(ph * _STAMP_MAX_H / sh, pw * _STAMP_MAX_W / sw)
+    ratio = min(ph * _STAMP_MAX_H / sh, pw * _STAMP_MAX_W / sw) * scale
+    # コマからはみ出す大きさにはしない
+    ratio = min(ratio, pw * 0.95 / sw, ph * 0.95 / sh)
     while True:
         size = (max(1, round(sw * ratio)), max(1, round(sh * ratio)))
         if override is not None:
             return _overridden_box(size, panel, override)
         box, free = _place(size, panel, placed, sfx=True, heads=heads)
-        if free or size[1] <= ph * _STAMP_MIN_H:
+        if free or fixed or size[1] <= ph * _STAMP_MIN_H * min(scale, 1.0):
             return box
         ratio *= _STAMP_SHRINK
 
@@ -318,12 +346,14 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
     if content.narration.strip():
         # ナレーションは先に場所を取り、吹き出しはそれを避けて置く。描くのは最後(枠線が上に来るように)。
         key = f"{key_base}:narration:0"
+        narration_scale = _panel_factor(rect) * style.text_scale * style.scales.get(key, 1.0)
+        narration_text_size = max(12, round(_NARRATION_SIZE * narration_scale))
         narration_block = fit_text(
             content.narration.strip(),
-            int(width * _NARRATION_MAX_WIDTH),
-            min(int(height * 0.7), _NARRATION_SIZE * _MAX_ROWS),
-            _NARRATION_SIZE,
-            _TEXT_MIN_SIZE,
+            int(width * _NARRATION_MAX_WIDTH * min(max(narration_scale, 1.0), 1.6)),
+            min(int(height * 0.7), narration_text_size * _MAX_ROWS),
+            narration_text_size,
+            max(10, round(_TEXT_MIN_SIZE * min(narration_scale, 1.0))),
         )
         size = narration_size(narration_block)
         override = style.overrides.get(key)
@@ -340,14 +370,20 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         key = f"{key_base}:bubble:{index}"
         override = style.overrides.get(key)
         shape, text = bubble_shape(line)
+        # 文字の大きさ = 基準 × コマの大きさ × 形(叫び/小声) × 全体の設定 × 個別の調整
+        element_scale = style.scales.get(key)
+        scale = _panel_factor(rect) * _SHAPE_TEXT_FACTOR.get(shape, 1.0) * style.text_scale * (element_scale or 1.0)
+        start_size = max(12, round(_TEXT_SIZE * scale))
+        # 個別に大きさを決めたものは、空きが無くても縮めない(置き場所の方を譲る)
+        min_size = start_size if element_scale is not None else max(10, round(_TEXT_MIN_SIZE * min(scale, 1.0)))
         # 空きが無ければ、まず同じ大きさの角丸の四角(場所を取らない)を試し、それでも駄目なら
         # 文字を小さくして探し直す。最後まで空きが無ければ、頭への被りが最小の位置にする。
         shapes = [shape] if shape in ("box", "cloud") else [shape, "box"]
         best: tuple[Rect, TextBlock, str] | None = None
-        text_size = _TEXT_SIZE
+        text_size = start_size
         while best is None:
             for candidate_shape in shapes:
-                block, size = _fit_bubble(text, rect, text_size, candidate_shape)
+                block, size = _fit_bubble(text, rect, text_size, candidate_shape, min_size)
                 if override is not None:
                     best = (_overridden_box(size, rect, override), block, candidate_shape)
                     break
@@ -355,8 +391,8 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
                 if free:
                     best = (box, block, candidate_shape)
                     break
-            if best is None and text_size <= _TEXT_MIN_SIZE:
-                block, size = _fit_bubble(text, rect, text_size, shape)
+            if best is None and text_size <= min_size:
+                block, size = _fit_bubble(text, rect, text_size, shape, min_size)
                 best = (_place(size, rect, placed, heads=heads)[0], block, shape)
             text_size -= _SHRINK_STEP_TEXT
         box, block, final_shape = best
@@ -378,23 +414,25 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
         key = f"{key_base}:sfx:{index}"
         override = style.overrides.get(key)
         stamp_path = style.sfx_stamps.get(text)
+        element_scale = style.scales.get(key)
+        sfx_scale = style.sfx_scale * (element_scale or 1.0)
         if stamp_path is not None and stamp_path.is_file():
             with Image.open(stamp_path) as stamp:
                 stamp.load()
-                box = _place_stamp(stamp.size, rect, placed, override, heads)
+                box = _place_stamp(stamp.size, rect, placed, override, heads, sfx_scale, element_scale is not None)
                 placed.append(box)
                 elements.append(Element(key, "sfx", text, box, rect))
                 draw_stamp(page, box, stamp)
             continue
-        layout = fit_sfx(text, width, height)
+        layout = fit_sfx(text, width, height, scale=sfx_scale)
         while True:
             if override is not None:
                 box = _overridden_box((layout.width, layout.height), rect, override)
                 break
             box, free = _place((layout.width, layout.height), rect, placed, sfx=True, heads=heads)
-            if free or layout.size <= SFX_MIN_SIZE:
+            if free or element_scale is not None or layout.size <= SFX_MIN_SIZE * min(sfx_scale, 1.0):
                 break
-            layout = fit_sfx(text, width, height, max_size=layout.size - _SHRINK_STEP_SFX)
+            layout = fit_sfx(text, width, height, max_size=layout.size - _SHRINK_STEP_SFX, scale=sfx_scale)
         placed.append(box)
         elements.append(Element(key, "sfx", text, box, rect))
         draw_sfx(page, box, layout, style.sfx_font_paths.get(text, style.sfx_font_path))

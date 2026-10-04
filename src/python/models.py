@@ -635,6 +635,10 @@ class MangaV2ComposeRequest(BaseModel):
     bubble_opacity: float = Field(1.0, ge=0.0, le=1.0)
     # 1コマのセリフの上限。超えるシーンは同じ絵の寄りのコマを足して分ける。0で分けない。
     max_lines_per_panel: int = Field(2, ge=0, le=10)
+    # 文字の大きさの全体の倍率(セリフ・ナレーション / 描き文字・スタンプ)。コマの大きさや
+    # 叫び・小声による自動調整に、さらに掛ける。
+    text_scale: float = Field(1.0, ge=0.5, le=2.0)
+    sfx_scale: float = Field(1.0, ge=0.5, le=2.0)
 
 
 class MangaV2Element(BaseModel):
@@ -646,6 +650,8 @@ class MangaV2Element(BaseModel):
     box: list[int]
     panel: list[int]
     moved: bool = False
+    # 個別に調整した大きさの倍率(未調整なら None)
+    scale: Optional[float] = None
 
 
 class MangaV2ComposeResponse(BaseModel):
@@ -655,6 +661,13 @@ class MangaV2ComposeResponse(BaseModel):
     page_height: int
     # pages と同じ順の、各ページに置いた要素
     elements: list[list[MangaV2Element]]
+
+
+class MangaV2ScaleRequest(BaseModel):
+    """吹き出し/描き文字/ナレーション1つの大きさの倍率。None で自動に戻す。"""
+
+    key: str
+    scale: Optional[float] = Field(None, ge=0.3, le=3.0)
 
 
 class MangaV2OverrideRequest(BaseModel):

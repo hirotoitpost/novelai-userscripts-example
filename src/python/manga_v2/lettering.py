@@ -460,13 +460,18 @@ class SfxLayout:
         return round(max((len(c) for c in self.columns), default=0) * self.size * _SFX_CHAR_STEP + self.size * 0.4)
 
 
-def fit_sfx(text: str, panel_w: int, panel_h: int, max_size: int = _SFX_MAX_SIZE) -> SfxLayout:
-    size = max(min(round(min(panel_w, panel_h) * _SFX_SIZE_RATIO), max_size), SFX_MIN_SIZE)
+def fit_sfx(
+    text: str, panel_w: int, panel_h: int, max_size: int = _SFX_MAX_SIZE, scale: float = 1.0
+) -> SfxLayout:
+    """scale は文字の大きさの倍率(全体の設定 × 個別の調整)。上限・下限も同じ倍率で動かす。"""
+    max_size = round(max_size * max(scale, 1.0))
+    min_size = max(16, round(SFX_MIN_SIZE * min(scale, 1.0)))
+    size = max(min(round(min(panel_w, panel_h) * _SFX_SIZE_RATIO * scale), max_size), min_size)
     chars = "".join(ch for ch in text if ch not in _SPACES)
     while True:
         columns = [chars[i : i + _SFX_MAX_ROWS] for i in range(0, len(chars), _SFX_MAX_ROWS)] or [""]
         layout = SfxLayout(columns, size)
-        if size <= SFX_MIN_SIZE or (layout.height <= panel_h * 0.85 and layout.width <= panel_w * 0.6):
+        if size <= min_size or (layout.height <= panel_h * 0.85 and layout.width <= panel_w * 0.6):
             return layout
         size -= 4
 
