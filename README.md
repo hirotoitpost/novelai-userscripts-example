@@ -176,7 +176,8 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ├── tests/                       # pytest test files
 ├── docs/                        # Additional documentation
 │   ├── README_jp.md             # Japanese README
-│   └── architecture.md          # System architecture & API reference
+│   ├── architecture.md          # System architecture & API reference
+│   └── content_guard_jp.md      # Content guard for character datasets (Japanese)
 ├── index.html                   # Vite entry point
 ├── vite.config.ts               # Vite config (API proxy to :8000)
 ├── pyproject.toml               # Python dependencies & tools

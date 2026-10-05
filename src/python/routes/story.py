@@ -31,6 +31,7 @@ from ..db import (
     create_manga_page,
     create_story,
     delete_character,
+    get_character,
     get_connection,
     get_story,
     list_manga_pages,
@@ -39,6 +40,7 @@ from ..db import (
     list_story_scenes,
     save_character,
     set_scene_characters,
+    update_character_sheet,
     update_scene_tags,
     update_scene_writing,
     update_story_final_image,
@@ -49,9 +51,17 @@ from ..db import (
 from ..keystore_crypto import decrypt_keystore, decrypt_object
 from ..manga_export import assemble_manga
 from ..notify import notify_job_finished
+from ..character_sheet import (
+    character_minor_tags,
+    character_prompt_tags,
+    characters_negative,
+    characters_seed,
+    join_tags,
+)
 from ..models import (
     CharacterResponse,
     CharacterSaveRequest,
+    CharacterSheetRequest,
     MangaPageResponse,
     StoryDraftCreateRequest,
     StoryIllustrateRequest,
@@ -64,7 +74,7 @@ from ..models import (
     StorySummary,
     SetSceneCharactersRequest,
 )
-from ..novelai_image_v5 import DIALOGUE_RE, generate_manga_page
+from ..novelai_image_v5 import _DEFAULT_NEGATIVE_PROMPT, DIALOGUE_RE, generate_manga_page
 from ..novelai_text import generate_kayra
 from ..novelai_text_oa import stream_chat
 from .llm import sse_event, strip_think_tags, stream_llm_text
@@ -990,7 +1000,6 @@ async def _run_illustrate(
 ) -> None:
     job.total = len(targets)
     settings = req.settings
-    negative = {"negative_prompt": settings.negative_prompt} if settings.negative_prompt else {}
 
     conn = get_connection()
     try:
@@ -1015,15 +1024,30 @@ async def _run_illustrate(
         ]
         # ページ内のコマに登場するキャラの容姿タグをまとめて渡す。characterPrompts は
         # 画像全体に効く指定でコマごとには分けられないため、重複を除いた和集合になる。
-        character_tags: list[str] = []
+        # 容姿にはキャラシートの普段の服装も含める。
+        page_characters: list[dict[str, Any]] = []
         for scene in page_scenes:
             for character in scene.get("characters", []):
-                tags = character["appearance_tags"].strip()
-                if tags and tags not in character_tags:
-                    character_tags.append(tags)
+                if character["id"] not in {c["id"] for c in page_characters}:
+                    page_characters.append(character)
+        character_tags: list[str] = []
+        for character in page_characters:
+            tags = character_prompt_tags(character)
+            if tags and tags not in character_tags:
+                character_tags.append(tags)
 
-        # シード未指定ならページごとに変える(従来動作)。指定時は全ページ固定。
-        seed = settings.seed if settings.seed is not None else story_id * 1000 + page_index
+        # シードの優先順: 設定で指定 > キャラシートの基準シード > ページごとに変える(従来動作)
+        seed = settings.seed
+        if seed is None:
+            seed = characters_seed(page_characters)
+        if seed is None:
+            seed = story_id * 1000 + page_index
+        char_negative = characters_negative(page_characters)
+        negative = (
+            {"negative_prompt": join_tags(settings.negative_prompt or _DEFAULT_NEGATIVE_PROMPT, char_negative)}
+            if settings.negative_prompt or char_negative
+            else {}
+        )
         image_bytes = await generate_manga_page(
             api_key,
             panels,
@@ -1651,6 +1675,33 @@ async def create_character(req: CharacterSaveRequest) -> dict[str, Any]:
     conn = get_connection()
     try:
         return save_character(conn, req.name, req.appearance_tags, req.notes)
+    finally:
+        conn.close()
+
+
+@router.put("/characters/{character_id}/sheet", response_model=CharacterResponse)
+async def put_character_sheet(character_id: int, req: CharacterSheetRequest) -> dict[str, Any]:
+    """キャラシート(容姿/服装/画風/ネガティブ/基準シード/トリガーワード)を更新する。"""
+    conn = get_connection()
+    try:
+        current = get_character(conn, character_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="character not found")
+        # seed は null で「基準シードなし」に戻せるよう、送られたものはそのまま反映する
+        sheet = req.model_dump(exclude_unset=True)
+        if sheet.get("is_adult") is None:
+            sheet.pop("is_adult", None)
+        # 成人フラグは、保存後のキャラシートに未成年を示すタグがない場合だけ付けられる
+        if sheet.get("is_adult", bool(current.get("is_adult"))):
+            found = character_minor_tags({**current, **sheet})
+            if found:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"未成年を示すタグがあるため成人キャラにできません: {', '.join(found)}",
+                )
+        if "is_adult" in sheet:
+            sheet["is_adult"] = int(sheet["is_adult"])
+        return update_character_sheet(conn, character_id, sheet) or {}
     finally:
         conn.close()
 

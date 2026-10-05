@@ -202,6 +202,19 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # データセット生成のガードの上乗せ分。基本のブロックリスト(character_sheet.py)は
+    # コード側で固定し、ここには利用者が追加したタグとネガティブだけを持つ。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS guard_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            blocked_tags TEXT NOT NULL DEFAULT '[]',
+            negative_tags TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     # 漫画v2: シーン1つ = コマ1つの絵。コマ割り・吹き出しは合成時に行うので、絵だけを持つ。
     conn.execute(
         """
@@ -409,8 +422,20 @@ def _migrate_story_scenes(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-# 漫画v2のキャラ参照(NovelAIのCharacter Reference)に使う画像。
-_CHARACTERS_EXTRA_COLUMNS = {"reference_image_path": "TEXT"}
+# reference_image_path は漫画v2のキャラ参照(NovelAIのCharacter Reference)に使う画像。
+# 残りはキャラシート(同じ見た目で安定して出すための設定)。appearance_tags は変えない容姿、
+# outfit_tags は普段の服装(場面やデータセットで差し替える)、style_tags は画風/品質、
+# negative_tags はそのキャラで出てほしくない要素、seed は基準シード。
+_CHARACTERS_EXTRA_COLUMNS = {
+    "reference_image_path": "TEXT",
+    "trigger_word": "TEXT",
+    "outfit_tags": "TEXT",
+    "style_tags": "TEXT",
+    "negative_tags": "TEXT",
+    "seed": "INTEGER",
+    # 成人キャラ。1 のときだけデータセットのR18生成を許す(未成年を示すタグがない場合に限る)
+    "is_adult": "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 def _migrate_characters(conn: sqlite3.Connection) -> None:
@@ -577,6 +602,29 @@ def delete_stamp_source(conn: sqlite3.Connection, key: str) -> None:
 def update_character_reference(conn: sqlite3.Connection, character_id: int, image_path: str | None) -> None:
     conn.execute("UPDATE characters SET reference_image_path = ? WHERE id = ?", (image_path, character_id))
     conn.commit()
+
+
+CHARACTER_SHEET_FIELDS = (
+    "appearance_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
+)
+
+
+def update_character_sheet(conn: sqlite3.Connection, character_id: int, sheet: dict[str, Any]) -> dict[str, Any] | None:
+    """キャラシートの項目をまとめて書き換える。渡されなかった項目はそのまま。"""
+    fields = [f for f in CHARACTER_SHEET_FIELDS if f in sheet]
+    if fields:
+        assignments = ", ".join(f"{f} = ?" for f in fields)
+        conn.execute(
+            f"UPDATE characters SET {assignments} WHERE id = ?",
+            (*(sheet[f] for f in fields), character_id),
+        )
+        conn.commit()
+    return get_character(conn, character_id)
+
+
+def get_character(conn: sqlite3.Connection, character_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM characters WHERE id = ?", (character_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def _migrate_stories(conn: sqlite3.Connection) -> None:
@@ -1396,7 +1444,7 @@ def save_character(
                 ELSE excluded.appearance_tags
             END,
             notes = COALESCE(excluded.notes, characters.notes)
-        RETURNING id, name, appearance_tags, notes, created_at
+        RETURNING *
         """,
         (name, appearance_tags, notes, now),
     ).fetchone()
@@ -1422,7 +1470,7 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     """物語内の scene_id → 登場キャラの一覧。"""
     rows = conn.execute(
         """
-        SELECT sc.scene_id, c.id, c.name, c.appearance_tags, c.reference_image_path
+        SELECT sc.scene_id, c.*
         FROM scene_characters sc
         JOIN characters c ON c.id = sc.character_id
         JOIN story_scenes s ON s.id = sc.scene_id
@@ -1434,14 +1482,9 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
 
     result: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
-        result.setdefault(row["scene_id"], []).append(
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "appearance_tags": row["appearance_tags"],
-                "reference_image_path": row["reference_image_path"],
-            }
-        )
+        character = dict(row)
+        del character["scene_id"]
+        result.setdefault(row["scene_id"], []).append(character)
     return result
 
 
@@ -1468,6 +1511,44 @@ def save_image_preset(conn: sqlite3.Connection, name: str, settings: dict[str, A
 
 def delete_image_preset(conn: sqlite3.Connection, preset_id: int) -> None:
     conn.execute("DELETE FROM image_presets WHERE id = ?", (preset_id,))
+    conn.commit()
+
+
+def _guard_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {**dict(row), "blocked_tags": json.loads(row["blocked_tags"])}
+
+
+def list_guard_profiles(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM guard_profiles ORDER BY name").fetchall()
+    return [_guard_row(row) for row in rows]
+
+
+def get_guard_profile(conn: sqlite3.Connection, profile_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM guard_profiles WHERE id = ?", (profile_id,)).fetchone()
+    return _guard_row(row) if row else None
+
+
+def save_guard_profile(
+    conn: sqlite3.Connection, name: str, blocked_tags: list[str], negative_tags: str
+) -> dict[str, Any]:
+    """同じ名前があれば上書きする(画像プリセットと同じ扱い)。"""
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO guard_profiles (name, blocked_tags, negative_tags, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            blocked_tags = excluded.blocked_tags, negative_tags = excluded.negative_tags
+        RETURNING *
+        """,
+        (name, json.dumps(blocked_tags, ensure_ascii=False), negative_tags, now),
+    ).fetchone()
+    conn.commit()
+    return _guard_row(row)
+
+
+def delete_guard_profile(conn: sqlite3.Connection, profile_id: int) -> None:
+    conn.execute("DELETE FROM guard_profiles WHERE id = ?", (profile_id,))
     conn.commit()
 
 

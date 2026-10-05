@@ -151,6 +151,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/character-dataset')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/character-dataset')}
+          >
+            <div className="home-card-icon">🎎</div>
+            <h2>キャラ別データセット</h2>
+            <p>登場人物のキャラシートを元に、ポーズ/服装/表情を変えた画像を1枚ずつ生成・取り込みします。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/chunks')}
             role="button"
             tabIndex={0}

@@ -10,6 +10,7 @@ import ImageGenerate from './pages/ImageGenerate'
 import LLMPage from './pages/LLMPage'
 import Metadata from './pages/Metadata'
 import LoraDataset from './pages/LoraDataset'
+import CharacterDataset from './pages/CharacterDataset'
 import Chunks from './pages/Chunks'
 import DbStatus from './pages/DbStatus'
 import Selection from './pages/Selection'
@@ -53,6 +54,10 @@ function AppRoutes() {
       <Route
         path="/lora-dataset"
         element={<ProtectedRoute><LoraDataset /></ProtectedRoute>}
+      />
+      <Route
+        path="/character-dataset"
+        element={<ProtectedRoute><CharacterDataset /></ProtectedRoute>}
       />
       <Route
         path="/chunks"

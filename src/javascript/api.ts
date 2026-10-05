@@ -340,6 +340,58 @@ export interface LoraDatasetProgressEvent {
   status: 'ok' | 'error'
   message?: string
   image_b64?: string
+  /** キャラシートからの生成のみ: 採用した画像のプロンプト・試行回数・参照画像との類似度 */
+  prompt?: string
+  attempts?: number
+  score?: number | null
+}
+
+export interface LoraDatasetRetryEvent {
+  current: number
+  total: number
+  file: string
+  attempt: number
+  score: number
+}
+
+export interface CharacterDatasetRequest {
+  root_name: string
+  poses: string[]
+  outfits: string[]
+  expressions: string[]
+  locations: string[]
+  count: number
+  model: string
+  width: number
+  height: number
+  steps: number
+  scale: number
+  sampler: string
+  noise_schedule: string
+  cfg_rescale: number
+  use_reference: boolean
+  reference_fidelity: number
+  reference_strength: number
+  max_attempts: number
+  similarity_threshold: number
+  scorer: 'color' | 'vlm'
+  guard_profile_id?: number | null
+  /** r18 は成人フラグのあるキャラのみ(サーバー側でも検査する) */
+  rating: 'general' | 'r18'
+}
+
+/** データセット生成のガード。基本(変更不可)にプロファイルの分を上乗せして使う。 */
+export interface GuardProfile {
+  id: number
+  name: string
+  blocked_tags: string[]
+  negative_tags: string
+  created_at: string
+}
+
+export interface GuardCore {
+  blocked_tags: string[]
+  negative_tags: string
 }
 
 export interface LoraDatasetCompleteEvent {
@@ -352,11 +404,12 @@ export interface LoraDatasetCompleteEvent {
 async function _streamLoraDataset(
   endpoint: string,
   token: string,
-  body: LoraDatasetRequest,
+  body: LoraDatasetRequest | CharacterDatasetRequest,
   onProgress: (e: LoraDatasetProgressEvent) => void,
   onComplete: (e: LoraDatasetCompleteEvent) => void,
   onError: (msg: string) => void,
   signal?: AbortSignal,
+  onRetry?: (e: LoraDatasetRetryEvent) => void,
 ): Promise<void> {
   try {
     const res = await fetch(endpoint, {
@@ -403,6 +456,8 @@ async function _streamLoraDataset(
             return
           } else if (eventType === 'progress') {
             onProgress(chunk as unknown as LoraDatasetProgressEvent)
+          } else if (eventType === 'retry') {
+            onRetry?.(chunk as unknown as LoraDatasetRetryEvent)
           } else if (eventType === 'complete') {
             onComplete(chunk as unknown as LoraDatasetCompleteEvent)
           }
@@ -435,6 +490,22 @@ export function streamLoraDatasetPreview(
   signal?: AbortSignal,
 ): Promise<void> {
   return _streamLoraDataset('/api/lora-dataset/preview', token, body, onProgress, onComplete, onError, signal)
+}
+
+/** キャラシートの容姿を固定し、ポーズ/服装/表情/場所を差し替えて1枚ずつ生成する。 */
+export function streamCharacterDataset(
+  token: string,
+  characterId: number,
+  body: CharacterDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onRetry: (e: LoraDatasetRetryEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return _streamLoraDataset(
+    `/api/lora-dataset/character/${characterId}/generate`, token, body, onProgress, onComplete, onError, signal, onRetry,
+  )
 }
 
 // SSE streaming helper for LLM endpoints

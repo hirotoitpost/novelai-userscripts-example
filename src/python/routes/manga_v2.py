@@ -108,6 +108,7 @@ from ..models import (
     MangaV2Template,
     StoryJobResponse,
 )
+from ..character_sheet import character_prompt_tags, characters_negative, characters_seed, join_tags
 from ..novelai_image_v5 import DIALOGUE_RE, CharacterReferenceInput, generate_image_v5, reference_image_b64
 from .llm import stream_llm_text, strip_think_tags
 from .story import _MANGA_DIR, _PROJECT_ROOT, _Job, _job_response, _start_job
@@ -854,12 +855,15 @@ async def _run_panels(
         job.message = f"シーン{scene['scene_index'] + 1}のコマを生成中 ({i}/{len(targets)})"
         width, height = generation_size(rects[scene["scene_index"] % len(rects)])
         # そのシーンに出るキャラだけの容姿を渡す(v1はページ内の全員をまとめていた)
-        character_tags = [
-            c["appearance_tags"].strip()
-            for c in characters.get(scene["id"], [])
-            if c["appearance_tags"].strip()
-        ][:_MAX_CHARACTERS]
-        seed = settings.seed if settings.seed is not None else story_id * 1000 + scene["scene_index"]
+        # (キャラシートの普段の服装も含む)
+        scene_characters = characters.get(scene["id"], [])
+        character_tags = [t for t in (character_prompt_tags(c) for c in scene_characters) if t][:_MAX_CHARACTERS]
+        # シードの優先順: 設定で指定 > キャラシートの基準シード > シーンごとに変える
+        seed = settings.seed
+        if seed is None:
+            seed = characters_seed(scene_characters)
+        if seed is None:
+            seed = story_id * 1000 + scene["scene_index"]
         reference = _scene_reference(characters.get(scene["id"], []), req) if req.use_character_reference else None
         if reference is not None:
             job.message += "(キャラ参照あり・V4.5)"
@@ -867,7 +871,10 @@ async def _run_panels(
         image = await generate_image_v5(
             api_key,
             build_panel_prompt(scene["draft_prompt_tags"], color=req.color, complexity=settings.complexity),
-            build_panel_negative(settings.negative_prompt, color=req.color, sexual=sexual),
+            join_tags(
+                build_panel_negative(settings.negative_prompt, color=req.color, sexual=sexual),
+                characters_negative(scene_characters),
+            ),
             model=_REFERENCE_MODEL if reference is not None else settings.model,
             width=width,
             height=height,

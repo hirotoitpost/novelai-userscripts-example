@@ -162,6 +162,67 @@ class LoraDatasetRequest(BaseModel):
     vibe_transfer: Optional[ControlNetRequest] = Field(None, description="Vibe Transfer（雰囲気転送）")
 
 
+class CharacterDatasetRequest(BaseModel):
+    """キャラシートを元に、ポーズ/服装/表情/場所を差し替えたデータセットを作る。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名")
+    poses: list[str] = Field(default_factory=list)
+    outfits: list[str] = Field(default_factory=list)
+    expressions: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
+    count: int = Field(10, ge=1, le=200, description="生成枚数。組み合わせから重複なしで選ぶ")
+    model: ImageModelLiteral = "nai-diffusion-4-5-full"
+    width: int = Field(832, ge=64, le=1600)
+    height: int = Field(1216, ge=64, le=1600)
+    steps: int = Field(23, ge=1, le=50)
+    scale: float = Field(5.0, ge=0.0, le=10.0)
+    sampler: SamplerLiteral = "k_euler_ancestral"
+    noise_schedule: NoiseScheduleLiteral = "karras"
+    cfg_rescale: float = Field(0.0, ge=0.0, le=1.0)
+    use_reference: bool = Field(True, description="キャラシートの参照画像をCharacter Referenceとして使う")
+    reference_fidelity: float = Field(1.0, ge=0.0, le=1.0)
+    reference_strength: float = Field(1.0, ge=0.0, le=1.0)
+    # ガチャ対策: 参照画像との類似度がしきい値未満なら、シードを変えて引き直す。
+    # 引き直しも1回ごとにAnlasを使うので、既定は1(引き直さない)。
+    max_attempts: int = Field(1, ge=1, le=5, description="1枚あたりの最大試行回数")
+    similarity_threshold: float = Field(0.7, ge=0.0, le=1.0)
+    scorer: Literal["color", "vlm"] = "color"
+    guard_profile_id: Optional[int] = Field(None, description="上乗せするガードプロファイル。未指定なら基本のガードのみ")
+    rating: Literal["general", "r18"] = Field("general", description="r18 は成人フラグのあるキャラのみ")
+
+
+class DatasetImportRequest(BaseModel):
+    """手元の画像をデータセットに取り込む。caption 未指定ならキャラシートから作る。"""
+
+    root_name: str = Field("training_data")
+    image: str = Field(..., description="base64 または data URL")
+    filename: Optional[str] = None
+    caption: Optional[str] = None
+    guard_profile_id: Optional[int] = None
+    rating: Literal["general", "r18"] = "general"
+
+
+class GuardProfileSaveRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    blocked_tags: list[str] = Field(default_factory=list)
+    negative_tags: str = ""
+
+
+class GuardProfileResponse(BaseModel):
+    id: int
+    name: str
+    blocked_tags: list[str]
+    negative_tags: str
+    created_at: str
+
+
+class GuardCoreResponse(BaseModel):
+    """基本のガード(変更不可)。"""
+
+    blocked_tags: list[str]
+    negative_tags: str
+
+
 class LoraDatasetProgressEvent(BaseModel):
     current: int
     total: int
@@ -417,6 +478,24 @@ class CharacterResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     reference_image_path: Optional[str] = None
+    trigger_word: Optional[str] = None
+    outfit_tags: Optional[str] = None
+    style_tags: Optional[str] = None
+    negative_tags: Optional[str] = None
+    seed: Optional[int] = None
+    is_adult: bool = False
+
+
+class CharacterSheetRequest(BaseModel):
+    """キャラシートの更新。送った項目だけ書き換える(未送信の項目は変えない)。"""
+
+    appearance_tags: Optional[str] = None
+    trigger_word: Optional[str] = None
+    outfit_tags: Optional[str] = None
+    style_tags: Optional[str] = None
+    negative_tags: Optional[str] = None
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
+    is_adult: Optional[bool] = Field(None, description="成人キャラ。未成年を示すタグがあると付けられない")
 
 
 class CharacterSaveRequest(BaseModel):

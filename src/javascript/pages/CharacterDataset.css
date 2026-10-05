@@ -1,0 +1,77 @@
+/* キャラ別データセット。基本の見た目は LoraDataset.css を共用し、ここは差分だけ。 */
+
+.chards-sheet {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.6rem;
+  background: var(--nai-card);
+  border: 1px solid var(--nai-border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+.chards-ref {
+  width: 72px;
+  height: 108px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.chards-sheet dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  margin: 0;
+}
+
+.chards-sheet dt { color: var(--nai-muted); }
+.chards-sheet dd { margin: 0; word-break: break-word; }
+
+.chards-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.chards-axis { display: flex; flex-direction: column; gap: 0.35rem; }
+
+.chards-axis-label { font-size: 0.85rem; font-weight: 600; }
+.chards-axis-label small { margin-left: 0.5rem; color: var(--nai-muted); font-weight: 400; }
+
+.chards-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.chards-chip {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--nai-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nai-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.chards-chip--on {
+  border-color: var(--nai-accent);
+  background: rgba(123, 92, 246, 0.18);
+  color: var(--nai-text);
+}
+
+.chards-chip--locked {
+  cursor: default;
+  border-style: dashed;
+  font-size: 0.72rem;
+}
+
+.chards-custom {
+  width: 9rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px dashed var(--nai-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nai-text);
+  font-size: 0.78rem;
+}
+
+.chards-import-thumbs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.chards-import-thumbs img { height: 96px; border-radius: 6px; }
