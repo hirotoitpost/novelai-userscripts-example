@@ -1452,6 +1452,75 @@ def save_character(
     return dict(row)
 
 
+def character_usage(conn: sqlite3.Connection, character_id: int) -> dict[str, Any]:
+    """そのキャラを割り当てている物語とシーンの数(削除前の確認用)。"""
+    row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT s.story_id) AS stories, COUNT(*) AS scenes
+        FROM scene_characters sc
+        JOIN story_scenes s ON s.id = sc.scene_id
+        WHERE sc.character_id = ?
+        """,
+        (character_id,),
+    ).fetchone()
+    titles = [
+        r["title"]
+        for r in conn.execute(
+            """
+            SELECT DISTINCT COALESCE(st.title, '(無題 #' || st.id || ')') AS title FROM scene_characters sc
+            JOIN story_scenes s ON s.id = sc.scene_id
+            JOIN stories st ON st.id = s.story_id
+            WHERE sc.character_id = ?
+            ORDER BY st.title
+            """,
+            (character_id,),
+        )
+    ]
+    return {"stories": row["stories"], "scenes": row["scenes"], "story_titles": titles}
+
+
+def story_characters(conn: sqlite3.Connection, story_id: int) -> list[dict[str, Any]]:
+    """物語のシーンに割り当てられているキャラと、そのシーン数(付け替えの元を選ぶ用)。"""
+    rows = conn.execute(
+        """
+        SELECT c.id, c.name, COUNT(*) AS scenes
+        FROM scene_characters sc
+        JOIN story_scenes s ON s.id = sc.scene_id
+        JOIN characters c ON c.id = sc.character_id
+        WHERE s.story_id = ?
+        GROUP BY c.id
+        ORDER BY c.name
+        """,
+        (story_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def replace_story_character(conn: sqlite3.Connection, story_id: int, from_id: int, to_id: int) -> int:
+    """
+    物語内で from_id を割り当てているシーンを、すべて to_id に付け替える。付け替えたシーン数を返す。
+    to_id が既に同じシーンにいる場合は重複させず、from_id を外すだけにする。
+    """
+    scene_ids = [
+        row["scene_id"]
+        for row in conn.execute(
+            """
+            SELECT sc.scene_id FROM scene_characters sc
+            JOIN story_scenes s ON s.id = sc.scene_id
+            WHERE s.story_id = ? AND sc.character_id = ?
+            """,
+            (story_id, from_id),
+        )
+    ]
+    for scene_id in scene_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO scene_characters (scene_id, character_id) VALUES (?, ?)", (scene_id, to_id)
+        )
+        conn.execute("DELETE FROM scene_characters WHERE scene_id = ? AND character_id = ?", (scene_id, from_id))
+    conn.commit()
+    return len(scene_ids)
+
+
 def delete_character(conn: sqlite3.Connection, character_id: int) -> None:
     conn.execute("DELETE FROM characters WHERE id = ?", (character_id,))
     conn.commit()

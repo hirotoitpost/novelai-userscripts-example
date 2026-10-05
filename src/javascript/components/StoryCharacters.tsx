@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CharacterSheetEditor from './CharacterSheetEditor'
 
 export interface Character {
   id: number
@@ -16,23 +17,6 @@ export interface Character {
   is_adult?: boolean
 }
 
-/** キャラシートで編集する項目。容姿は変えない部分、服装は場面で差し替える部分。 */
-type SheetField = 'appearance_tags' | 'outfit_tags' | 'style_tags' | 'negative_tags' | 'trigger_word' | 'seed'
-
-const SHEET_FIELDS: { key: SheetField; label: string; placeholder: string; rows: number }[] = [
-  { key: 'appearance_tags', label: '容姿(固定)', placeholder: '1girl, brown hair, long hair, two side up, pink scrunchie, yellow eyes', rows: 2 },
-  { key: 'outfit_tags', label: '普段の服装', placeholder: 'school uniform, cardigan, pleated skirt', rows: 1 },
-  { key: 'style_tags', label: '画風(データセット用)', placeholder: 'best quality, masterpiece, flat color', rows: 1 },
-  { key: 'negative_tags', label: 'ネガティブ', placeholder: 'short hair, blue eyes', rows: 1 },
-  { key: 'trigger_word', label: 'トリガーワード', placeholder: 'kujo_yura', rows: 1 },
-  { key: 'seed', label: '基準シード', placeholder: '3257661879', rows: 1 },
-]
-
-function sheetValue(character: Character, key: SheetField): string {
-  const value = character[key]
-  return value == null ? '' : String(value)
-}
-
 export interface SceneCharacter {
   id: number
   name: string
@@ -46,27 +30,75 @@ interface Props {
   /** 変更をStory側に反映させる(シーン一覧の再読み込み)。 */
   onChanged: () => void
   disabled?: boolean
+  /** 開いている物語。指定すると、この物語の中でキャラを付け替える欄を出す。 */
+  storyId?: number
+}
+
+interface StoryCharacterUsage {
+  id: number
+  name: string
+  scenes: number
 }
 
 /**
  * 登場人物の一覧と編集。抽出は当たり外れがあるので、ここで手直しできることが前提。
  * キャラは物語をまたいで共有されるので、他の物語で作った設定もそのまま選べる。
  */
-export default function StoryCharacters({ apiOrigin, onChanged, disabled }: Props) {
+export default function StoryCharacters({ apiOrigin, onChanged, disabled, storyId }: Props) {
   const [characters, setCharacters] = useState<Character[]>([])
-  const [editing, setEditing] = useState<Record<number, Partial<Record<SheetField, string>>>>({})
+  const [editing, setEditing] = useState<Record<number, string>>({})
   const [open, setOpen] = useState<Record<number, boolean>>({})
   const [newName, setNewName] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [inStory, setInStory] = useState<StoryCharacterUsage[]>([])
+  const [replaceFrom, setReplaceFrom] = useState<number | null>(null)
+  const [replaceTo, setReplaceTo] = useState<number | null>(null)
+  const [replaceMsg, setReplaceMsg] = useState<string | null>(null)
 
   function load() {
     fetch(`${apiOrigin}/api/story/characters`)
       .then(r => (r.ok ? r.json() : []))
       .then(setCharacters)
       .catch(() => {/* サイレント失敗 */})
+    if (storyId != null) {
+      fetch(`${apiOrigin}/api/story/${storyId}/characters`)
+        .then(r => (r.ok ? r.json() : []))
+        .then(setInStory)
+        .catch(() => {/* サイレント失敗 */})
+    }
   }
 
-  useEffect(load, [apiOrigin])
+  useEffect(load, [apiOrigin, storyId])
+
+  /** この物語の中だけで、from のキャラが出ているシーンを to のキャラに付け替える。 */
+  async function replace() {
+    if (storyId == null || replaceFrom == null || replaceTo == null) return
+    const from = inStory.find(c => c.id === replaceFrom)
+    const to = characters.find(c => c.id === replaceTo)
+    if (!from || !to) return
+    if (!window.confirm(
+      `この物語の${from.scenes}シーンで「${from.name}」を「${to.name}」に付け替えますか？\n` +
+      '他の物語の割り当てと、キャラ自体(キャラシート)は変わりません。',
+    )) return
+    setError(null)
+    setReplaceMsg(null)
+    try {
+      const res = await fetch(`${apiOrigin}/api/story/${storyId}/characters/replace`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_character_id: replaceFrom, to_character_id: replaceTo }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? '付け替えに失敗しました')
+      const { scenes } = await res.json()
+      setReplaceMsg(`${scenes}シーンを「${from.name}」から「${to.name}」に付け替えました。`)
+      setReplaceFrom(null)
+      setReplaceTo(null)
+      load()
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   async function save(name: string, appearanceTags: string) {
     setError(null)
@@ -79,56 +111,6 @@ export default function StoryCharacters({ apiOrigin, onChanged, disabled }: Prop
       if (!res.ok) throw new Error((await res.json()).detail ?? '保存に失敗しました')
       load()
       onChanged()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  async function saveSheet(character: Character) {
-    setError(null)
-    const changes = editing[character.id] ?? {}
-    const body: Record<string, string | number | null> = {}
-    for (const [key, value] of Object.entries(changes) as [SheetField, string][]) {
-      if (key === 'seed') {
-        const trimmed = value.trim()
-        if (trimmed && !/^\d+$/.test(trimmed)) {
-          setError('基準シードは数字で入力してください')
-          return
-        }
-        body.seed = trimmed ? Number(trimmed) : null
-      } else {
-        body[key] = value.trim()
-      }
-    }
-    try {
-      const res = await fetch(`${apiOrigin}/api/story/characters/${character.id}/sheet`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) throw new Error((await res.json()).detail ?? '保存に失敗しました')
-      setEditing(prev => {
-        const next = { ...prev }
-        delete next[character.id]
-        return next
-      })
-      load()
-      onChanged()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  async function setAdult(character: Character, isAdult: boolean) {
-    setError(null)
-    try {
-      const res = await fetch(`${apiOrigin}/api/story/characters/${character.id}/sheet`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_adult: isAdult }),
-      })
-      if (!res.ok) throw new Error((await res.json()).detail ?? '保存に失敗しました')
-      load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -155,6 +137,43 @@ export default function StoryCharacters({ apiOrigin, onChanged, disabled }: Prop
 
       {error && <div className="story-error">{error}</div>}
 
+      {storyId != null && (
+        <div className="story-replace">
+          <span className="story-muted">この物語でキャラを付け替える(抽出された仮のキャラを、作り込んだキャラシートのキャラに替える、など)</span>
+          {inStory.length === 0 ? (
+            <span className="story-muted">この物語のシーンにはまだキャラが割り当てられていません。</span>
+          ) : (
+            <div className="story-row">
+              <select
+                value={replaceFrom ?? ''}
+                onChange={e => setReplaceFrom(e.target.value ? Number(e.target.value) : null)}
+                disabled={disabled}
+              >
+                <option value="">付け替え元</option>
+                {inStory.map(c => <option key={c.id} value={c.id}>{c.name}({c.scenes}シーン)</option>)}
+              </select>
+              <span>→</span>
+              <select
+                value={replaceTo ?? ''}
+                onChange={e => setReplaceTo(e.target.value ? Number(e.target.value) : null)}
+                disabled={disabled}
+              >
+                <option value="">付け替え先</option>
+                {characters.filter(c => c.id !== replaceFrom).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button
+                type="button"
+                onClick={() => void replace()}
+                disabled={disabled || replaceFrom == null || replaceTo == null}
+              >
+                付け替え
+              </button>
+            </div>
+          )}
+          {replaceMsg && <span className="story-muted">{replaceMsg}</span>}
+        </div>
+      )}
+
       <ul className="story-character-list">
         {characters.length === 0 && <li className="story-muted">まだ登録がありません。</li>}
         {characters.map(character => (
@@ -165,55 +184,43 @@ export default function StoryCharacters({ apiOrigin, onChanged, disabled }: Prop
                 削除
               </button>
             </div>
-            {(() => {
-              const draft = editing[character.id] ?? {}
-              const value = (key: SheetField) => draft[key] ?? sheetValue(character, key)
-              const dirty = Object.entries(draft).some(([k, v]) => v !== sheetValue(character, k as SheetField))
-              const fields = open[character.id] ? SHEET_FIELDS : SHEET_FIELDS.slice(0, 1)
-              return (
-                <>
-                  {fields.map(field => (
-                    <label key={field.key} className="story-sheet-field">
-                      {open[character.id] && <span className="story-muted">{field.label}</span>}
-                      <textarea
-                        className="story-premise"
-                        rows={field.rows}
-                        placeholder={field.placeholder}
-                        value={value(field.key)}
-                        disabled={disabled}
-                        onChange={e =>
-                          setEditing({ ...editing, [character.id]: { ...draft, [field.key]: e.target.value } })
-                        }
-                      />
-                    </label>
-                  ))}
-                  {open[character.id] && (
-                    <label className="story-sheet-field">
-                      <input
-                        type="checkbox"
-                        checked={!!character.is_adult}
-                        disabled={disabled}
-                        onChange={e => void setAdult(character, e.target.checked)}
-                      />
-                      成人キャラ(データセットのR18生成を許可。未成年を示すタグがあると付けられません)
-                    </label>
-                  )}
-                  <div className="story-actions">
-                    <button
-                      type="button"
-                      onClick={() => setOpen({ ...open, [character.id]: !open[character.id] })}
-                    >
-                      {open[character.id] ? 'キャラシートを閉じる' : 'キャラシートを開く'}
-                    </button>
-                    {dirty && (
-                      <button type="button" onClick={() => void saveSheet(character)} disabled={disabled}>
-                        保存
-                      </button>
-                    )}
-                  </div>
-                </>
-              )
-            })()}
+            {open[character.id] ? (
+              <CharacterSheetEditor
+                apiOrigin={apiOrigin}
+                character={character}
+                disabled={disabled}
+                onSaved={() => {
+                  load()
+                  onChanged()
+                }}
+                onDuplicated={() => load()}
+              />
+            ) : (
+              <>
+                <textarea
+                  className="story-premise"
+                  rows={2}
+                  placeholder="1girl, long black hair, blue eyes, school uniform"
+                  value={editing[character.id] ?? character.appearance_tags}
+                  disabled={disabled}
+                  onChange={e => setEditing({ ...editing, [character.id]: e.target.value })}
+                />
+                {(editing[character.id] ?? character.appearance_tags) !== character.appearance_tags && (
+                  <button
+                    type="button"
+                    onClick={() => void save(character.name, editing[character.id] ?? '')}
+                    disabled={disabled}
+                  >
+                    容姿タグを保存
+                  </button>
+                )}
+              </>
+            )}
+            <div className="story-actions">
+              <button type="button" onClick={() => setOpen({ ...open, [character.id]: !open[character.id] })}>
+                {open[character.id] ? 'キャラシートを閉じる' : 'キャラシートを開く'}
+              </button>
+            </div>
           </li>
         ))}
       </ul>

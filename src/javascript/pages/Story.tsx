@@ -1022,6 +1022,7 @@ export default function Story() {
                 <summary>登場人物（容姿の指定）</summary>
                 <StoryCharacters
                   apiOrigin={API_ORIGIN}
+                  storyId={story?.id}
                   onChanged={() => { if (story) void loadStory(story.id) }}
                   disabled={busy}
                 />

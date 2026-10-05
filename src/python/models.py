@@ -511,6 +511,34 @@ class CharacterSaveRequest(BaseModel):
     notes: Optional[str] = None
 
 
+class CharacterDuplicateRequest(BaseModel):
+    """別名保存。元キャラのシートを複製し、sheet の項目(書きかけの変更)で上書きする。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    sheet: Optional[CharacterSheetRequest] = None
+
+
+class CharacterUsageResponse(BaseModel):
+    stories: int
+    scenes: int
+    story_titles: list[str]
+
+
+class StoryCharacterUsage(BaseModel):
+    id: int
+    name: str
+    scenes: int
+
+
+class ReplaceStoryCharacterRequest(BaseModel):
+    from_character_id: int
+    to_character_id: int
+
+
+class ReplaceStoryCharacterResponse(BaseModel):
+    scenes: int
+
+
 class SetSceneCharactersRequest(BaseModel):
     character_ids: list[int]
 

@@ -10,6 +10,7 @@ import {
   LoraDatasetRetryEvent,
 } from '../api'
 import type { Character } from '../components/StoryCharacters'
+import CharacterSheetEditor, { type SheetEditorClasses } from '../components/CharacterSheetEditor'
 import GuardProfiles from '../components/GuardProfiles'
 import './LoraDataset.css'
 import './CharacterDataset.css'
@@ -44,6 +45,17 @@ function fileUrl(path: string): string {
  * キャラシート(物語の登場人物に紐づく安定生成設定)を元に、ポーズ/服装/表情/場所を
  * 差し替えたデータセットを1枚ずつ生成する。手元の画像の取り込みもここで行う。
  */
+const SHEET_CLASSES: SheetEditorClasses = {
+  field: 'chards-sheet-field',
+  label: 'lora-label',
+  input: 'lora-textarea',
+  actions: 'lora-actions',
+  button: 'lora-btn lora-btn--secondary',
+  primary: 'lora-btn lora-btn--primary',
+  danger: 'lora-btn lora-btn--danger',
+  error: 'lora-error',
+}
+
 export default function CharacterDataset() {
   const { token } = useAuth()
   const navigate = useNavigate()
@@ -71,6 +83,9 @@ export default function CharacterDataset() {
   const [scorer, setScorer] = useLocalStorage<'color' | 'vlm'>('nai_chards_scorer', 'color')
   const [guardId, setGuardId] = useLocalStorage<number | null>('nai_chards_guard', null)
   const [r18Selected, setR18Selected] = useState(false)
+  const [editingSheet, setEditingSheet] = useState(false)
+  const [newCharName, setNewCharName] = useState('')
+  const [charError, setCharError] = useState<string | null>(null)
 
   const [phase, setPhase] = useState<Phase>('idle')
   const [progress, setProgress] = useState({ current: 0, total: 0 })
@@ -87,8 +102,34 @@ export default function CharacterDataset() {
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
+  function loadCharacters() {
     fetch('/api/story/characters').then(r => (r.ok ? r.json() : [])).then(setCharacters).catch(() => {})
+  }
+
+  // 物語を書かなくてもキャラ別データセットを始められるよう、ここでもキャラを作れるようにする
+  async function createCharacter() {
+    const name = newCharName.trim()
+    if (!name) return
+    setCharError(null)
+    try {
+      const res = await fetch('/api/story/characters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, appearance_tags: '' }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? '追加に失敗しました')
+      const created: Character = await res.json()
+      setNewCharName('')
+      loadCharacters()
+      setCharacterId(created.id)
+      setEditingSheet(true)
+    } catch (e) {
+      setCharError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  useEffect(() => {
+    loadCharacters()
     fetch('/api/lora-dataset/variations').then(r => (r.ok ? r.json() : null)).then(v => v && setDefaults(v)).catch(() => {})
   }, [])
 
@@ -231,11 +272,50 @@ export default function CharacterDataset() {
               <option value="">選択してください</option>
               {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-            {characters.length === 0 && (
-              <p className="lora-hint">物語の「登場人物」でキャラを登録し、キャラシートを設定してください。</p>
+            <div className="chards-new-char">
+              <input
+                className="lora-input"
+                placeholder="新しいキャラ名"
+                value={newCharName}
+                onChange={e => setNewCharName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && void createCharacter()}
+                disabled={isRunning}
+              />
+              <button
+                type="button"
+                className="lora-btn lora-btn--secondary"
+                onClick={() => void createCharacter()}
+                disabled={isRunning || !newCharName.trim()}
+              >
+                追加
+              </button>
+            </div>
+            {charError && <p className="lora-error" role="alert">{charError}</p>}
+
+            {character && editingSheet && (
+              <div className="chards-sheet chards-sheet--edit">
+                <CharacterSheetEditor
+                  apiOrigin=""
+                  character={character}
+                  onSaved={loadCharacters}
+                  disabled={isRunning}
+                  classes={SHEET_CLASSES}
+                  showReference
+                  fileUrl={fileUrl}
+                  onDuplicated={created => {
+                    loadCharacters()
+                    setCharacterId(created.id)
+                  }}
+                  onDeleted={() => {
+                    loadCharacters()
+                    setCharacterId(null)
+                    setEditingSheet(false)
+                  }}
+                />
+              </div>
             )}
 
-            {character && (
+            {character && !editingSheet && (
               <div className="chards-sheet">
                 {hasReference && (
                   <img className="chards-ref" src={fileUrl(character.reference_image_path!)} alt={`${character.name}の参照画像`} />
@@ -245,9 +325,19 @@ export default function CharacterDataset() {
                   <dt>容姿</dt><dd>{character.appearance_tags || '(未設定)'}</dd>
                   <dt>普段の服装</dt><dd>{character.outfit_tags || '(未設定)'}</dd>
                   <dt>基準シード</dt><dd>{character.seed ?? '(ランダム)'}</dd>
-                  <dt>参照画像</dt><dd>{hasReference ? 'あり' : 'なし(漫画v2の画面で登録できます)'}</dd>
+                  <dt>参照画像</dt><dd>{hasReference ? 'あり' : 'なし'}</dd>
                 </dl>
               </div>
+            )}
+            {character && (
+              <button
+                type="button"
+                className="lora-btn lora-btn--secondary"
+                onClick={() => setEditingSheet(!editingSheet)}
+                disabled={isRunning}
+              >
+                {editingSheet ? 'キャラシートの編集を閉じる' : 'キャラシートを編集'}
+              </button>
             )}
 
             <label className="lora-label" htmlFor="chards-root">出力ルート(outputs/ 配下)</label>

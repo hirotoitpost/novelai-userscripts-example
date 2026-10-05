@@ -75,3 +75,10 @@
 
 .chards-import-thumbs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .chards-import-thumbs img { height: 96px; border-radius: 6px; }
+
+.chards-sheet--edit { flex-direction: column; }
+
+.chards-sheet-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; }
+
+.chards-new-char { display: flex; gap: 0.4rem; }
+.chards-new-char .lora-input { flex: 1; min-width: 0; }

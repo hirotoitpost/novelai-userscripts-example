@@ -30,7 +30,10 @@ from ..db import (
     characters_by_scene,
     create_manga_page,
     create_story,
+    character_usage,
     delete_character,
+    replace_story_character,
+    story_characters,
     get_character,
     get_connection,
     get_story,
@@ -40,6 +43,7 @@ from ..db import (
     list_story_scenes,
     save_character,
     set_scene_characters,
+    update_character_reference,
     update_character_sheet,
     update_scene_tags,
     update_scene_writing,
@@ -62,6 +66,11 @@ from ..models import (
     CharacterResponse,
     CharacterSaveRequest,
     CharacterSheetRequest,
+    CharacterDuplicateRequest,
+    CharacterUsageResponse,
+    ReplaceStoryCharacterRequest,
+    ReplaceStoryCharacterResponse,
+    StoryCharacterUsage,
     MangaPageResponse,
     StoryDraftCreateRequest,
     StoryIllustrateRequest,
@@ -1688,20 +1697,77 @@ async def put_character_sheet(character_id: int, req: CharacterSheetRequest) -> 
         if current is None:
             raise HTTPException(status_code=404, detail="character not found")
         # seed は null で「基準シードなし」に戻せるよう、送られたものはそのまま反映する
-        sheet = req.model_dump(exclude_unset=True)
-        if sheet.get("is_adult") is None:
-            sheet.pop("is_adult", None)
-        # 成人フラグは、保存後のキャラシートに未成年を示すタグがない場合だけ付けられる
-        if sheet.get("is_adult", bool(current.get("is_adult"))):
-            found = character_minor_tags({**current, **sheet})
-            if found:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"未成年を示すタグがあるため成人キャラにできません: {', '.join(found)}",
-                )
-        if "is_adult" in sheet:
-            sheet["is_adult"] = int(sheet["is_adult"])
+        sheet = _checked_sheet(current, req.model_dump(exclude_unset=True))
         return update_character_sheet(conn, character_id, sheet) or {}
+    finally:
+        conn.close()
+
+
+def _checked_sheet(current: dict[str, Any], sheet: dict[str, Any]) -> dict[str, Any]:
+    """キャラシートの更新内容を検査する(上書き保存と別名保存で共通)。"""
+    sheet = dict(sheet)
+    if sheet.get("is_adult") is None:
+        sheet.pop("is_adult", None)
+    # 成人フラグは、保存後のキャラシートに未成年を示すタグがない場合だけ付けられる
+    if sheet.get("is_adult", bool(current.get("is_adult"))):
+        found = character_minor_tags({**current, **sheet})
+        if found:
+            raise HTTPException(
+                status_code=422,
+                detail=f"未成年を示すタグがあるため成人キャラにできません: {', '.join(found)}",
+            )
+    if "is_adult" in sheet:
+        sheet["is_adult"] = int(sheet["is_adult"])
+    return sheet
+
+
+@router.post("/characters/{character_id}/duplicate", response_model=CharacterResponse)
+async def duplicate_character(character_id: int, req: CharacterDuplicateRequest) -> dict[str, Any]:
+    """
+    別名保存。元キャラのシート(参照画像を含む)を新しい名前のキャラとして複製する。
+    参照画像はファイルごと複製し、片方を差し替えてももう片方に影響しないようにする。
+    """
+    name = req.name.strip()
+    conn = get_connection()
+    try:
+        source = get_character(conn, character_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="character not found")
+        if any(c["name"] == name for c in list_characters(conn)):
+            raise HTTPException(status_code=409, detail=f"「{name}」という名前のキャラは既にあります。")
+
+        copied = {
+            key: source.get(key)
+            for key in ("appearance_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult")
+        }
+        overrides = req.sheet.model_dump(exclude_unset=True) if req.sheet else {}
+        sheet = _checked_sheet(source, {**copied, "is_adult": bool(copied["is_adult"]), **overrides})
+        # トリガーワードはデータセットの保存先フォルダにも使うので、既存キャラと同じだと画像が混ざる
+        trigger = (sheet.get("trigger_word") or "").strip()
+        if trigger and any((c.get("trigger_word") or "").strip() == trigger for c in list_characters(conn)):
+            raise HTTPException(
+                status_code=409,
+                detail=f"トリガーワード「{trigger}」は他のキャラが使っています。別のトリガーワードにしてください。",
+            )
+
+        created = save_character(conn, name, "", source.get("notes"))
+        ref_path = source.get("reference_image_path")
+        if ref_path and (_PROJECT_ROOT / ref_path).is_file():
+            filename = f"char{created['id']}_{uuid4().hex[:8]}.png"
+            (_MANGA_DIR / "refs").mkdir(parents=True, exist_ok=True)
+            (_MANGA_DIR / "refs" / filename).write_bytes((_PROJECT_ROOT / ref_path).read_bytes())
+            update_character_reference(conn, created["id"], f"outputs/manga/refs/{filename}")
+        return update_character_sheet(conn, created["id"], sheet) or {}
+    finally:
+        conn.close()
+
+
+@router.get("/characters/{character_id}/usage", response_model=CharacterUsageResponse)
+async def get_character_usage(character_id: int) -> dict[str, Any]:
+    """削除前の確認用。そのキャラを割り当てている物語とシーンの数。"""
+    conn = get_connection()
+    try:
+        return character_usage(conn, character_id)
     finally:
         conn.close()
 
@@ -1711,6 +1777,35 @@ async def delete_character_endpoint(character_id: int) -> None:
     conn = get_connection()
     try:
         delete_character(conn, character_id)
+    finally:
+        conn.close()
+
+
+@router.get("/{story_id}/characters", response_model=list[StoryCharacterUsage])
+async def get_story_characters(story_id: int) -> list[dict[str, Any]]:
+    """この物語のシーンに割り当てられているキャラと、そのシーン数。"""
+    conn = get_connection()
+    try:
+        return story_characters(conn, story_id)
+    finally:
+        conn.close()
+
+
+@router.post("/{story_id}/characters/replace", response_model=ReplaceStoryCharacterResponse)
+async def post_replace_story_character(story_id: int, req: ReplaceStoryCharacterRequest) -> dict[str, Any]:
+    """
+    物語内のキャラを付け替える(例: 抽出で作られた仮のキャラを、作り込んだキャラシートのキャラに)。
+    他の物語の割り当てやキャラ自体は変えない。
+    """
+    if req.from_character_id == req.to_character_id:
+        raise HTTPException(status_code=400, detail="付け替え元と付け替え先が同じです。")
+    conn = get_connection()
+    try:
+        if get_story(conn, story_id) is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        if get_character(conn, req.from_character_id) is None or get_character(conn, req.to_character_id) is None:
+            raise HTTPException(status_code=404, detail="character not found")
+        return {"scenes": replace_story_character(conn, story_id, req.from_character_id, req.to_character_id)}
     finally:
         conn.close()
 

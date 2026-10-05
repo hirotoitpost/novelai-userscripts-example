@@ -902,3 +902,13 @@
   font-size: 0.82rem;
   color: #b8a4ff;
 }
+
+/* この物語でキャラを付け替える欄 */
+.story-replace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.story-replace .story-row { align-items: center; flex-wrap: wrap; gap: 0.4rem; }
