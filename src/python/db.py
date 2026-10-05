@@ -272,6 +272,29 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # ギャラリー(画像)と本棚(物語)のブックマーク。kind は 'image' | 'book'、item_key はそれぞれの識別子
+    # (画像は "history:{id}:{n}" などのギャラリーのキー、本は物語ID)。端末をまたいで共有するためDBに置く。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bookmarks (
+            kind TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (kind, item_key)
+        )
+        """
+    )
+    # 成人向けかどうかの手動指定。無い物は自動判定(タグ)に従う。kind/item_key は bookmarks と同じ。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS adult_marks (
+            kind TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            adult INTEGER NOT NULL,
+            PRIMARY KEY (kind, item_key)
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -950,6 +973,181 @@ def list_generation_history(conn: sqlite3.Connection, limit: int = 50) -> list[d
         d["metadata_incomplete"] = bool(d["metadata_incomplete"])
         result.append(d)
     return result
+
+
+def list_bookmarks(conn: sqlite3.Connection, kind: str) -> set[str]:
+    rows = conn.execute("SELECT item_key FROM bookmarks WHERE kind = ?", (kind,)).fetchall()
+    return {row["item_key"] for row in rows}
+
+
+def set_bookmark(conn: sqlite3.Connection, kind: str, item_key: str, bookmarked: bool) -> None:
+    if bookmarked:
+        conn.execute(
+            "INSERT OR IGNORE INTO bookmarks (kind, item_key, created_at) VALUES (?, ?, ?)",
+            (kind, item_key, datetime.now(timezone.utc).isoformat()),
+        )
+    else:
+        conn.execute("DELETE FROM bookmarks WHERE kind = ? AND item_key = ?", (kind, item_key))
+    conn.commit()
+
+
+def list_adult_marks(conn: sqlite3.Connection, kind: str) -> dict[str, bool]:
+    rows = conn.execute("SELECT item_key, adult FROM adult_marks WHERE kind = ?", (kind,)).fetchall()
+    return {row["item_key"]: bool(row["adult"]) for row in rows}
+
+
+def set_adult_mark(conn: sqlite3.Connection, kind: str, item_key: str, adult: bool | None) -> None:
+    """adult=None で手動指定を外し、自動判定に戻す。"""
+    if adult is None:
+        conn.execute("DELETE FROM adult_marks WHERE kind = ? AND item_key = ?", (kind, item_key))
+    else:
+        conn.execute(
+            "INSERT INTO adult_marks (kind, item_key, adult) VALUES (?, ?, ?)"
+            " ON CONFLICT (kind, item_key) DO UPDATE SET adult = excluded.adult",
+            (kind, item_key, int(adult)),
+        )
+    conn.commit()
+
+
+def forget_library_items(conn: sqlite3.Connection, kind: str, item_keys: list[str]) -> None:
+    """削除した画像/本のブックマークと成人向けの手動指定を消す。"""
+    for table in ("bookmarks", "adult_marks"):
+        conn.executemany(
+            f"DELETE FROM {table} WHERE kind = ? AND item_key = ?", [(kind, key) for key in item_keys]
+        )
+    conn.commit()
+
+
+def list_scene_tags(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """成人向けの自動判定用: 全シーンの物語IDと画像生成タグ。"""
+    rows = conn.execute(
+        "SELECT story_id, draft_prompt_tags FROM story_scenes WHERE draft_prompt_tags != ''"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_story_texts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """成人向けの自動判定用: 物語ごとの本文(シーンの本文、無ければ取り込んだままの本文)。"""
+    rows = conn.execute(
+        """
+        SELECT st.id AS story_id,
+               COALESCE((SELECT GROUP_CONCAT(COALESCE(NULLIF(s.novelai_text, ''), s.draft_text), char(10))
+                         FROM story_scenes s WHERE s.story_id = st.id), st.raw_text, '') AS text
+        FROM stories st
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_generation_entry(conn: sqlite3.Connection, entry_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM generation_history WHERE id = ?", (entry_id,)).fetchone()
+    if row is None:
+        return None
+    entry = dict(row)
+    entry["image_paths"] = json.loads(entry["image_paths"])
+    entry["character_references"] = (
+        json.loads(entry["character_references"]) if entry["character_references"] else []
+    )
+    return entry
+
+
+def set_generation_image_paths(conn: sqlite3.Connection, entry_id: int, image_paths: list[str]) -> None:
+    conn.execute(
+        "UPDATE generation_history SET image_paths = ? WHERE id = ?", (json.dumps(image_paths), entry_id)
+    )
+    conn.commit()
+
+
+def delete_generation_entry(conn: sqlite3.Connection, entry_id: int) -> None:
+    conn.execute("DELETE FROM generation_history WHERE id = ?", (entry_id,))
+    conn.commit()
+
+
+def delete_manga_panel(conn: sqlite3.Connection, panel_id: int) -> str | None:
+    """漫画v2のコマを1つ消し、消したコマの画像パスを返す(無ければ None)。"""
+    row = conn.execute("DELETE FROM manga_panels WHERE id = ? RETURNING image_path", (panel_id,)).fetchone()
+    conn.commit()
+    return row["image_path"] if row else None
+
+
+def delete_manga_page(conn: sqlite3.Connection, page_id: int) -> str | None:
+    """漫画v1の挿絵ページを1つ消し、消したページの画像パスを返す(無ければ None)。"""
+    row = conn.execute("DELETE FROM manga_pages WHERE id = ? RETURNING image_path", (page_id,)).fetchone()
+    conn.commit()
+    return row["image_path"] if row else None
+
+
+def delete_story(conn: sqlite3.Connection, story_id: int) -> list[str]:
+    """
+    物語を消す。シーン・コマ・挿絵ページの行は外部キーの CASCADE で一緒に消える
+    (エディタの下書きは story_id が NULL になって残る)。消える行が指していた画像パスを返す。
+    """
+    paths = [
+        row["image_path"]
+        for row in conn.execute(
+            "SELECT image_path FROM manga_panels WHERE story_id = ?"
+            " UNION ALL SELECT image_path FROM manga_pages WHERE story_id = ?",
+            (story_id, story_id),
+        ).fetchall()
+    ]
+    conn.execute("DELETE FROM stories WHERE id = ?", (story_id,))
+    conn.commit()
+    return paths
+
+
+def list_library_panels(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """ギャラリー用: 漫画v2のコマ全部と、その物語・シーンの情報。"""
+    rows = conn.execute(
+        """
+        SELECT p.id, p.story_id, p.image_path, p.seed, p.width, p.height, p.created_at,
+               s.scene_index, s.draft_title, s.draft_prompt_tags,
+               COALESCE(st.title, st.premise) AS story_title
+        FROM manga_panels p
+        JOIN story_scenes s ON s.id = p.scene_id
+        JOIN stories st ON st.id = p.story_id
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_library_pages(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """ギャラリー/本棚用: 漫画v1(V5でページごと生成)の挿絵ページ全部と、その物語の情報。"""
+    rows = conn.execute(
+        """
+        SELECT p.id, p.story_id, p.page_index, p.image_path, p.seed, p.created_at,
+               COALESCE(st.title, st.premise) AS story_title
+        FROM manga_pages p
+        JOIN stories st ON st.id = p.story_id
+        ORDER BY p.story_id, p.page_index
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_library_stories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """
+    本棚用: 物語ごとの概要。本文の文字数・シーン数と、最後に手を入れた日時(コマ/挿絵の生成、
+    エディタの保存のうち一番新しいもの)を付ける。
+    """
+    rows = conn.execute(
+        """
+        SELECT st.id, st.premise, st.title, st.status, st.created_at, st.final_image_path, st.raw_text,
+               (SELECT COUNT(*) FROM story_scenes s WHERE s.story_id = st.id) AS scene_count,
+               (SELECT COALESCE(SUM(LENGTH(COALESCE(NULLIF(s.novelai_text, ''), s.draft_text))), 0)
+                  FROM story_scenes s WHERE s.story_id = st.id) AS scene_chars,
+               (SELECT MIN(p.image_path) FROM manga_panels p JOIN story_scenes s ON s.id = p.scene_id
+                  WHERE p.story_id = st.id
+                    AND s.scene_index = (SELECT MIN(s2.scene_index) FROM manga_panels p2
+                                         JOIN story_scenes s2 ON s2.id = p2.scene_id
+                                         WHERE p2.story_id = st.id)) AS first_panel_path,
+               MAX(st.created_at,
+                   COALESCE((SELECT MAX(created_at) FROM manga_panels WHERE story_id = st.id), ''),
+                   COALESCE((SELECT MAX(created_at) FROM manga_pages WHERE story_id = st.id), ''),
+                   COALESCE((SELECT MAX(updated_at) FROM story_drafts WHERE story_id = st.id), '')) AS updated_at
+        FROM stories st
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def create_story(

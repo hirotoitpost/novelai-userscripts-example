@@ -1,0 +1,643 @@
+.shelf-root {
+  min-height: 100vh;
+  background: #0a0a14;
+  color: #e8e8ff;
+  padding: 0 1rem 4rem;
+}
+
+.shelf-root button,
+.shelf-root select,
+.shelf-root input {
+  font: inherit;
+}
+
+.shelf-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 0;
+}
+
+.shelf-header h1 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.shelf-count {
+  color: #9a9ac0;
+  font-size: 0.85rem;
+}
+
+.shelf-back,
+.reader-close,
+.reader-actions button,
+.reader-textopts button,
+.reader-pager button,
+.reader-end button {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.shelf-back:hover,
+.reader-close:hover,
+.reader-actions button:hover:not(:disabled),
+.reader-textopts button:hover,
+.reader-pager button:hover:not(:disabled),
+.reader-end button:hover {
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.shelf-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.shelf-search {
+  width: 100%;
+  box-sizing: border-box;
+  background: #13132a;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  color: #e8e8ff;
+  padding: 0.55rem 0.8rem;
+}
+
+.shelf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.shelf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.shelf-chip {
+  background: #13132a;
+  border: 1px solid #2a2a50;
+  border-radius: 999px;
+  color: #9a9ac0;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+}
+
+.shelf-chip.is-on {
+  background: #2c2160;
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.shelf-chip--star.is-on {
+  background: #3a2e08;
+  border-color: #f5c542;
+  color: #f5c542;
+}
+
+.shelf-controls select {
+  background: #13132a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  padding: 0.35rem 0.5rem;
+}
+
+.shelf-error {
+  margin: 0.5rem 0 1rem;
+  padding: 0.75rem 1rem;
+  background: #2a1020;
+  border: 1px solid #ff5c8a;
+  border-radius: 8px;
+  color: #ffb0c8;
+  font-size: 0.85rem;
+}
+
+.shelf-empty {
+  color: #9a9ac0;
+  text-align: center;
+  padding: 3rem 0;
+}
+
+/* ---- マガジンラック ----
+ * 棚の背板の上に、表紙をこちらへ向けた本を少し後ろへ傾けて立てかけ、手前の金属の縁で下端を押さえる。
+ * 列の間を空けずに並べるので、各スロットの縁がつながって1本の棚板に見える。 */
+
+.rack {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  column-gap: 0;
+  row-gap: 1.75rem;
+  padding: 1.75rem 0.75rem 1.25rem;
+  border-radius: 10px;
+  background:
+    /* 背板の縦の溝 */
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 2px, transparent 2px 96px),
+    linear-gradient(180deg, #2a1d14 0%, #1d140e 100%);
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.6), 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+@media (min-width: 640px) {
+  .rack {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    padding: 2rem 1.25rem 1.5rem;
+  }
+}
+
+@media (min-width: 1100px) {
+  .rack {
+    grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  }
+}
+
+.rack[aria-busy='true'] {
+  opacity: 0.7;
+}
+
+.rack-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 0.45rem;
+  perspective: 900px;
+}
+
+.rack-cover {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1.414;
+  padding: 0;
+  border: none;
+  border-radius: 2px 4px 4px 2px;
+  overflow: hidden;
+  background: #222;
+  cursor: pointer;
+  /* 下端を支点に少し後ろへ傾ける(立てかけた雑誌) */
+  transform-origin: 50% 100%;
+  transform: rotateX(7deg);
+  box-shadow:
+    0 -2px 0 rgba(255, 255, 255, 0.06) inset,
+    -3px 0 0 rgba(0, 0, 0, 0.25) inset,
+    0 10px 18px rgba(0, 0, 0, 0.55);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  z-index: 1;
+}
+
+.rack-cover:hover,
+.rack-cover:focus-visible {
+  transform: rotateX(1deg) translateY(-8px);
+  box-shadow: 0 18px 26px rgba(0, 0, 0, 0.6);
+  outline: none;
+}
+
+.rack-cover:focus-visible {
+  box-shadow: 0 0 0 3px #7b5cf6, 0 18px 26px rgba(0, 0, 0, 0.6);
+}
+
+.rack-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+/* 表紙の無い本: 色付きの装丁に縦書きの題 */
+.rack-cover-plain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 18% 8% 10%;
+  box-sizing: border-box;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.25) 0 6%, transparent 6%),
+    linear-gradient(160deg, hsl(var(--hue) 45% 34%), hsl(var(--hue) 50% 18%));
+}
+
+.rack-cover-plain-title {
+  writing-mode: vertical-rl;
+  font-family: 'Yu Mincho', 'Hiragino Mincho ProN', serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  color: #fdf6e3;
+  max-height: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* 表紙の題字(雑誌の誌名のように上部に載せる) */
+.rack-masthead {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.4rem 0.45rem 1.4rem;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.55) 60%, transparent 100%);
+  text-align: left;
+  pointer-events: none;
+}
+
+.rack-cover-plain ~ .rack-masthead {
+  /* 縦書きの題がある装丁では、上の題字は小さな帯だけにする */
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent);
+}
+
+.rack-cover-plain ~ .rack-masthead .rack-title {
+  display: none;
+}
+
+.rack-origin {
+  align-self: flex-start;
+  font-size: 0.6rem;
+  color: #0a0a14;
+  background: #f5c542;
+  border-radius: 2px;
+  padding: 0 0.3rem;
+  line-height: 1.5;
+}
+
+.rack-title {
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.3;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rack-star {
+  position: absolute;
+  right: 0.3rem;
+  bottom: 1.3rem;
+  color: #f5c542;
+  font-size: 1.1rem;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+}
+
+/* 読んだところまで(縁に隠れない高さに出す) */
+.rack-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14%;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.rack-progress span {
+  display: block;
+  height: 100%;
+  background: #7b5cf6;
+}
+
+/* 手前の縁(棚板)。本の下端を少し覆う */
+.rack-ledge {
+  position: relative;
+  z-index: 2;
+  width: calc(100% + 0.9rem);
+  height: 22px;
+  margin-top: -14%;
+  background: linear-gradient(180deg, #c9ccd6 0%, #8b8f9c 45%, #5d606b 100%);
+  border-top: 1px solid #e4e6ee;
+  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.55);
+}
+
+@media (min-width: 640px) {
+  .rack-ledge {
+    width: calc(100% + 0.9rem);
+    height: 26px;
+  }
+}
+
+.rack-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.25rem;
+  width: 100%;
+  margin-top: 0.4rem;
+  color: #c9b8a6;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.rack-label span:last-child {
+  color: #8a7a6a;
+}
+
+/* ---- 読む画面 ---- */
+
+.reader {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: #08080f;
+  overflow-y: auto;
+}
+
+.reader-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: rgba(8, 8, 15, 0.94);
+  border-bottom: 1px solid #1d1d38;
+}
+
+.reader-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-star {
+  background: transparent;
+  border: none;
+  color: #9a9ac0;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.reader-star.is-on {
+  color: #f5c542;
+}
+
+.reader-error {
+  margin: 1rem;
+}
+
+.reader-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+}
+
+.reader-tabs {
+  display: flex;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.reader-tabs button {
+  background: transparent;
+  border: none;
+  color: #9a9ac0;
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+}
+
+.reader-tabs button.is-on {
+  background: #7b5cf6;
+  color: #fff;
+}
+
+.reader-textopts,
+.reader-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.reader-actions {
+  margin-left: auto;
+}
+
+.reader-textopts button.is-on {
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.reader-actions button:disabled,
+.reader-pager button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.reader-stage {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 0 0.5rem;
+  touch-action: pan-y;
+}
+
+.reader-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 11rem);
+  object-fit: contain;
+  user-select: none;
+  background: #fff;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+}
+
+/* 画面の左右を押してページをめくる(右から左へ読むので、左が次) */
+.reader-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 33%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.reader-zone:disabled {
+  cursor: default;
+}
+
+.reader-zone--next {
+  left: 0;
+}
+
+.reader-zone--prev {
+  right: 0;
+}
+
+.reader-pager {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: 760px;
+  width: 100%;
+  margin: 0.8rem auto 0;
+  padding: 0 1rem;
+  box-sizing: border-box;
+}
+
+.reader-pager input[type='range'] {
+  flex: 1;
+  accent-color: #7b5cf6;
+}
+
+.reader-pageno {
+  color: #9a9ac0;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.reader-end {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 1rem auto 0;
+  color: #c8c8ec;
+}
+
+.reader-end span {
+  font-family: 'Yu Mincho', 'Hiragino Mincho ProN', serif;
+  font-size: 1.1rem;
+  margin-right: 0.5rem;
+}
+
+.reader-text {
+  width: 100%;
+  max-width: 40em;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 2rem;
+  box-sizing: border-box;
+  font-family: 'Yu Mincho', 'Hiragino Mincho ProN', serif;
+  line-height: 1.95;
+  color: #ece6d8;
+}
+
+.reader-text h2 {
+  font-size: 1.3em;
+  margin: 0 0 1.5em;
+  line-height: 1.5;
+}
+
+.reader-text p {
+  margin: 0 0 1.1em;
+  white-space: pre-wrap;
+}
+
+/* 縦書き: 右から左へ横にスクロールして読む */
+.reader-text.is-vertical {
+  writing-mode: vertical-rl;
+  max-width: none;
+  height: calc(100vh - 9rem);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1.25rem 1rem;
+}
+
+.reader-text.is-vertical h2 {
+  margin: 0 0 0 1.5em;
+}
+
+.reader-text.is-vertical p {
+  margin: 0 0 0 1.1em;
+}
+
+.reader-muted {
+  color: #9a9ac0;
+}
+
+.reader-meta {
+  max-width: 760px;
+  margin: 1rem auto 2rem;
+  padding: 0 1rem;
+  color: #6c6c90;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* ---- 成人向け・削除 ---- */
+
+.shelf-selects {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.shelf-selects select {
+  background: #13132a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  padding: 0.35rem 0.5rem;
+}
+
+.shelf-blur-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #c8c8ec;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.shelf-blur-toggle input {
+  accent-color: #7b5cf6;
+}
+
+/* 表紙の絵と題字をぼかす(R18 の札は読めるように残す) */
+.rack-slot.is-blurred .rack-cover img,
+.rack-slot.is-blurred .rack-cover-plain,
+.rack-slot.is-blurred .rack-masthead {
+  filter: blur(14px) brightness(0.8);
+}
+
+.rack-r18 {
+  position: absolute;
+  left: 0.3rem;
+  bottom: 1.4rem;
+  padding: 0 0.35rem;
+  border-radius: 3px;
+  background: #d6336c;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+}
+
+.shelf-root .reader-danger {
+  border-color: #6a2038;
+  color: #ff8fb0;
+}
+
+.shelf-root .reader-danger:hover {
+  border-color: #ff5c8a;
+  background: #2a1020;
+  color: #ffb0c8;
+}

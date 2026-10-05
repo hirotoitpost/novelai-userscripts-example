@@ -203,14 +203,27 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
-            onClick={() => navigate('/story-library')}
+            onClick={() => navigate('/bookshelf')}
             role="button"
             tabIndex={0}
-            onKeyDown={e => e.key === 'Enter' && navigate('/story-library')}
+            onKeyDown={e => e.key === 'Enter' && navigate('/bookshelf')}
           >
             <div className="home-card-icon">📚</div>
-            <h2>物語を読む</h2>
-            <p>取り込み・生成した物語を一覧から選んで読めます。</p>
+            <h2>本棚</h2>
+            <p>生成・取り込みした物語と漫画を、表紙を並べた本棚から選んで読めます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/gallery')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/gallery')}
+          >
+            <div className="home-card-icon">🖼️</div>
+            <h2>ギャラリー</h2>
+            <p>生成した画像・漫画のコマ・挿絵を一覧で見て、ブックマークやダウンロードができます。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
         </div>

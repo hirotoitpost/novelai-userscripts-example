@@ -4,6 +4,8 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './pages/Login'
 import Home from './pages/Home'
 import BatchOrganize from './pages/BatchOrganize'
+import Bookshelf from './pages/Bookshelf'
+import Gallery from './pages/Gallery'
 import ImageGenerate from './pages/ImageGenerate'
 import LLMPage from './pages/LLMPage'
 import Metadata from './pages/Metadata'
@@ -75,6 +77,14 @@ function AppRoutes() {
       <Route
         path="/story-library"
         element={<ProtectedRoute><StoryLibrary /></ProtectedRoute>}
+      />
+      <Route
+        path="/gallery"
+        element={<ProtectedRoute><Gallery /></ProtectedRoute>}
+      />
+      <Route
+        path="/bookshelf"
+        element={<ProtectedRoute><Bookshelf /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

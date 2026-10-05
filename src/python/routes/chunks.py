@@ -61,7 +61,7 @@ from ..models import (
     SituationResponse,
     WordSelectionGenerateRequest,
 )
-from .image import _build_kwargs, _decode_b64, _http_status, _pil_to_b64
+from .image import _build_kwargs, _decode_b64, _http_status, _pil_to_b64, save_generation
 
 router = APIRouter(prefix="/api/chunks", tags=["chunks"])
 
@@ -331,74 +331,13 @@ async def select_generate_endpoint(
         raise HTTPException(status_code=_http_status(exc), detail=str(exc))
 
     b64_images = _pil_to_b64(images, "png")
-
-    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    image_paths: list[str] = []
-    for b64 in b64_images:
-        filename = f"{uuid4().hex}.png"
-        (_HISTORY_DIR / filename).write_bytes(b64decode(b64))
-        image_paths.append(f"outputs/history/{filename}")
-
-    i2i_image_path = None
-    if req.generation.i2i:
-        i2i_image_path = _save_reference_image(req.generation.i2i.image)
-
-    character_references: list[dict[str, Any]] | None = None
-    if req.generation.character_references:
-        character_references = [
-            {
-                "image_path": _save_reference_image(cr.image),
-                "type": cr.type,
-                "fidelity": cr.fidelity,
-                "strength": cr.strength,
-            }
-            for cr in req.generation.character_references
-        ]
-
-    characters: list[dict[str, Any]] | None = None
-    if req.generation.characters:
-        characters = [
-            {
-                "prompt": c.prompt,
-                "negative_prompt": c.negative_prompt,
-                "position": c.position,
-                "enabled": c.enabled,
-            }
-            for c in req.generation.characters
-        ]
-
-    conn = get_connection()
-    try:
-        entry = record_generation(
-            conn,
-            prompt=req.generation.prompt,
-            negative_prompt=req.generation.negative_prompt,
-            model=req.generation.model,
-            size=str(req.generation.size),
-            steps=req.generation.steps,
-            scale=req.generation.scale,
-            seed=req.generation.seed,
-            chunk_ids=req.chunk_ids,
-            image_paths=image_paths,
-            i2i_image_path=i2i_image_path,
-            i2i_strength=req.generation.i2i.strength if req.generation.i2i else None,
-            i2i_noise=req.generation.i2i.noise if req.generation.i2i else None,
-            character_references=character_references,
-            characters=characters,
-            based_on_id=req.based_on,
-        )
-    finally:
-        conn.close()
-
+    entry = save_generation(
+        req.generation,
+        [b64decode(b) for b in b64_images],
+        chunk_ids=req.chunk_ids,
+        based_on=req.based_on,
+    )
     return {"images": b64_images, "format": "png", "history_id": entry["id"]}
-
-
-def _save_reference_image(image_b64: str) -> str:
-    """i2i/キャラクター参照画像を outputs/history/ に保存し、リポジトリルート相対パスを返す。"""
-    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"{uuid4().hex}_ref.png"
-    (_HISTORY_DIR / filename).write_bytes(_decode_b64(image_b64))
-    return f"outputs/history/{filename}"
 
 
 @router.get("/history")
