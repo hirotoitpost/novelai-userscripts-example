@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 import io
 import re
 import zipfile
@@ -21,6 +22,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from ..db import (
+    list_characters,
     delete_generation_entry,
     delete_manga_page,
     delete_manga_panel,
@@ -49,6 +51,7 @@ from ..db import (
 )
 from ..manga_v2.prompt import is_sexual
 from ..relatedness import Item, idf_weights, normalize_tags, rank
+from .lora_dataset import _safe_name
 from .story import _jobs
 
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -57,6 +60,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _OUTPUTS = _PROJECT_ROOT / "outputs"
 # 配信してよいフォルダ(生成履歴と漫画)。LoRA の学習データなどは出さない。
 _SERVED_DIRS = (_OUTPUTS / "history", _OUTPUTS / "manga")
+# キャラ別データセットの画像フォルダ: outputs/<ルート>/<キャラのフォルダ>/<この名前>/*.png
+# 引き直しの外れ(rejected)はギャラリーに出さない。
+_DATASET_SUBDIRS = ("generated", "generated_r18", "manual", "manual_r18")
 _THUMB_DIR = _OUTPUTS / ".thumbs"
 _THUMB_WIDTHS = (240, 360, 480, 720)
 _PDF_RESOLUTION = 150.0
@@ -64,7 +70,7 @@ _FILENAME_UNSAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 # 前提文の頭書き。例: 「[インポート] 本文…」「[エディタ] 題」
 _ORIGIN_RE = re.compile(r"^\[([^\]]{1,10})\]\s*(.*)$", re.DOTALL)
 
-ImageSource = Literal["generate", "panel", "illustration"]
+ImageSource = Literal["generate", "panel", "illustration", "dataset"]
 # 一覧の絞り込み: すべて / 一般向けだけ / 成人向けだけ
 Rating = Literal["all", "general", "adult"]
 # 漫画の性的な場面の判定(is_sexual)に加えて、成人向けを示すタグ
@@ -82,10 +88,28 @@ _ADULT_TEXT_MIN_HITS = 3
 # ---- 共通 ----
 
 
+def _is_dataset_file(full: Path) -> bool:
+    """キャラ別データセットの画像か(outputs/<ルート>/<キャラ>/<generated等>/<名前>.png の形だけ)。"""
+    try:
+        parts = full.relative_to(_OUTPUTS.resolve()).parts
+    except ValueError:
+        return False
+    return (
+        len(parts) == 4
+        and not parts[0].startswith(".")
+        and parts[2] in _DATASET_SUBDIRS
+        and full.suffix.lower() == ".png"
+    )
+
+
+def _is_served(full: Path) -> bool:
+    return any(full.is_relative_to(d.resolve()) for d in _SERVED_DIRS) or _is_dataset_file(full)
+
+
 def _served_path(path: str) -> Path:
     """リポジトリルート相対のパスを、配信してよいフォルダの中にある実ファイルに直す。"""
     full = (_PROJECT_ROOT / path).resolve()
-    if not any(full.is_relative_to(d.resolve()) for d in _SERVED_DIRS):
+    if not _is_served(full):
         raise HTTPException(status_code=403, detail="invalid path")
     if not full.is_file():
         raise HTTPException(status_code=404, detail="not found")
@@ -224,6 +248,7 @@ def _matches_rating(adult: bool, rating: Rating) -> bool:
 
 class GalleryImage(BaseModel):
     # 生成元ごとの識別子。history:{履歴ID}:{n} / panel:{コマID} / illustration:{ページID}
+    # / dataset:{outputs からの相対パス}
     key: str
     source: ImageSource
     path: str
@@ -261,6 +286,63 @@ def _parse_size(size: str) -> tuple[int | None, int | None]:
 def _history_key(entry_id: int, path: str) -> str:
     # 1回の生成の何枚目かではなくファイル名で識別する(1枚消しても他の画像のキーが変わらない)
     return f"history:{entry_id}:{Path(path).name}"
+
+
+def _dataset_images() -> list[GalleryImage]:
+    """
+    キャラ別データセットの画像。DB には記録せず、保存先のフォルダをそのまま読む
+    (手動の取り込みやエクスプローラーでの削除もそのまま反映するため)。
+    キャラのフォルダ名はトリガーワード(無ければキャラ名)なので、登録済みのキャラから探す。
+    """
+    conn = get_connection()
+    try:
+        characters = list_characters(conn)
+    finally:
+        conn.close()
+    names = {_safe_name(c.get("trigger_word") or c["name"]): c["name"] for c in characters}
+    if not _OUTPUTS.is_dir():
+        return []
+
+    items: list[GalleryImage] = []
+    for root in _OUTPUTS.iterdir():
+        if not root.is_dir() or root.name.startswith(".") or root.name in ("history", "manga"):
+            continue
+        for folder, character_name in names.items():
+            for sub in _DATASET_SUBDIRS:
+                directory = root / folder / sub
+                if not directory.is_dir():
+                    continue
+                for png in directory.glob("*.png"):
+                    caption = png.with_suffix(".txt")
+                    try:
+                        with Image.open(png) as img:  # ヘッダだけ読むので速い
+                            width, height = img.size
+                    except OSError:
+                        continue
+                    rel = png.relative_to(_PROJECT_ROOT).as_posix()
+                    items.append(
+                        GalleryImage(
+                            key=f"dataset:{png.relative_to(_OUTPUTS).as_posix()}",
+                            source="dataset",
+                            path=rel,
+                            created_at=datetime.fromtimestamp(png.stat().st_mtime, timezone.utc).isoformat(),
+                            width=width,
+                            height=height,
+                            prompt=caption.read_text(encoding="utf-8").strip() if caption.is_file() else "",
+                            label=f"{character_name} / {sub}",
+                        )
+                    )
+    return items
+
+
+def _delete_dataset_image(rel: str) -> bool:
+    """データセットの画像と、対になるキャプション(.txt)を消す。"""
+    full = (_OUTPUTS / rel).resolve()
+    if not _is_dataset_file(full) or not full.is_file():
+        return False
+    full.unlink()
+    full.with_suffix(".txt").unlink(missing_ok=True)
+    return True
 
 
 def _gallery_images() -> list[GalleryImage]:
@@ -322,11 +404,15 @@ def _gallery_images() -> list[GalleryImage]:
                 index=row["page_index"],
             )
         )
+    items.extend(_dataset_images())
     for item in items:
         item.bookmarked = item.key in marks
         # 漫画のコマ・挿絵は、そのコマのタグに出ていなくても物語が成人向けなら成人向けに寄せる
-        item.adult_auto = _tags_adult(item.prompt) or (
-            item.story_id is not None and story_adult.get(item.story_id, False)
+        item.adult_auto = (
+            _tags_adult(item.prompt)
+            or (item.story_id is not None and story_adult.get(item.story_id, False))
+            # データセットの R18 フォルダ(generated_r18 / manual_r18)の画像
+            or (item.source == "dataset" and item.path.rsplit("/", 2)[-2].endswith("_r18"))
         )
         item.adult_manual = adult_marks.get(item.key)
         item.adult = (
@@ -709,7 +795,7 @@ def _remove_file(path: str | None) -> None:
     if not path:
         return
     full = (_PROJECT_ROOT / path).resolve()
-    if any(full.is_relative_to(d.resolve()) for d in _SERVED_DIRS) and full.is_file():
+    if _is_served(full) and full.is_file():
         full.unlink()
 
 
@@ -755,6 +841,10 @@ def delete_images(req: ImagesDeleteRequest) -> dict[str, int]:
         if kind == "history":
             entry_id, _, filename = rest.partition(":")
             if entry_id.isdigit() and _delete_history_image(int(entry_id), filename):
+                deleted.append(key)
+        elif kind == "dataset":
+            # データセットの画像は学習用フォルダから消える(キャプションも一緒に)
+            if _delete_dataset_image(rest):
                 deleted.append(key)
         elif kind in ("panel", "illustration") and rest.isdigit():
             conn = get_connection()

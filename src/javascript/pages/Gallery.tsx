@@ -15,7 +15,7 @@ import {
 } from '../library'
 import './Gallery.css'
 
-type Source = 'generate' | 'panel' | 'illustration'
+type Source = 'generate' | 'panel' | 'illustration' | 'dataset'
 
 interface GalleryImage {
   key: string
@@ -54,8 +54,11 @@ const SOURCES: { id: Source; label: string }[] = [
   { id: 'generate', label: '画像生成' },
   { id: 'panel', label: '漫画のコマ' },
   { id: 'illustration', label: '挿絵ページ' },
+  { id: 'dataset', label: 'データセット' },
 ]
-const SOURCE_LABELS: Record<Source, string> = { generate: '画像生成', panel: '漫画のコマ', illustration: '挿絵ページ' }
+const SOURCE_LABELS: Record<Source, string> = {
+  generate: '画像生成', panel: '漫画のコマ', illustration: '挿絵ページ', dataset: 'データセット',
+}
 const PAGE_SIZE = 60
 // スワイプとみなす横方向の移動量(px)
 const SWIPE_THRESHOLD = 50
@@ -65,6 +68,8 @@ function describe(item: GalleryImage): string {
     return `シーン${item.index + 1}${item.label ? `: ${item.label}` : ''}`
   }
   if (item.source === 'illustration' && item.index !== null) return `ページ${item.index + 1}`
+  // キャラ別データセットは「キャラ名 / generated」のようにキャラと保存先を出す
+  if (item.source === 'dataset' && item.label) return item.label
   return ''
 }
 
@@ -266,7 +271,12 @@ export default function Gallery() {
     const message = keys.length === 1
       ? 'この画像を削除します。元に戻せません。よろしいですか？'
       : `${keys.length} 枚の画像を削除します。元に戻せません。よろしいですか？`
-    if (!window.confirm(`${message}\n(漫画のコマを消しても、合成済みのページはそのまま残ります)`)) return
+    const datasetCount = items.filter(i => keys.includes(i.key) && i.source === 'dataset').length
+    const notes = ['(漫画のコマを消しても、合成済みのページはそのまま残ります)']
+    if (datasetCount > 0) {
+      notes.push(`※ データセットの画像 ${datasetCount} 枚は、学習用フォルダからも画像とキャプションが削除されます。`)
+    }
+    if (!window.confirm(`${message}\n${notes.join('\n')}`)) return
     setDeleting(true)
     setError(null)
     try {
