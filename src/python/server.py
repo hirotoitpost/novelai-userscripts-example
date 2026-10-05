@@ -24,6 +24,7 @@ from .routes.push import router as push_router
 from .routes.series import router as series_router
 from .routes.story import router as story_router
 from .routes.user import router as user_router
+from .routes.works import router as works_router
 from .routes.writer import router as writer_router
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -67,6 +68,7 @@ app.include_router(metadata_router)
 app.include_router(ocr_router)
 app.include_router(push_router)
 app.include_router(series_router)
+app.include_router(works_router)
 app.include_router(story_router)
 app.include_router(user_router)
 app.include_router(writer_router)

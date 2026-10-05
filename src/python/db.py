@@ -298,6 +298,45 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 作品の強い関連。「作品」はシリーズ(work_kind='series')か、シリーズに入っていない物語('story')。
+    # 作者(出典・原作者。例: Toptoon Chat のキャラクター)は複数の作品に付けられる。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS authors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            platform TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL DEFAULT '',
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS work_authors (
+            work_kind TEXT NOT NULL,
+            work_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL REFERENCES authors(id) ON DELETE CASCADE,
+            PRIMARY KEY (work_kind, work_id, author_id)
+        )
+        """
+    )
+    # type='spinoff' は from(派生) → to(元作品)。'crossover' は対等で、同じ組は1行だけ持つ。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS work_relations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            from_kind TEXT NOT NULL,
+            from_id INTEGER NOT NULL,
+            to_kind TEXT NOT NULL,
+            to_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (type, from_kind, from_id, to_kind, to_id)
+        )
+        """
+    )
     # 成人向けかどうかの手動指定。無い物は自動判定(タグ)に従う。kind/item_key は bookmarks と同じ。
     conn.execute(
         """
@@ -1161,29 +1200,52 @@ def list_library_pages(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def list_library_stories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """
-    本棚用: 物語ごとの概要。本文の文字数・シーン数と、最後に手を入れた日時(コマ/挿絵の生成、
-    エディタの保存のうち一番新しいもの)を付ける。
+    本棚用: 物語ごとの概要。本文の文字数・シーン数、最初のコマの画像(表紙の候補)と、最後に手を入れた
+    日時(コマ/挿絵の生成、エディタの保存のうち一番新しいもの)を付ける。
+
+    物語ごとの相関サブクエリにすると、巻に分けて物語が増えたところで1秒近くかかったので、
+    表ごとにまとめて集計してから Python で突き合わせる。
     """
-    rows = conn.execute(
-        """
-        SELECT st.id, st.premise, st.title, st.status, st.created_at, st.final_image_path, st.raw_text,
-               st.series_id, st.volume_no, (SELECT title FROM series WHERE id = st.series_id) AS series_title,
-               (SELECT COUNT(*) FROM story_scenes s WHERE s.story_id = st.id) AS scene_count,
-               (SELECT COALESCE(SUM(LENGTH(COALESCE(NULLIF(s.novelai_text, ''), s.draft_text))), 0)
-                  FROM story_scenes s WHERE s.story_id = st.id) AS scene_chars,
-               (SELECT MIN(p.image_path) FROM manga_panels p JOIN story_scenes s ON s.id = p.scene_id
-                  WHERE p.story_id = st.id
-                    AND s.scene_index = (SELECT MIN(s2.scene_index) FROM manga_panels p2
-                                         JOIN story_scenes s2 ON s2.id = p2.scene_id
-                                         WHERE p2.story_id = st.id)) AS first_panel_path,
-               MAX(st.created_at,
-                   COALESCE((SELECT MAX(created_at) FROM manga_panels WHERE story_id = st.id), ''),
-                   COALESCE((SELECT MAX(created_at) FROM manga_pages WHERE story_id = st.id), ''),
-                   COALESCE((SELECT MAX(updated_at) FROM story_drafts WHERE story_id = st.id), '')) AS updated_at
-        FROM stories st
-        """
-    ).fetchall()
-    return [dict(row) for row in rows]
+    stories = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT st.id, st.premise, st.title, st.status, st.created_at, st.final_image_path, st.raw_text,
+                   st.series_id, st.volume_no, se.title AS series_title
+            FROM stories st LEFT JOIN series se ON se.id = st.series_id
+            """
+        ).fetchall()
+    ]
+    scenes = {
+        row["story_id"]: row
+        for row in conn.execute(
+            "SELECT story_id, COUNT(*) AS n, COALESCE(SUM(LENGTH(COALESCE(NULLIF(novelai_text, ''), draft_text))), 0)"
+            " AS chars FROM story_scenes GROUP BY story_id"
+        ).fetchall()
+    }
+    first_panel: dict[int, tuple[int, str]] = {}
+    for row in conn.execute(
+        "SELECT p.story_id, p.image_path, s.scene_index FROM manga_panels p JOIN story_scenes s ON s.id = p.scene_id"
+    ).fetchall():
+        current = first_panel.get(row["story_id"])
+        if current is None or row["scene_index"] < current[0]:
+            first_panel[row["story_id"]] = (row["scene_index"], row["image_path"])
+    latest: dict[int, str] = {}
+    for query in (
+        "SELECT story_id, MAX(created_at) AS t FROM manga_panels GROUP BY story_id",
+        "SELECT story_id, MAX(created_at) AS t FROM manga_pages GROUP BY story_id",
+        "SELECT story_id, MAX(updated_at) AS t FROM story_drafts WHERE story_id IS NOT NULL GROUP BY story_id",
+    ):
+        for row in conn.execute(query).fetchall():
+            if row["t"] and row["t"] > latest.get(row["story_id"], ""):
+                latest[row["story_id"]] = row["t"]
+    for story in stories:
+        counted = scenes.get(story["id"])
+        story["scene_count"] = counted["n"] if counted else 0
+        story["scene_chars"] = counted["chars"] if counted else 0
+        story["first_panel_path"] = first_panel[story["id"]][1] if story["id"] in first_panel else None
+        story["updated_at"] = max(story["created_at"], latest.get(story["id"], ""))
+    return stories
 
 
 def create_story(
@@ -1780,3 +1842,146 @@ def split_story_into_volumes(
         conn.rollback()
         raise
     return ids
+
+
+# ---- 作品の関連(作者・スピンオフ・クロスオーバー) ----
+
+
+def create_author(conn: sqlite3.Connection, name: str, platform: str = "", url: str = "", note: str = "") -> dict[str, Any]:
+    row = conn.execute(
+        "INSERT INTO authors (name, platform, url, note, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
+        (name, platform, url, note, datetime.now(timezone.utc).isoformat()),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def list_authors(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT a.*, (SELECT COUNT(*) FROM work_authors wa WHERE wa.author_id = a.id) AS work_count
+        FROM authors a ORDER BY a.name
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_author(conn: sqlite3.Connection, author_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM authors WHERE id = ?", (author_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_author(conn: sqlite3.Connection, author_id: int, fields: dict[str, Any]) -> None:
+    values = {k: v for k, v in fields.items() if k in {"name", "platform", "url", "note"}}
+    if values:
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        conn.execute(f"UPDATE authors SET {assignments} WHERE id = ?", (*values.values(), author_id))
+        conn.commit()
+
+
+def delete_author(conn: sqlite3.Connection, author_id: int) -> None:
+    conn.execute("DELETE FROM authors WHERE id = ?", (author_id,))
+    conn.commit()
+
+
+def add_work_author(conn: sqlite3.Connection, work_kind: str, work_id: int, author_id: int) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO work_authors (work_kind, work_id, author_id) VALUES (?, ?, ?)",
+        (work_kind, work_id, author_id),
+    )
+    conn.commit()
+
+
+def remove_work_author(conn: sqlite3.Connection, work_kind: str, work_id: int, author_id: int) -> None:
+    conn.execute(
+        "DELETE FROM work_authors WHERE work_kind = ? AND work_id = ? AND author_id = ?",
+        (work_kind, work_id, author_id),
+    )
+    conn.commit()
+
+
+def list_work_authors(conn: sqlite3.Connection) -> dict[tuple[str, int], list[dict[str, Any]]]:
+    """(work_kind, work_id) → 作者の一覧。"""
+    rows = conn.execute(
+        """
+        SELECT wa.work_kind, wa.work_id, a.id, a.name, a.platform, a.url
+        FROM work_authors wa JOIN authors a ON a.id = wa.author_id
+        ORDER BY a.name
+        """
+    ).fetchall()
+    result: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for row in rows:
+        result.setdefault((row["work_kind"], row["work_id"]), []).append(
+            {"id": row["id"], "name": row["name"], "platform": row["platform"], "url": row["url"]}
+        )
+    return result
+
+
+def add_work_relation(
+    conn: sqlite3.Connection, type_: str, from_kind: str, from_id: int, to_kind: str, to_id: int
+) -> dict[str, Any] | None:
+    """同じ関連が既にあれば None。"""
+    row = conn.execute(
+        "INSERT OR IGNORE INTO work_relations (type, from_kind, from_id, to_kind, to_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?) RETURNING *",
+        (type_, from_kind, from_id, to_kind, to_id, datetime.now(timezone.utc).isoformat()),
+    ).fetchone()
+    conn.commit()
+    return dict(row) if row else None
+
+
+def delete_work_relation(conn: sqlite3.Connection, relation_id: int) -> bool:
+    deleted = conn.execute("DELETE FROM work_relations WHERE id = ?", (relation_id,)).rowcount
+    conn.commit()
+    return deleted > 0
+
+
+def find_work_relation(
+    conn: sqlite3.Connection, type_: str, a_kind: str, a_id: int, b_kind: str, b_id: int
+) -> dict[str, Any] | None:
+    """a→b か b→a の関連(クロスオーバーの重複や、スピンオフの逆向きを見つける用)。"""
+    row = conn.execute(
+        "SELECT * FROM work_relations WHERE type = ? AND ("
+        " (from_kind = ? AND from_id = ? AND to_kind = ? AND to_id = ?)"
+        " OR (from_kind = ? AND from_id = ? AND to_kind = ? AND to_id = ?))",
+        (type_, a_kind, a_id, b_kind, b_id, b_kind, b_id, a_kind, a_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_work_relations(conn: sqlite3.Connection, work_kind: str, work_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM work_relations WHERE (from_kind = ? AND from_id = ?) OR (to_kind = ? AND to_id = ?)"
+        " ORDER BY created_at",
+        (work_kind, work_id, work_kind, work_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def forget_work(conn: sqlite3.Connection, work_kind: str, work_id: int) -> None:
+    """消えた作品の作者・関連を外す(関連の相手の作品は残る)。"""
+    conn.execute("DELETE FROM work_authors WHERE work_kind = ? AND work_id = ?", (work_kind, work_id))
+    conn.execute(
+        "DELETE FROM work_relations WHERE (from_kind = ? AND from_id = ?) OR (to_kind = ? AND to_id = ?)",
+        (work_kind, work_id, work_kind, work_id),
+    )
+    conn.commit()
+
+
+def move_work(conn: sqlite3.Connection, old_kind: str, old_id: int, new_kind: str, new_id: int) -> None:
+    """
+    作品の作者・関連を別の作品へ付け替える(単巻の物語がシリーズになったとき)。付け替えた結果
+    自分自身との関連になるものや、既にある関連と重なるものは捨てる。
+    """
+    conn.execute(
+        "INSERT OR IGNORE INTO work_authors (work_kind, work_id, author_id)"
+        " SELECT ?, ?, author_id FROM work_authors WHERE work_kind = ? AND work_id = ?",
+        (new_kind, new_id, old_kind, old_id),
+    )
+    for side, other in (("from", "to"), ("to", "from")):
+        conn.execute(
+            f"UPDATE OR IGNORE work_relations SET {side}_kind = ?, {side}_id = ?"
+            f" WHERE {side}_kind = ? AND {side}_id = ? AND NOT ({other}_kind = ? AND {other}_id = ?)",
+            (new_kind, new_id, old_kind, old_id, new_kind, new_id),
+        )
+    forget_work(conn, old_kind, old_id)

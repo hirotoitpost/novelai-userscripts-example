@@ -27,6 +27,9 @@ from ..db import (
     delete_series_if_empty,
     delete_story,
     forget_library_items,
+    forget_work,
+    get_series,
+    list_work_authors,
     get_connection,
     get_generation_entry,
     get_story,
@@ -427,6 +430,8 @@ class Book(BaseModel):
     series_id: int | None = None
     series_title: str | None = None
     volume_no: int | None = None
+    # 作品(シリーズ、または単巻の物語)に付けた作者
+    authors: list[dict[str, Any]] = []
 
 
 def _v2_pages(final_image_path: str | None) -> list[str]:
@@ -467,6 +472,7 @@ def _books() -> list[Book]:
         v1_rows = list_library_pages(conn)
         marks = list_bookmarks(conn, "book")
         adult_marks = list_adult_marks(conn, "book")
+        work_authors = list_work_authors(conn)
     finally:
         conn.close()
     adult_auto, _ = _story_adult()
@@ -514,6 +520,12 @@ def _books() -> list[Book]:
                 series_id=story["series_id"],
                 series_title=story["series_title"],
                 volume_no=story["volume_no"],
+                authors=work_authors.get(
+                    ("series", story["series_id"])
+                    if story["series_id"] is not None
+                    else ("story", story["id"]),
+                    [],
+                ),
             )
         )
     return books
@@ -524,6 +536,7 @@ def list_books(
     kind: Literal["all", "manga", "text"] = "all",
     bookmarked: bool = False,
     rating: Rating = "all",
+    author_id: int | None = None,
     q: str = "",
     sort: Literal["updated", "created", "title"] = "updated",
 ) -> list[Book]:
@@ -536,6 +549,8 @@ def list_books(
     if bookmarked:
         books = [b for b in books if b.bookmarked]
     books = [b for b in books if _matches_rating(b.adult, rating)]
+    if author_id is not None:
+        books = [b for b in books if any(a["id"] == author_id for a in b.authors)]
     for word in q.lower().split():
         books = [b for b in books if word in b.title.lower()]
     if sort == "title":
@@ -727,8 +742,13 @@ def delete_book(story_id: int) -> None:
             raise HTTPException(status_code=404, detail="story not found")
         series_id = (get_story(conn, story_id) or {}).get("series_id")
         paths = delete_story(conn, story_id)
-        if series_id is not None:
+        # 作品の作者・関連も外す(シリーズは最後の巻を消して無くなったときだけ)
+        if series_id is None:
+            forget_work(conn, "story", story_id)
+        else:
             delete_series_if_empty(conn, series_id)
+            if get_series(conn, series_id) is None:
+                forget_work(conn, "series", series_id)
         forget_library_items(conn, "image", image_keys)
         forget_library_items(conn, "book", [str(story_id)])
     finally:

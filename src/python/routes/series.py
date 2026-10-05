@@ -22,6 +22,8 @@ from ..db import (
     get_story,
     list_series,
     list_series_volumes,
+    list_work_authors,
+    move_work,
     set_draft_series,
     set_story_recap,
     set_story_series,
@@ -151,8 +153,10 @@ def split_into_volumes(story_id: int, max_scenes: int) -> int | None:
             series = get_series(conn, series_id)
             base = series["title"] if series else _base_title(story)
             first_no = story.get("volume_no") or 1
+            new_series = False
         else:
             base = _base_title(story)
+            new_series = True
             series_id = create_series(
                 conn, base, memory=story.get("memory") or "", max_scenes=max_scenes
             )["id"]
@@ -160,6 +164,9 @@ def split_into_volumes(story_id: int, max_scenes: int) -> int | None:
         raw = story.get("raw_text") or ""
         remaining = raw[_covered_length(raw, story["scenes"]) :] if raw else ""
         ids = split_story_into_volumes(conn, story_id, size, remaining)
+        if new_series:
+            # 単巻の物語に付けていた作者・関連は、シリーズ全体のものにする
+            move_work(conn, "story", story_id, "series", series_id)
         for offset, volume_id in enumerate(ids):
             set_story_series(conn, volume_id, series_id, first_no + offset)
             set_story_title(conn, volume_id, f"{base} {first_no + offset}巻")
@@ -226,6 +233,8 @@ def create_series_route(req: SeriesCreateRequest) -> dict[str, Any]:
         )["id"]
         for volume_no, story_id in enumerate(req.story_ids, start=1):
             set_story_series(conn, story_id, series_id, volume_no)
+            # 単巻の物語に付けていた作者・関連は、シリーズ全体のものにする
+            move_work(conn, "story", story_id, "series", series_id)
     finally:
         conn.close()
     return _series_response(series_id)
@@ -358,14 +367,26 @@ def put_recap(story_id: int, req: RecapRequest) -> None:
 
 
 def _continuity_memory(
-    series: dict[str, Any], volumes: list[dict[str, Any]], ending: str
+    series: dict[str, Any],
+    volumes: list[dict[str, Any]],
+    ending: str,
+    authors: list[dict[str, Any]],
 ) -> str:
-    """次の巻を書くときのメモリ: シリーズの設定 + これまでのあらすじ(直近の巻) + 前巻の結び。"""
+    """
+    次の巻を書くときのメモリ: シリーズの設定 + 出典・原作 + これまでのあらすじ(直近の巻) + 前巻の結び。
+    出典・原作はシリーズに付けた作者から作る(作者が無ければシリーズの出典欄)。
+    """
     parts = []
     if series["memory"].strip():
         parts.append(series["memory"].strip())
-    if series["source"].strip():
-        parts.append(f"出典・原作: {series['source'].strip()}")
+    sources = [
+        f"{a['platform']}「{a['name']}」" if a["platform"] else a["name"]
+        for a in authors
+    ]
+    if not sources and series["source"].strip():
+        sources = [series["source"].strip()]
+    if sources:
+        parts.append(f"出典・原作: {'、'.join(sources)}")
     recaps = [v for v in volumes if v["recap"]][-_RECAP_VOLUMES:]
     if recaps:
         parts.append(
@@ -419,7 +440,12 @@ async def next_volume(series_id: int, client: ClientDep) -> dict[str, int]:
             conn,
             draft["id"],
             {
-                "memory": _continuity_memory(series, volumes, ending),
+                "memory": _continuity_memory(
+                    series,
+                    volumes,
+                    ending,
+                    list_work_authors(conn).get(("series", series_id), []),
+                ),
                 "author_note": (
                     f"[ これは「{series['title']}」の第{next_no}巻。"
                     "前巻の結びの直後から、同じ登場人物・同じ文体で話を続ける。 ]"

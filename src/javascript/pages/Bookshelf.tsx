@@ -15,6 +15,7 @@ import {
   setBookmark,
   thumbUrl,
 } from '../library'
+import WorkRelations, { Author } from '../components/WorkRelations'
 import './Bookshelf.css'
 
 interface Book {
@@ -38,6 +39,8 @@ interface Book {
   series_id: number | null
   series_title: string | null
   volume_no: number | null
+  /** 作品(シリーズ、または単巻の物語)に付けた作者(出典・原作者) */
+  authors: Author[]
 }
 
 interface SeriesVolume {
@@ -59,7 +62,7 @@ interface SeriesInfo {
 /** 棚に並べる単位: 単巻の本、またはシリーズ(巻をまとめた1段) */
 type ShelfEntry =
   | { kind: 'books'; books: Book[] }
-  | { kind: 'series'; id: number; title: string; books: Book[] }
+  | { kind: 'series'; id: number; title: string; authors: Author[]; books: Book[] }
 
 interface BookDetail extends Book {
   pages: string[]
@@ -95,7 +98,7 @@ function shelfEntries(books: Book[]): ShelfEntry[] {
     }
     let group = series.get(book.series_id)
     if (!group) {
-      group = { kind: 'series', id: book.series_id, title: book.series_title ?? '', books: [] }
+      group = { kind: 'series', id: book.series_id, title: book.series_title ?? '', authors: book.authors, books: [] }
       series.set(book.series_id, group)
       entries.push(group)
     }
@@ -125,6 +128,8 @@ export default function Bookshelf() {
   const [sort, setSort] = useLocalStorage<Sort>('nai_bookshelf_sort', 'updated')
   const [onlyBookmarked, setOnlyBookmarked] = useLocalStorage('nai_bookshelf_bookmarked', false)
   const [rating, setRating] = useLocalStorage<Rating>('nai_bookshelf_rating', 'all')
+  const [authorId, setAuthorId] = useLocalStorage<number | null>('nai_bookshelf_author', null)
+  const [authors, setAuthors] = useState<(Author & { work_count: number })[]>([])
   // 成人向けの表紙をぼかすか(ギャラリーと共通・端末ごと)。既定はぼかす
   const [blurAdult, setBlurAdult] = useLocalStorage('nai_library_blur_adult', true)
   // 物語ID → 最後に開いていた漫画のページ(0始まり)
@@ -149,6 +154,7 @@ export default function Bookshelf() {
     const params = new URLSearchParams({ kind, sort })
     if (onlyBookmarked) params.set('bookmarked', 'true')
     if (rating !== 'all') params.set('rating', rating)
+    if (authorId !== null) params.set('author_id', String(authorId))
     if (debouncedQuery) params.set('q', debouncedQuery)
     setLoading(true)
     setError(null)
@@ -160,11 +166,17 @@ export default function Bookshelf() {
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [kind, sort, onlyBookmarked, rating, debouncedQuery])
+  }, [kind, sort, onlyBookmarked, rating, authorId, debouncedQuery])
 
   useEffect(() => {
     void loadBooks()
   }, [loadBooks])
+
+  function loadAuthors() {
+    getJson<(Author & { work_count: number })[]>('/api/authors').then(setAuthors).catch(() => {})
+  }
+
+  useEffect(loadAuthors, [])
 
   async function toggleBookmark(book: Pick<Book, 'id' | 'bookmarked'>) {
     const next = !book.bookmarked
@@ -236,7 +248,8 @@ export default function Bookshelf() {
     setSearchParams({ book: String(id) }, { replace: true, state: location.state })
   }
 
-  const filtered = kind !== 'all' || onlyBookmarked || rating !== 'all' || debouncedQuery !== ''
+  const filtered =
+    kind !== 'all' || onlyBookmarked || rating !== 'all' || authorId !== null || debouncedQuery !== ''
   const entries = useMemo(() => shelfEntries(books), [books])
 
   function renderSlot(book: Book) {
@@ -320,6 +333,20 @@ export default function Bookshelf() {
             </button>
           </div>
           <div className="shelf-selects">
+            {authors.length > 0 && (
+              <select
+                value={authorId ?? ''}
+                onChange={e => setAuthorId(e.target.value ? Number(e.target.value) : null)}
+                aria-label="作者で絞り込む"
+              >
+                <option value="">すべての作者</option>
+                {authors.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.platform ? `${a.name}(${a.platform})` : a.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <select value={rating} onChange={e => setRating(e.target.value as Rating)} aria-label="成人向けで絞り込む">
               {RATINGS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
             </select>
@@ -356,6 +383,11 @@ export default function Bookshelf() {
             <div className="rack-series-head">
               <h2>{entry.title}</h2>
               <span>全{entry.books.length}巻</span>
+              {entry.authors.length > 0 && (
+                <span className="rack-series-authors">
+                  原作 {entry.authors.map(a => (a.platform ? `${a.name}(${a.platform})` : a.name)).join('、')}
+                </span>
+              )}
               {entry.books.length > SERIES_PREVIEW && (
                 <button
                   type="button"
@@ -388,7 +420,11 @@ export default function Bookshelf() {
           onToggleAdult={toggleAdult}
           onDelete={removeBook}
           onOpenBook={openOtherBook}
-          onShelfChanged={() => void loadBooks()}
+          onShelfChanged={() => {
+            void loadBooks()
+            loadAuthors()
+          }}
+          blurAdult={blurAdult}
           onEdit={() => navigate(`/story?story=${openId}`)}
         />
       )}
@@ -410,11 +446,12 @@ interface ReaderProps {
   onOpenBook: (id: number) => void
   /** 巻に分けた等で、本棚の並びが変わった */
   onShelfChanged: () => void
+  blurAdult: boolean
   onEdit: () => void
 }
 
 function Reader({
-  bookId, initialPage, onPage, onClose, onToggleBookmark, onToggleAdult, onDelete, onOpenBook, onShelfChanged, onEdit,
+  bookId, initialPage, onPage, onClose, onToggleBookmark, onToggleAdult, onDelete, onOpenBook, onShelfChanged, blurAdult, onEdit,
 }: ReaderProps) {
   const navigate = useNavigate()
   const [book, setBook] = useState<BookDetail | null>(null)
@@ -674,6 +711,13 @@ function Reader({
               </button>
             </details>
           )}
+          <WorkRelations
+            key={book.series_id !== null ? `series-${book.series_id}` : `story-${book.id}`}
+            work={book.series_id !== null ? { kind: 'series', id: book.series_id } : { kind: 'story', id: book.id }}
+            onOpen={onOpenBook}
+            onChanged={onShelfChanged}
+            blurAdult={blurAdult}
+          />
 
           {tab === 'manga' && pageCount > 0 && (
             <>
