@@ -356,6 +356,7 @@ export interface LoraDatasetRetryEvent {
 
 export interface CharacterDatasetRequest {
   root_name: string
+  framings: string[]
   poses: string[]
   outfits: string[]
   expressions: string[]
@@ -372,6 +373,7 @@ export interface CharacterDatasetRequest {
   use_reference: boolean
   reference_fidelity: number
   reference_strength: number
+  reference_type: 'character' | 'character&style'
   max_attempts: number
   similarity_threshold: number
   scorer: 'color' | 'vlm'

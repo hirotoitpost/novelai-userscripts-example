@@ -20,6 +20,7 @@ from ..character_sheet import (
     CORE_NEGATIVE,
     DEFAULT_NEGATIVE,
     EXPRESSIONS,
+    FRAMINGS,
     LOCATIONS,
     OUTFITS,
     POSES,
@@ -243,7 +244,7 @@ async def delete_guard_profile_endpoint(profile_id: int) -> None:
 @router.get("/variations")
 async def get_variations() -> dict[str, list[str]]:
     """キャラ別データセットのバリエーション既定リスト(全年齢向け)。"""
-    return {"poses": POSES, "outfits": OUTFITS, "expressions": EXPRESSIONS, "locations": LOCATIONS}
+    return {"framings": FRAMINGS, "poses": POSES, "outfits": OUTFITS, "expressions": EXPRESSIONS, "locations": LOCATIONS}
 
 
 @router.post("/character/{character_id}/generate")
@@ -257,7 +258,7 @@ async def generate_character_dataset(
     character = _load_character(character_id)
     guard = _load_guard(req.guard_profile_id)
     r18 = req.rating == "r18"
-    variations = req.poses + req.outfits + req.expressions + req.locations
+    variations = req.framings + req.poses + req.outfits + req.expressions + req.locations
     _check_tags(
         character,
         ", ".join([*variations, character.get("outfit_tags") or "", character.get("style_tags") or ""]),
@@ -274,7 +275,7 @@ async def generate_character_dataset(
     if req.use_reference and ref_bytes:
         references = [CharacterReference(
             image=ref_bytes,
-            type="character&style",
+            type=req.reference_type,
             fidelity=req.reference_fidelity,
             strength=req.reference_strength,
         )]
@@ -303,6 +304,7 @@ async def generate_character_dataset(
 
     shots = build_variation_shots(
         character,
+        framings=req.framings,
         poses=req.poses,
         outfits=req.outfits,
         expressions=req.expressions,

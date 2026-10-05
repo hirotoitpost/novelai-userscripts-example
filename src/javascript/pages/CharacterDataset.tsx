@@ -14,10 +14,11 @@ import GuardProfiles from '../components/GuardProfiles'
 import './LoraDataset.css'
 import './CharacterDataset.css'
 
-type Axis = 'poses' | 'outfits' | 'expressions' | 'locations'
+type Axis = 'framings' | 'poses' | 'outfits' | 'expressions' | 'locations'
 type Variations = Record<Axis, string[]>
 
 const AXES: { key: Axis; label: string }[] = [
+  { key: 'framings', label: '構図' },
   { key: 'poses', label: 'ポーズ' },
   { key: 'outfits', label: '服装' },
   { key: 'expressions', label: '表情' },
@@ -49,11 +50,11 @@ export default function CharacterDataset() {
 
   const [characters, setCharacters] = useState<Character[]>([])
   const [characterId, setCharacterId] = useLocalStorage<number | null>('nai_chards_character', null)
-  const [defaults, setDefaults] = useState<Variations>({ poses: [], outfits: [], expressions: [], locations: [] })
+  const [defaults, setDefaults] = useState<Variations>({ framings: [], poses: [], outfits: [], expressions: [], locations: [] })
   const [selected, setSelected] = useLocalStorage<Variations>('nai_chards_selected', {
-    poses: [], outfits: [], expressions: [], locations: [],
+    framings: [], poses: [], outfits: [], expressions: [], locations: [],
   })
-  const [custom, setCustom] = useState<Record<Axis, string>>({ poses: '', outfits: '', expressions: '', locations: '' })
+  const [custom, setCustom] = useState<Record<Axis, string>>({ framings: '', poses: '', outfits: '', expressions: '', locations: '' })
 
   const [rootName, setRootName] = useLocalStorage('nai_chards_root', 'training_data')
   const [count, setCount] = useLocalStorage('nai_chards_count', 10)
@@ -61,9 +62,10 @@ export default function CharacterDataset() {
   const [height, setHeight] = useLocalStorage('nai_chards_height', 1216)
   const [steps, setSteps] = useLocalStorage('nai_chards_steps', 23)
   const [scale, setScale] = useLocalStorage('nai_chards_scale', 5.0)
-  const [useReference, setUseReference] = useLocalStorage('nai_chards_use_ref', true)
+  const [useReference, setUseReference] = useLocalStorage('nai_chards_use_ref', false)
   const [refFidelity, setRefFidelity] = useLocalStorage('nai_chards_ref_fidelity', 1.0)
-  const [refStrength, setRefStrength] = useLocalStorage('nai_chards_ref_strength', 1.0)
+  const [refStrength, setRefStrength] = useLocalStorage('nai_chards_ref_strength', 0.7)
+  const [refType, setRefType] = useLocalStorage<'character' | 'character&style'>('nai_chards_ref_type', 'character')
   const [maxAttempts, setMaxAttempts] = useLocalStorage('nai_chards_attempts', 1)
   const [threshold, setThreshold] = useLocalStorage('nai_chards_threshold', 0.7)
   const [scorer, setScorer] = useLocalStorage<'color' | 'vlm'>('nai_chards_scorer', 'color')
@@ -139,6 +141,7 @@ export default function CharacterDataset() {
       use_reference: useReference,
       reference_fidelity: refFidelity,
       reference_strength: refStrength,
+      reference_type: refType,
       max_attempts: maxAttempts,
       similarity_threshold: threshold,
       scorer,
@@ -272,6 +275,12 @@ export default function CharacterDataset() {
                 <input type="checkbox" checked={useReference} onChange={e => setUseReference(e.target.checked)} disabled={isRunning || !hasReference} />
                 参照画像を Character Reference に使う
               </label>
+              <label className="lora-label">参照する範囲
+                <select className="lora-select" value={refType} onChange={e => setRefType(e.target.value as 'character' | 'character&style')} disabled={isRunning}>
+                  <option value="character">キャラのみ(服装・構図を変えやすい)</option>
+                  <option value="character&style">キャラ＋画風(元画像に寄る)</option>
+                </select>
+              </label>
               <label className="lora-label">Fidelity {refFidelity.toFixed(2)}
                 <input className="lora-range" type="range" min={0} max={1} step={0.05} value={refFidelity} onChange={e => setRefFidelity(Number(e.target.value))} disabled={isRunning} />
               </label>
@@ -299,6 +308,7 @@ export default function CharacterDataset() {
               <p className="lora-hint">
                 参照画像との類似度が合格ライン未満なら、シードをずらして引き直し、最も似た1枚を採用します。
                 引き直しも1回ごとにAnlasを使います(最大 {planned * maxAttempts} リクエスト)。外れた画像は rejected/ に残ります。
+                検証では採点が当たり外れを見分けられなかったため、通常は「1(引き直さない)」を推奨します。
               </p>
               {maxAttempts > 1 && !hasReference && <p className="lora-warn">引き直しには参照画像が必要です。</p>}
             </fieldset>

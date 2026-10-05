@@ -76,8 +76,19 @@ def _parse_score(text: str) -> float:
     return float(number.group(0)) / 10
 
 
-async def vlm_similarity(image: Image, reference: Image) -> float:
+async def vlm_similarity(image: Image, reference: Image, retries: int = 3) -> float:
+    """空の応答やタイムアウトは(ローカルLLMが混んでいると起きる)数回まで採点し直す。"""
     ref_b64, img_b64 = _png_b64(reference), _png_b64(image)
+    for attempt in range(retries):
+        try:
+            return max(0.0, min(1.0, _parse_score(await _ask_vlm(ref_b64, img_b64))))
+        except (ValueError, httpx.TimeoutException):
+            if attempt == retries - 1:
+                raise
+    raise RuntimeError("unreachable")
+
+
+async def _ask_vlm(ref_b64: str, img_b64: str) -> str:
     if is_ollama_vision():
         base = get_vision_base_url().rstrip("/").removesuffix("/v1")
         async with httpx.AsyncClient(timeout=120) as http:
@@ -105,7 +116,7 @@ async def vlm_similarity(image: Image, reference: Image) -> float:
             }],
         )
         text = completion.choices[0].message.content or ""
-    return max(0.0, min(1.0, _parse_score(text)))
+    return text
 
 
 async def similarity(image: Image, reference: Image, scorer: ScorerLiteral) -> float:

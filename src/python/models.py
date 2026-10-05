@@ -166,6 +166,7 @@ class CharacterDatasetRequest(BaseModel):
     """キャラシートを元に、ポーズ/服装/表情/場所を差し替えたデータセットを作る。"""
 
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名")
+    framings: list[str] = Field(default_factory=list, description="構図(full body, upper body など)")
     poses: list[str] = Field(default_factory=list)
     outfits: list[str] = Field(default_factory=list)
     expressions: list[str] = Field(default_factory=list)
@@ -179,9 +180,15 @@ class CharacterDatasetRequest(BaseModel):
     sampler: SamplerLiteral = "k_euler_ancestral"
     noise_schedule: NoiseScheduleLiteral = "karras"
     cfg_rescale: float = Field(0.0, ge=0.0, le=1.0)
-    use_reference: bool = Field(True, description="キャラシートの参照画像をCharacter Referenceとして使う")
+    # 既定は検証結果(docs/trials/2026-10-06_character-dataset-stability.md)に合わせる:
+    # 基準シード+容姿タグだけで見た目は安定し、参照画像の上乗せ効果は小さかったため既定はオフ。
+    # 使うときは「キャラのみ・強さ0.7」(服装や構図が参照画像に引っぱられにくい)。
+    use_reference: bool = Field(False, description="キャラシートの参照画像をCharacter Referenceとして使う")
+    reference_type: Literal["character", "character&style"] = Field(
+        "character", description="character は顔・髪だけを参照し、服装や構図を引きずりにくい"
+    )
     reference_fidelity: float = Field(1.0, ge=0.0, le=1.0)
-    reference_strength: float = Field(1.0, ge=0.0, le=1.0)
+    reference_strength: float = Field(0.7, ge=0.0, le=1.0)
     # ガチャ対策: 参照画像との類似度がしきい値未満なら、シードを変えて引き直す。
     # 引き直しも1回ごとにAnlasを使うので、既定は1(引き直さない)。
     max_attempts: int = Field(1, ge=1, le=5, description="1枚あたりの最大試行回数")
