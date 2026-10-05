@@ -335,6 +335,9 @@ class StorySplitRequest(BaseModel):
     # テストや事前確認用に、冒頭のこのシーン数だけを分割・タグ付けする。未指定なら最後まで。
     # 残りは後でもう一度 /split を呼ぶと続きから分割される。
     max_scenes: int | None = Field(None, ge=1, le=1000)
+    # 1巻のシーン数の目安上限。分割の結果これを超えたら、超えた分を次の巻(シリーズ)へ切り出す。
+    # 0 なら巻に分けない。
+    volume_max_scenes: int = Field(20, ge=0, le=1000)
 
 
 # 挿絵(コマ割りページ)生成で選べるモデル。V5はこのリポジトリ独自のリクエスト組み立てで
@@ -728,6 +731,9 @@ class WriterDraft(BaseModel):
     text: str
     settings: WriterSettings
     story_id: Optional[int] = None
+    # シリーズの次の巻として書いている下書きなら、そのシリーズと巻番号
+    series_id: Optional[int] = None
+    volume_no: Optional[int] = None
     created_at: str
     updated_at: str
 

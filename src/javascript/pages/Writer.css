@@ -270,3 +270,14 @@
     margin-left: 0;
   }
 }
+
+.writer-series-note {
+  margin: 0 0 0.6rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #4a3a9a;
+  border-radius: 8px;
+  background: #1a1440;
+  color: #c8c0f0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}

@@ -25,6 +25,8 @@ from ..db import (
     get_story,
     list_drafts,
     set_story_memory,
+    set_story_series,
+    set_story_title,
     update_draft,
 )
 from ..models import (
@@ -162,6 +164,26 @@ def _premise_label(title: str, text: str) -> str:
     return f"[エディタ] {head}"
 
 
+def _attach_to_series(conn: Any, story_id: int, draft: dict[str, Any], previous: int | None) -> None:
+    """
+    シリーズの次の巻として書いた下書きの物語を、その巻にする。本文を直して作り直した場合は、
+    同じ下書きから前に作った物語が巻の席にいるので、それを単巻に戻して入れ替える(絵は前の物語に残る)。
+    """
+    holder = conn.execute(
+        "SELECT id FROM stories WHERE series_id = ? AND volume_no = ?", (draft["series_id"], draft["volume_no"])
+    ).fetchone()
+    if holder is not None:
+        if holder["id"] != previous:
+            raise HTTPException(
+                status_code=409,
+                detail=f"このシリーズの{draft['volume_no']}巻は既に別の物語です。",
+            )
+        set_story_series(conn, holder["id"], None, None)
+    set_story_series(conn, story_id, draft["series_id"], draft["volume_no"])
+    if draft["title"].strip():
+        set_story_title(conn, story_id, draft["title"].strip())
+
+
 @router.post("/drafts/{draft_id}/to-story")
 async def draft_to_story(draft_id: int, req: WriterToStoryRequest) -> dict[str, Any]:
     """
@@ -187,6 +209,8 @@ async def draft_to_story(draft_id: int, req: WriterToStoryRequest) -> dict[str, 
         update_draft(conn, draft_id, {"story_id": story["id"]})
         # メモリ(登場人物の容姿など)は本文に書かれていないことが多いので、登場人物の抽出用に渡す
         set_story_memory(conn, story["id"], draft["memory"])
+        if draft.get("series_id") and draft.get("volume_no"):
+            _attach_to_series(conn, story["id"], draft, previous=draft.get("story_id"))
     finally:
         conn.close()
     return {"story_id": story["id"], "reused": False}

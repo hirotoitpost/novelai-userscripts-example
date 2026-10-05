@@ -34,6 +34,9 @@ interface Draft {
   text: string
   settings: WriterSettings
   story_id: number | null
+  /** シリーズの次の巻として書いている下書きなら、そのシリーズと巻番号 */
+  series_id: number | null
+  volume_no: number | null
 }
 
 // Story ページと同じ理由(Vite の dev プロキシは SSE をバッファしてしまう)で、
@@ -85,7 +88,10 @@ export default function Writer() {
       .then(r => r.json())
       .then((list: DraftSummary[]) => {
         setDrafts(list)
-        if (list.length > 0) void openDraft(list[0].id)
+        // 本棚の「続きの巻を書く」などから ?draft=ID で来たら、その下書きを開く
+        const requested = Number(new URLSearchParams(window.location.search).get('draft'))
+        if (requested) void openDraft(requested)
+        else if (list.length > 0) void openDraft(list[0].id)
       })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -327,6 +333,12 @@ export default function Writer() {
             </div>
           ) : (
             <>
+              {draft.series_id !== null && draft.volume_no !== null && (
+                <p className="writer-series-note">
+                  シリーズの第{draft.volume_no}巻として書いています。メモリに「これまでのあらすじ」と
+                  「前巻の結び」が入っているので、その続きから書き始めてください。「漫画にする」とこの巻になります。
+                </p>
+              )}
               <input
                 className="writer-title"
                 type="text"

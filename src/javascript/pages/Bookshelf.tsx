@@ -7,7 +7,9 @@ import {
   fileUrl,
   formatDate,
   getJson,
+  API_ORIGIN,
   Rating,
+  readErrorDetail,
   RATINGS,
   setAdult,
   setBookmark,
@@ -32,7 +34,32 @@ interface Book {
   adult: boolean
   adult_auto: boolean
   adult_manual: boolean | null
+  /** シリーズの巻なら、そのシリーズと巻番号(単巻は null) */
+  series_id: number | null
+  series_title: string | null
+  volume_no: number | null
 }
+
+interface SeriesVolume {
+  story_id: number
+  volume_no: number
+  title: string
+  scene_count: number
+  recap: string | null
+}
+
+interface SeriesInfo {
+  id: number
+  title: string
+  source: string
+  max_scenes: number
+  volumes: SeriesVolume[]
+}
+
+/** 棚に並べる単位: 単巻の本、またはシリーズ(巻をまとめた1段) */
+type ShelfEntry =
+  | { kind: 'books'; books: Book[] }
+  | { kind: 'series'; id: number; title: string; books: Book[] }
 
 interface BookDetail extends Book {
   pages: string[]
@@ -49,6 +76,34 @@ const KINDS: { id: Kind; label: string }[] = [
   { id: 'text', label: '小説' },
 ]
 const SWIPE_THRESHOLD = 50
+// シリーズの段に最初から出す巻数(長いシリーズは「すべて表示」で開く)
+const SERIES_PREVIEW = 6
+
+/**
+ * 並び順を保ったまま、シリーズの巻を1つの段にまとめる。シリーズは最初に出てきた位置に置き、
+ * 段の中は巻番号順にする。続けて並ぶ単巻の本は1つの棚にまとめる。
+ */
+function shelfEntries(books: Book[]): ShelfEntry[] {
+  const entries: ShelfEntry[] = []
+  const series = new Map<number, Extract<ShelfEntry, { kind: 'series' }>>()
+  for (const book of books) {
+    if (book.series_id === null) {
+      const last = entries[entries.length - 1]
+      if (last?.kind === 'books') last.books.push(book)
+      else entries.push({ kind: 'books', books: [book] })
+      continue
+    }
+    let group = series.get(book.series_id)
+    if (!group) {
+      group = { kind: 'series', id: book.series_id, title: book.series_title ?? '', books: [] }
+      series.set(book.series_id, group)
+      entries.push(group)
+    }
+    group.books.push(book)
+  }
+  for (const group of series.values()) group.books.sort((a, b) => (a.volume_no ?? 0) - (b.volume_no ?? 0))
+  return entries
+}
 
 /** 表紙の無い本の色。物語IDから決めるので、毎回同じ色になる。 */
 function coverHue(id: number): number {
@@ -78,6 +133,8 @@ export default function Bookshelf() {
   const [debouncedQuery, setDebouncedQuery] = useState('')
 
   const [books, setBooks] = useState<Book[]>([])
+  // 全巻を表示しているシリーズ
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -174,7 +231,55 @@ export default function Bookshelf() {
     else setSearchParams({}, { replace: true })
   }
 
+  function openOtherBook(id: number) {
+    // 巻の移動は履歴を積まない(「戻る」で本棚に戻れるよう、開いたときの状態を引き継ぐ)
+    setSearchParams({ book: String(id) }, { replace: true, state: location.state })
+  }
+
   const filtered = kind !== 'all' || onlyBookmarked || rating !== 'all' || debouncedQuery !== ''
+  const entries = useMemo(() => shelfEntries(books), [books])
+
+  function renderSlot(book: Book) {
+    const page = progress[String(book.id)]
+    const readRatio = book.manga && page !== undefined && book.page_count > 0
+      ? (page + 1) / book.page_count
+      : null
+    // 成人向けだけを表示しているときは、自分で選んで見ているのでぼかさない
+    const blurred = book.adult && blurAdult && rating !== 'adult'
+    return (
+      <div key={book.id} className={`rack-slot${blurred ? ' is-blurred' : ''}`}>
+        <button type="button" className="rack-cover" onClick={() => openBook(book.id)} aria-label={`${book.title}を読む`}>
+          {book.cover_path ? (
+            <img src={thumbUrl(book.cover_path, 480)} loading="lazy" alt="" />
+          ) : (
+            <span
+              className="rack-cover-plain"
+              style={{ '--hue': coverHue(book.series_id ?? book.id) } as CSSProperties}
+            >
+              <span className="rack-cover-plain-title">{book.title}</span>
+            </span>
+          )}
+          <span className="rack-masthead">
+            {book.origin && <span className="rack-origin">{book.origin}</span>}
+            <span className="rack-title">{book.title}</span>
+          </span>
+          {book.volume_no !== null && <span className="rack-volume">{book.volume_no}</span>}
+          {book.bookmarked && <span className="rack-star" aria-label="ブックマーク済み">★</span>}
+          {book.adult && <span className="rack-r18">R18</span>}
+          {readRatio !== null && (
+            <span className="rack-progress" aria-label={`${page + 1}ページまで読んだ`}>
+              <span style={{ width: `${Math.min(readRatio, 1) * 100}%` }} />
+            </span>
+          )}
+        </button>
+        <div className="rack-ledge" aria-hidden />
+        <div className="rack-label">
+          <span>{book.volume_no !== null ? `${book.volume_no}巻 ・ ` : ''}{bookSummary(book)}</span>
+          <span>{formatDate(book.updated_at).split(' ')[0]}</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="shelf-root">
@@ -236,48 +341,41 @@ export default function Bookshelf() {
         <p className="shelf-empty">{filtered ? '条件に合う本がありません。' : '本がまだありません。'}</p>
       )}
 
-      <div className="rack" aria-busy={loading}>
-        {books.map(book => {
-          const page = progress[String(book.id)]
-          const readRatio = book.manga && page !== undefined && book.page_count > 0
-            ? (page + 1) / book.page_count
-            : null
-          // 成人向けだけを表示しているときは、自分で選んで見ているのでぼかさない
-          const blurred = book.adult && blurAdult && rating !== 'adult'
+      {entries.map(entry => {
+        if (entry.kind === 'books') {
           return (
-            <div key={book.id} className={`rack-slot${blurred ? ' is-blurred' : ''}`}>
-              <button type="button" className="rack-cover" onClick={() => openBook(book.id)} aria-label={`${book.title}を読む`}>
-                {book.cover_path ? (
-                  <img src={thumbUrl(book.cover_path, 480)} loading="lazy" alt="" />
-                ) : (
-                  <span
-                    className="rack-cover-plain"
-                    style={{ '--hue': coverHue(book.id) } as CSSProperties}
-                  >
-                    <span className="rack-cover-plain-title">{book.title}</span>
-                  </span>
-                )}
-                <span className="rack-masthead">
-                  {book.origin && <span className="rack-origin">{book.origin}</span>}
-                  <span className="rack-title">{book.title}</span>
-                </span>
-                {book.bookmarked && <span className="rack-star" aria-label="ブックマーク済み">★</span>}
-                {book.adult && <span className="rack-r18">R18</span>}
-                {readRatio !== null && (
-                  <span className="rack-progress" aria-label={`${page + 1}ページまで読んだ`}>
-                    <span style={{ width: `${Math.min(readRatio, 1) * 100}%` }} />
-                  </span>
-                )}
-              </button>
-              <div className="rack-ledge" aria-hidden />
-              <div className="rack-label">
-                <span>{bookSummary(book)}</span>
-                <span>{formatDate(book.updated_at).split(' ')[0]}</span>
-              </div>
+            <div key={`books-${entry.books[0].id}`} className="rack" aria-busy={loading}>
+              {entry.books.map(renderSlot)}
             </div>
           )
-        })}
-      </div>
+        }
+        const open = expanded.has(entry.id)
+        const shown = open ? entry.books : entry.books.slice(0, SERIES_PREVIEW)
+        return (
+          <section key={`series-${entry.id}`} className="rack-series" aria-label={`シリーズ ${entry.title}`}>
+            <div className="rack-series-head">
+              <h2>{entry.title}</h2>
+              <span>全{entry.books.length}巻</span>
+              {entry.books.length > SERIES_PREVIEW && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = new Set(expanded)
+                    if (open) next.delete(entry.id)
+                    else next.add(entry.id)
+                    setExpanded(next)
+                  }}
+                >
+                  {open ? '一部だけ表示' : `すべて表示(${entry.books.length}巻)`}
+                </button>
+              )}
+            </div>
+            <div className="rack" aria-busy={loading}>
+              {shown.map(renderSlot)}
+            </div>
+          </section>
+        )
+      })}
 
       {openId !== null && (
         <Reader
@@ -289,6 +387,8 @@ export default function Bookshelf() {
           onToggleBookmark={toggleBookmark}
           onToggleAdult={toggleAdult}
           onDelete={removeBook}
+          onOpenBook={openOtherBook}
+          onShelfChanged={() => void loadBooks()}
           onEdit={() => navigate(`/story?story=${openId}`)}
         />
       )}
@@ -306,13 +406,22 @@ interface ReaderProps {
     book: Pick<Book, 'id' | 'adult' | 'adult_auto'>,
   ) => Promise<Pick<Book, 'adult' | 'adult_manual'> | null>
   onDelete: (book: Pick<Book, 'id' | 'title'>) => Promise<boolean>
+  /** シリーズの別の巻を開く */
+  onOpenBook: (id: number) => void
+  /** 巻に分けた等で、本棚の並びが変わった */
+  onShelfChanged: () => void
   onEdit: () => void
 }
 
 function Reader({
-  bookId, initialPage, onPage, onClose, onToggleBookmark, onToggleAdult, onDelete, onEdit,
+  bookId, initialPage, onPage, onClose, onToggleBookmark, onToggleAdult, onDelete, onOpenBook, onShelfChanged, onEdit,
 }: ReaderProps) {
+  const navigate = useNavigate()
   const [book, setBook] = useState<BookDetail | null>(null)
+  const [series, setSeries] = useState<SeriesInfo | null>(null)
+  const [working, setWorking] = useState<string | null>(null)
+  // 1巻のシーン数の上限(物語ページのシーン分割と共通)
+  const [volumeMaxScenes] = useLocalStorage('nai_story_volume_max_scenes', 20)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<ReaderTab>('manga')
   const [page, setPage] = useState(0)
@@ -321,10 +430,21 @@ function Reader({
   const [vertical, setVertical] = useLocalStorage('nai_bookshelf_vertical', false)
   const touchStart = useRef<number | null>(null)
 
+  function loadSeries(id: number | null) {
+    if (id === null) {
+      setSeries(null)
+      return
+    }
+    getJson<SeriesInfo>(`/api/series/${id}`)
+      .then(setSeries)
+      .catch(e => setError(e instanceof Error ? e.message : String(e)))
+  }
+
   useEffect(() => {
     getJson<BookDetail>(`/api/library/books/${bookId}`)
       .then(data => {
         setBook(data)
+        loadSeries(data.series_id)
         setTab(data.pages.length > 0 ? 'manga' : 'text')
         // 読み終わったページで開くと最後のページから始まってしまうので、最後なら最初に戻す
         const start = initialPage >= data.pages.length - 1 ? 0 : initialPage
@@ -387,6 +507,68 @@ function Reader({
     const next = await onToggleAdult(book)
     if (next) setBook({ ...book, ...next })
   }
+
+  /** POST して結果を返す。失敗は画面に出す。 */
+  async function post<T>(label: string, path: string, body: unknown = {}): Promise<T | null> {
+    setWorking(label)
+    setError(null)
+    try {
+      const res = await fetch(`${API_ORIGIN}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      return (await res.json()) as T
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      return null
+    } finally {
+      setWorking(null)
+    }
+  }
+
+  async function writeNextVolume() {
+    if (!series) return
+    // 最後の巻のあらすじが無ければ、ここで作る(数秒〜十数秒かかる)
+    const result = await post<{ draft_id: number }>('next', `/api/series/${series.id}/next-volume`)
+    if (result) navigate(`/writer?draft=${result.draft_id}`)
+  }
+
+  async function splitIntoVolumes() {
+    if (!book) return
+    const ok = window.confirm(
+      `「${book.title}」(${book.scene_count}シーン)を、1巻${volumeMaxScenes}シーンまでの巻に分けます。\n` +
+        '本文・コマ・挿絵はそのまま各巻へ移ります(1ページのコマ数の倍数で区切ります)。',
+    )
+    if (!ok) return
+    const result = await post<SeriesInfo>('split', `/api/series/split/${book.id}`, { max_scenes: volumeMaxScenes })
+    if (!result) return
+    setSeries(result)
+    onShelfChanged()
+    const fresh = await getJson<BookDetail>(`/api/library/books/${book.id}`)
+    setBook(fresh)
+  }
+
+  async function makeRecap() {
+    if (!book) return
+    const result = await post<{ recap: string }>('recap', `/api/series/volumes/${book.id}/recap`)
+    if (result && series) {
+      setSeries({
+        ...series,
+        volumes: series.volumes.map(v => (v.story_id === book.id ? { ...v, recap: result.recap } : v)),
+      })
+    }
+  }
+
+  const volumeIndex = series ? series.volumes.findIndex(v => v.story_id === bookId) : -1
+  const prevVolume = volumeIndex > 0 ? series!.volumes[volumeIndex - 1] : null
+  const nextVolume = series && volumeIndex >= 0 ? series.volumes[volumeIndex + 1] ?? null : null
+  const isLastVolume = series !== null && volumeIndex === series.volumes.length - 1
+  const recap = volumeIndex >= 0 ? series!.volumes[volumeIndex].recap : null
+  // 単巻か、シリーズの最後の巻だけ分けられる(途中の巻を分けると後ろの巻番号がずれる)
+  const canSplit = book !== null && volumeMaxScenes > 0 && book.scene_count > volumeMaxScenes
+    && (series === null || isLastVolume)
 
   const paragraphs = useMemo(() => (book?.text ?? '').split(/\n{2,}/).filter(p => p.trim()), [book])
   const atEnd = tab === 'manga' && pageCount > 0 && page === pageCount - 1
@@ -455,6 +637,44 @@ function Reader({
             </div>
           </div>
 
+          {(series || canSplit) && (
+            <div className="reader-series">
+              {series && (
+                <>
+                  <span className="reader-series-name">
+                    {series.title} 第{book.volume_no}巻 / 全{series.volumes.length}巻
+                  </span>
+                  <button type="button" disabled={!prevVolume} onClick={() => prevVolume && onOpenBook(prevVolume.story_id)}>
+                    ‹ 前の巻
+                  </button>
+                  {nextVolume && (
+                    <button type="button" onClick={() => onOpenBook(nextVolume.story_id)}>次の巻 ›</button>
+                  )}
+                  {isLastVolume && (
+                    <button type="button" className="reader-primary" disabled={working !== null}
+                      onClick={() => void writeNextVolume()}>
+                      {working === 'next' ? '準備中…' : '続きの巻を書く'}
+                    </button>
+                  )}
+                </>
+              )}
+              {canSplit && (
+                <button type="button" disabled={working !== null} onClick={() => void splitIntoVolumes()}>
+                  {working === 'split' ? '分けています…' : `巻に分ける(${book.scene_count}シーン → 1巻${volumeMaxScenes}まで)`}
+                </button>
+              )}
+            </div>
+          )}
+          {series && (
+            <details className="reader-recap">
+              <summary>この巻のあらすじ{recap ? '' : '(まだありません)'}</summary>
+              {recap && <p>{recap}</p>}
+              <button type="button" disabled={working !== null} onClick={() => void makeRecap()}>
+                {working === 'recap' ? '作成中…' : recap ? 'あらすじを作り直す' : 'あらすじを作る'}
+              </button>
+            </details>
+          )}
+
           {tab === 'manga' && pageCount > 0 && (
             <>
               <div
@@ -485,6 +705,11 @@ function Reader({
               {atEnd && (
                 <div className="reader-end">
                   <span>おわり</span>
+                  {nextVolume && (
+                    <button type="button" className="reader-primary" onClick={() => onOpenBook(nextVolume.story_id)}>
+                      次の巻へ
+                    </button>
+                  )}
                   <button type="button" onClick={() => goTo(0)}>最初から読む</button>
                   <button type="button" onClick={onClose}>本棚に戻る</button>
                 </div>

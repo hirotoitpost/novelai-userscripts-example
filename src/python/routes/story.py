@@ -855,6 +855,24 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest, options: 
     elif tagged < len(scene_texts):
         job.message += f"(未設定{len(scene_texts) - tagged}シーンは「タグ付けを実行」でやり直せます)"
 
+    # 上限を超えたら巻に分ける(冒頭だけの分割では、残りを分け終えてから)
+    if req.volume_max_scenes and not partial:
+        from .series import split_into_volumes  # 循環 import を避けて遅延で読む
+
+        conn = get_connection()
+        try:
+            total = len(list_story_scenes(conn, story_id))
+        finally:
+            conn.close()
+        series_id = split_into_volumes(story_id, req.volume_max_scenes)
+        if series_id is not None:
+            conn = get_connection()
+            try:
+                volumes = conn.execute("SELECT COUNT(*) FROM stories WHERE series_id = ?", (series_id,)).fetchone()[0]
+            finally:
+                conn.close()
+            job.message += f"。上限({req.volume_max_scenes}シーン)を超えたので、{total}シーンを{volumes}巻に分けました"
+
 
 @router.post("/{story_id}/write")
 async def write_story(story_id: int, client: ClientDep, request: Request) -> StreamingResponse:

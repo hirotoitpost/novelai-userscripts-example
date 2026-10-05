@@ -641,3 +641,119 @@
   background: #2a1020;
   color: #ffb0c8;
 }
+
+/* ---- シリーズ ---- */
+
+.rack + .rack,
+.rack-series + .rack,
+.rack + .rack-series,
+.rack-series + .rack-series {
+  margin-top: 1.5rem;
+}
+
+.rack-series-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.5rem;
+  padding: 0 0.25rem;
+}
+
+.rack-series-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-family: 'Yu Mincho', 'Hiragino Mincho ProN', serif;
+}
+
+.rack-series-head span {
+  color: #9a9ac0;
+  font-size: 0.8rem;
+}
+
+.rack-series-head button,
+.reader-series button,
+.reader-recap button {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.65rem;
+  cursor: pointer;
+}
+
+.rack-series-head button:hover,
+.reader-series button:hover:not(:disabled),
+.reader-recap button:hover:not(:disabled) {
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.reader-series button:disabled,
+.reader-recap button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* 表紙の右上の巻番号(背表紙の番号のように) */
+.rack-volume {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  min-width: 1.5rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: #f5c542;
+  color: #0a0a14;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.5rem;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.reader-series {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1rem 0.6rem;
+}
+
+.reader-series-name {
+  margin-right: auto;
+  color: #c9b8a6;
+  font-size: 0.82rem;
+}
+
+.shelf-root .reader-primary {
+  background: #7b5cf6;
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.reader-recap {
+  margin: 0 1rem 0.8rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #1d1d38;
+  border-radius: 8px;
+  color: #c8c8ec;
+  font-size: 0.82rem;
+}
+
+.reader-recap summary {
+  cursor: pointer;
+  color: #9a9ac0;
+}
+
+.reader-recap p {
+  margin: 0.5rem 0;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+/* 巻番号のある表紙は、題字が巻番号に隠れないよう右を空ける */
+.rack-cover:has(.rack-volume) .rack-masthead {
+  padding-right: 2.1rem;
+}

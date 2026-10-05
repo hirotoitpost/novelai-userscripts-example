@@ -225,6 +225,8 @@ export default function Story() {
   const [maxChars, setMaxChars] = useState(300)
   // テスト・事前確認用に冒頭だけ分割・タグ付けするシーン数。0なら最後まで。
   const [headScenes, setHeadScenes] = useState(0)
+  // 1巻のシーン数の目安上限。超えた分は次の巻(シリーズ)に切り出す。0 で分けない
+  const [volumeMaxScenes, setVolumeMaxScenes] = useLocalStorage('nai_story_volume_max_scenes', 20)
   // 挿絵を生成するページ範囲(表示は1始まり)。
   const [pageFrom, setPageFrom] = useState(1)
   const [pageTo, setPageTo] = useState(5)
@@ -449,6 +451,7 @@ export default function Story() {
           max_paragraphs: maxParagraphs,
           max_chars: maxChars,
           max_scenes: headScenes > 0 ? headScenes : null,
+          volume_max_scenes: volumeMaxScenes,
           adult: adultTags,
         }),
         signal,
@@ -999,6 +1002,16 @@ export default function Story() {
                     max={1000}
                     value={headScenes}
                     onChange={e => setHeadScenes(Math.max(0, Number(e.target.value)))}
+                  />
+                </label>
+                <label>
+                  1巻のシーン数の上限(超えたら次の巻に分ける・0で分けない)
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={volumeMaxScenes}
+                    onChange={e => setVolumeMaxScenes(Math.max(0, Number(e.target.value)))}
                   />
                 </label>
               </div>

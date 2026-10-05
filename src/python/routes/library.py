@@ -24,6 +24,7 @@ from ..db import (
     delete_generation_entry,
     delete_manga_page,
     delete_manga_panel,
+    delete_series_if_empty,
     delete_story,
     forget_library_items,
     get_connection,
@@ -36,6 +37,7 @@ from ..db import (
     list_library_panels,
     list_library_stories,
     list_scene_tags,
+    list_story_series,
     list_story_texts,
     set_adult_mark,
     set_bookmark,
@@ -181,6 +183,7 @@ def _story_adult() -> tuple[dict[int, bool], dict[int, bool]]:
     try:
         scenes = list_scene_tags(conn)
         texts = list_story_texts(conn)
+        story_series = list_story_series(conn)
         marks = list_adult_marks(conn, "book")
     finally:
         conn.close()
@@ -195,6 +198,11 @@ def _story_adult() -> tuple[dict[int, bool], dict[int, bool]]:
             and len(_ADULT_TEXT_RE.findall(row["text"] or "")) >= _ADULT_TEXT_MIN_HITS
         ):
             auto[row["story_id"]] = True
+    # シリーズのどれか1巻が成人向けなら、シリーズ全体を成人向けとみなす(続きの巻は同じ内容になりやすい)
+    adult_series = {series for story, series in story_series.items() if auto.get(story)}
+    for story, series in story_series.items():
+        if series in adult_series:
+            auto[story] = True
     effective = dict(auto)
     for key, adult in marks.items():
         if key.isdigit():
@@ -415,6 +423,10 @@ class Book(BaseModel):
     adult: bool = False
     adult_auto: bool = False
     adult_manual: bool | None = None
+    # シリーズの巻なら、そのシリーズと巻番号(単巻は None)
+    series_id: int | None = None
+    series_title: str | None = None
+    volume_no: int | None = None
 
 
 def _v2_pages(final_image_path: str | None) -> list[str]:
@@ -499,6 +511,9 @@ def _books() -> list[Book]:
                 ),
                 adult_auto=adult_auto.get(story["id"], False),
                 adult_manual=adult_marks.get(str(story["id"])),
+                series_id=story["series_id"],
+                series_title=story["series_title"],
+                volume_no=story["volume_no"],
             )
         )
     return books
@@ -710,7 +725,10 @@ def delete_book(story_id: int) -> None:
     try:
         if get_story(conn, story_id) is None:
             raise HTTPException(status_code=404, detail="story not found")
+        series_id = (get_story(conn, story_id) or {}).get("series_id")
         paths = delete_story(conn, story_id)
+        if series_id is not None:
+            delete_series_if_empty(conn, series_id)
         forget_library_items(conn, "image", image_keys)
         forget_library_items(conn, "book", [str(story_id)])
     finally:

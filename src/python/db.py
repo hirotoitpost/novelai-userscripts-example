@@ -284,6 +284,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # シリーズ: 巻(stories.series_id / volume_no)を束ねる。memory は全巻共通の設定(世界観・登場人物)、
+    # source は出典・原作者(例: Toptoon Chat のキャラクター)、max_scenes は1巻のシーン数の目安上限。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS series (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            memory TEXT NOT NULL DEFAULT '',
+            max_scenes INTEGER NOT NULL DEFAULT 20,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     # 成人向けかどうかの手動指定。無い物は自動判定(タグ)に従う。kind/item_key は bookmarks と同じ。
     conn.execute(
         """
@@ -320,6 +334,11 @@ _STORIES_EXTRA_COLUMNS = {
     # 漫画v2で最後に合成したときの設定(テンプレート・フォント・文字の大きさなど)。JSON。
     # ダウンロードはこの設定で作り直し、スタジオを開いたときにもこの設定に戻す。
     "manga_v2_compose_settings": "TEXT",
+    # シリーズの巻。series_id が NULL なら単巻。(series_id, volume_no) は一意。
+    "series_id": "INTEGER REFERENCES series(id) ON DELETE SET NULL",
+    "volume_no": "INTEGER",
+    # この巻のあらすじ(次の巻を書くときに「これまでのあらすじ」として渡す)。手で直せる。
+    "recap": "TEXT",
     # 物語エディタのメモリ(世界観・登場人物)。登場人物の抽出で容姿の手がかりに使う。
     "memory": "TEXT",
 }
@@ -526,6 +545,16 @@ def _migrate_stories(conn: sqlite3.Connection) -> None:
     for column, column_type in _STORIES_EXTRA_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE stories ADD COLUMN {column} {column_type}")
+    # 同じシリーズに同じ巻番号が2つできないようにする(巻の順番を確実にするため)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_stories_series_volume"
+        " ON stories(series_id, volume_no) WHERE series_id IS NOT NULL"
+    )
+    # 物語エディタの下書きも、どのシリーズの何巻として書いているかを持つ(「漫画にする」で巻になる)
+    draft_columns = {row["name"] for row in conn.execute("PRAGMA table_info(story_drafts)")}
+    for column in ("series_id", "volume_no"):
+        if column not in draft_columns:
+            conn.execute(f"ALTER TABLE story_drafts ADD COLUMN {column} INTEGER")
     conn.commit()
 
 
@@ -1026,6 +1055,12 @@ def list_scene_tags(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def list_story_series(conn: sqlite3.Connection) -> dict[int, int]:
+    """物語ID → シリーズID(シリーズの巻だけ)。"""
+    rows = conn.execute("SELECT id, series_id FROM stories WHERE series_id IS NOT NULL").fetchall()
+    return {row["id"]: row["series_id"] for row in rows}
+
+
 def list_story_texts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """成人向けの自動判定用: 物語ごとの本文(シーンの本文、無ければ取り込んだままの本文)。"""
     rows = conn.execute(
@@ -1132,6 +1167,7 @@ def list_library_stories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT st.id, st.premise, st.title, st.status, st.created_at, st.final_image_path, st.raw_text,
+               st.series_id, st.volume_no, (SELECT title FROM series WHERE id = st.series_id) AS series_title,
                (SELECT COUNT(*) FROM story_scenes s WHERE s.story_id = st.id) AS scene_count,
                (SELECT COALESCE(SUM(LENGTH(COALESCE(NULLIF(s.novelai_text, ''), s.draft_text))), 0)
                   FROM story_scenes s WHERE s.story_id = st.id) AS scene_chars,
@@ -1566,3 +1602,181 @@ def list_push_subscriptions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def delete_push_subscription(conn: sqlite3.Connection, endpoint: str) -> None:
     conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
     conn.commit()
+
+
+# ---- シリーズ(巻) ----
+
+
+def create_series(
+    conn: sqlite3.Connection, title: str, source: str = "", memory: str = "", max_scenes: int = 20
+) -> dict[str, Any]:
+    row = conn.execute(
+        "INSERT INTO series (title, source, memory, max_scenes, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
+        (title, source, memory, max_scenes, datetime.now(timezone.utc).isoformat()),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def get_series(conn: sqlite3.Connection, series_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_series(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [dict(row) for row in conn.execute("SELECT * FROM series ORDER BY id").fetchall()]
+
+
+def update_series(conn: sqlite3.Connection, series_id: int, fields: dict[str, Any]) -> None:
+    values = {k: v for k, v in fields.items() if k in {"title", "source", "memory", "max_scenes"}}
+    if values:
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        conn.execute(f"UPDATE series SET {assignments} WHERE id = ?", (*values.values(), series_id))
+        conn.commit()
+
+
+def delete_series_if_empty(conn: sqlite3.Connection, series_id: int) -> None:
+    """最後の巻を消したシリーズを片付ける。"""
+    conn.execute(
+        "DELETE FROM series WHERE id = ? AND NOT EXISTS (SELECT 1 FROM stories WHERE series_id = ?)",
+        (series_id, series_id),
+    )
+    conn.commit()
+
+
+def list_series_volumes(conn: sqlite3.Connection, series_id: int) -> list[dict[str, Any]]:
+    """シリーズの巻(巻番号順)。本文はあらすじ作り・結びの取り出しに使う。"""
+    rows = conn.execute(
+        """
+        SELECT st.id, st.title, st.premise, st.volume_no, st.recap, st.status, st.raw_text,
+               (SELECT COUNT(*) FROM story_scenes s WHERE s.story_id = st.id) AS scene_count
+        FROM stories st
+        WHERE st.series_id = ?
+        ORDER BY st.volume_no
+        """,
+        (series_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_story_series(conn: sqlite3.Connection, story_id: int, series_id: int | None, volume_no: int | None) -> None:
+    conn.execute(
+        "UPDATE stories SET series_id = ?, volume_no = ? WHERE id = ?", (series_id, volume_no, story_id)
+    )
+    conn.commit()
+
+
+def set_story_recap(conn: sqlite3.Connection, story_id: int, recap: str | None) -> None:
+    conn.execute("UPDATE stories SET recap = ? WHERE id = ?", (recap, story_id))
+    conn.commit()
+
+
+def set_story_title(conn: sqlite3.Connection, story_id: int, title: str) -> None:
+    conn.execute("UPDATE stories SET title = ? WHERE id = ?", (title, story_id))
+    conn.commit()
+
+
+def set_draft_series(conn: sqlite3.Connection, draft_id: int, series_id: int, volume_no: int) -> None:
+    conn.execute(
+        "UPDATE story_drafts SET series_id = ?, volume_no = ? WHERE id = ?", (series_id, volume_no, draft_id)
+    )
+    conn.commit()
+
+
+def story_text(conn: sqlite3.Connection, story_id: int) -> str:
+    """物語の本文(シーン順)。シーンが無ければ取り込んだままの本文。"""
+    rows = conn.execute(
+        "SELECT COALESCE(NULLIF(novelai_text, ''), draft_text) AS text FROM story_scenes"
+        " WHERE story_id = ? ORDER BY scene_index",
+        (story_id,),
+    ).fetchall()
+    if rows:
+        return "\n\n".join(row["text"] for row in rows if row["text"])
+    row = conn.execute("SELECT raw_text FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return (row["raw_text"] or "") if row else ""
+
+
+# 新しい巻にそのまま写す物語の列(漫画の合成設定・吹き出しの位置などは巻ごとに同じものを使う)
+_VOLUME_COPY_COLUMNS = (
+    "premise",
+    "panels_per_page",
+    "status",
+    "created_at",
+    "memory",
+    "manga_v2_overrides",
+    "manga_v2_sfx_fonts",
+    "manga_v2_sfx_stamps",
+    "manga_v2_compose_settings",
+)
+
+
+def split_story_into_volumes(
+    conn: sqlite3.Connection, story_id: int, volume_size: int, remaining_raw_text: str = ""
+) -> list[int]:
+    """
+    シーンを volume_size ずつ別の物語(巻)へ移す。1巻目は元の物語のまま残し、2巻目以降を新しく作る。
+    戻り値は巻の物語ID(巻順)。シーンの行ごと移すので、シーンに付いた登場人物・漫画v2のコマも一緒に移る。
+    漫画v1の挿絵ページは、含むシーンの巻へページ番号を振り直して移す(volume_size はページのコマ数の
+    倍数にしておくこと。そうでないとページが巻をまたぐ)。
+
+    各巻の raw_text はその巻のシーンの本文にする(元の全文のままだと「未分割の残り」と誤認されるため)。
+    remaining_raw_text はまだシーンにしていない残りの本文で、最後の巻に付けて「続きを分割」できるようにする。
+    1つのトランザクションで行い、途中で失敗したら何も変えない。
+    """
+    story = conn.execute("SELECT * FROM stories WHERE id = ?", (story_id,)).fetchone()
+    if story is None:
+        raise ValueError("story not found")
+    total = conn.execute("SELECT COUNT(*) FROM story_scenes WHERE story_id = ?", (story_id,)).fetchone()[0]
+    per_page = story["panels_per_page"]
+    starts = list(range(0, total, volume_size))
+    ids = [story_id]
+    try:
+        for start in starts[1:]:
+            end = min(start + volume_size, total) - 1
+            columns = ", ".join(_VOLUME_COPY_COLUMNS)
+            new_id = conn.execute(
+                f"INSERT INTO stories ({columns}, n_scenes) SELECT {columns}, ? FROM stories WHERE id = ? RETURNING id",
+                (end - start + 1, story_id),
+            ).fetchone()[0]
+            moved = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM story_scenes WHERE story_id = ? AND scene_index BETWEEN ? AND ?",
+                    (story_id, start, end),
+                ).fetchall()
+            ]
+            conn.execute(
+                "UPDATE story_scenes SET story_id = ?, scene_index = scene_index - ?,"
+                " page_index = (scene_index - ?) / ? WHERE story_id = ? AND scene_index BETWEEN ? AND ?",
+                (new_id, start, start, per_page, story_id, start, end),
+            )
+            conn.executemany("UPDATE manga_panels SET story_id = ? WHERE scene_id = ?", [(new_id, s) for s in moved])
+            first_page, last_page = start // per_page, end // per_page
+            conn.execute(
+                "UPDATE manga_pages SET story_id = ?, page_index = page_index - ?"
+                " WHERE story_id = ? AND page_index BETWEEN ? AND ?",
+                (new_id, first_page, story_id, first_page, last_page),
+            )
+            ids.append(new_id)
+        # 1巻目は volume_size シーンだけになる。全体をつないだ完成画像は内容と合わなくなるので外す
+        # (ファイルは消さない)。漫画v2は合成し直せば巻ごとの完成画像ができる。
+        conn.execute(
+            "UPDATE stories SET n_scenes = ?, final_image_path = NULL WHERE id = ?",
+            (min(volume_size, total), story_id),
+        )
+        for index, volume_id in enumerate(ids):
+            texts = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT draft_text FROM story_scenes WHERE story_id = ? ORDER BY scene_index", (volume_id,)
+                ).fetchall()
+            ]
+            raw = "\n\n".join(texts)
+            if index == len(ids) - 1 and remaining_raw_text.strip():
+                raw += "\n\n" + remaining_raw_text.lstrip()
+            conn.execute("UPDATE stories SET raw_text = ? WHERE id = ?", (raw, volume_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return ids
