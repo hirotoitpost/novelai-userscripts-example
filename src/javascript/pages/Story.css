@@ -407,6 +407,7 @@
 
 /* .story-section input の appearance: none でチェックボックスとスライダーが描かれなくなるので戻す */
 .story-section .mv2 input[type='checkbox'],
+.story-section .mv2 input[type='radio'],
 .story-section .mv2 input[type='range'] {
   -webkit-appearance: auto;
   appearance: auto;
@@ -699,6 +700,27 @@
 
 .mv2-compose {
   margin-top: 1rem;
+}
+
+.mv2-download {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #2a2a40;
+}
+
+.mv2-download h4 {
+  margin: 0 0 0.5rem;
+}
+
+.mv2-download .story-row {
+  align-items: center;
+}
+
+.mv2-download-contents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
 }
 
 .mv2-page-tabs {

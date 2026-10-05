@@ -39,6 +39,17 @@ interface Panel {
   created_at: string
 }
 
+/** 合成の設定(サーバーの MangaV2ComposeRequest)。物語ごとに最後に合成した値が保存される。 */
+export interface MangaV2ComposeSettings {
+  template: string
+  font: string | null
+  sfx_font: string | null
+  bubble_opacity: number
+  max_lines_per_panel: number
+  text_scale: number
+  sfx_scale: number
+}
+
 interface ComposeResult {
   pages: string[]
   page_width: number
@@ -50,6 +61,8 @@ interface Props {
   apiOrigin: string
   storyId: number
   scenes: MangaV2Scene[]
+  /** この物語で最後に合成したときの設定。開いたときにこれへ戻す(未合成なら null)。 */
+  savedComposeSettings: MangaV2ComposeSettings | null
   imageSettings: MangaImageSettingsValue
   token: string | null
   busy: boolean
@@ -60,6 +73,30 @@ interface Props {
   /** シーン(効果音)や完成画像が変わったので物語を読み直す。 */
   onChanged: () => Promise<void> | void
   fileUrl: (path: string) => string
+}
+
+type DownloadFormat = 'pdf' | 'zip'
+type DownloadContent = 'pages' | 'pages_clean' | 'panels' | 'panels_clean'
+
+const DOWNLOAD_CONTENTS: { id: DownloadContent; label: string }[] = [
+  { id: 'pages', label: '漫画(セリフあり)' },
+  { id: 'pages_clean', label: 'セリフなし漫画' },
+  { id: 'panels', label: 'ページ合成前のコマ画像(セリフあり)' },
+  { id: 'panels_clean', label: 'ページ合成前のコマ画像(セリフなし)' },
+]
+
+/** Content-Disposition の filename*(日本語名)を優先して取り出す。 */
+function downloadFilename(res: Response, fallback: string): string {
+  const header = res.headers.get('Content-Disposition') ?? ''
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1])
+    } catch {
+      // 壊れた名前なら下の filename を使う
+    }
+  }
+  return /filename="([^"]+)"/i.exec(header)?.[1] ?? fallback
 }
 
 const DIALOGUE_RE = /[「『]([^」』]*)[」』]/g
@@ -79,7 +116,7 @@ async function readErrorDetail(res: Response): Promise<string> {
 }
 
 export default function MangaV2Studio({
-  apiOrigin, storyId, scenes, imageSettings, token, busy, runTask, pollJob, onChanged, fileUrl,
+  apiOrigin, storyId, scenes, savedComposeSettings, imageSettings, token, busy, runTask, pollJob, onChanged, fileUrl,
 }: Props) {
   const [fonts, setFonts] = useState<FontOption[]>([])
   const [templates, setTemplates] = useState<TemplateOption[]>([])
@@ -100,6 +137,11 @@ export default function MangaV2Studio({
   const [useReference, setUseReference] = useLocalStorage('nai_manga_v2_use_reference', false)
   const [refStrength, setRefStrength] = useLocalStorage('nai_manga_v2_ref_strength', 1.0)
   const [refFidelity, setRefFidelity] = useLocalStorage('nai_manga_v2_ref_fidelity', 1.0)
+  const [downloadFormat, setDownloadFormat] = useLocalStorage<DownloadFormat>('nai_manga_v2_download_format', 'pdf')
+  const [downloadContents, setDownloadContents] = useLocalStorage<DownloadContent[]>(
+    'nai_manga_v2_download_contents',
+    ['pages'],
+  )
   const [skipExisting, setSkipExisting] = useState(true)
   const [overwriteSfx, setOverwriteSfx] = useState(false)
   // 描き文字の自動選択で成人向け素材のスタンプも使うか(既定は使わない)
@@ -135,6 +177,21 @@ export default function MangaV2Studio({
     setComposed(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiOrigin, storyId])
+
+  // 物語を開いたら、その物語で最後に合成した設定に戻す(端末ごとに見た目が変わらないように)。
+  // 物語を読み直すたびに戻すと、合成前に変えた設定が消えるので、開いたときだけにする。
+  useEffect(() => {
+    const saved = savedComposeSettings
+    if (!saved) return
+    setTemplate(saved.template)
+    if (saved.font) setFont(saved.font)
+    if (saved.sfx_font) setSfxFont(saved.sfx_font)
+    setOpacity(Math.round(saved.bubble_opacity * 100))
+    setMaxLines(saved.max_lines_per_panel)
+    setTextScale(Math.round(saved.text_scale * 100))
+    setSfxScale(Math.round(saved.sfx_scale * 100))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storyId])
 
   // 物語を読み直したら、保存済みの効果音を入力欄に反映する(編集途中のものは保たない)
   useEffect(() => {
@@ -302,19 +359,22 @@ export default function MangaV2Studio({
     reader.readAsDataURL(file)
   }
 
+  // 合成とダウンロードで同じ設定を使う(ダウンロードは同じ見た目のページを作り直す)
+  const composeSettings = {
+    template,
+    font,
+    sfx_font: sfxFont,
+    bubble_opacity: opacity / 100,
+    max_lines_per_panel: maxLines,
+    text_scale: textScale / 100,
+    sfx_scale: sfxScale / 100,
+  }
+
   async function requestCompose(signal: AbortSignal) {
     const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/compose`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        template,
-        font,
-        sfx_font: sfxFont,
-        bubble_opacity: opacity / 100,
-        max_lines_per_panel: maxLines,
-        text_scale: textScale / 100,
-        sfx_scale: sfxScale / 100,
-      }),
+      body: JSON.stringify(composeSettings),
       signal,
     })
     if (!res.ok) throw new Error(await readErrorDetail(res))
@@ -327,6 +387,37 @@ export default function MangaV2Studio({
   function compose() {
     return runTask('ページの合成', requestCompose)
   }
+
+  function toggleDownloadContent(id: DownloadContent, checked: boolean) {
+    const next = checked ? [...downloadContents, id] : downloadContents.filter(c => c !== id)
+    // 表示順にそろえておく(zip のフォルダ・PDF の並びもこの順になる)
+    setDownloadContents(DOWNLOAD_CONTENTS.map(c => c.id).filter(c => next.includes(c)))
+  }
+
+  function download() {
+    return runTask('ダウンロード用ファイルの作成', async signal => {
+      const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...composeSettings, format: downloadFormat, contents: downloadContents }),
+        signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = downloadFilename(res, `manga_story${storyId}.${blob.type === 'application/pdf' ? 'pdf' : 'zip'}`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      // クリック直後に解放するとダウンロードが始まらないブラウザがあるので少し待つ
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      return 'ダウンロードを開始しました'
+    })
+  }
+
+  const downloadIsZip = downloadFormat === 'zip' || downloadContents.length > 1
 
   async function putOverride(key: string, x: number | null, y: number | null, signal: AbortSignal) {
     const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/overrides`, {
@@ -688,6 +779,53 @@ export default function MangaV2Studio({
                 このページの手動配置を戻す
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {panels.length > 0 && (
+        <div className="mv2-download">
+          <h4>ダウンロード</h4>
+          <div className="story-row">
+            <span>形式</span>
+            {(['pdf', 'zip'] as const).map(format => (
+              <label key={format} className="mv2-check">
+                <input
+                  type="radio"
+                  name="mv2-download-format"
+                  value={format}
+                  checked={downloadFormat === format}
+                  disabled={busy}
+                  onChange={() => setDownloadFormat(format)}
+                />
+                {format === 'pdf' ? 'PDF' : '画像一式(zip)'}
+              </label>
+            ))}
+          </div>
+          <div className="mv2-download-contents">
+            {DOWNLOAD_CONTENTS.map(c => (
+              <label key={c.id} className="mv2-check">
+                <input
+                  type="checkbox"
+                  checked={downloadContents.includes(c.id)}
+                  disabled={busy}
+                  onChange={e => toggleDownloadContent(c.id, e.target.checked)}
+                />
+                {c.label}
+              </label>
+            ))}
+          </div>
+          <p className="story-muted">
+            {savedComposeSettings
+              ? `最後に「ページを合成」したときの設定(テンプレート「${templates.find(t => t.id === savedComposeSettings.template)?.label ?? savedComposeSettings.template}」・フォント・文字の大きさ)と手動配置で書き出します。設定を変えたら、先に合成し直してください。`
+              : 'まだ合成していないので、今の設定(テンプレート・フォント・文字の大きさ)で書き出します。'}
+            コマ画像(セリフなし)は生成した絵そのもの、(セリフあり)はその絵に吹き出しと描き文字を入れたものです。
+            {downloadFormat === 'pdf' && downloadContents.length > 1 && ' PDFで複数選ぶと、種類ごとのPDFをまとめたzipになります。'}
+          </p>
+          <div className="story-actions">
+            <button type="button" onClick={download} disabled={busy || downloadContents.length === 0}>
+              {downloadIsZip ? 'zipでダウンロード' : 'PDFでダウンロード'}
+            </button>
           </div>
         </div>
       )}

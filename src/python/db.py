@@ -294,6 +294,9 @@ _STORIES_EXTRA_COLUMNS = {
     "manga_v2_sfx_fonts": "TEXT",
     # 漫画v2で効果音ごとに使うスタンプ。JSON {効果音の文字列: スタンプID}
     "manga_v2_sfx_stamps": "TEXT",
+    # 漫画v2で最後に合成したときの設定(テンプレート・フォント・文字の大きさなど)。JSON。
+    # ダウンロードはこの設定で作り直し、スタジオを開いたときにもこの設定に戻す。
+    "manga_v2_compose_settings": "TEXT",
     # 物語エディタのメモリ(世界観・登場人物)。登場人物の抽出で容姿の手がかりに使う。
     "memory": "TEXT",
 }
@@ -359,6 +362,20 @@ def set_manga_v2_sfx_fonts(conn: sqlite3.Connection, story_id: int, fonts: dict[
     conn.execute(
         "UPDATE stories SET manga_v2_sfx_fonts = ? WHERE id = ?",
         (json.dumps(fonts, ensure_ascii=False) if fonts else None, story_id),
+    )
+    conn.commit()
+
+
+def get_manga_v2_compose_settings(conn: sqlite3.Connection, story_id: int) -> dict[str, Any] | None:
+    """最後に合成したときの設定。まだ合成していなければ None。"""
+    row = conn.execute("SELECT manga_v2_compose_settings FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return json.loads(row["manga_v2_compose_settings"]) if row and row["manga_v2_compose_settings"] else None
+
+
+def set_manga_v2_compose_settings(conn: sqlite3.Connection, story_id: int, settings: dict[str, Any]) -> None:
+    conn.execute(
+        "UPDATE stories SET manga_v2_compose_settings = ? WHERE id = ?",
+        (json.dumps(settings, ensure_ascii=False), story_id),
     )
     conn.commit()
 

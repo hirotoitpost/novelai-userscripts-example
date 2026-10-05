@@ -310,7 +310,9 @@ def _place_stamp(
         ratio *= _STAMP_SHRINK
 
 
-def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle) -> list[Element]:
+def _draw_panel(
+    page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle, *, border: bool = True
+) -> list[Element]:
     x0, y0, x1, y1 = rect
     width, height = x1 - x0, y1 - y0
     draw = ImageDraw.Draw(page)
@@ -440,7 +442,8 @@ def _draw_panel(page: Image.Image, rect: Rect, content: PanelContent, style: Let
     if narration_box is not None and narration_block is not None:
         draw_narration(page, narration_box, narration_block, style.font_path)
 
-    draw.rectangle(rect, outline=(0, 0, 0), width=_BORDER)
+    if border:
+        draw.rectangle(rect, outline=(0, 0, 0), width=_BORDER)
     return elements
 
 
@@ -467,6 +470,20 @@ def compose_pages(
         chunk = panels[i : i + per_page]
         pages.append(compose_page(panel_rects(fill_template(template_id, len(chunk))), chunk, style))
     return pages
+
+
+def compose_panel(content: PanelContent, style: LetteringStyle) -> Image.Image:
+    """
+    1コマを、ページに嵌める前の絵の大きさのまま(切り抜かず・枠線なしで)吹き出しと描き文字を
+    置いて返す。ダウンロード用。手動配置はコマに対する割合なので、そのまま同じ辺りに置かれる。
+    """
+    if content.image_path is None or not content.image_path.is_file():
+        raise ValueError("panel image is missing")
+    with Image.open(content.image_path) as src:
+        size = src.size
+    canvas = Image.new("RGB", size, (255, 255, 255))
+    _draw_panel(canvas, (0, 0, size[0], size[1]), content, style, border=False)
+    return canvas
 
 
 _PAGE_GAP = 40

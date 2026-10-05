@@ -153,7 +153,10 @@ def _story_response(story: dict[str, Any] | None) -> StoryResponse:
     raw_text = story.get("raw_text") or ""
     # 末尾の改行など空白だけの残りは「未分割」に数えない
     unsplit = len(raw_text[_covered_length(raw_text, story["scenes"]) :].strip()) if story["scenes"] else 0
-    return StoryResponse.model_validate({**story, "unsplit_chars": unsplit})
+    settings = story.get("manga_v2_compose_settings")
+    return StoryResponse.model_validate(
+        {**story, "unsplit_chars": unsplit, "manga_v2_compose_settings": json.loads(settings) if settings else None}
+    )
 
 
 _DRAFT_MAX_ATTEMPTS = 3

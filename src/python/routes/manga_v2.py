@@ -16,7 +16,10 @@ import json
 import re
 import unicodedata
 import zipfile
+from dataclasses import replace
+from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -29,6 +32,7 @@ from ..client import get_client
 from ..db import (
     characters_by_scene,
     get_connection,
+    get_manga_v2_compose_settings,
     get_manga_v2_overrides,
     get_manga_v2_sfx_fonts,
     get_manga_v2_sfx_stamps,
@@ -37,12 +41,14 @@ from ..db import (
     delete_stamp,
     delete_stamp_source,
     get_stamp,
+    get_story,
     list_stamp_sources,
     list_stamps,
     replace_stamp_source,
     update_stamp_label,
     list_manga_panels,
     list_story_scenes,
+    set_manga_v2_compose_settings,
     set_manga_v2_overrides,
     set_manga_v2_sfx_fonts,
     set_manga_v2_sfx_stamps,
@@ -56,6 +62,7 @@ from ..manga_v2.compose import (
     LetteringStyle,
     PanelContent,
     compose_pages,
+    compose_panel,
     concat_pages,
     page_png,
     split_dense_panels,
@@ -89,6 +96,7 @@ from ..models import (
     MangaV2CharacterReferenceRequest,
     MangaV2ComposeRequest,
     MangaV2ComposeResponse,
+    MangaV2DownloadRequest,
     MangaV2Font,
     MangaV2OverrideRequest,
     MangaV2ScaleRequest,
@@ -887,12 +895,13 @@ async def _run_panels(
     job.message = f"{len(targets)}コマの絵を生成しました"
 
 
-# 画像処理で数秒かかるので、同期関数にしてスレッドプールで実行させる(イベントループを塞がない)
-@router.post("/{story_id}/compose", response_model=MangaV2ComposeResponse)
-def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
+def _compose_inputs(
+    story_id: int, req: MangaV2ComposeRequest
+) -> tuple[list[PanelContent], LetteringStyle, dict[str, int]]:
     """
-    コマの絵をテンプレートに嵌め込み、セリフを吹き出しで描いてページにする。
+    合成に渡すコマ(シーン順)と文字の設定を DB から組み立てる。合成とダウンロードで共用する。
     冒頭だけ試せるよう、絵がある最後のシーンまでを対象にする(途中の未生成コマは灰色)。
+    3つ目は PanelContent.key(シーンID) → シーン番号(0始まり)。ダウンロードのファイル名に使う。
     """
     _require_template(req.template)
     conn = get_connection()
@@ -935,6 +944,14 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         for s in scenes
         if s["scene_index"] <= last
     ]
+    return contents, style, {str(s["id"]): s["scene_index"] for s in scenes}
+
+
+# 画像処理で数秒かかるので、同期関数にしてスレッドプールで実行させる(イベントループを塞がない)
+@router.post("/{story_id}/compose", response_model=MangaV2ComposeResponse)
+def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
+    """コマの絵をテンプレートに嵌め込み、セリフを吹き出しで描いてページにする。"""
+    contents, style, _ = _compose_inputs(story_id, req)
     composed = compose_pages(req.template, split_dense_panels(contents, req.max_lines_per_panel), style)
     pages = [page for page, _ in composed]
 
@@ -952,6 +969,8 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
     conn = get_connection()
     try:
         update_story_final_image(conn, story_id, final_path)
+        # ダウンロードやスタジオを開き直したときに、この見た目を再現できるよう物語ごとに残す
+        set_manga_v2_compose_settings(conn, story_id, req.model_dump())
     finally:
         conn.close()
     return {
@@ -967,14 +986,142 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
                     "text": e.text,
                     "box": list(e.box),
                     "panel": list(e.panel),
-                    "moved": e.key in overrides,
-                    "scale": overrides[_SCALE_PREFIX + e.key][0] if _SCALE_PREFIX + e.key in overrides else None,
+                    "moved": e.key in style.overrides,
+                    "scale": style.scales.get(e.key),
                 }
                 for e in elements
             ]
             for _, elements in composed
         ],
     }
+
+
+# ---- ダウンロード ----
+
+# zip 内のフォルダ名・PDF のファイル名
+_DOWNLOAD_NAMES: dict[str, str] = {
+    "pages": "pages",
+    "pages_clean": "pages_no_text",
+    "panels": "panels",
+    "panels_clean": "panels_no_text",
+}
+# PDF の1ページの解像度(dpi)。ページ画像 1200×1700 px が A4 よりやや大きい程度になる。
+_PDF_RESOLUTION = 150.0
+_FILENAME_UNSAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _download_images(
+    kind: str,
+    contents: list[PanelContent],
+    style: LetteringStyle,
+    scene_numbers: dict[str, int],
+    req: MangaV2DownloadRequest,
+) -> list[tuple[str, Image.Image]]:
+    """ダウンロードの1種類分を (ファイル名, 画像) の並びで作る。ページ・コマの並びは合成と同じ。"""
+    split = split_dense_panels(contents, req.max_lines_per_panel)
+    if kind in ("pages", "pages_clean"):
+        if kind == "pages_clean":
+            # 寄りのコマもセリフありと同じ並びにするため、分けた後で文字だけを外す
+            split = [replace(c, dialogue=[], sfx=[], narration="") for c in split]
+        pages = [page for page, _ in compose_pages(req.template, split, style)]
+        width = max(2, len(str(len(pages))))
+        return [(f"page_{i + 1:0{width}d}.png", page) for i, page in enumerate(pages)]
+
+    if kind == "panels_clean":
+        result: list[tuple[str, Image.Image]] = []
+        for name, path in _clean_panel_files(contents, scene_numbers):
+            with Image.open(path) as src:
+                result.append((name, src.convert("RGB")))
+        return result
+    width = _scene_number_width(scene_numbers)
+    return [
+        (
+            f"scene_{scene_numbers[c.key] + 1:0{width}d}{f'_{c.zoom_step + 1}' if c.zoom_step else ''}.png",
+            compose_panel(c, style),
+        )
+        for c in split
+        if c.image_path is not None and c.image_path.is_file()
+    ]
+
+
+def _scene_number_width(scene_numbers: dict[str, int]) -> int:
+    return max(2, len(str(max(scene_numbers.values()) + 1)))
+
+
+def _clean_panel_files(contents: list[PanelContent], scene_numbers: dict[str, int]) -> list[tuple[str, Path]]:
+    """生成したコマの絵そのもの(セリフなし)のファイル。シーンごとに1枚。"""
+    width = _scene_number_width(scene_numbers)
+    return [
+        (f"scene_{scene_numbers[c.key] + 1:0{width}d}.png", c.image_path)
+        for c in contents
+        if c.image_path is not None and c.image_path.is_file()
+    ]
+
+
+def _pdf_bytes(images: list[Image.Image]) -> bytes:
+    buf = io.BytesIO()
+    images[0].save(buf, format="PDF", save_all=True, append_images=images[1:], resolution=_PDF_RESOLUTION)
+    return buf.getvalue()
+
+
+def _attachment_header(story_id: int, title: str | None, extension: str) -> str:
+    """ASCII の filename と、日本語のタイトルを入れた filename*(RFC 5987)の両方を付ける。"""
+    fallback = f"manga_story{story_id}.{extension}"
+    name = _FILENAME_UNSAFE_RE.sub("_", (title or "").strip())[:80]
+    if not name:
+        return f'attachment; filename="{fallback}"'
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(f'{name}.{extension}')}"
+
+
+@router.post("/{story_id}/download")
+def download(story_id: int, req: MangaV2DownloadRequest) -> Response:
+    """
+    最後に合成したときの設定でページ/コマを作り直し、PDF か zip にまとめて返す。DB や合成済みのページは変えない。
+    まだ合成していない物語ではリクエストの設定を使う。
+    zip は選んだ種類ごとのフォルダに PNG を入れる。PDF は1種類ならその PDF、複数なら PDF をまとめた zip。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        saved = get_manga_v2_compose_settings(conn, story_id)
+    finally:
+        conn.close()
+    if saved:
+        # 端末ごとの画面の設定ではなく、最後に合成したレイアウトにそろえる
+        req = req.model_copy(update=MangaV2ComposeRequest.model_validate(saved).model_dump())
+    contents, style, scene_numbers = _compose_inputs(story_id, req)
+    title = (story or {}).get("title")
+    kinds = list(dict.fromkeys(req.contents))  # 重複を除き、選んだ順を保つ
+
+    if req.format == "pdf" and len(kinds) == 1:
+        images = _download_images(kinds[0], contents, style, scene_numbers, req)
+        return Response(
+            _pdf_bytes([image for _, image in images]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": _attachment_header(story_id, title, "pdf")},
+        )
+
+    buf = io.BytesIO()
+    # PNG/PDF は既に圧縮されているので、zip では圧縮し直さない
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as archive:
+        for kind in kinds:
+            folder = _DOWNLOAD_NAMES[kind]
+            if req.format == "zip" and kind == "panels_clean":
+                # 生成した PNG をそのまま入れる(作り直さないので速く、NovelAI の生成情報も残る)
+                for name, path in _clean_panel_files(contents, scene_numbers):
+                    archive.write(path, f"{folder}/{name}")
+                continue
+            images = _download_images(kind, contents, style, scene_numbers, req)
+            if req.format == "pdf":
+                archive.writestr(f"{folder}.pdf", _pdf_bytes([image for _, image in images]))
+            else:
+                for name, image in images:
+                    archive.writestr(f"{folder}/{name}", page_png(image))
+    return Response(
+        buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": _attachment_header(story_id, title, "zip")},
+    )
 
 
 # ---- 効果音ごとのフォント ----

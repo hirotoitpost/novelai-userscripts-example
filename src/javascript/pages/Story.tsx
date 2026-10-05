@@ -7,7 +7,7 @@ import MangaImageSettings, {
   MangaImageSettingsValue,
 } from '../components/MangaImageSettings'
 import StoryCharacters, { SceneCharacter } from '../components/StoryCharacters'
-import MangaV2Studio from '../components/MangaV2Studio'
+import MangaV2Studio, { MangaV2ComposeSettings } from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import NotificationToggle from '../components/NotificationToggle'
@@ -40,6 +40,8 @@ interface StoryData {
   raw_text: string | null
   // raw_text のうちまだシーンへ分割していない残りの文字数(冒頭だけ分割した場合に正)
   unsplit_chars: number
+  // 漫画v2で最後に合成したときの設定(未合成なら null)
+  manga_v2_compose_settings: MangaV2ComposeSettings | null
   scenes: StoryScene[]
 }
 
@@ -1050,6 +1052,7 @@ export default function Story() {
                 apiOrigin={API_ORIGIN}
                 storyId={story.id}
                 scenes={story.scenes}
+                savedComposeSettings={story.manga_v2_compose_settings}
                 imageSettings={imageSettings}
                 token={token}
                 busy={busy}

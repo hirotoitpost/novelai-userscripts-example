@@ -455,6 +455,8 @@ class StoryResponse(BaseModel):
     raw_text: str | None = None
     # raw_text のうち、まだシーンへ分割していない残りの文字数(冒頭だけ分割した場合に正)
     unsplit_chars: int = 0
+    # 漫画v2で最後に合成したときの設定(MangaV2ComposeRequest の中身)。未合成なら None。
+    manga_v2_compose_settings: Optional[dict[str, Any]] = None
     scenes: list[StorySceneResponse]
 
 
@@ -641,6 +643,18 @@ class MangaV2ComposeRequest(BaseModel):
     # 叫び・小声による自動調整に、さらに掛ける。
     text_scale: float = Field(1.0, ge=0.5, le=2.0)
     sfx_scale: float = Field(1.0, ge=0.5, le=2.0)
+
+
+# ダウンロードに入れるもの。pages=合成したページ、pages_clean=セリフ・効果音・ナレーションなしのページ、
+# panels=ページに嵌める前のコマに文字を入れたもの、panels_clean=生成したコマの絵そのもの。
+MangaV2DownloadContent = Literal["pages", "pages_clean", "panels", "panels_clean"]
+
+
+class MangaV2DownloadRequest(MangaV2ComposeRequest):
+    """合成と同じ設定で作り直してダウンロードする。PDFで複数選んだ場合はPDFをまとめたzipになる。"""
+
+    format: Literal["pdf", "zip"] = "zip"
+    contents: list[MangaV2DownloadContent] = Field(default_factory=lambda: ["pages"], min_length=1)
 
 
 class MangaV2Element(BaseModel):
