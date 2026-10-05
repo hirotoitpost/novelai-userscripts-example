@@ -425,6 +425,7 @@ export default function Bookshelf() {
             loadAuthors()
           }}
           blurAdult={blurAdult}
+          rating={rating}
           onEdit={() => navigate(`/story?story=${openId}`)}
         />
       )}
@@ -447,11 +448,12 @@ interface ReaderProps {
   /** 巻に分けた等で、本棚の並びが変わった */
   onShelfChanged: () => void
   blurAdult: boolean
+  rating: Rating
   onEdit: () => void
 }
 
 function Reader({
-  bookId, initialPage, onPage, onClose, onToggleBookmark, onToggleAdult, onDelete, onOpenBook, onShelfChanged, blurAdult, onEdit,
+  bookId, initialPage, onPage, onClose, onToggleBookmark, onToggleAdult, onDelete, onOpenBook, onShelfChanged, blurAdult, rating, onEdit,
 }: ReaderProps) {
   const navigate = useNavigate()
   const [book, setBook] = useState<BookDetail | null>(null)
@@ -717,6 +719,7 @@ function Reader({
             onOpen={onOpenBook}
             onChanged={onShelfChanged}
             blurAdult={blurAdult}
+            rating={rating}
           />
 
           {tab === 'manga' && pageCount > 0 && (

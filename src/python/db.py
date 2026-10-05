@@ -1985,3 +1985,29 @@ def move_work(conn: sqlite3.Connection, old_kind: str, old_id: int, new_kind: st
             (new_kind, new_id, old_kind, old_id, new_kind, new_id),
         )
     forget_work(conn, old_kind, old_id)
+
+
+def list_story_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """似ている作品の計算用: 物語ごとの登場人物(シーンに割り当てたもの)。"""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT s.story_id, c.id AS character_id, c.name
+        FROM scene_characters sc
+        JOIN story_scenes s ON s.id = sc.scene_id
+        JOIN characters c ON c.id = sc.character_id
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_panel_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """似ている画像の計算用: 漫画のコマごとの登場人物。"""
+    rows = conn.execute(
+        """
+        SELECT p.id AS panel_id, c.id AS character_id, c.name
+        FROM manga_panels p
+        JOIN scene_characters sc ON sc.scene_id = p.scene_id
+        JOIN characters c ON c.id = sc.character_id
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]

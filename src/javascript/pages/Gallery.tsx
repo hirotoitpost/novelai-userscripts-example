@@ -38,6 +38,12 @@ interface GalleryImage {
   adult_manual: boolean | null
 }
 
+interface SimilarImage {
+  image: GalleryImage
+  score: number
+  reasons: string[]
+}
+
 interface GalleryResponse {
   items: GalleryImage[]
   total: number
@@ -90,6 +96,7 @@ export default function Gallery() {
   // ぼかしを外して見た画像(このページを開いている間だけ)
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [similar, setSimilar] = useState<SimilarImage[] | null>(null)
 
   const sentinel = useRef<HTMLDivElement | null>(null)
   const touchStart = useRef<number | null>(null)
@@ -119,7 +126,11 @@ export default function Gallery() {
       try {
         const data = await getJson<GalleryResponse>(`/api/library/images?${filterQuery}&offset=${offset}`)
         if (id !== requestId.current) return
-        setItems(prev => (offset === 0 ? data.items : [...prev, ...data.items]))
+        setItems(prev => {
+          if (offset === 0) return data.items
+          const loaded = new Set(prev.map(i => i.key))
+          return [...prev, ...data.items.filter(i => !loaded.has(i.key))]
+        })
         setTotal(data.total)
         setStories(data.stories)
       } catch (e) {
@@ -149,6 +160,30 @@ export default function Gallery() {
   }, [hasMore, loading, items.length, load])
 
   const current = viewing !== null ? items[viewing] ?? null : null
+  const currentKey = current?.key ?? null
+
+  // 見ている画像に似ている画像(共通のタグ・登場人物、同じ物語、生成日時から計算)
+  useEffect(() => {
+    if (currentKey === null) return
+    setSimilar(null)
+    let cancelled = false
+    getJson<SimilarImage[]>(`/api/library/images/similar?key=${encodeURIComponent(currentKey)}&rating=${rating}`)
+      .then(data => { if (!cancelled) setSimilar(data) })
+      .catch(() => { if (!cancelled) setSimilar([]) })
+    return () => { cancelled = true }
+  }, [currentKey, rating])
+
+  /** 似ている画像を開く。一覧に読み込んでいなければ、今の画像の次に差し込む(前後の移動が続けられる)。 */
+  function openSimilar(image: GalleryImage) {
+    const index = items.findIndex(i => i.key === image.key)
+    if (index >= 0) {
+      setViewing(index)
+    } else if (viewing !== null) {
+      setItems(prev => [...prev.slice(0, viewing + 1), image, ...prev.slice(viewing + 1)])
+      setViewing(viewing + 1)
+    }
+    setCopied(false)
+  }
   // 成人向けだけを表示しているときは、自分で選んで見ているのでぼかさない
   const blurs = (item: GalleryImage) => item.adult && blurAdult && rating !== 'adult'
 
@@ -541,6 +576,34 @@ export default function Gallery() {
                 <p>{current.prompt}</p>
               </div>
             )}
+            <div className="gallery-similar">
+              <h3>似ている画像</h3>
+              {similar === null && <p className="gallery-similar-muted">計算中…</p>}
+              {similar?.length === 0 && <p className="gallery-similar-muted">見つかりませんでした。</p>}
+              <ul>
+                {similar?.map(({ image, reasons }) => {
+                  // ぼかしている成人向けの画像は、露骨な語が出ることがあるタグの理由を出さない
+                  const shown = blurs(image) ? reasons.filter(r => !r.startsWith('共通のタグ')) : reasons
+                  return (
+                  <li key={image.key}>
+                    <button
+                      type="button"
+                      onClick={() => openSimilar(image)}
+                      title={shown.join(' ・ ')}
+                    >
+                      <img
+                        src={thumbUrl(image.path, 240)}
+                        alt={describe(image) || SOURCE_LABELS[image.source]}
+                        className={blurs(image) ? 'is-blurred' : undefined}
+                        loading="lazy"
+                      />
+                      <span>{shown[0] ?? ''}</span>
+                    </button>
+                  </li>
+                  )
+                })}
+              </ul>
+            </div>
           </div>
         </div>
       )}

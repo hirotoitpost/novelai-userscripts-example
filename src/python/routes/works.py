@@ -24,12 +24,15 @@ from ..db import (
     get_series,
     get_story,
     list_authors,
+    list_scene_tags,
+    list_story_characters,
     list_work_authors,
     list_work_relations,
     remove_work_author,
     update_author,
 )
-from .library import _books
+from ..relatedness import Item, idf_weights, normalize_tags, rank
+from .library import Book, _books
 
 router = APIRouter(tags=["works"])
 
@@ -51,10 +54,12 @@ class Work(WorkRef):
     first_story_id: int
 
 
-def _works() -> dict[tuple[str, int], Work]:
+def _works(books: list[Book] | None = None) -> dict[tuple[str, int], Work]:
     """本棚の本から作品の一覧を作る。シリーズは1巻の表紙と題を使う。"""
     works: dict[tuple[str, int], Work] = {}
-    for book in sorted(_books(), key=lambda b: b.volume_no or 0):
+    for book in sorted(
+        books if books is not None else _books(), key=lambda b: b.volume_no or 0
+    ):
         if book.series_id is None:
             works[("story", book.id)] = Work(
                 kind="story",
@@ -301,3 +306,86 @@ def detach_author(kind: WorkKind, work_id: int, author_id: int) -> None:
         remove_work_author(conn, kind, work_id, author_id)
     finally:
         conn.close()
+
+
+# ---- 似ている作品(弱い関連・自動) ----
+
+
+class SimilarWork(BaseModel):
+    work: Work
+    score: float
+    reasons: list[str]
+
+
+@router.get("/api/works/{kind}/{work_id}/similar", response_model=list[SimilarWork])
+def similar_works(
+    kind: WorkKind,
+    work_id: int,
+    rating: Literal["all", "general", "adult"] = "all",
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """
+    似ている作品(共通の登場人物・作者・タグ、題名、作成日から計算)。既に強い関連(スピンオフ・
+    クロスオーバー)で結んだ作品は、関連作品の欄に出ているので除く。
+    """
+    books = _books()
+    works = _works(books)
+    if (kind, work_id) not in works:
+        raise HTTPException(status_code=404, detail="作品がありません。")
+    story_to_work: dict[int, tuple[str, int]] = {}
+    created: dict[tuple[str, int], str] = {}
+    for book in books:
+        key = (
+            ("series", book.series_id)
+            if book.series_id is not None
+            else ("story", book.id)
+        )
+        story_to_work[book.id] = key
+        created[key] = min(created.get(key, book.created_at), book.created_at)
+
+    conn = get_connection()
+    try:
+        scene_tags = list_scene_tags(conn)
+        characters = list_story_characters(conn)
+        authors = list_work_authors(conn)
+        linked = {
+            (r["to_kind"], r["to_id"])
+            if (r["from_kind"], r["from_id"]) == (kind, work_id)
+            else (r["from_kind"], r["from_id"])
+            for r in list_work_relations(conn, kind, work_id)
+        }
+    finally:
+        conn.close()
+
+    items: dict[tuple[str, int], Item] = {
+        key: Item(
+            key=f"{key[0]}:{key[1]}",
+            created_at=created.get(key, ""),
+            title=work.title,
+            authors={a["id"]: a["name"] for a in authors.get(key, [])},
+        )
+        for key, work in works.items()
+    }
+    for row in scene_tags:
+        key = story_to_work.get(row["story_id"])
+        if key in items:
+            items[key].tags |= normalize_tags(row["draft_prompt_tags"])
+    for row in characters:
+        key = story_to_work.get(row["story_id"])
+        if key in items:
+            items[key].characters[row["character_id"]] = row["name"]
+
+    target = items[(kind, work_id)]
+    idf = idf_weights(item.tags for item in items.values())
+    candidates = [
+        item
+        for key, item in items.items()
+        if key != (kind, work_id)
+        and key not in linked
+        and (rating == "all" or works[key].adult == (rating == "adult"))
+    ]
+    by_key = {f"{key[0]}:{key[1]}": work for key, work in works.items()}
+    return [
+        {"work": by_key[m.key], "score": m.score, "reasons": m.reasons}
+        for m in rank(target, candidates, idf, max(1, min(limit, 30)))
+    ]

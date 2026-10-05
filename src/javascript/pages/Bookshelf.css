@@ -920,3 +920,9 @@
   color: #9a9ac0;
   font-size: 0.7rem;
 }
+
+.work-relations-open .work-relations-reasons {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -473,3 +473,71 @@
   background: #2a1020;
   color: #ffb0c8;
 }
+
+/* ---- 似ている画像 ---- */
+
+.gallery-similar {
+  margin-top: 1rem;
+}
+
+.gallery-similar h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #9a9ac0;
+  font-weight: 600;
+}
+
+.gallery-similar-muted {
+  margin: 0;
+  color: #6c6c90;
+  font-size: 0.8rem;
+}
+
+.gallery-similar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+}
+
+.gallery-similar li {
+  flex: 0 0 auto;
+}
+
+.gallery-similar button {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 112px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: #9a9ac0;
+  font-size: 0.68rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gallery-similar img {
+  width: 112px;
+  height: 112px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #2a2a50;
+}
+
+.gallery-similar img.is-blurred {
+  filter: blur(10px) brightness(0.8);
+}
+
+.gallery-similar button:hover img {
+  border-color: #7b5cf6;
+}
+
+.gallery-similar span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

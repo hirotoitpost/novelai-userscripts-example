@@ -33,6 +33,17 @@ interface Relations {
   related: RelatedWork[]
 }
 
+interface SimilarWork {
+  work: Work
+  score: number
+  reasons: string[]
+}
+
+/** 成人向けの作品をぼかしているときは、露骨な語が出ることがあるタグの理由を出さない */
+function visibleReasons(item: SimilarWork, blurAdult: boolean): string[] {
+  return item.work.adult && blurAdult ? item.reasons.filter(r => !r.startsWith('共通のタグ')) : item.reasons
+}
+
 // 追加するときの関連の向き。spinoff_of: この作品が相手のスピンオフ / has_spinoff: 相手がこの作品のスピンオフ
 type NewRole = 'spinoff_of' | 'has_spinoff' | 'crossover'
 
@@ -66,16 +77,19 @@ interface Props {
   onChanged: () => void
   /** 成人向けの表紙をぼかすか */
   blurAdult: boolean
+  /** 本棚の成人向けの絞り込み(似ている作品にも効かせる) */
+  rating: 'all' | 'general' | 'adult'
 }
 
 /**
  * 本の画面の「作者・関連作品」。作者(出典・原作者)の付け外しと、スピンオフ・クロスオーバーの
  * 関連の追加・削除をする。関連は巻ではなく作品(シリーズ全体、または単巻の物語)に付く。
  */
-export default function WorkRelations({ work, onOpen, onChanged, blurAdult }: Props) {
+export default function WorkRelations({ work, onOpen, onChanged, blurAdult, rating }: Props) {
   const [relations, setRelations] = useState<Relations | null>(null)
   const [authors, setAuthors] = useState<(Author & { work_count: number })[]>([])
   const [works, setWorks] = useState<Work[]>([])
+  const [similar, setSimilar] = useState<SimilarWork[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [authorToAdd, setAuthorToAdd] = useState('')
@@ -88,9 +102,13 @@ export default function WorkRelations({ work, onOpen, onChanged, blurAdult }: Pr
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
     getJson<(Author & { work_count: number })[]>('/api/authors').then(setAuthors).catch(() => {})
     getJson<Work[]>('/api/works').then(setWorks).catch(() => {})
+    // 関連作品に足したものは似ている作品から外れるので、関連を変えたら読み直す
+    getJson<SimilarWork[]>(`/api/works/${work.kind}/${work.id}/similar?rating=${rating}`)
+      .then(setSimilar)
+      .catch(() => setSimilar([]))
   }
 
-  useEffect(load, [work.kind, work.id])
+  useEffect(load, [work.kind, work.id, rating])
 
   async function run(task: () => Promise<unknown>, changed = false) {
     setBusy(true)
@@ -231,6 +249,37 @@ export default function WorkRelations({ work, onOpen, onChanged, blurAdult }: Pr
           </select>
           <button type="button" disabled={busy || !workToAdd} onClick={addRelation}>追加</button>
         </div>
+      </div>
+
+      <div className="work-relations-block">
+        <h4>似ている作品(自動)</h4>
+        <p className="work-relations-muted">
+          共通の登場人物・作者・タグ、題名、作成日から計算しています。上の関連作品に足したものは出しません。
+        </p>
+        {similar === null && <p className="work-relations-muted">計算中…</p>}
+        {similar?.length === 0 && <p className="work-relations-muted">似ている作品は見つかりませんでした。</p>}
+        <ul className="work-relations-list">
+          {similar?.map(item => (
+            <li key={`${item.work.kind}:${item.work.id}`}>
+              <button type="button" className="work-relations-open" onClick={() => onOpen(item.work.first_story_id)}>
+                {item.work.cover_path ? (
+                  <img
+                    src={thumbUrl(item.work.cover_path, 240)}
+                    alt=""
+                    className={item.work.adult && blurAdult ? 'is-blurred' : undefined}
+                  />
+                ) : (
+                  <span className="work-relations-nocover" />
+                )}
+                <span>
+                  {item.work.title}
+                  {item.work.kind === 'series' && <small>全{item.work.volume_count}巻</small>}
+                  <small className="work-relations-reasons">{visibleReasons(item, blurAdult).join(' ・ ')}</small>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
     </details>
   )

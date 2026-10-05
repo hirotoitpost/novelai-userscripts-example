@@ -39,6 +39,7 @@ from ..db import (
     list_library_pages,
     list_library_panels,
     list_library_stories,
+    list_panel_characters,
     list_scene_tags,
     list_story_series,
     list_story_texts,
@@ -47,6 +48,7 @@ from ..db import (
     set_generation_image_paths,
 )
 from ..manga_v2.prompt import is_sexual
+from ..relatedness import Item, idf_weights, normalize_tags, rank
 from .story import _jobs
 
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -377,6 +379,56 @@ def list_images(
         "total": len(items),
         "stories": list(stories.values()),
     }
+
+
+class SimilarImage(BaseModel):
+    image: GalleryImage
+    score: float
+    reasons: list[str]
+
+
+@router.get("/images/similar", response_model=list[SimilarImage])
+def similar_images(
+    key: str, rating: Rating = "all", limit: int = 12
+) -> list[dict[str, Any]]:
+    """
+    似ている画像(共通のタグ・登場人物、同じ物語、生成日時の近さから計算)。保存はせず毎回計算する。
+    """
+    items = _gallery_images()
+    by_key = {item.key: item for item in items}
+    if key not in by_key:
+        raise HTTPException(status_code=404, detail="画像がありません。")
+    conn = get_connection()
+    try:
+        panel_characters = list_panel_characters(conn)
+    finally:
+        conn.close()
+    characters: dict[str, dict[int, str]] = {}
+    for row in panel_characters:
+        characters.setdefault(f"panel:{row['panel_id']}", {})[row["character_id"]] = (
+            row["name"]
+        )
+
+    candidates = {
+        item.key: Item(
+            key=item.key,
+            created_at=item.created_at,
+            tags=normalize_tags(item.prompt),
+            characters=characters.get(item.key, {}),
+            story_id=item.story_id,
+        )
+        for item in items
+    }
+    idf = idf_weights(c.tags for c in candidates.values())
+    others = [
+        c
+        for k, c in candidates.items()
+        if k != key and _matches_rating(by_key[k].adult, rating)
+    ]
+    return [
+        {"image": by_key[m.key], "score": m.score, "reasons": m.reasons}
+        for m in rank(candidates[key], others, idf, max(1, min(limit, 40)))
+    ]
 
 
 class ImagesDownloadRequest(BaseModel):
