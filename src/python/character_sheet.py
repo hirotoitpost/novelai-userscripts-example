@@ -156,6 +156,12 @@ def characters_seed(characters: list[dict[str, Any]]) -> int | None:
 class VariationShot:
     stem: str
     prompt: str
+    # 基準シードからのずらし幅。同じ組み合わせを2周目以降に使うときに、同じ絵にならないようにする
+    seed_offset: int = 0
+
+
+# 周回ごとのシードのずらし幅。引き直し(シード+試行回数、最大5回)と重ならないように間を空ける
+SEED_STEP_PER_ROUND = 10
 
 
 def balanced_combos(axes: list[list[str]], count: int, rng: random.Random) -> list[tuple[str, ...]]:
@@ -216,16 +222,27 @@ def build_variation_shots(
     キャラシートの容姿を固定し、構図/ポーズ/服装/表情/場所の組み合わせを count 枚分作る。
     組み合わせは各軸が均等に出るように選ぶ(balanced_combos)。
     服装を1つも選ばなければキャラシートの普段の服装を使う。
+
+    count が組み合わせの数より多いときは、組み合わせを一巡するごとにシードをずらして繰り返す
+    (同じプロンプト・同じシードだと同じ絵になるため)。
     """
     rng = rng or random.Random()
     outfit_choices = outfits or [character.get("outfit_tags") or ""]
     axes = [framings or [""], poses or [""], outfit_choices, expressions or [""], locations or [""]]
 
     head = join_tags(character.get("trigger_word"), character.get("appearance_tags"), R18_POSITIVE if r18 else "")
-    shots = []
-    for i, (framing, pose, outfit, expression, location) in enumerate(balanced_combos(axes, count, rng), start=1):
-        prompt = join_tags(head, framing, outfit, pose, expression, location, character.get("style_tags"))
-        shots.append(VariationShot(stem=f"{i:04d}", prompt=prompt))
+    total = 1
+    for axis in axes:
+        total *= len(axis)
+    shots: list[VariationShot] = []
+    round_no = 0
+    while len(shots) < count:
+        for framing, pose, outfit, expression, location in balanced_combos(axes, count - len(shots), rng):
+            prompt = join_tags(head, framing, outfit, pose, expression, location, character.get("style_tags"))
+            shots.append(VariationShot(
+                stem=f"{len(shots) + 1:04d}", prompt=prompt, seed_offset=round_no * SEED_STEP_PER_ROUND,
+            ))
+        round_no += 1
     return shots
 
 

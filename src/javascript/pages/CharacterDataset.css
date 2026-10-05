@@ -82,3 +82,5 @@
 
 .chards-new-char { display: flex; gap: 0.4rem; }
 .chards-new-char .lora-input { flex: 1; min-width: 0; }
+
+.chards-count-inline { width: 5rem; flex: 0 0 auto; }

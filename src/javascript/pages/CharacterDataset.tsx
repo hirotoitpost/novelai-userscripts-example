@@ -140,7 +140,9 @@ export default function CharacterDataset() {
   const rating = r18 ? 'r18' : 'general'
   const isRunning = phase === 'running'
   const combos = AXES.reduce((n, a) => n * Math.max(1, selected[a.key].length), 1)
-  const planned = Math.min(count, combos)
+  // 組み合わせより多い枚数も出せる(一巡するごとにシードをずらして繰り返す)
+  const planned = count
+  const rounds = Math.ceil(planned / combos)
   const canRun = !!token && !!character && !isRunning && (maxAttempts === 1 || hasReference)
 
   function toggle(axis: Axis, value: string) {
@@ -348,7 +350,11 @@ export default function CharacterDataset() {
               id="chards-count" className="lora-input" type="number" min={1} max={200}
               value={count} onChange={e => setCount(Math.max(1, Number(e.target.value) || 1))} disabled={isRunning}
             />
-            <p className="lora-hint">組み合わせ {combos} 通りから重複なしで {planned} 枚。1枚ずつ順番にリクエストします。</p>
+            <p className="lora-hint">
+              組み合わせ {combos} 通りから {planned} 枚。
+              {rounds > 1 && ` 組み合わせが足りない分は、シードをずらして繰り返します(${rounds}周)。`}
+              {' '}内部で1枚ずつ順番にリクエストします。
+            </p>
 
             <div className="chards-row">
               <label className="lora-label">幅<input className="lora-input" type="number" step={64} value={width} onChange={e => setWidth(Number(e.target.value))} disabled={isRunning} /></label>
@@ -434,7 +440,22 @@ export default function CharacterDataset() {
             <div className="lora-actions">
               {isRunning
                 ? <button type="button" className="lora-btn lora-btn--danger" onClick={handleCancel}>中断</button>
-                : <button type="button" className="lora-btn lora-btn--primary" onClick={() => void handleGenerate()} disabled={!canRun}>生成({planned}枚)</button>}
+                : (
+                  <>
+                    <input
+                      className="lora-input chards-count-inline"
+                      type="number"
+                      min={1}
+                      max={200}
+                      aria-label="生成枚数"
+                      value={count}
+                      onChange={e => setCount(Math.min(200, Math.max(1, Number(e.target.value) || 1)))}
+                    />
+                    <button type="button" className="lora-btn lora-btn--primary" onClick={() => void handleGenerate()} disabled={!canRun}>
+                      生成({planned}枚)
+                    </button>
+                  </>
+                )}
             </div>
           </section>
         </aside>

@@ -332,7 +332,7 @@ async def generate_character_dataset(
                 candidates: list[tuple[float, Image.Image]] = []
                 for attempt in range(req.max_attempts):
                     # 同じシード・同じプロンプトだと同じ絵になるので、引き直しはシードをずらす
-                    seed = None if cfg.seed is None else (cfg.seed + attempt) % 4294967296
+                    seed = None if cfg.seed is None else (cfg.seed + shot.seed_offset + attempt) % 4294967296
                     if attempt > 0:
                         best_so_far = max(score for score, _ in candidates)
                         yield _sse("retry", {**event, "attempt": attempt + 1, "score": round(best_so_far, 3)})
