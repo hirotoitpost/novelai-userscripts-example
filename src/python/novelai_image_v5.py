@@ -102,7 +102,8 @@ _MAX_CHARACTER_PROMPTS = 4
 
 def _build_character_prompts(
     character_tags: list[str],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    character_negatives: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """
     (characterPrompts, char_captions) を組み立てる。V4形式のリクエストでは同じ内容を
     この2箇所に入れる必要がある(SDKのCharacter指定が生成するボディと同じ形)。
@@ -111,15 +112,22 @@ def _build_character_prompts(
     位置指定について「モデルは設定した位置に忠実に従う」「コマ割りの誘導に使える」
     「キャラクターの一貫性を高め、特徴の混ざりを抑える」と明記している。そこで横方向に
     均等に振り分けて渡す。
+
+    character_negatives はキャラごとのネガティブ(character_tags と同じ並び)。全体のネガティブに
+    まとめると、一人の「黒髪にしない」がもう一人の黒髪まで消してしまうので、キャラの欄(uc)に分ける。
+    3つ目の戻り値は v4_negative_prompt 側の char_captions(公式クライアントと同じく位置も入れる)。
     """
     tags = character_tags[:_MAX_CHARACTER_PROMPTS]
+    negatives = (list(character_negatives or []) + [""] * len(tags))[: len(tags)]
     prompts: list[dict[str, Any]] = []
     captions: list[dict[str, Any]] = []
-    for index, tag in enumerate(tags):
+    negative_captions: list[dict[str, Any]] = []
+    for index, (tag, negative) in enumerate(zip(tags, negatives)):
         center = {"x": round((index + 1) / (len(tags) + 1), 3), "y": 0.5}
-        prompts.append({"prompt": tag, "uc": "", "center": center, "enabled": True})
+        prompts.append({"prompt": tag, "uc": negative, "center": center, "enabled": True})
         captions.append({"char_caption": tag, "centers": [center]})
-    return prompts, captions
+        negative_captions.append({"char_caption": negative, "centers": [center]})
+    return prompts, captions, negative_captions
 
 
 def _build_v5_body(
@@ -136,8 +144,11 @@ def _build_v5_body(
     cfg_rescale: float,
     seed: int,
     character_tags: list[str],
+    character_negatives: list[str] | None = None,
 ) -> dict[str, Any]:
-    character_prompts, char_captions = _build_character_prompts(character_tags)
+    character_prompts, char_captions, negative_captions = _build_character_prompts(
+        character_tags, character_negatives
+    )
     parameters: dict[str, Any] = {
         "width": width,
         "height": height,
@@ -155,7 +166,7 @@ def _build_v5_body(
             "use_order": True,
         },
         "v4_negative_prompt": {
-            "caption": {"base_caption": negative_prompt, "char_captions": []},
+            "caption": {"base_caption": negative_prompt, "char_captions": negative_captions},
             "legacy_uc": False,
         },
         "sm": False,
@@ -254,15 +265,18 @@ def reference_image_b64(image_bytes: bytes) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _apply_character_reference(parameters: dict[str, Any], ref: CharacterReferenceInput) -> None:
-    """SDK(converter._convert_character_references)が送るのと同じ形で director_reference_* を足す。"""
-    parameters["director_reference_images"] = [ref.image_b64]
+def _apply_character_reference(parameters: dict[str, Any], refs: list[CharacterReferenceInput]) -> None:
+    """
+    SDK(converter._convert_character_references)が送るのと同じ形で director_reference_* を足す。
+    各項目は配列なので、複数のキャラの参照画像を並べて渡せる(1枚ごとに Anlas がかかる)。
+    """
+    parameters["director_reference_images"] = [ref.image_b64 for ref in refs]
     parameters["director_reference_descriptions"] = [
-        {"caption": {"base_caption": "character&style", "char_captions": []}, "legacy_uc": False}
+        {"caption": {"base_caption": "character&style", "char_captions": []}, "legacy_uc": False} for _ in refs
     ]
-    parameters["director_reference_strength_values"] = [round(ref.strength, 2)]
-    parameters["director_reference_secondary_strength_values"] = [round(1 - ref.fidelity, 2)]
-    parameters["director_reference_information_extracted"] = [1.0]
+    parameters["director_reference_strength_values"] = [round(ref.strength, 2) for ref in refs]
+    parameters["director_reference_secondary_strength_values"] = [round(1 - ref.fidelity, 2) for ref in refs]
+    parameters["director_reference_information_extracted"] = [1.0 for _ in refs]
 
 
 async def generate_image_v5(
@@ -280,13 +294,16 @@ async def generate_image_v5(
     cfg_rescale: float = 0.0,
     seed: int = 0,
     character_tags: list[str] | None = None,
-    character_reference: CharacterReferenceInput | None = None,
+    character_reference: CharacterReferenceInput | list[CharacterReferenceInput] | None = None,
+    character_negatives: list[str] | None = None,
 ) -> bytes:
     """
     組み立て済みのプロンプトで1枚生成し、PNGバイト列を返す。漫画ページ(コマ割り込み)にも、
     漫画v2のコマ単位の画像にも使う。
 
     character_reference は V4.5 のみ対応(V5に付けると500が返る。2026-10 実機で確認)。
+    複数のキャラの参照をまとめて渡すときはリストにする。character_negatives はキャラごとの
+    ネガティブ(character_tags と同じ並び)。
     """
     body = _build_v5_body(
         prompt,
@@ -301,9 +318,12 @@ async def generate_image_v5(
         cfg_rescale=cfg_rescale,
         seed=seed,
         character_tags=character_tags or [],
+        character_negatives=character_negatives,
     )
-    if character_reference is not None:
-        _apply_character_reference(body["parameters"], character_reference)
+    refs = character_reference if isinstance(character_reference, list) else [character_reference]
+    refs = [ref for ref in refs if ref is not None]
+    if refs:
+        _apply_character_reference(body["parameters"], refs)
 
     headers = {"Authorization": f"Bearer {api_key}"}
     async with httpx.AsyncClient(headers=headers, timeout=180) as http_client:

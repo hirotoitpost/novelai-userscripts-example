@@ -82,6 +82,7 @@ from ..manga_v2.stamps import (
 from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
+from ..manga_v2.speakers import CastMember, attribute_speakers, cast_member
 from ..models import (
     MangaV2CatalogFont,
     MangaV2SfxFontRequest,
@@ -162,14 +163,14 @@ _TITLE_PARTICLES = set("のとをがはにもで")
 _THOUGHT_LINE_RE = re.compile(r"^[ 　]*（([^）\n]{1,80})）[ 　]*$", re.MULTILINE)
 
 
-def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """
-    シーンから (吹き出しにするセリフ, 描き文字にする効果音) を取り出す。
-    効果音は本文中の《》・カタカナだけのセリフに、シーンに設定した効果音(手入力やAI提案)を足す。
-    """
-    text = scene["novelai_text"] or scene["draft_text"] or ""
+def _scene_text(scene: dict[str, Any]) -> str:
+    return scene["novelai_text"] or scene["draft_text"] or ""
+
+
+def _spoken_spans(text: str) -> tuple[list[tuple[int, int, str]], list[str]]:
+    """本文から (吹き出しにするセリフの (開始, 終了, 中身) の並び, 本文中の効果音) を取り出す。"""
     sfx: list[str] = [m.group(1).strip() for m in _SFX_MARK_RE.finditer(text) if m.group(1).strip()]
-    spoken: list[tuple[int, str]] = []
+    spoken: list[tuple[int, int, str]] = []
     for match in DIALOGUE_RE.finditer(text):
         line = match.group(1).strip()
         if not line or not _is_spoken(text, match.start(), match.end()):
@@ -177,11 +178,32 @@ def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
         if _is_katakana_sfx(line):
             sfx.append(line)
         else:
-            spoken.append((match.start(), line))
+            spoken.append((match.start(), match.end(), line))
     # 1行まるごと（…）の独白は心の声。括弧ごと渡すと雲形の吹き出しになる
     for match in _THOUGHT_LINE_RE.finditer(text):
-        spoken.append((match.start(), f"（{match.group(1).strip()}）"))
-    dialogue = [line for _, line in sorted(spoken)]
+        spoken.append((match.start(), match.end(), f"（{match.group(1).strip()}）"))
+    return sorted(spoken), sfx
+
+
+def _scene_speakers(scene: dict[str, Any]) -> tuple[list[int | None], list[CastMember]]:
+    """
+    セリフ(_lettering の並び)ごとの話し手のキャラIDと、シーンの登場キャラ。
+    キャラが割り当てられていないシーンは話し手を推定しない(空の並び)。
+    """
+    cast = [cast_member(c) for c in scene.get("characters") or []]
+    if not cast:
+        return [], []
+    text = _scene_text(scene)
+    return attribute_speakers(text, _spoken_spans(text)[0], cast), cast
+
+
+def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """
+    シーンから (吹き出しにするセリフ, 描き文字にする効果音) を取り出す。
+    効果音は本文中の《》・カタカナだけのセリフに、シーンに設定した効果音(手入力やAI提案)を足す。
+    """
+    spoken, sfx = _spoken_spans(_scene_text(scene))
+    dialogue = [line for _, _, line in spoken]
     for extra in scene.get("sfx") or []:
         if extra.strip() and extra.strip() not in sfx:
             sfx.append(extra.strip())
@@ -819,22 +841,51 @@ async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: Clie
     return _job_response(_start_job(story_id, "panels", runner))
 
 
-def _scene_reference(
+def _scene_references(
     characters: list[dict[str, Any]], req: MangaV2PanelsRequest
-) -> CharacterReferenceInput | None:
+) -> list[CharacterReferenceInput]:
     """
-    シーンに出るキャラのうち、参照画像があるものを1人分だけ使う(複数枚の同時指定は未検証)。
-    シーンへの割り当て順(名前順)で最初の1人になる。
+    シーンに出るキャラのうち、参照画像があるもの全員分。以前は1人分(名前順で最初の1人)だけを
+    使っていたため、二人の場面でもう一人の見た目まで最初の1人に寄ってしまっていた。
     """
+    refs: list[CharacterReferenceInput] = []
     for character in characters:
         path = character.get("reference_image_path")
         if path and (_PROJECT_ROOT / path).is_file():
-            return CharacterReferenceInput(
-                image_b64=reference_image_b64((_PROJECT_ROOT / path).read_bytes()),
-                strength=req.reference_strength,
-                fidelity=req.reference_fidelity,
+            refs.append(
+                CharacterReferenceInput(
+                    image_b64=reference_image_b64((_PROJECT_ROOT / path).read_bytes()),
+                    strength=req.reference_strength,
+                    fidelity=req.reference_fidelity,
+                )
             )
-    return None
+    return refs
+
+
+# 人数のタグ。一人ずつの容姿にある「1girl」「1boy」を数えて、二人以上の場面の全体のプロンプトに入れる
+_COUNT_TAGS = {"1girl": "girls", "1boy": "boys", "1other": "others"}
+
+
+def _cast_prompt(scene_characters: list[dict[str, Any]]) -> tuple[list[str], list[str], str]:
+    """
+    (キャラごとの容姿, キャラごとのネガティブ, 全体のプロンプトに足す人数タグ)。
+    一人なら従来どおり。二人以上なら各キャラの「solo」を外し(一人しか描かれなくなる)、
+    「2girls」のような人数を全体に足す。
+    """
+    pairs = [(character_prompt_tags(c), c.get("negative_tags") or "") for c in scene_characters]
+    pairs = [(tags, negative) for tags, negative in pairs if tags][:_MAX_CHARACTERS]
+    if len(pairs) < 2:
+        return [tags for tags, _ in pairs], [negative for _, negative in pairs], ""
+    counts: dict[str, int] = {}
+    stripped: list[str] = []
+    for tags, _ in pairs:
+        items = [t.strip() for t in tags.split(",") if t.strip()]
+        for item in items:
+            if item in _COUNT_TAGS:
+                counts[item] = counts.get(item, 0) + 1
+        stripped.append(", ".join(t for t in items if t != "solo"))
+    count_tags = ", ".join(f"{n}{_COUNT_TAGS[tag]}" if n > 1 else tag for tag, n in counts.items())
+    return stripped, [negative for _, negative in pairs], count_tags
 
 
 async def _run_panels(
@@ -857,25 +908,29 @@ async def _run_panels(
         # そのシーンに出るキャラだけの容姿を渡す(v1はページ内の全員をまとめていた)
         # (キャラシートの普段の服装も含む)
         scene_characters = characters.get(scene["id"], [])
-        character_tags = [t for t in (character_prompt_tags(c) for c in scene_characters) if t][:_MAX_CHARACTERS]
+        character_tags, character_negatives, count_tags = _cast_prompt(scene_characters)
+        # 二人以上なら、キャラごとのネガティブはキャラの欄に分ける(全体にまとめると打ち消し合う)
+        multiple = len(character_tags) > 1
         # シードの優先順: 設定で指定 > キャラシートの基準シード > シーンごとに変える
         seed = settings.seed
         if seed is None:
             seed = characters_seed(scene_characters)
         if seed is None:
             seed = story_id * 1000 + scene["scene_index"]
-        reference = _scene_reference(characters.get(scene["id"], []), req) if req.use_character_reference else None
-        if reference is not None:
-            job.message += "(キャラ参照あり・V4.5)"
+        references = _scene_references(scene_characters, req) if req.use_character_reference else []
+        if references:
+            job.message += f"(キャラ参照{len(references)}人・V4.5)"
         sexual = is_sexual(scene["draft_prompt_tags"])
         image = await generate_image_v5(
             api_key,
-            build_panel_prompt(scene["draft_prompt_tags"], color=req.color, complexity=settings.complexity),
+            build_panel_prompt(
+                join_tags(count_tags, scene["draft_prompt_tags"]), color=req.color, complexity=settings.complexity
+            ),
             join_tags(
                 build_panel_negative(settings.negative_prompt, color=req.color, sexual=sexual),
-                characters_negative(scene_characters),
+                "" if multiple else characters_negative(scene_characters),
             ),
-            model=_REFERENCE_MODEL if reference is not None else settings.model,
+            model=_REFERENCE_MODEL if references else settings.model,
             width=width,
             height=height,
             steps=settings.steps,
@@ -885,7 +940,8 @@ async def _run_panels(
             cfg_rescale=settings.cfg_rescale,
             seed=seed,
             character_tags=character_tags,
-            character_reference=reference,
+            character_reference=references,
+            character_negatives=character_negatives if multiple else None,
         )
         filename = f"story{story_id}_scene{scene['scene_index']}_{uuid4().hex[:8]}.png"
         (_PANEL_DIR / filename).write_bytes(image)
@@ -941,16 +997,21 @@ def _compose_inputs(
         raise HTTPException(status_code=400, detail="先にコマの絵を生成してください。")
 
     last = max(s["scene_index"] for s in scenes if s["id"] in panels)
-    contents = [
-        PanelContent(
-            _PROJECT_ROOT / panels[s["id"]]["image_path"] if s["id"] in panels else None,
-            *_lettering(s),
-            key=str(s["id"]),
-            narration=s.get("narration") or "",
+    contents: list[PanelContent] = []
+    for s in scenes:
+        if s["scene_index"] > last:
+            continue
+        speakers, cast = _scene_speakers(s)
+        contents.append(
+            PanelContent(
+                _PROJECT_ROOT / panels[s["id"]]["image_path"] if s["id"] in panels else None,
+                *_lettering(s),
+                key=str(s["id"]),
+                narration=s.get("narration") or "",
+                speakers=speakers,
+                cast=cast,
+            )
         )
-        for s in scenes
-        if s["scene_index"] <= last
-    ]
     return contents, style, {str(s["id"]): s["scene_index"] for s in scenes}
 
 
