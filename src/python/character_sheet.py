@@ -147,10 +147,10 @@ def characters_negative(characters: list[dict[str, Any]]) -> str:
 def sheet_prompt(character: dict[str, Any], *, r18: bool = False) -> str:
     """
     キャラシートだけで組み立てた生成用プロンプト。キャラ別データセットの1枚から、構図・ポーズ・
-    表情・場所の差し替え分を除いたもの(並びもデータセットと同じ)。画像生成ページへの読み込みに使う。
+    表情・場所の差し替え分とトリガーワードを除いたもの(並びはデータセットと同じ)。画像生成ページへの
+    読み込みに使う。トリガーワードは LoRA 学習用のキャプションの語で、NovelAI の生成には意味がない。
     """
     return join_tags(
-        character.get("trigger_word"),
         character.get("appearance_tags"),
         R18_POSITIVE if r18 else "",
         character.get("outfit_tags"),

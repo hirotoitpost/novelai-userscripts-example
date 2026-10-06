@@ -250,8 +250,8 @@ async def get_variations() -> dict[str, list[str]]:
 async def get_character_sheet_prompt(character_id: int) -> dict:
     """
     キャラシートから組み立てた生成用のプロンプト・ネガティブ・基準シード。画像生成ページで
-    キャラシートを読み込むのに使う。キャラ別データセット(全年齢)と同じ組み立てなので、
-    データセットと同じ見た目を単発で試せる(参照画像は画像生成ページでは使わない)。
+    キャラシートを読み込むのに使う。キャラ別データセット(全年齢)からトリガーワードを除いた
+    組み立てなので、データセットと同じ見た目を単発で試せる(参照画像は画像生成ページでは使わない)。
     """
     character = _load_character(character_id)
     return {

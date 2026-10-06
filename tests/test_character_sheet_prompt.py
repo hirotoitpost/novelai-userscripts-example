@@ -36,10 +36,12 @@ YURA = {
 
 
 def test_sheet_prompt_matches_a_dataset_shot_without_variations() -> None:
-    # 差し替え(構図・ポーズ・服装・表情・場所)を選ばないデータセットの1枚と同じプロンプトになる
+    # 差し替え(構図・ポーズ・服装・表情・場所)を選ばないデータセットの1枚から、
+    # トリガーワードだけを除いたプロンプトになる
     shot = build_variation_shots(YURA, poses=[], outfits=[], expressions=[], locations=[], count=1)[0]
-    assert sheet_prompt(YURA) == shot.prompt
-    assert sheet_prompt(YURA).startswith("kujo_yura, 1girl, solo, brown hair")
+    assert shot.prompt == f"kujo_yura, {sheet_prompt(YURA)}"
+    assert "kujo_yura" not in sheet_prompt(YURA)
+    assert sheet_prompt(YURA).startswith("1girl, solo, brown hair")
 
 
 def test_sheet_prompt_skips_missing_fields() -> None:

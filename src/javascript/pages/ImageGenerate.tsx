@@ -199,7 +199,7 @@ export default function ImageGenerate() {
 
   /**
    * キャラシートのプロンプト・ネガティブプロンプト・基準シードで入力欄を置き換える。
-   * 組み立てはキャラ別データセット(全年齢)と同じなので、データセットと同じ見た目を単発で試せる。
+   * 組み立てはキャラ別データセット(全年齢)からトリガーワードを除いたもので、データセットと同じ見た目を単発で試せる。
    */
   const importCharacterSheet = async () => {
     const target = characters.find(c => c.id === characterId)
