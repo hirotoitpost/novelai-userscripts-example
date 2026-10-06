@@ -82,7 +82,7 @@ from ..manga_v2.stamps import (
 from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
-from ..manga_v2.speakers import CastMember, attribute_speakers, cast_member
+from ..manga_v2.speakers import CastMember, attribute_speakers, cast_members
 from ..models import (
     MangaV2CatalogFont,
     MangaV2SfxFontRequest,
@@ -190,7 +190,7 @@ def _scene_speakers(scene: dict[str, Any]) -> tuple[list[int | None], list[CastM
     セリフ(_lettering の並び)ごとの話し手のキャラIDと、シーンの登場キャラ。
     キャラが割り当てられていないシーンは話し手を推定しない(空の並び)。
     """
-    cast = [cast_member(c) for c in scene.get("characters") or []]
+    cast = cast_members(scene.get("characters") or [])
     if not cast:
         return [], []
     text = _scene_text(scene)

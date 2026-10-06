@@ -25,6 +25,7 @@ from python.manga_v2.compose import (  # noqa: E402
 from python.manga_v2.speakers import (  # noqa: E402
     attribute_speakers,
     cast_member,
+    cast_members,
     hair_color,
     identify_heads,
 )
@@ -48,6 +49,17 @@ def test_cast_member_names_and_hair() -> None:
     member = cast_member(YURA)
     assert member.names == ("九条ゆら", "ゆら", "九条")
     assert member.hair == hair_color("brown hair")
+
+
+def test_shared_family_name_adds_short_names() -> None:
+    # 「矢野栄子」「矢野先生」のように空白なしで姓が共通なら、「栄子」「先生」でも呼べる
+    eiko, sensei = cast_members([{"id": 3, "name": "矢野栄子"}, {"id": 4, "name": "矢野先生"}])
+    assert "栄子" in eiko.names and "先生" in sensei.names
+    text = "「先生、朝ですよ」\n「栄子さん、あと五分……」\n先生は布団にもぐった。"
+    spans = [(m.start(), m.end(), m.group(1)) for m in DIALOGUE_RE.finditer(text)]
+    assert attribute_speakers(text, spans, [eiko, sensei]) == [3, 4]
+    # 姓が共通でなければ何も足さない
+    assert cast_members([YURA, MIO]) == CAST
 
 
 def test_following_narration_names_the_speaker() -> None:

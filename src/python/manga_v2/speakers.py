@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import itertools
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from PIL import Image
@@ -40,6 +41,29 @@ def cast_member(character: dict) -> CastMember:
         tuple(unique),
         hair_color(character.get("appearance_tags") or ""),
     )
+
+
+# 登場キャラの名前に共通する頭の部分を姓とみなす最小の長さ
+_MIN_SHARED_FAMILY_NAME = 2
+
+
+def cast_members(characters: list[dict]) -> list[CastMember]:
+    """
+    シーンの登場キャラ全員分の CastMember。名前が空白で区切られておらず(「矢野栄子」「矢野先生」)、
+    全員の名前の頭が共通しているなら、それを姓とみなして残り(「栄子」「先生」)も呼び名に加える。
+    本文では夫婦や家族を姓抜きで呼ぶことがほとんどなので、これが無いと話し手の手がかりを拾えない。
+    """
+    members = [cast_member(c) for c in characters]
+    if len(members) < 2:
+        return members
+    full_names = [m.names[0] for m in members]
+    family = os.path.commonprefix(full_names)
+    if len(family) < _MIN_SHARED_FAMILY_NAME or any(len(n) <= len(family) for n in full_names):
+        return members
+    return [
+        replace(m, names=tuple(sorted(dict.fromkeys((*m.names, m.names[0][len(family) :])), key=len, reverse=True)))
+        for m in members
+    ]
 
 
 # ---- 話し手の推定 ----
