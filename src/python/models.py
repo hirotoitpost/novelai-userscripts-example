@@ -198,6 +198,16 @@ class CharacterDatasetRequest(BaseModel):
     rating: Literal["general", "r18"] = Field("general", description="r18 は成人フラグのあるキャラのみ")
 
 
+class CharacterSheetPromptResponse(BaseModel):
+    """キャラシートから組み立てた、画像生成ページに読み込む値。"""
+
+    character_id: int
+    name: str
+    prompt: str
+    negative_prompt: str
+    seed: Optional[int] = None
+
+
 class DatasetImportRequest(BaseModel):
     """手元の画像をデータセットに取り込む。caption 未指定ならキャラシートから作る。"""
 

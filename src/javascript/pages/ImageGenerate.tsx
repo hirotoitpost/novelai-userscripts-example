@@ -4,9 +4,10 @@ import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import ChunkPicker from '../components/ChunkPicker'
 import { naiImageFilename } from '../downloadFilename'
+import type { Character } from '../components/StoryCharacters'
 import {
   apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
-  ImagePreset, ImagePresetSettings,
+  ImagePreset, ImagePresetSettings, CharacterSheetPrompt,
 } from '../api'
 import './ImageGenerate.css'
 
@@ -141,6 +142,11 @@ export default function ImageGenerate() {
   const [presetName, setPresetName] = useState('')
   const [presetMsg,  setPresetMsg]  = useState<{ text: string; isError: boolean } | null>(null)
 
+  // キャラシート(キャラ別データセットと共用)からプロンプト・ネガティブ・基準シードを読み込む
+  const [characters,  setCharacters]  = useState<Character[]>([])
+  const [characterId, setCharacterId] = useState<number | null>(null)
+  const [sheetMsg,    setSheetMsg]    = useState<{ text: string; isError: boolean } | null>(null)
+
   // セッション中のみ保持
   const [seed,         setSeed]         = useState<string>('')
   const [loading,      setLoading]      = useState(false)
@@ -183,6 +189,43 @@ export default function ImageGenerate() {
   }, [token])
 
   useEffect(() => { loadPresets() }, [loadPresets])
+
+  useEffect(() => {
+    if (!token) return
+    apiFetch<Character[]>(token, '/api/story/characters')
+      .then(setCharacters)
+      .catch(() => {})  // 一覧が取れなくても生成はできるのでサイレント失敗
+  }, [token])
+
+  /**
+   * キャラシートのプロンプト・ネガティブプロンプト・基準シードで入力欄を置き換える。
+   * 組み立てはキャラ別データセット(全年齢)と同じなので、データセットと同じ見た目を単発で試せる。
+   */
+  const importCharacterSheet = async () => {
+    const target = characters.find(c => c.id === characterId)
+    if (!token || !target) return
+    if ((prompt.trim() || negPrompt.trim())
+        && !window.confirm(`今のプロンプトとネガティブプロンプトを「${target.name}」のキャラシートで置き換えます。よろしいですか?`)) {
+      return
+    }
+    try {
+      const sheet = await apiFetch<CharacterSheetPrompt>(token, `/api/lora-dataset/character/${target.id}/sheet-prompt`)
+      setPrompt(sheet.prompt)
+      setNegPrompt(sheet.negative_prompt)
+      setSeed(sheet.seed != null ? String(sheet.seed) : '')
+      caretRef.current = null
+      setSheetMsg({
+        text: [
+          `「${sheet.name}」のキャラシートを読み込みました`,
+          sheet.seed == null ? '基準シードが無いため、シード値は空(毎回ランダム)にしました' : '',
+          target.reference_image_path ? '参照画像はこのページでは使いません' : '',
+        ].filter(Boolean).join('。'),
+        isError: false,
+      })
+    } catch (e) {
+      setSheetMsg({ text: e instanceof Error ? e.message : String(e), isError: true })
+    }
+  }
 
   /**
    * 最後にカーソルがあった欄(プロンプト/ネガティブ)のカーソル位置にチャンクを挿入する。
@@ -633,6 +676,39 @@ export default function ImageGenerate() {
             {presetMsg && (
               <p className={presetMsg.isError ? 'ig-preset-msg ig-preset-msg--error' : 'ig-preset-msg'}>
                 {presetMsg.text}
+              </p>
+            )}
+          </section>
+
+          {/* Character sheet */}
+          <section className="ig-section ig-settings">
+            <span className="ig-label">キャラシート</span>
+            <div className="ig-preset-row">
+              <select
+                className="ig-select"
+                aria-label="キャラシートを選択"
+                value={characterId ?? ''}
+                onChange={e => {
+                  setCharacterId(e.target.value ? Number(e.target.value) : null)
+                  setSheetMsg(null)
+                }}
+              >
+                <option value="">キャラを選択...</option>
+                {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button
+                type="button"
+                className="ig-preset-btn"
+                onClick={importCharacterSheet}
+                disabled={characterId === null}
+                title="プロンプト・ネガティブプロンプト・シード値をキャラシートの内容で置き換える"
+              >
+                読み込む
+              </button>
+            </div>
+            {sheetMsg && (
+              <p className={sheetMsg.isError ? 'ig-preset-msg ig-preset-msg--error' : 'ig-preset-msg'}>
+                {sheetMsg.text}
               </p>
             )}
           </section>

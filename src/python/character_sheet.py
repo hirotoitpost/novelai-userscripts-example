@@ -144,6 +144,25 @@ def characters_negative(characters: list[dict[str, Any]]) -> str:
     return join_tags(*(c.get("negative_tags") for c in characters))
 
 
+def sheet_prompt(character: dict[str, Any], *, r18: bool = False) -> str:
+    """
+    キャラシートだけで組み立てた生成用プロンプト。キャラ別データセットの1枚から、構図・ポーズ・
+    表情・場所の差し替え分を除いたもの(並びもデータセットと同じ)。画像生成ページへの読み込みに使う。
+    """
+    return join_tags(
+        character.get("trigger_word"),
+        character.get("appearance_tags"),
+        R18_POSITIVE if r18 else "",
+        character.get("outfit_tags"),
+        character.get("style_tags"),
+    )
+
+
+def sheet_negative(character: dict[str, Any], *, r18: bool = False, extra: str | None = None) -> str:
+    """キャラ別データセットと同じネガティブ(基本+キャラシート+年齢区分ごとの安全タグ+上乗せ分)。"""
+    return join_tags(DEFAULT_NEGATIVE, character.get("negative_tags"), R18_NEGATIVE if r18 else SAFE_NEGATIVE, extra)
+
+
 def characters_seed(characters: list[dict[str, Any]]) -> int | None:
     """登場キャラのうち基準シードを持つ最初の1人のシード(名前順)。"""
     for character in characters:

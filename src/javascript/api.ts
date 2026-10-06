@@ -68,6 +68,15 @@ export interface ImagePreset {
   created_at: string
 }
 
+/** キャラシートから組み立てた、画像生成ページに読み込む値(/api/lora-dataset/character/{id}/sheet-prompt) */
+export interface CharacterSheetPrompt {
+  character_id: number
+  name: string
+  prompt: string
+  negative_prompt: string
+  seed: number | null
+}
+
 export interface GenerateResponse {
   images: string[]
   format: string

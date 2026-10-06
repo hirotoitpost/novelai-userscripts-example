@@ -18,20 +18,18 @@ from PIL import Image, UnidentifiedImageError
 from ..character_sheet import (
     CORE_BLOCKED_TAGS,
     CORE_NEGATIVE,
-    DEFAULT_NEGATIVE,
     EXPRESSIONS,
     FRAMINGS,
     LOCATIONS,
     OUTFITS,
     POSES,
-    R18_NEGATIVE,
-    SAFE_NEGATIVE,
     blocked_tags,
     build_variation_shots,
     caption_for,
     character_minor_tags,
-    join_tags,
     minor_tags,
+    sheet_negative,
+    sheet_prompt,
 )
 from ..client import get_client
 from ..db import (
@@ -54,6 +52,7 @@ from ..lora_dataset import (
 )
 from ..models import (
     CharacterDatasetRequest,
+    CharacterSheetPromptResponse,
     DatasetImportRequest,
     GuardCoreResponse,
     GuardProfileResponse,
@@ -247,6 +246,23 @@ async def get_variations() -> dict[str, list[str]]:
     return {"framings": FRAMINGS, "poses": POSES, "outfits": OUTFITS, "expressions": EXPRESSIONS, "locations": LOCATIONS}
 
 
+@router.get("/character/{character_id}/sheet-prompt", response_model=CharacterSheetPromptResponse)
+async def get_character_sheet_prompt(character_id: int) -> dict:
+    """
+    キャラシートから組み立てた生成用のプロンプト・ネガティブ・基準シード。画像生成ページで
+    キャラシートを読み込むのに使う。キャラ別データセット(全年齢)と同じ組み立てなので、
+    データセットと同じ見た目を単発で試せる(参照画像は画像生成ページでは使わない)。
+    """
+    character = _load_character(character_id)
+    return {
+        "character_id": character["id"],
+        "name": character["name"],
+        "prompt": sheet_prompt(character),
+        "negative_prompt": sheet_negative(character),
+        "seed": character.get("seed"),
+    }
+
+
 @router.post("/character/{character_id}/generate")
 async def generate_character_dataset(
     character_id: int, req: CharacterDatasetRequest, client: ClientDep
@@ -290,12 +306,7 @@ async def generate_character_dataset(
             sampler=req.sampler,
             noise_schedule=req.noise_schedule,
             cfg_rescale=req.cfg_rescale,
-            negative_prompt=join_tags(
-                DEFAULT_NEGATIVE,
-                character.get("negative_tags"),
-                R18_NEGATIVE if r18 else SAFE_NEGATIVE,
-                guard["negative_tags"],
-            ),
+            negative_prompt=sheet_negative(character, r18=r18, extra=guard["negative_tags"]),
             seed=character.get("seed"),
             character_references=references,
         )
