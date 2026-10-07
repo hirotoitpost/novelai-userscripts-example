@@ -88,13 +88,14 @@ def _subject_in(narration: str, cast: list[CastMember]) -> int | None:
 def _addressee(line: str, cast: list[CastMember]) -> int | None:
     """
     セリフの中の呼びかけで呼ばれているキャラ。文の頭か区切りの直後に名前があり、すぐ読点などが
-    続くもの(「ゆら、…」「ありがとう、みお。」「…。ゆら、お風呂…」)。「みおは？」は呼びかけではない。
+    続くか、セリフがそこで終わるもの(「ゆら、…」「ありがとう、みお。」「…。ゆら、お風呂…」「ねえ、先生」)。
+    「みおは？」は呼びかけではない。
     """
     for member in cast:
         for name in member.names:
             suffixes = "|".join(_VOCATIVE_SUFFIXES)
             if re.search(
-                rf"(?:^|[。、！？!?　 ]){re.escape(name)}(?:{suffixes})?[、。！!…]",
+                rf"(?:^|[。、！？!?　 ]){re.escape(name)}(?:{suffixes})?(?:[、。！!…]|$)",
                 line,
             ):
                 return member.id
