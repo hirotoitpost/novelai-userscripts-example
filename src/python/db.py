@@ -1408,6 +1408,29 @@ def update_scene_tags(
     conn.commit()
 
 
+def update_scene_content(
+    conn: sqlite3.Connection,
+    scene_id: int,
+    *,
+    draft_title: str | None = None,
+    text: str | None = None,
+    draft_prompt_tags: str | None = None,
+) -> None:
+    """シーンの手直し。None の項目は変えない。本文は draft_text と novelai_text の両方を差し替える。"""
+    if draft_title is not None:
+        conn.execute("UPDATE story_scenes SET draft_title = ? WHERE id = ?", (draft_title, scene_id))
+    if text is not None:
+        conn.execute("UPDATE story_scenes SET draft_text = ?, novelai_text = ? WHERE id = ?", (text, text, scene_id))
+    if draft_prompt_tags is not None:
+        conn.execute("UPDATE story_scenes SET draft_prompt_tags = ? WHERE id = ?", (draft_prompt_tags, scene_id))
+    conn.commit()
+
+
+def get_scene(conn: sqlite3.Connection, scene_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM story_scenes WHERE id = ?", (scene_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def update_scene_writing(conn: sqlite3.Connection, scene_id: int, seed_cue: str, novelai_text: str) -> None:
     conn.execute(
         "UPDATE story_scenes SET seed_cue = ?, novelai_text = ? WHERE id = ?",

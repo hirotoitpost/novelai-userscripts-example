@@ -806,6 +806,37 @@ async def get_panels(story_id: int) -> list[dict[str, Any]]:
         conn.close()
 
 
+@router.get("/{story_id}/speakers")
+async def get_speakers(story_id: int) -> list[dict[str, Any]]:
+    """
+    シーンごとの吹き出しのセリフと、合成で使う話し手の判定結果。台本の確認用。
+    speaker_id が null のセリフは、しっぽを一番近い顔へ向ける(話し手が分からない)。
+    """
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+    finally:
+        conn.close()
+    if not scenes:
+        raise HTTPException(status_code=404, detail="story not found")
+    result: list[dict[str, Any]] = []
+    for scene in scenes:
+        lines = _lettering(scene)[0]
+        speakers, _ = _scene_speakers(scene)
+        names = {c["id"]: c["name"] for c in scene.get("characters") or []}
+        result.append(
+            {
+                "scene_id": scene["id"],
+                "scene_index": scene["scene_index"],
+                "lines": [
+                    {"text": line, "speaker_id": speaker, "speaker_name": names.get(speaker) if speaker else None}
+                    for line, speaker in zip(lines, speakers or [None] * len(lines))
+                ],
+            }
+        )
+    return result
+
+
 @router.post("/{story_id}/panels", response_model=StoryJobResponse)
 async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: ClientDep) -> dict[str, Any]:
     """

@@ -27,6 +27,7 @@ from mcp.types import ImageContent, TextContent
 from novelai import AsyncNovelAI
 from novelai.types import GenerateImageParams
 
+from .mcp_manga import register_manga_tools
 from .db import (
     create_custom_chunk,
     find_conflicts,
@@ -51,8 +52,11 @@ mcp = MCPServer(
     instructions=(
         "NovelAIのプロンプトチャンク(公式インポート+自作)を、シチュエーション/排他グループ/"
         "選択ルールに基づいて選び、実際に画像生成するためのツール群。"
+        "manga_ で始まるツールは漫画作成用: 台本(1シーン=1コマ)から物語/シリーズの巻を作り、"
+        "話し手の判定を確かめ、コマを生成・描き直し、合成してページを見る(バックエンドの起動が必要)。"
     ),
 )
+register_manga_tools(mcp)
 
 
 def _get_novelai_client() -> AsyncNovelAI:

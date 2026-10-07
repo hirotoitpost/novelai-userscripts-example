@@ -148,7 +148,7 @@ def test_identify_heads_by_hair_color() -> None:
 
 def test_identify_heads_uses_the_generation_order_when_colors_are_unclear() -> None:
     # 暗い場面でゆらの茶髪も黒っぽく描かれたとき、髪色だけだと決まらない。生成時に
-    # キャラを割り当て順に左から並べているので、左がゆら、右がみおになる
+    # キャラを名前順(ゆら→みお)に左から並べているので、左がゆら、右がみおになる
     assert identify_heads(_two_heads(_BLACK, _BLACK), _HEADS, CAST) == [2, 1]
 
 

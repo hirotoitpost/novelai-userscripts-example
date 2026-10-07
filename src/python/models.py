@@ -379,6 +379,36 @@ class StoryDraftCreateRequest(BaseModel):
     panels_per_page: int = Field(4, ge=1, le=8)
 
 
+class ScriptSceneInput(BaseModel):
+    """台本の1シーン(=1コマ)。text のセリフ(「」)と心の声(（）だけの行)が吹き出しになる。"""
+
+    title: Optional[str] = Field(None, max_length=100)
+    text: str = Field(min_length=1, description="セリフと、話し手の手がかりになる地の文")
+    prompt_tags: str = Field("", description="コマの作画タグ(英語の danbooru タグ)")
+    character_ids: list[int] = Field(default_factory=list, description="このコマに描くキャラ(コマでは名前順に左から並ぶ)")
+    narration: Optional[str] = Field(None, max_length=80)
+    sfx: Optional[list[str]] = Field(None, max_length=8)
+
+
+class ScriptedStoryRequest(BaseModel):
+    """台本(1シーン=1コマ)から物語を作る。series_id と volume_no を渡すとそのシリーズの巻にする。"""
+
+    title: str = Field(min_length=1, max_length=200)
+    premise: Optional[str] = Field(None, description="物語一覧の見出し。省略時は「[漫画] タイトル」")
+    panels_per_page: int = Field(4, ge=1, le=12)
+    scenes: list[ScriptSceneInput] = Field(min_length=1, max_length=200)
+    series_id: Optional[int] = None
+    volume_no: Optional[int] = Field(None, ge=1)
+
+
+class SceneUpdateRequest(BaseModel):
+    """シーンの手直し。送った項目だけ書き換える。text は本文(漫画のセリフの元)を差し替える。"""
+
+    title: Optional[str] = Field(None, max_length=100)
+    text: Optional[str] = Field(None, min_length=1)
+    prompt_tags: Optional[str] = None
+
+
 class StoryImportRequest(BaseModel):
     text: str = Field(min_length=1)
     n_scenes: int = Field(4, ge=1, le=20)

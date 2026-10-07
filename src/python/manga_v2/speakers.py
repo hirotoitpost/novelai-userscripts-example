@@ -242,7 +242,7 @@ _ORDER_WEIGHT = 0.3
 def _identify_in_order(image: Image.Image, heads: list[Box], cast: list[CastMember]) -> list[int | None]:
     """
     頭とキャラの割り当てを、髪色の一致と並び順の両方で総当たりして決める。コマの生成では
-    キャラを割り当て順に左から並べるよう位置を指定している(characterPrompts の center)ので、
+    キャラをシーンのキャラの並び(名前順)に左から並べるよう位置を指定している(characterPrompts の center)ので、
     左から順に cast の並びになっている見込みが高い。髪色だけだと、暗い場面で茶髪が黒髪に
     見えるなどして左右が入れ替わることがある(実機で確認)。
     """

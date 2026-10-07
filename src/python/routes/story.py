@@ -36,6 +36,8 @@ from ..db import (
     story_characters,
     get_character,
     get_connection,
+    get_scene,
+    get_series,
     get_story,
     list_manga_pages,
     list_stories,
@@ -43,8 +45,13 @@ from ..db import (
     list_story_scenes,
     save_character,
     set_scene_characters,
+    set_story_series,
+    set_story_title,
     update_character_reference,
     update_character_sheet,
+    update_scene_content,
+    update_scene_narration,
+    update_scene_sfx,
     update_scene_tags,
     update_scene_writing,
     update_story_final_image,
@@ -70,6 +77,8 @@ from ..models import (
     CharacterUsageResponse,
     ReplaceStoryCharacterRequest,
     ReplaceStoryCharacterResponse,
+    SceneUpdateRequest,
+    ScriptedStoryRequest,
     StoryCharacterUsage,
     MangaPageResponse,
     StoryDraftCreateRequest,
@@ -617,6 +626,77 @@ async def import_story(req: StoryImportRequest) -> StoryResponse:
     finally:
         conn.close()
     return _story_response(result)
+
+
+@router.post("/scripted", response_model=StoryResponse)
+async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
+    """
+    台本(1シーン=1コマ: セリフ・作画タグ・登場キャラ・ナレーション・効果音)から物語を作る。
+    分割・タグ付け・執筆を経ないので、そのままコマの生成(漫画v2)へ進める。
+    series_id と volume_no を渡すと、そのシリーズの巻にする(既にその巻があれば 409)。
+    """
+    conn = get_connection()
+    try:
+        known = {c["id"] for c in list_characters(conn)}
+        unknown = sorted({i for scene in req.scenes for i in scene.character_ids} - known)
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"存在しないキャラIDがあります: {unknown}")
+        if (req.series_id is None) != (req.volume_no is None):
+            raise HTTPException(status_code=422, detail="series_id と volume_no は両方指定してください。")
+        if req.series_id is not None:
+            if get_series(conn, req.series_id) is None:
+                raise HTTPException(status_code=404, detail="series not found")
+            holder = conn.execute(
+                "SELECT id FROM stories WHERE series_id = ? AND volume_no = ?", (req.series_id, req.volume_no)
+            ).fetchone()
+            if holder is not None:
+                raise HTTPException(
+                    status_code=409, detail=f"このシリーズの{req.volume_no}巻は既に物語 {holder['id']} です。"
+                )
+
+        story = create_story(conn, req.premise or f"[漫画] {req.title}", len(req.scenes), req.panels_per_page)
+        add_story_scenes(
+            conn,
+            story["id"],
+            [
+                {
+                    "draft_title": scene.title,
+                    "draft_text": scene.text,
+                    "draft_prompt_tags": scene.prompt_tags,
+                    "novelai_text": scene.text,
+                }
+                for scene in req.scenes
+            ],
+        )
+        for row, scene in zip(list_story_scenes(conn, story["id"]), req.scenes):
+            if scene.character_ids:
+                set_scene_characters(conn, row["id"], scene.character_ids)
+            if scene.narration:
+                update_scene_narration(conn, row["id"], scene.narration)
+            # 効果音は未設定(None)だとAI提案の対象になるので、台本で無しなら空にしておく
+            update_scene_sfx(conn, row["id"], [s.strip() for s in scene.sfx or [] if s.strip()])
+        update_story_status(conn, story["id"], "written")
+        set_story_title(conn, story["id"], req.title)
+        if req.series_id is not None:
+            set_story_series(conn, story["id"], req.series_id, req.volume_no)
+        result = get_story(conn, story["id"])
+    finally:
+        conn.close()
+    return _story_response(result)
+
+
+@router.patch("/scenes/{scene_id}", status_code=204)
+async def patch_scene(scene_id: int, req: SceneUpdateRequest) -> None:
+    """シーンのタイトル・本文・作画タグを手直しする(送った項目だけ)。"""
+    conn = get_connection()
+    try:
+        if get_scene(conn, scene_id) is None:
+            raise HTTPException(status_code=404, detail="scene not found")
+        update_scene_content(
+            conn, scene_id, draft_title=req.title, text=req.text, draft_prompt_tags=req.prompt_tags
+        )
+    finally:
+        conn.close()
 
 
 @router.post("/{story_id}/split", response_model=StoryJobResponse)
