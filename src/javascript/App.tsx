@@ -10,6 +10,7 @@ import ImageGenerate from './pages/ImageGenerate'
 import LLMPage from './pages/LLMPage'
 import Metadata from './pages/Metadata'
 import LoraDataset from './pages/LoraDataset'
+import MangaDraft from './pages/MangaDraft'
 import CharacterDataset from './pages/CharacterDataset'
 import Chunks from './pages/Chunks'
 import DbStatus from './pages/DbStatus'
@@ -78,6 +79,10 @@ function AppRoutes() {
       <Route
         path="/writer"
         element={<ProtectedRoute><Writer /></ProtectedRoute>}
+      />
+      <Route
+        path="/manga-draft"
+        element={<ProtectedRoute><MangaDraft /></ProtectedRoute>}
       />
       <Route
         path="/story-library"

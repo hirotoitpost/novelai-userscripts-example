@@ -125,6 +125,8 @@ _REFERENCE_MODEL = "nai-diffusion-4-5-full"
 _PAGE_DIR = _MANGA_DIR / "v2"
 # characterPrompts の上限(V4系と同じ)
 _MAX_CHARACTERS = 4
+# vary_seed のとき、シーンごとにシードをずらす間隔
+_SEED_STEP = 37
 
 
 def _require_template(template_id: str) -> None:
@@ -948,6 +950,8 @@ async def _run_panels(
             seed = characters_seed(scene_characters)
         if seed is None:
             seed = story_id * 1000 + scene["scene_index"]
+        elif req.vary_seed:
+            seed = (seed + scene["scene_index"] * _SEED_STEP) % 4294967296
         references = _scene_references(scene_characters, req) if req.use_character_reference else []
         if references:
             job.message += f"(キャラ参照{len(references)}人・V4.5)"

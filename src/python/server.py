@@ -15,6 +15,7 @@ from .routes.batch import router as batch_router
 from .routes.chunks import router as chunks_router
 from .routes.image import router as image_router
 from .routes.llm import router as llm_router
+from .routes.manga_draft import router as manga_draft_router
 from .routes.manga_v2 import router as manga_v2_router
 from .routes.library import router as library_router
 from .routes.lora_dataset import router as lora_dataset_router
@@ -61,6 +62,7 @@ app.include_router(batch_router)
 app.include_router(chunks_router)
 app.include_router(image_router)
 app.include_router(llm_router)
+app.include_router(manga_draft_router)
 app.include_router(manga_v2_router)
 app.include_router(library_router)
 app.include_router(lora_dataset_router)

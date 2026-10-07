@@ -409,6 +409,62 @@ class SceneUpdateRequest(BaseModel):
     prompt_tags: Optional[str] = None
 
 
+class MangaDraftOutline(BaseModel):
+    """大枠シナリオの1案。episodes は1話(4コマ)ごとの内容。"""
+
+    title: str = Field(min_length=1, max_length=200)
+    logline: str = ""
+    episodes: list[str] = Field(min_length=1, max_length=10)
+
+
+class MangaDraftLine(BaseModel):
+    speaker: str = Field("", description="話し手の呼び名(空なら不明)")
+    kind: Literal["speech", "thought"] = "speech"
+    text: str = Field(min_length=1, max_length=80)
+
+
+class MangaDraftPanel(BaseModel):
+    """画面で編集する台本の1コマ。characters と speaker はキャラの呼び名(共通の姓を除いた名前)。"""
+
+    characters: list[str] = Field(default_factory=list)
+    lines: list[MangaDraftLine] = Field(default_factory=list, max_length=4)
+    narration: str = Field("", max_length=80)
+    sfx: list[str] = Field(default_factory=list, max_length=8)
+    prompt_tags: str = ""
+
+
+class MangaDraftOutlineRequest(BaseModel):
+    theme: str = Field(min_length=1, max_length=500)
+    genre: str = Field("日常コメディ", max_length=100)
+    character_ids: list[int] = Field(min_length=1, max_length=4)
+    episodes: int = Field(5, ge=1, le=10, description="話数(1話=4コマ)")
+    notes: str = Field("", max_length=2000, description="人物像や設定の補足")
+    # キャラごとの人物像(キャラシートのメモより優先)
+    profiles: dict[int, str] = Field(default_factory=dict)
+    series_id: Optional[int] = Field(None, description="続編にするシリーズ(メモリと既刊のあらすじを前提にする)")
+
+
+class MangaDraftEpisodeRequest(BaseModel):
+    outline: MangaDraftOutline
+    episode_index: int = Field(ge=0)
+    character_ids: list[int] = Field(min_length=1, max_length=4)
+    notes: str = Field("", max_length=2000)
+    profiles: dict[int, str] = Field(default_factory=dict)
+    series_id: Optional[int] = None
+    previous_panels: list[MangaDraftPanel] = Field(default_factory=list, max_length=8)
+
+
+class MangaDraftCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    character_ids: list[int] = Field(min_length=1, max_length=4)
+    profiles: dict[int, str] = Field(default_factory=dict)
+    episodes: list[list[MangaDraftPanel]] = Field(min_length=1, max_length=10)
+    panels_per_page: int = Field(4, ge=1, le=12)
+    series_id: Optional[int] = None
+    # 省略するとシリーズの次の巻
+    volume_no: Optional[int] = Field(None, ge=1)
+
+
 class StoryImportRequest(BaseModel):
     text: str = Field(min_length=1)
     n_scenes: int = Field(4, ge=1, le=20)
@@ -754,6 +810,9 @@ class MangaV2PanelsRequest(BaseModel):
     # V5は未対応(実機で500)なので、そのコマはV4.5 Fullで生成する。1コマあたり+5 Anlas。
     use_character_reference: bool = False
     reference_strength: float = Field(1.0, ge=0.0, le=1.0)
+    # シーンごとにシードをずらす(+シーン番号×37)。キャラの基準シードや固定シードだと、全コマが
+    # 同じ構図に寄ってしまうため。
+    vary_seed: bool = False
     reference_fidelity: float = Field(1.0, ge=0.0, le=1.0)
     # width/height はテンプレートのコマの形から決めるので使わない。
     settings: MangaImageSettings = MangaImageSettings()

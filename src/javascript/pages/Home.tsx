@@ -79,6 +79,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/manga-draft')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/manga-draft')}
+          >
+            <div className="home-card-icon">📝</div>
+            <h2>漫画ドラフト</h2>
+            <p>テーマとキャラから大枠シナリオを選び、4コマの台本を書き進めて、そのまま漫画にします。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/generate')}
             role="button"
             tabIndex={0}
