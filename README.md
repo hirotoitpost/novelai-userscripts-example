@@ -208,6 +208,18 @@ Full interactive docs available at **http://localhost:8000/docs** while the back
 
 MIT — see [LICENSE](LICENSE) for details.
 
+### Third-party models
+
+These models are downloaded to `data/models/` on first use and are not part of this repository.
+
+- [deepghs/anime_head_detection](https://huggingface.co/deepghs/anime_head_detection) (MIT) — head positions for speech-bubble placement.
+- [deepghs/manga109_yolo](https://huggingface.co/deepghs/manga109_yolo) — panel, face, body and text positions when importing manga for structure reference.
+  It was trained on [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s)
+  (Aizawa et al., "Building a Manga Dataset 'Manga109' with Annotations for Multimedia Applications", IEEE MultiMedia, 2020),
+  whose terms allow using results of machine-learning experiments but forbid redistributing the dataset.
+  The model itself has no stated license, so check with its author (or switch models) before distributing this app or offering it commercially.
+  Without it, panels are found from their border lines instead.
+
 ## Related Projects
 
 - [novelai-sdk](https://github.com/caru-ini/novelai-sdk) – Community Python SDK (third-party)

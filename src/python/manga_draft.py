@@ -93,6 +93,13 @@ JSONだけを返してください(前置きや```は不要):
 - 露出や性的な描写はしない"""
 
 
+# 取り込んだ作品の構成を渡すときの但し書き。市販の作品も入るので、内容は使わせない
+_STRUCTURE_NOTE = (
+    "参考にするコマ運び(別の作品から読み取った、各コマの構図・人数・セリフの量・役割だけ。"
+    "このテンポや山場・オチの位置に合わせるが、話の内容・設定・セリフは新しく考える):"
+)
+
+
 def outline_prompts(
     theme: str,
     genre: str,
@@ -102,6 +109,7 @@ def outline_prompts(
     notes: str = "",
     previous: list[str] | None = None,
     options: int = 3,
+    structure: list[list[str]] | None = None,
 ) -> tuple[str, str]:
     system = _OUTLINE_SYSTEM.format(options=options, episodes=episodes)
     user = [f"テーマ: {theme}", f"ジャンル: {genre}", "登場人物:", _cast_block(characters)]
@@ -110,6 +118,9 @@ def outline_prompts(
     if previous:
         user.append("これまでの巻のあらすじ(同じネタは避け、続編として自然にする):")
         user.extend(f"- {p}" for p in previous)
+    if structure:
+        user.append(_STRUCTURE_NOTE)
+        user.extend(f"第{i + 1}話: " + " / ".join(lines) for i, lines in enumerate(structure))
     return system, "\n".join(user)
 
 
@@ -139,8 +150,11 @@ async def generate_outlines(
     *,
     notes: str = "",
     previous: list[str] | None = None,
+    structure: list[list[str]] | None = None,
 ) -> list[dict[str, Any]]:
-    system, user = outline_prompts(theme, genre, characters, episodes, notes=notes, previous=previous)
+    system, user = outline_prompts(
+        theme, genre, characters, episodes, notes=notes, previous=previous, structure=structure
+    )
     outlines = parse_outlines(await _ask_json(api_key, system, user, max_tokens=4000, temperature=0.9), episodes)
     if not outlines:
         raise RuntimeError("使える大枠シナリオ案がありませんでした。もう一度試してください。")
@@ -168,6 +182,7 @@ def episode_prompts(
     *,
     notes: str = "",
     previous_panels: list[dict[str, Any]] | None = None,
+    structure: list[str] | None = None,
 ) -> tuple[str, str]:
     episodes = outline["episodes"]
     user = ["登場人物:", _cast_block(characters)]
@@ -182,6 +197,12 @@ def episode_prompts(
         if recent:
             user.append("直前の話のセリフ: " + " / ".join(recent))
     user.append(f"この話(第{episode_index + 1}話): {episodes[episode_index]}")
+    if structure:
+        user.append(
+            "各コマはこの構成に合わせる(構図は prompt_tags にも close-up / cowboy shot / full body などで入れる。"
+            "セリフの量も合わせる):"
+        )
+        user.extend(f"{i + 1}コマ目: {line}" for i, line in enumerate(structure))
     return _EPISODE_SYSTEM, "\n".join(user)
 
 
@@ -247,8 +268,11 @@ async def generate_episode(
     *,
     notes: str = "",
     previous_panels: list[dict[str, Any]] | None = None,
+    structure: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    system, user = episode_prompts(outline, episode_index, characters, notes=notes, previous_panels=previous_panels)
+    system, user = episode_prompts(
+        outline, episode_index, characters, notes=notes, previous_panels=previous_panels, structure=structure
+    )
     last_error = ""
     for _ in range(_MAX_ATTEMPTS):
         data = await _ask_json(api_key, system, user, max_tokens=3000, temperature=0.7)

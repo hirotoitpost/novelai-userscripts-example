@@ -12,8 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from novelai import AsyncNovelAI
 
 from ..client import get_client
-from ..db import get_character, get_connection, get_series, list_series_volumes
-from ..manga_draft import DraftCharacter, draft_characters, generate_episode, generate_outlines, panel_to_scene
+from ..db import get_character, get_connection, get_manga_import, get_series, list_series_volumes
+from ..manga_draft import (
+    PANELS_PER_EPISODE,
+    DraftCharacter,
+    draft_characters,
+    generate_episode,
+    generate_outlines,
+    panel_to_scene,
+)
+from ..manga_import import structure_lines
 from ..models import (
     MangaDraftCreateRequest,
     MangaDraftEpisodeRequest,
@@ -57,6 +65,29 @@ def _series_context(series_id: int | None) -> tuple[str, list[str], int | None]:
     return series.get("memory") or "", recaps, next_volume
 
 
+# 取り込みから作れる話数の上限(大枠の話数の上限と同じ)
+_MAX_EPISODES = 10
+
+
+def _import_structure(import_id: int | None) -> list[list[str]]:
+    """取り込んだ作品のコマ運びを、読む順に4コマずつ(1話ずつ)の説明にする。未指定なら空。"""
+    if import_id is None:
+        return []
+    conn = get_connection()
+    try:
+        item = get_manga_import(conn, import_id)
+    finally:
+        conn.close()
+    if item is None:
+        raise HTTPException(status_code=404, detail="import not found")
+    panels = [p for page in (item.get("analysis") or {}).get("pages") or [] for p in page["panels"]]
+    if not panels:
+        raise HTTPException(status_code=409, detail="取り込んだ作品の構成をまだ読み取っていません。")
+    lines = structure_lines(panels)
+    chunks = [lines[i : i + PANELS_PER_EPISODE] for i in range(0, len(lines), PANELS_PER_EPISODE)]
+    return chunks[:_MAX_EPISODES]
+
+
 def _notes(series_memory: str, notes: str) -> str:
     return "\n".join(part for part in (series_memory.strip(), notes.strip()) if part)
 
@@ -66,15 +97,19 @@ async def post_outlines(req: MangaDraftOutlineRequest, client: ClientDep) -> dic
     """大枠シナリオ案を3つ作る(GLM-4.6 で数十秒)。"""
     characters = _characters(req.character_ids, req.profiles)
     memory, recaps, next_volume = _series_context(req.series_id)
+    structure = _import_structure(req.import_id)
+    # 取り込んだ作品の構成を使うときは、話数をそのコマ数に合わせる
+    episodes = len(structure) or req.episodes
     try:
         outlines = await generate_outlines(
             client.api_key,
             req.theme,
             req.genre,
             characters,
-            req.episodes,
+            episodes,
             notes=_notes(memory, req.notes),
             previous=recaps,
+            structure=structure,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -82,6 +117,7 @@ async def post_outlines(req: MangaDraftOutlineRequest, client: ClientDep) -> dic
         "outlines": outlines,
         "characters": [{"id": c.id, "name": c.name} for c in characters],
         "next_volume": next_volume,
+        "episodes": episodes,
     }
 
 
@@ -92,6 +128,7 @@ async def post_episode(req: MangaDraftEpisodeRequest, client: ClientDep) -> dict
         raise HTTPException(status_code=400, detail="その話は大枠にありません。")
     characters = _characters(req.character_ids, req.profiles)
     memory, _, _ = _series_context(req.series_id)
+    structure = _import_structure(req.import_id)
     try:
         panels = await generate_episode(
             client.api_key,
@@ -100,6 +137,7 @@ async def post_episode(req: MangaDraftEpisodeRequest, client: ClientDep) -> dict
             characters,
             notes=_notes(memory, req.notes),
             previous_panels=[p.model_dump() for p in req.previous_panels],
+            structure=structure[req.episode_index] if req.episode_index < len(structure) else None,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))

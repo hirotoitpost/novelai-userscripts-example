@@ -92,6 +92,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/manga-import')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/manga-import')}
+          >
+            <div className="home-card-icon">📚</div>
+            <h2>作品の取り込み</h2>
+            <p>PDF や画像の漫画からコマ運び(構図・人数・セリフ量・役割)を読み取り、漫画ドラフトの参考にします。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/generate')}
             role="button"
             tabIndex={0}

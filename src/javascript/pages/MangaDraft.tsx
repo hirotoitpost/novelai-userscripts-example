@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import type { Character } from '../components/StoryCharacters'
 import { apiFetch, ImagePreset } from '../api'
@@ -37,6 +37,13 @@ interface Series {
   volumes: { volume_no: number }[]
 }
 
+interface ImportSummary {
+  id: number
+  title: string
+  status: string
+  panel_count: number
+}
+
 interface Template {
   id: string
   label: string
@@ -50,6 +57,8 @@ interface DraftState {
   episodes: number
   notes: string
   seriesId: number | null
+  // 構成(コマ運び)の参考にする取り込み(/api/manga-import)
+  importId: number | null
   outlines: Outline[]
   outline: Outline | null
   names: { id: number; name: string }[]
@@ -80,6 +89,7 @@ const EMPTY: DraftState = {
   episodes: 3,
   notes: '',
   seriesId: null,
+  importId: null,
   outlines: [],
   outline: null,
   names: [],
@@ -107,7 +117,14 @@ function errorText(e: unknown): string {
 export default function MangaDraft() {
   const { token } = useAuth()
   const navigate = useNavigate()
-  const [draft, setDraft] = useState<DraftState>(loadDraft)
+  const [searchParams] = useSearchParams()
+  // 取り込みページの「この構成で漫画を作る」から来たら、その取り込みを構成の参考にする
+  const [draft, setDraft] = useState<DraftState>(() => {
+    const loaded = loadDraft()
+    const fromImport = Number(searchParams.get('import'))
+    return fromImport ? { ...loaded, importId: fromImport } : loaded
+  })
+  const [imports, setImports] = useState<ImportSummary[]>([])
   const [characters, setCharacters] = useState<Character[]>([])
   const [seriesList, setSeriesList] = useState<Series[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
@@ -137,6 +154,7 @@ export default function MangaDraft() {
     apiFetch<Character[]>(token, '/api/story/characters').then(setCharacters).catch(() => {})
     apiFetch<Series[]>(token, '/api/series').then(setSeriesList).catch(() => {})
     apiFetch<Template[]>(token, '/api/manga-v2/templates').then(setTemplates).catch(() => {})
+    apiFetch<ImportSummary[]>(token, '/api/manga-import').then(setImports).catch(() => {})
     apiFetch<ImagePreset[]>(token, '/api/image/presets').then(setPresets).catch(() => {})
   }, [token])
 
@@ -155,6 +173,7 @@ export default function MangaDraft() {
     profiles: draft.profiles,
     notes: draft.notes,
     series_id: draft.seriesId,
+    import_id: draft.importId,
   })
 
   const makeOutlines = async () => {
@@ -162,11 +181,11 @@ export default function MangaDraft() {
     setBusy('大枠シナリオを考えています(数十秒)…')
     setError(null)
     try {
-      const res = await apiFetch<{ outlines: Outline[]; characters: { id: number; name: string }[] }>(
+      const res = await apiFetch<{ outlines: Outline[]; characters: { id: number; name: string }[]; episodes: number }>(
         token, '/api/manga-draft/outlines',
         { ...common(), theme: draft.theme, genre: draft.genre, episodes: draft.episodes },
       )
-      update({ outlines: res.outlines, names: res.characters, outline: null, scripts: [] })
+      update({ outlines: res.outlines, names: res.characters, episodes: res.episodes, outline: null, scripts: [] })
     } catch (e) {
       setError(errorText(e))
     } finally {
@@ -317,7 +336,8 @@ export default function MangaDraft() {
             </label>
             <label className="md-field md-field--narrow">
               <span>話数(1話=4コマ)</span>
-              <input type="number" min={1} max={10} value={draft.episodes}
+              <input type="number" min={1} max={10} value={draft.episodes} disabled={draft.importId != null}
+                title={draft.importId != null ? '構成の参考のコマ数から決まります' : undefined}
                 onChange={e => update({ episodes: Math.min(10, Math.max(1, Number(e.target.value) || 1)) })} />
             </label>
             <label className="md-field">
@@ -332,6 +352,21 @@ export default function MangaDraft() {
           </div>
           {selectedSeries && (
             <p className="md-hint">シリーズの人物設定と既刊のあらすじを前提に、続編として作ります。</p>
+          )}
+          <label className="md-field">
+            <span>構成の参考(取り込んだ作品)</span>
+            <select value={draft.importId ?? ''} onChange={e => update({ importId: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">使わない</option>
+              {imports.filter(i => i.status === 'analyzed' || i.id === draft.importId).map(i => (
+                <option key={i.id} value={i.id}>{i.title}({i.panel_count}コマ)</option>
+              ))}
+            </select>
+          </label>
+          {draft.importId != null && (
+            <p className="md-hint">
+              取り込んだ作品のコマ運び(構図・人数・セリフの量・役割)だけを参考にします。話の内容・セリフは新しく作ります。
+              話数はコマ数から決まります(4コマずつ、最大10話)。
+            </p>
           )}
 
           <div className="md-field">

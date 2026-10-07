@@ -409,6 +409,20 @@ class SceneUpdateRequest(BaseModel):
     prompt_tags: Optional[str] = None
 
 
+class MangaImportFile(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    data: str = Field(min_length=1, description="base64 または data URL(PDF・PNG・JPEG など)")
+
+
+class MangaImportRequest(BaseModel):
+    """漫画の取り込み(構成の参考)。files は渡した順にページになる(PDF は全ページ)。"""
+
+    title: str = Field(min_length=1, max_length=200)
+    files: list[MangaImportFile] = Field(min_length=1, max_length=100)
+    # コマの役割・感情をローカルの画像モデルで読む(1コマ十数秒)。False なら人数・構図・セリフ量だけ
+    use_vision: bool = True
+
+
 class MangaDraftOutline(BaseModel):
     """大枠シナリオの1案。episodes は1話(4コマ)ごとの内容。"""
 
@@ -442,6 +456,8 @@ class MangaDraftOutlineRequest(BaseModel):
     # キャラごとの人物像(キャラシートのメモより優先)
     profiles: dict[int, str] = Field(default_factory=dict)
     series_id: Optional[int] = Field(None, description="続編にするシリーズ(メモリと既刊のあらすじを前提にする)")
+    # 構成の参考にする取り込み(/api/manga-import)。コマ運び(構図・人数・セリフ量・役割)だけを使う
+    import_id: Optional[int] = None
 
 
 class MangaDraftEpisodeRequest(BaseModel):
@@ -451,6 +467,7 @@ class MangaDraftEpisodeRequest(BaseModel):
     notes: str = Field("", max_length=2000)
     profiles: dict[int, str] = Field(default_factory=dict)
     series_id: Optional[int] = None
+    import_id: Optional[int] = None
     previous_panels: list[MangaDraftPanel] = Field(default_factory=list, max_length=8)
 
 

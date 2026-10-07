@@ -361,6 +361,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 漫画の取り込み(構成の参考)。ページ画像は data/imports/{id}/ に置き、コマの位置と読み取った
+    # 構成(人数・構図・セリフ量・役割・感情)を analysis(JSON)に持つ。セリフや筋書きは持たない。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manga_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            page_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'imported',
+            analysis TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -2184,3 +2198,46 @@ def list_panel_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         """
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ---- 漫画の取り込み(構成の参考) ----
+
+
+def create_manga_import(conn: sqlite3.Connection, title: str, page_count: int) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        "INSERT INTO manga_imports (title, page_count, created_at) VALUES (?, ?, ?)", (title, page_count, now)
+    )
+    conn.commit()
+    return get_manga_import(conn, int(cur.lastrowid or 0)) or {}
+
+
+def get_manga_import(conn: sqlite3.Connection, import_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM manga_imports WHERE id = ?", (import_id,)).fetchone()
+    if row is None:
+        return None
+    item = dict(row)
+    item["analysis"] = json.loads(item["analysis"]) if item["analysis"] else None
+    return item
+
+
+def list_manga_imports(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT id FROM manga_imports ORDER BY id DESC").fetchall()
+    return [item for row in rows if (item := get_manga_import(conn, row["id"])) is not None]
+
+
+def update_manga_import(
+    conn: sqlite3.Connection, import_id: int, *, status: str | None = None, analysis: Any = None
+) -> None:
+    if status is not None:
+        conn.execute("UPDATE manga_imports SET status = ? WHERE id = ?", (status, import_id))
+    if analysis is not None:
+        conn.execute(
+            "UPDATE manga_imports SET analysis = ? WHERE id = ?", (json.dumps(analysis, ensure_ascii=False), import_id)
+        )
+    conn.commit()
+
+
+def delete_manga_import(conn: sqlite3.Connection, import_id: int) -> None:
+    conn.execute("DELETE FROM manga_imports WHERE id = ?", (import_id,))
+    conn.commit()
