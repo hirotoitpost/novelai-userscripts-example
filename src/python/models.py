@@ -411,11 +411,11 @@ class SceneUpdateRequest(BaseModel):
 
 class MangaImportFile(BaseModel):
     name: str = Field(min_length=1, max_length=300)
-    data: str = Field(min_length=1, description="base64 または data URL(PDF・PNG・JPEG など)")
+    data: str = Field(min_length=1, description="base64 または data URL(PDF・PNG・JPEG・zip など)")
 
 
 class MangaImportRequest(BaseModel):
-    """漫画の取り込み(構成の参考)。files は渡した順にページになる(PDF は全ページ)。"""
+    """漫画の取り込み(構成の参考)。files は渡した順にページになる(PDF は全ページ、zip は中の画像と PDF)。"""
 
     title: str = Field(min_length=1, max_length=200)
     files: list[MangaImportFile] = Field(min_length=1, max_length=100)

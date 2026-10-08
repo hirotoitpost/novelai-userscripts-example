@@ -19,7 +19,9 @@ import io
 import json
 import logging
 import os
+import re
 import threading
+import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -89,10 +91,54 @@ def _fit_width(image: Image.Image) -> Image.Image:
     return image
 
 
+# zip の中で読まないもの(macOS の付属ファイル・サムネイル・隠しファイル)
+_ZIP_JUNK = re.compile(r"(^|/)(__MACOSX/|\.|thumbs\.db$|desktop\.ini$)", re.IGNORECASE)
+_PAGE_SUFFIXES = (".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff")
+# zip を展開した合計の上限(zip 爆弾の対策)と、読む項目数の上限
+MAX_ZIP_BYTES = 1024 * 1024 * 1024
+_MAX_ZIP_ENTRIES = 2000
+
+
+def _natural_key(name: str) -> list[object]:
+    """ファイル名の自然な順(page2 → page10)。数字の部分は数として比べる。"""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", name)]
+
+
+def _is_zip(name: str, data: bytes) -> bool:
+    return name.lower().endswith((".zip", ".cbz")) or data[:4] == b"PK\x03\x04"
+
+
+def _zip_entries(data: bytes) -> list[tuple[str, bytes]]:
+    """
+    zip(.cbz も)の中の画像と PDF を、ファイル名の自然な順に取り出す。フォルダに分かれていても
+    パスごと並べるので、フォルダ順・ページ順になる。中の zip は開かない。
+    """
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        infos = [
+            info
+            for info in archive.infolist()
+            if not info.is_dir()
+            and not _ZIP_JUNK.search(info.filename)
+            and info.filename.lower().endswith(_PAGE_SUFFIXES)
+        ][:_MAX_ZIP_ENTRIES]
+        if sum(info.file_size for info in infos) > MAX_ZIP_BYTES:
+            raise ValueError("zip の中身が大きすぎます(展開後 1GB まで)。")
+        infos.sort(key=lambda info: _natural_key(info.filename))
+        return [(info.filename, archive.read(info)) for info in infos]
+
+
 def load_pages(files: list[tuple[str, bytes]]) -> list[Image.Image]:
-    """PDF(全ページ)と画像を、渡された順にページ画像にする。"""
+    """
+    PDF(全ページ)・画像・zip(.cbz も。中の画像と PDF をファイル名の自然な順に)を、渡された順に
+    ページ画像にする。
+    """
     pages: list[Image.Image] = []
-    for name, data in files:
+    queue = list(files)
+    while queue and len(pages) < MAX_PAGES:
+        name, data = queue.pop(0)
+        if _is_zip(name, data):
+            queue[0:0] = _zip_entries(data)
+            continue
         if name.lower().endswith(".pdf") or data[:5] == b"%PDF-":
             import pypdfium2 as pdfium  # 読み込みが重いので使うときだけ
 
@@ -107,8 +153,6 @@ def load_pages(files: list[tuple[str, bytes]]) -> list[Image.Image]:
                 document.close()
         else:
             pages.append(_fit_width(Image.open(io.BytesIO(data))))
-        if len(pages) >= MAX_PAGES:
-            break
     return pages[:MAX_PAGES]
 
 

@@ -144,7 +144,7 @@ export default function MangaImport() {
         <section className="mi-section">
           <h2>取り込む</h2>
           <p className="mi-hint">
-            PDF や画像(複数可、選んだ順にページになります)から、コマごとの構図・人数・セリフの量・役割だけを読み取ります。
+            PDF・画像・zip(複数可、選んだ順にページになります。zip の中はファイル名順)から、コマごとの構図・人数・セリフの量・役割だけを読み取ります。
             セリフや話の内容は読み取らず、新しく作る漫画にも使いません。
           </p>
           <label className="mi-field">
@@ -153,7 +153,7 @@ export default function MangaImport() {
           </label>
           <label className="mi-field">
             <span>ファイル</span>
-            <input type="file" multiple accept="application/pdf,image/*"
+            <input type="file" multiple accept="application/pdf,image/*,.zip,.cbz,application/zip"
               onChange={e => setFiles(Array.from(e.target.files ?? []))} />
           </label>
           {files.length > 0 && <p className="mi-hint">{files.length}ファイル: {files.map(f => f.name).join('、')}</p>}

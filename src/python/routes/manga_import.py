@@ -10,6 +10,7 @@ import asyncio
 import base64
 import binascii
 import shutil
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -139,7 +140,7 @@ async def post_import(req: MangaImportRequest) -> dict[str, Any]:
     """PDF・画像を取り込み、構成の読み取りを始める。ファイルは渡した順にページになる。"""
     try:
         pages = await asyncio.to_thread(load_pages, [(f.name, _decode(f.data)) for f in req.files])
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    except (UnidentifiedImageError, OSError, ValueError, zipfile.BadZipFile) as exc:
         raise HTTPException(status_code=400, detail=f"ページを読み込めませんでした: {exc}")
     if not pages:
         raise HTTPException(status_code=400, detail="ページがありません。")

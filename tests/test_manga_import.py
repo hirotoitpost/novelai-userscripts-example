@@ -13,6 +13,7 @@ import base64
 import io
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,51 @@ def test_load_pages_from_pdf_and_images() -> None:
     assert pages[2].size == (600, 850)
 
 
+def _sized(width: int) -> bytes:
+    """幅でページを見分けられる白い画像(PNG)。"""
+    return _png(Image.new("RGB", (width, 100), "white"))
+
+
+def _zip(entries: list[tuple[str, bytes]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        for name, data in entries:
+            archive.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_load_pages_from_zip() -> None:
+    pdf = io.BytesIO()
+    Image.new("RGB", (130, 100), "white").save(pdf, format="PDF")
+    archive = _zip(
+        [
+            ("book/p10.png", _sized(110)),
+            ("book/p2.png", _sized(102)),
+            ("book/p1.jpg", _sized(101)),
+            ("extra/z.pdf", pdf.getvalue()),
+            ("__MACOSX/book/._p1.jpg", b"junk"),
+            ("book/.hidden.png", b"junk"),
+            ("book/Thumbs.db", b"junk"),
+            ("book/readme.txt", b"not a page"),
+        ]
+    )
+    pages = load_pages([("chapter.zip", archive)])
+    # フォルダ・ファイル名の自然な順(p1 → p2 → p10)、付属ファイルや画像以外は読まない。PDF は幅1200で描く
+    assert [p.width for p in pages] == [101, 102, 110, 1200]
+
+
+def test_load_pages_mixes_zip_and_single_files() -> None:
+    cbz = _zip([("002.png", _sized(202)), ("001.png", _sized(201))])
+    pages = load_pages([("cover.png", _sized(300)), ("vol.cbz", cbz), ("last.png", _sized(400))])
+    assert [p.width for p in pages] == [300, 201, 202, 400]
+
+
+def test_zip_too_large_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manga_import, "MAX_ZIP_BYTES", 10)
+    with pytest.raises(ValueError, match="大きすぎます"):
+        load_pages([("big.zip", _zip([("p1.png", _sized(100))]))])
+
+
 def test_structure_lines_hide_the_content() -> None:
     panels = [
         {"shot": "long", "people": 2, "text_blocks": 1, "role": "導入", "emotion": "期待"},
@@ -216,6 +262,22 @@ def test_import_api(client: TestClient, tmp_path: Path) -> None:
     assert client.delete(f"/api/manga-import/{import_id}").status_code == 204
     assert client.get(f"/api/manga-import/{import_id}").status_code == 404
     assert not (tmp_path / "imports" / str(import_id)).exists()
+
+
+def test_import_api_accepts_zip(client: TestClient) -> None:
+    archive = _zip([("p2.png", _png(_page(_grid()))), ("p1.png", _png(_page(_grid())))])
+    data = base64.b64encode(archive).decode()
+    res = client.post(
+        "/api/manga-import",
+        json={"title": "zip", "files": [{"name": "a.zip", "data": data}], "use_vision": False},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["page_count"] == 2
+    _wait(client, res.json()["id"])
+    # 壊れた zip は読めない
+    broken = base64.b64encode(b"PK\x03\x04 broken").decode()
+    res = client.post("/api/manga-import", json={"title": "x", "files": [{"name": "b.zip", "data": broken}]})
+    assert res.status_code == 400
 
 
 def test_rejects_unreadable_files(client: TestClient) -> None:
