@@ -564,7 +564,7 @@ class StoryJobResponse(BaseModel):
     """分割/挿絵生成のバックグラウンドジョブの進捗。"""
 
     story_id: int
-    kind: Literal["split", "illustrate", "characters", "panels", "sfx", "narration", "sfx_fonts"]
+    kind: Literal["split", "illustrate", "characters", "panels", "sfx", "narration", "sfx_fonts", "manga"]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
     progress: int = 0
@@ -881,6 +881,16 @@ class MangaV2ComposeRequest(BaseModel):
 # ダウンロードに入れるもの。pages=合成したページ、pages_clean=セリフ・効果音・ナレーションなしのページ、
 # panels=ページに嵌める前のコマに文字を入れたもの、panels_clean=生成したコマの絵そのもの。
 MangaV2DownloadContent = Literal["pages", "pages_clean", "panels", "panels_clean"]
+
+
+class MangaV2MakeRequest(BaseModel):
+    """
+    まだ絵の無いコマを生成してから、ページに合成するまでを1つのジョブで行う(漫画ドラフトの「漫画にする」)。
+    画面を閉じたり開き直したりしても、サーバー側で最後まで進む。
+    """
+
+    panels: MangaV2PanelsRequest = MangaV2PanelsRequest()
+    compose: MangaV2ComposeRequest = MangaV2ComposeRequest()
 
 
 class MangaV2DownloadRequest(MangaV2ComposeRequest):

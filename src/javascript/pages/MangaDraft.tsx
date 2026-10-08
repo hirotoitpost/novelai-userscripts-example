@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import type { Character } from '../components/StoryCharacters'
 import { apiFetch, ImagePreset } from '../api'
+import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './MangaDraft.css'
 
 /**
@@ -142,7 +143,9 @@ export default function MangaDraft() {
   const [useReference, setUseReference] = useState(false)
   const [presetId, setPresetId] = useState<number | null>(null)
   const [negative, setNegative] = useState(DEFAULT_NEGATIVE)
-  const [job, setJob] = useState<Job | null>(null)
+  // 「漫画にする」の進み具合(物語ページと同じ処理状況ダイアログ)。サーバーのジョブなので、画面を
+  // 閉じたり開き直したりしても処理は続き、開き直すと表示を引き継ぐ
+  const task = useTaskStatus()
   const [result, setResult] = useState<{ storyId: number; finalImage: string } | null>(null)
 
   useEffect(() => {
@@ -258,23 +261,75 @@ export default function MangaDraft() {
 
   const allWritten = draft.scripts.length > 0 && draft.scripts.every(s => s && s.length > 0)
 
-  const waitJob = async (storyId: number) => {
+  /** 物語のジョブ(コマの生成と合成)が終わるまで進捗をダイアログに出す。 */
+  const pollJob = async (storyId: number) => {
     while (true) {
-      const current = await apiFetch<Job | null>(token!, `/api/story/${storyId}/job`)
-      setJob(current)
-      if (!current || current.status !== 'running') return current
-      await new Promise(r => setTimeout(r, 3000))
+      const job = await apiFetch<Job | null>(token!, `/api/story/${storyId}/job`).catch(() => undefined)
+      if (job === undefined) {
+        // 一時的につながらない(スマホの通信の切り替えなど)ときは待って読み直す
+        await new Promise(r => setTimeout(r, 3000))
+        continue
+      }
+      if (!job) return
+      task.update(job.message, job.progress, job.total, `nai-job-${storyId}`)
+      if (job.status === 'error') throw new Error(job.detail ?? '漫画にできませんでした')
+      if (job.status === 'cancelled') throw new Error('キャンセルしました。描き終わったコマは残っています')
+      if (job.status !== 'running') return
+      await new Promise(r => setTimeout(r, 2000))
     }
   }
 
-  /** 物語を作り、コマを生成して合成する。 */
+  /** できた漫画(物語の最後に合成したページ)を結果として出す。 */
+  const showResult = async (storyId: number) => {
+    const story = await apiFetch<{ final_image_path: string | null }>(token!, `/api/story/${storyId}`)
+    if (story.final_image_path) setResult({ storyId, finalImage: story.final_image_path })
+    return story.final_image_path
+  }
+
+  /** ジョブの進捗を追い、終わったら結果を出す(開始直後と、開き直したときの引き継ぎで共用)。 */
+  const followJob = async (storyId: number) => {
+    try {
+      await pollJob(storyId)
+      const finalImage = await showResult(storyId)
+      task.finish(finalImage ? 'done' : 'error', finalImage ? '漫画ができました' : '漫画のページがありません')
+    } catch (e) {
+      const message = errorText(e)
+      setError(message)
+      task.finish(message.startsWith('キャンセル') ? 'cancelled' : 'error', message)
+    }
+  }
+
+  // 開き直したとき: 作成中の物語のジョブが動いていれば進捗表示を引き継ぎ、終わっていれば結果を出す
+  useEffect(() => {
+    const storyId = draft.pendingStoryId
+    if (!token || storyId == null) return
+    let stopped = false
+    void (async () => {
+      const job = await apiFetch<Job | null>(token, `/api/story/${storyId}/job`).catch(() => null)
+      if (stopped) return
+      if (job?.status === 'running') {
+        task.start('漫画にする')
+        await followJob(storyId)
+      } else {
+        await showResult(storyId).catch(() => null)
+      }
+    })()
+    return () => { stopped = true }
+    // 開いたときに1回だけ
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  /**
+   * 物語を作り(途中で失敗して押し直したときは前の物語を使う)、まだ絵の無いコマの生成からページの合成までを
+   * サーバーの1つのジョブで行う。
+   */
   const makeManga = async () => {
     if (!token || !draft.outline || !allWritten) return
     setError(null)
     setResult(null)
+    task.start('漫画にする')
+    let storyId = draft.pendingStoryId ?? null
     try {
-      // 前に作った物語があれば(途中で失敗して押し直したとき)作り直さず、まだ絵の無いコマから続ける
-      let storyId = draft.pendingStoryId ?? null
       if (storyId != null) {
         try {
           await apiFetch(token, `/api/story/${storyId}`)
@@ -283,7 +338,7 @@ export default function MangaDraft() {
         }
       }
       if (storyId == null) {
-        setBusy('物語を作っています…')
+        task.update('物語を作っています')
         const created = await apiFetch<{ id: number }>(token, '/api/manga-draft/create', {
           title: draft.outline.title,
           character_ids: draft.characterIds,
@@ -294,7 +349,6 @@ export default function MangaDraft() {
         storyId = created.id
         update({ pendingStoryId: storyId })
       }
-      const story = { id: storyId }
       const preset = presets.find(p => p.id === presetId)
       const settings: Record<string, unknown> = { negative_prompt: negative.trim() || null }
       if (preset) {
@@ -303,26 +357,23 @@ export default function MangaDraft() {
           if (value != null) settings[key] = value
         }
       }
-      const total = draft.scripts.reduce((n, s) => n + (s?.length ?? 0), 0)
-      const done = await apiFetch<unknown[]>(token, `/api/manga-v2/${story.id}/panels`)
-      if (done.length < total) {
-        setBusy('コマの絵を生成しています(1コマ十秒前後)…')
-        await apiFetch(token, `/api/manga-v2/${story.id}/panels`, {
-          template, color, use_character_reference: useReference, vary_seed: true, skip_existing: true, settings,
-        })
-        const finished = await waitJob(story.id)
-        if (finished?.status === 'error') throw new Error(finished.detail ?? 'コマの生成に失敗しました')
-      }
-      setBusy('ページに合成しています…')
-      const composed = await apiFetch<{ final_image_path: string }>(token, `/api/manga-v2/${story.id}/compose`, { template })
-      setResult({ storyId: story.id, finalImage: composed.final_image_path })
-      update({ pendingStoryId: null })
+      await apiFetch(token, `/api/manga-v2/${storyId}/make`, {
+        panels: { template, color, use_character_reference: useReference, vary_seed: true, settings },
+        compose: { template },
+      })
     } catch (e) {
-      setError(errorText(e))
-    } finally {
-      setBusy(null)
-      setJob(null)
+      const message = errorText(e)
+      setError(message)
+      task.finish('error', message)
+      return
     }
+    await followJob(storyId)
+  }
+
+  const cancelMake = async () => {
+    const storyId = draft.pendingStoryId
+    if (storyId == null) return
+    await fetch(`/api/story/${storyId}/job/cancel`, { method: 'POST' }).catch(() => {})
   }
 
   const reset = () => {
@@ -571,7 +622,7 @@ export default function MangaDraft() {
               全{draft.scripts.reduce((n, s) => n + (s?.length ?? 0), 0)}コマを生成します(NovelAI の Anlas を使います)。
               {draft.seriesId != null && ` シリーズの${(selectedSeries?.volumes.length ?? 0) + 1}巻になります。`}
             </p>
-            <button type="button" className="md-primary" onClick={makeManga} disabled={!!busy}>
+            <button type="button" className="md-primary" onClick={makeManga} disabled={!!busy || task.busy}>
               漫画にする
             </button>
           </section>
@@ -582,7 +633,6 @@ export default function MangaDraft() {
             {busy && (
               <p>
                 <span className="md-spinner" /> {busy}
-                {job && job.total > 0 && ` (${job.progress}/${job.total})`}
               </p>
             )}
             {error && <p className="md-error" role="alert">{error}</p>}
@@ -598,6 +648,14 @@ export default function MangaDraft() {
           </section>
         )}
       </main>
+
+      <TaskStatusDialog
+        status={task.status}
+        minimized={task.minimized}
+        onMinimize={task.setMinimized}
+        onCancel={() => void cancelMake()}
+        onClose={task.dismiss}
+      />
     </div>
   )
 }

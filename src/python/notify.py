@@ -38,6 +38,7 @@ JOB_KIND_LABELS = {
     "narration": "ナレーションの作成",
     "panels": "コマの絵の生成",
     "sfx_fonts": "描き文字の選択",
+    "manga": "漫画にする(コマの生成と合成)",
 }
 
 _STATUS_WORDS = {"done": "✅ 完了", "error": "⚠️ 失敗", "cancelled": "⏹️ キャンセル"}

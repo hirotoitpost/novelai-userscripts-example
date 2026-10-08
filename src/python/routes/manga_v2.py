@@ -96,6 +96,7 @@ from ..models import (
     MangaV2StampZipRequest,
     MangaV2CharacterReferenceRequest,
     MangaV2ComposeRequest,
+    MangaV2MakeRequest,
     MangaV2ComposeResponse,
     MangaV2DownloadRequest,
     MangaV2Font,
@@ -1174,6 +1175,36 @@ def _attachment_header(story_id: int, title: str | None, extension: str) -> str:
     if not name:
         return f'attachment; filename="{fallback}"'
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(f'{name}.{extension}')}"
+
+
+@router.post("/{story_id}/make", response_model=StoryJobResponse)
+async def make_manga(story_id: int, req: MangaV2MakeRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    まだ絵の無いコマを生成し、続けてページに合成する(1つのジョブ)。コマの生成だけをジョブにして合成を
+    画面から呼ぶと、生成中に画面を開き直したときに合成が行われないまま終わってしまう(実機で確認)。
+    進捗は GET /api/story/{id}/job、できた漫画は物語の final_image_path で見る。
+    """
+    _require_template(req.panels.template)
+    _require_template(req.compose.template)
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+        existing = {p["scene_id"] for p in list_manga_panels(conn, story_id)}
+    finally:
+        conn.close()
+    if not scenes:
+        raise HTTPException(status_code=404, detail="story not found")
+    targets = [s for s in scenes if s["id"] not in existing]
+    api_key = client.api_key
+
+    async def runner(job: _Job) -> None:
+        if targets:
+            await _run_panels(job, story_id, req.panels, api_key, targets)
+        job.message = "ページに合成しています"
+        result = await asyncio.to_thread(compose, story_id, req.compose)
+        job.message = f"漫画ができました({len(result['pages'])}ページ)"
+
+    return _job_response(_start_job(story_id, "manga", runner))
 
 
 @router.post("/{story_id}/download")
