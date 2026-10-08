@@ -1,6 +1,6 @@
 """
-NovelAI の文章生成(text.novelai.net/oa)の呼び出しのテスト。画面のログインのトークンで 401 が返ったら、
-.env の永続 API トークンで呼び直すこと。NovelAI には接続せず、偽の応答で確かめる。
+NovelAI の文章生成(text.novelai.net/oa)と画像生成(V5)の呼び出しのテスト。画面のログインのトークンで
+401 が返ったら、.env の永続 API トークンで呼び直すこと。NovelAI には接続せず、偽の応答で確かめる。
 
 実行方法:
   uv run pytest tests/test_novelai_text_oa.py -v
@@ -9,7 +9,9 @@ NovelAI の文章生成(text.novelai.net/oa)の呼び出しのテスト。画面
 from __future__ import annotations
 
 import asyncio
+import io
 import sys
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -17,7 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from python import novelai_text_oa  # noqa: E402
+from python import novelai_image_v5, novelai_text_oa  # noqa: E402
 from python.novelai_text_oa import stream_chat  # noqa: E402
 
 _SSE = 'data: {"choices": [{"delta": {"content": "こん"}}]}\n\ndata: {"choices": [{"delta": {"content": "にちは"}}]}\n\ndata: [DONE]\n\n'
@@ -66,3 +68,26 @@ def test_reports_401_without_a_persistent_token(monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(RuntimeError, match="401"):
         asyncio.run(_chat())
     assert seen == ["login-token"]
+
+
+def test_image_api_retries_with_persistent_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NOVELAI_API_TOKEN", "pst-persistent")
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("image_0.png", b"PNGDATA")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.headers["Authorization"].removeprefix("Bearer ")
+        seen.append(token)
+        if token != "pst-persistent":
+            return httpx.Response(401, json={"statusCode": 401, "message": "Unauthorized"})
+        return httpx.Response(200, content=archive.getvalue())
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        novelai_image_v5.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    )
+    image = asyncio.run(novelai_image_v5.generate_image_v5("login-token", "1girl", "", width=512, height=512))
+    assert image == b"PNGDATA"
+    assert seen == ["login-token", "pst-persistent"]

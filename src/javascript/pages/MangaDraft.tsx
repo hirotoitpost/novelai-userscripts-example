@@ -63,6 +63,9 @@ interface DraftState {
   outline: Outline | null
   names: { id: number; name: string }[]
   scripts: (DraftPanel[] | null)[]
+  // 「漫画にする」で作った物語。コマの生成などで失敗して押し直したとき、作り直さずに続きから進める。
+  // 台本や大枠を変えたら消す(変えた台本は新しい物語にする)
+  pendingStoryId?: number | null
 }
 
 interface Job {
@@ -94,6 +97,7 @@ const EMPTY: DraftState = {
   outline: null,
   names: [],
   scripts: [],
+  pendingStoryId: null,
 }
 
 function loadDraft(): DraftState {
@@ -185,7 +189,9 @@ export default function MangaDraft() {
         token, '/api/manga-draft/outlines',
         { ...common(), theme: draft.theme, genre: draft.genre, episodes: draft.episodes },
       )
-      update({ outlines: res.outlines, names: res.characters, episodes: res.episodes, outline: null, scripts: [] })
+      update({
+        outlines: res.outlines, names: res.characters, episodes: res.episodes, outline: null, scripts: [], pendingStoryId: null,
+      })
     } catch (e) {
       setError(errorText(e))
     } finally {
@@ -194,7 +200,7 @@ export default function MangaDraft() {
   }
 
   const chooseOutline = (o: Outline) => {
-    update({ outline: { ...o, episodes: [...o.episodes] }, scripts: o.episodes.map(() => null) })
+    update({ outline: { ...o, episodes: [...o.episodes] }, scripts: o.episodes.map(() => null), pendingStoryId: null })
     setResult(null)
   }
 
@@ -223,7 +229,7 @@ export default function MangaDraft() {
         setBusy(`第${index + 1}話の台本を書いています…`)
         const panels = await makeEpisode(index, scripts)
         scripts = scripts.map((s, i) => (i === index ? panels : s))
-        setDraft(d => ({ ...d, scripts }))
+        setDraft(d => ({ ...d, scripts, pendingStoryId: null }))
       }
     } catch (e) {
       setError(errorText(e))
@@ -235,6 +241,7 @@ export default function MangaDraft() {
   const editPanel = (episode: number, panel: number, patch: Partial<DraftPanel>) => {
     setDraft(d => ({
       ...d,
+      pendingStoryId: null,
       scripts: d.scripts.map((s, e) =>
         e !== episode || !s ? s : s.map((p, i) => (i === panel ? { ...p, ...patch } : p))),
     }))
@@ -266,14 +273,28 @@ export default function MangaDraft() {
     setError(null)
     setResult(null)
     try {
-      setBusy('物語を作っています…')
-      const story = await apiFetch<{ id: number }>(token, '/api/manga-draft/create', {
-        title: draft.outline.title,
-        character_ids: draft.characterIds,
-        profiles: draft.profiles,
-        episodes: draft.scripts.map(s => cleanPanels(s ?? [])),
-        series_id: draft.seriesId,
-      })
+      // 前に作った物語があれば(途中で失敗して押し直したとき)作り直さず、まだ絵の無いコマから続ける
+      let storyId = draft.pendingStoryId ?? null
+      if (storyId != null) {
+        try {
+          await apiFetch(token, `/api/story/${storyId}`)
+        } catch {
+          storyId = null  // 消されていたら作り直す
+        }
+      }
+      if (storyId == null) {
+        setBusy('物語を作っています…')
+        const created = await apiFetch<{ id: number }>(token, '/api/manga-draft/create', {
+          title: draft.outline.title,
+          character_ids: draft.characterIds,
+          profiles: draft.profiles,
+          episodes: draft.scripts.map(s => cleanPanels(s ?? [])),
+          series_id: draft.seriesId,
+        })
+        storyId = created.id
+        update({ pendingStoryId: storyId })
+      }
+      const story = { id: storyId }
       const preset = presets.find(p => p.id === presetId)
       const settings: Record<string, unknown> = { negative_prompt: negative.trim() || null }
       if (preset) {
@@ -282,15 +303,20 @@ export default function MangaDraft() {
           if (value != null) settings[key] = value
         }
       }
-      setBusy('コマの絵を生成しています(1コマ十秒前後)…')
-      await apiFetch(token, `/api/manga-v2/${story.id}/panels`, {
-        template, color, use_character_reference: useReference, vary_seed: true, skip_existing: false, settings,
-      })
-      const finished = await waitJob(story.id)
-      if (finished?.status === 'error') throw new Error(finished.detail ?? 'コマの生成に失敗しました')
+      const total = draft.scripts.reduce((n, s) => n + (s?.length ?? 0), 0)
+      const done = await apiFetch<unknown[]>(token, `/api/manga-v2/${story.id}/panels`)
+      if (done.length < total) {
+        setBusy('コマの絵を生成しています(1コマ十秒前後)…')
+        await apiFetch(token, `/api/manga-v2/${story.id}/panels`, {
+          template, color, use_character_reference: useReference, vary_seed: true, skip_existing: true, settings,
+        })
+        const finished = await waitJob(story.id)
+        if (finished?.status === 'error') throw new Error(finished.detail ?? 'コマの生成に失敗しました')
+      }
       setBusy('ページに合成しています…')
       const composed = await apiFetch<{ final_image_path: string }>(token, `/api/manga-v2/${story.id}/compose`, { template })
       setResult({ storyId: story.id, finalImage: composed.final_image_path })
+      update({ pendingStoryId: null })
     } catch (e) {
       setError(errorText(e))
     } finally {

@@ -16,6 +16,19 @@ async def init_client() -> None:
         _fallback_client = AsyncNovelAI(api_key=api_key)
 
 
+def api_keys_with_fallback(api_key: str) -> list[str]:
+    """
+    NovelAI を呼ぶときに試すトークンの順: 渡されたもの(画面のログインのトークン)→ .env の永続 API トークン。
+    画面に残ったログインのトークンが期限切れなどで 401 になっても、このアプリの利用者本人の永続トークンで
+    続けられるようにする(2026-10 実機: スマホの画面から文章・画像の生成がどちらも 401 になった)。
+    """
+    keys = [api_key]
+    persistent = os.environ.get("NOVELAI_API_TOKEN") or os.environ.get("NOVELAI_API_KEY")
+    if persistent and persistent != api_key:
+        keys.append(persistent)
+    return keys
+
+
 async def close_client() -> None:
     global _fallback_client
     if _fallback_client is not None:

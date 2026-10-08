@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+from .client import api_keys_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -49,25 +50,12 @@ _MAX_BODY_CHARS = 16000
 _AUTHOR_NOTE_DEPTH = 3
 
 
-def _api_keys(api_key: str) -> list[str]:
-    """
-    試すトークンの順: 渡されたもの(画面のログインのトークン)→ .env の永続 API トークン。
-    画面から呼ぶと、このエンドポイントが 401 を返すことがある(2026-10 実機。ログインのトークンを
-    受け付けないのか、期限切れなのかは未確認)。永続トークンはこのアプリの利用者本人のもの。
-    """
-    keys = [api_key]
-    persistent = os.environ.get("NOVELAI_API_TOKEN") or os.environ.get("NOVELAI_API_KEY")
-    if persistent and persistent != api_key:
-        keys.append(persistent)
-    return keys
-
-
 async def _stream_lines(url: str, body: dict[str, Any], api_key: str, label: str) -> AsyncGenerator[str, None]:
     """
     SSE の data 行の中身を返す。401 なら次のトークンで1回だけ呼び直す(何も返す前に決まるので、
     途中まで返してから切り替わることはない)。
     """
-    keys = _api_keys(api_key)
+    keys = api_keys_with_fallback(api_key)
     async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=30)) as client:
         for index, key in enumerate(keys):
             async with client.stream("POST", url, json=body, headers={"Authorization": f"Bearer {key}"}) as response:

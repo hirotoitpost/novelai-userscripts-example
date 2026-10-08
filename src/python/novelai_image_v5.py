@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import re
 import zipfile
 from dataclasses import dataclass
@@ -25,6 +26,10 @@ from typing import Any
 
 import httpx
 from PIL import Image
+
+from .client import api_keys_with_fallback
+
+logger = logging.getLogger(__name__)
 
 _IMAGE_API_ADDRESS = "https://image.novelai.net"
 
@@ -146,9 +151,7 @@ def _build_v5_body(
     character_tags: list[str],
     character_negatives: list[str] | None = None,
 ) -> dict[str, Any]:
-    character_prompts, char_captions, negative_captions = _build_character_prompts(
-        character_tags, character_negatives
-    )
+    character_prompts, char_captions, negative_captions = _build_character_prompts(character_tags, character_negatives)
     parameters: dict[str, Any] = {
         "width": width,
         "height": height,
@@ -325,12 +328,21 @@ async def generate_image_v5(
     if refs:
         _apply_character_reference(body["parameters"], refs)
 
-    headers = {"Authorization": f"Bearer {api_key}"}
-    async with httpx.AsyncClient(headers=headers, timeout=180) as http_client:
-        response = await http_client.post(f"{_IMAGE_API_ADDRESS}/ai/generate-image", json=body)
-        if response.status_code != 200:
-            raise RuntimeError(f"NovelAI V5 image API error {response.status_code}: {response.text}")
-        content = response.content
+    keys = api_keys_with_fallback(api_key)
+    content = b""
+    async with httpx.AsyncClient(timeout=180) as http_client:
+        for index, key in enumerate(keys):
+            response = await http_client.post(
+                f"{_IMAGE_API_ADDRESS}/ai/generate-image", json=body, headers={"Authorization": f"Bearer {key}"}
+            )
+            # 画面のログインのトークンが期限切れなどで 401 なら、.env の永続トークンで1回だけ呼び直す
+            if response.status_code == 401 and index + 1 < len(keys):
+                logger.warning("NovelAI image API が 401 を返したので、.env の永続 API トークンで呼び直します")
+                continue
+            if response.status_code != 200:
+                raise RuntimeError(f"NovelAI V5 image API error {response.status_code}: {response.text}")
+            content = response.content
+            break
 
     zf = zipfile.ZipFile(io.BytesIO(content))
     names = zf.namelist()
