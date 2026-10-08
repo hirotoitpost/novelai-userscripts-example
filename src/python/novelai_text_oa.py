@@ -11,10 +11,15 @@ https://github.com/SillyTavern/SillyTavern/pull/5967 と、2026-10 の実機で�
 from __future__ import annotations
 
 import json
+import logging
+import os
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _TEXT_API = "https://text.novelai.net/oa/v1/completions"
 _CHAT_API = "https://text.novelai.net/oa/v1/chat/completions"
@@ -42,6 +47,44 @@ _MAX_BODY_CHARS = 16000
 # 作者メモ(Author's Note)を差し込む位置(本文の末尾から何段落前か)。公式エディタと同じく
 # 末尾の少し手前に置くと、直近の展開に効きやすい。
 _AUTHOR_NOTE_DEPTH = 3
+
+
+def _api_keys(api_key: str) -> list[str]:
+    """
+    試すトークンの順: 渡されたもの(画面のログインのトークン)→ .env の永続 API トークン。
+    画面から呼ぶと、このエンドポイントが 401 を返すことがある(2026-10 実機。ログインのトークンを
+    受け付けないのか、期限切れなのかは未確認)。永続トークンはこのアプリの利用者本人のもの。
+    """
+    keys = [api_key]
+    persistent = os.environ.get("NOVELAI_API_TOKEN") or os.environ.get("NOVELAI_API_KEY")
+    if persistent and persistent != api_key:
+        keys.append(persistent)
+    return keys
+
+
+async def _stream_lines(url: str, body: dict[str, Any], api_key: str, label: str) -> AsyncGenerator[str, None]:
+    """
+    SSE の data 行の中身を返す。401 なら次のトークンで1回だけ呼び直す(何も返す前に決まるので、
+    途中まで返してから切り替わることはない)。
+    """
+    keys = _api_keys(api_key)
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=30)) as client:
+        for index, key in enumerate(keys):
+            async with client.stream("POST", url, json=body, headers={"Authorization": f"Bearer {key}"}) as response:
+                if response.status_code == 401 and index + 1 < len(keys):
+                    logger.warning("NovelAI %s API が 401 を返したので、.env の永続 API トークンで呼び直します", label)
+                    continue
+                if response.status_code != 200:
+                    detail = (await response.aread()).decode("utf-8", "replace")
+                    raise RuntimeError(f"NovelAI {label} API error {response.status_code}: {detail[:300]}")
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        return
+                    yield payload
+                return
 
 
 def build_prompt(memory: str, text: str, author_note: str) -> str:
@@ -80,21 +123,10 @@ async def stream_completion(
     }
     if stop:
         body["stop"] = stop
-    headers = {"Authorization": f"Bearer {api_key}"}
-    async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=30)) as client:
-        async with client.stream("POST", _TEXT_API, json=body, headers=headers) as response:
-            if response.status_code != 200:
-                detail = (await response.aread()).decode("utf-8", "replace")
-                raise RuntimeError(f"NovelAI text API error {response.status_code}: {detail[:300]}")
-            async for line in response.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    return
-                choices = json.loads(payload).get("choices") or []
-                if choices and choices[0].get("text"):
-                    yield choices[0]["text"]
+    async for payload in _stream_lines(_TEXT_API, body, api_key, "text"):
+        choices = json.loads(payload).get("choices") or []
+        if choices and choices[0].get("text"):
+            yield choices[0]["text"]
 
 
 async def stream_chat(
@@ -107,19 +139,8 @@ async def stream_chat(
 ) -> AsyncGenerator[str, None]:
     """チャット形式で指示に答えさせる(ストリーミング)。非ストリーミングは本文が空で返るため使わない。"""
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": True}
-    headers = {"Authorization": f"Bearer {api_key}"}
-    async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=30)) as client:
-        async with client.stream("POST", _CHAT_API, json=body, headers=headers) as response:
-            if response.status_code != 200:
-                detail = (await response.aread()).decode("utf-8", "replace")
-                raise RuntimeError(f"NovelAI chat API error {response.status_code}: {detail[:300]}")
-            async for line in response.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    return
-                choices = json.loads(payload).get("choices") or []
-                content = (choices[0].get("delta") or {}).get("content") if choices else None
-                if content:
-                    yield content
+    async for payload in _stream_lines(_CHAT_API, body, api_key, "chat"):
+        choices = json.loads(payload).get("choices") or []
+        content = (choices[0].get("delta") or {}).get("content") if choices else None
+        if content:
+            yield content
