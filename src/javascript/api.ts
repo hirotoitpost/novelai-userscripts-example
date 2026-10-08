@@ -1,5 +1,20 @@
 const BASE = ''  // Vite proxy が /api/ をバックエンドへ転送
 
+/**
+ * ログインのトークンが NovelAI に拒否された(期限切れなど)ことを知らせるイベント。
+ * AuthProvider が受け取ってログアウトし、ログイン画面で理由を出す。
+ */
+export const AUTH_EXPIRED_EVENT = 'nai-auth-expired'
+
+export function notifyAuthExpired(): void {
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+}
+
+/** NovelAI がトークンを拒否したときの応答か(バックエンドは 401、SDK は "Invalid API key")。 */
+export function isAuthExpired(status: number, detail?: string): boolean {
+  return status === 401 || /invalid api key|unauthorized/i.test(detail ?? '')
+}
+
 export async function apiFetch<T>(
   token: string,
   path: string,
@@ -16,6 +31,7 @@ export async function apiFetch<T>(
 
   const data = await res.json().catch(() => ({ detail: res.statusText }))
   if (!res.ok) {
+    if (isAuthExpired(res.status)) notifyAuthExpired()
     throw new Error(data.detail ?? `HTTP ${res.status}`)
   }
   return data as T

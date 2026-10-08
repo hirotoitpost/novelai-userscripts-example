@@ -7,7 +7,7 @@ import { naiImageFilename } from '../downloadFilename'
 import type { Character } from '../components/StoryCharacters'
 import {
   apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
-  ImagePreset, ImagePresetSettings, CharacterSheetPrompt,
+  ImagePreset, ImagePresetSettings, CharacterSheetPrompt, isAuthExpired, notifyAuthExpired,
 } from '../api'
 import './ImageGenerate.css'
 
@@ -427,7 +427,9 @@ export default function ImageGenerate() {
 
       if (!res.ok || !res.body) {
         const errData = await res.json().catch(() => ({ detail: res.statusText }))
-        throw new Error((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
+        const detail = (errData as { detail?: string }).detail
+        if (isAuthExpired(res.status, detail)) notifyAuthExpired()
+        throw new Error(detail ?? `HTTP ${res.status}`)
       }
 
       const reader  = res.body.getReader()
@@ -456,7 +458,9 @@ export default function ImageGenerate() {
               continue
             }
             if (eventType === 'error') {
-              throw new Error((chunk.detail as string | undefined) ?? 'ストリーミングエラー')
+              const detail = chunk.detail as string | undefined
+              if (isAuthExpired(0, detail)) notifyAuthExpired()
+              throw new Error(detail ?? 'ストリーミングエラー')
             }
             const img = chunk.image as string | undefined
             if (!img) continue

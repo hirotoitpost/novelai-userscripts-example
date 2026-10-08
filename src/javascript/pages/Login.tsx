@@ -1,6 +1,6 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { AUTH_MESSAGE_KEY, useAuth } from '../context/AuthContext'
 import { getRecaptchaToken } from '../recaptcha'
 import './Login.css'
 
@@ -12,6 +12,12 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  // 期限切れなどで自動的にログアウトしたときの理由(1回だけ出す)
+  const [notice] = useState<string | null>(() => {
+    const message = sessionStorage.getItem(AUTH_MESSAGE_KEY)
+    sessionStorage.removeItem(AUTH_MESSAGE_KEY)
+    return message
+  })
 
   const [tokenInput, setTokenInput] = useState('')
   const [showTokenLogin, setShowTokenLogin] = useState(false)
@@ -100,6 +106,7 @@ export default function Login() {
             />
           </div>
 
+          {notice && !error && <p className="login-error">{notice}</p>}
           {error && <p className="login-error">{error}</p>}
 
           <button type="submit" className="login-btn" disabled={loading}>
