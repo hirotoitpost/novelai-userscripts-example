@@ -1,0 +1,434 @@
+from __future__ import annotations
+
+import io
+from base64 import b64decode, b64encode
+from pathlib import Path
+from typing import Annotated, Any
+from uuid import uuid4
+
+import httpx
+import numpy as np
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import FileResponse
+from novelai import AsyncNovelAI
+from novelai._utils.nai_meta import extract_image_metadata
+from novelai.types import GenerateImageParams
+from PIL import Image
+
+from ..auth_utils import get_encryption_key
+from ..client import get_client
+from ..db import (
+    create_exclusive_group,
+    create_preset,
+    create_situation,
+    delete_exclusive_group,
+    delete_preset,
+    delete_situation,
+    find_conflicts,
+    find_similar,
+    get_connection,
+    get_preset,
+    list_exclusive_groups,
+    list_generation_history,
+    list_prompt_chunks,
+    list_presets,
+    list_situations,
+    record_generation,
+    select_by_situation,
+    select_random,
+    set_chunk_exclusive_groups,
+    set_chunk_situations,
+    update_preset_chunks,
+    upsert_prompt_chunks,
+)
+from ..keystore_crypto import decrypt_keystore, decrypt_object
+from ..models import (
+    ConflictCheckRequest,
+    EncryptionKeyRequest,
+    EncryptionKeyResponse,
+    ExclusiveGroupCreateRequest,
+    ExclusiveGroupResponse,
+    ImportImagesRequest,
+    PresetCreateRequest,
+    PresetSummary,
+    PresetUpdateRequest,
+    RandomSelectRequest,
+    ScenarioSelectRequest,
+    SetChunkExclusiveGroupsRequest,
+    SetChunkSituationsRequest,
+    SimilarSelectRequest,
+    SituationCreateRequest,
+    SituationResponse,
+    WordSelectionGenerateRequest,
+)
+from .image import _build_kwargs, _decode_b64, _http_status, _pil_to_b64, save_generation
+
+router = APIRouter(prefix="/api/chunks", tags=["chunks"])
+
+ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
+
+_HISTORY_DIR = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "history"
+
+# promptmacros(プロンプトチャンク)は image.novelai.net 側のユーザーストレージにある。
+# persistent access token は拒否されるため、実ログインで発行されたセッショントークンが必要。
+_IMAGE_API = "https://image.novelai.net"
+
+
+@router.post("/encryption-key", response_model=EncryptionKeyResponse)
+async def compute_encryption_key(req: EncryptionKeyRequest) -> EncryptionKeyResponse:
+    """
+    keystore 復号用の鍵をメール+パスワードから計算する。ローカル計算のみでネットワーク送信は無い。
+    パスワード自体はレスポンスに含めず、導出された鍵だけを返す。
+    """
+    key = get_encryption_key(req.email, req.password)
+    return EncryptionKeyResponse(encryption_key=b64encode(key).decode())
+
+
+@router.get("/promptmacros")
+async def get_prompt_macros(
+    encryption_key: str = Query(..., description="POST /encryption-key で取得した base64 鍵"),
+    authorization: str | None = Header(None),
+) -> list[dict[str, Any]]:
+    """
+    NovelAI 公式のプロンプトチャンクを取得・復号し、ローカルDB(prompt_chunks)へ
+    upsert してから返す。取得＝インポートであり、通常のアプリ利用には不要な任意操作。
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authorization ヘッダーが必要です")
+    token = authorization[7:]
+
+    try:
+        key = b64decode(encryption_key)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"encryption_key が不正です: {exc}")
+
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(headers=headers, timeout=30) as client:
+        resp = await client.get(f"{_IMAGE_API}/user/keystore")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        try:
+            keystore = decrypt_keystore(resp.json(), key)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"keystore の復号に失敗しました: {exc}")
+
+        resp = await client.get(f"{_IMAGE_API}/user/objects/promptmacros")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        body = resp.json()
+
+    items = body.get("objects", body) if isinstance(body, dict) else body
+
+    result: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            decrypted = decrypt_object(item, keystore)
+        except Exception:  # noqa: BLE001 一部アイテムの復号失敗はスキップして続行する
+            continue
+        decrypted["remote_object_id"] = item.get("id")
+        result.append(decrypted)
+
+    conn = get_connection()
+    try:
+        upsert_prompt_chunks(conn, result)
+    finally:
+        conn.close()
+
+    return result
+
+
+@router.get("/imported")
+async def get_imported_chunks() -> list[dict[str, Any]]:
+    """NovelAIへは問い合わせず、ローカルDBに既にインポート済みのチャンクだけを返す。"""
+    conn = get_connection()
+    try:
+        return list_prompt_chunks(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/situations", response_model=list[SituationResponse])
+async def get_situations() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_situations(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/situations", response_model=SituationResponse)
+async def create_situation_endpoint(req: SituationCreateRequest) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return create_situation(conn, req.name)
+    finally:
+        conn.close()
+
+
+@router.delete("/situations/{situation_id}", status_code=204)
+async def delete_situation_endpoint(situation_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_situation(conn, situation_id)
+    finally:
+        conn.close()
+
+
+@router.put("/{chunk_id}/situations", status_code=204)
+async def set_chunk_situations_endpoint(chunk_id: str, req: SetChunkSituationsRequest) -> None:
+    conn = get_connection()
+    try:
+        set_chunk_situations(conn, chunk_id, req.situation_ids)
+    finally:
+        conn.close()
+
+
+@router.get("/exclusive-groups", response_model=list[ExclusiveGroupResponse])
+async def get_exclusive_groups() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_exclusive_groups(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/exclusive-groups", response_model=ExclusiveGroupResponse)
+async def create_exclusive_group_endpoint(req: ExclusiveGroupCreateRequest) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return create_exclusive_group(conn, req.name)
+    finally:
+        conn.close()
+
+
+@router.delete("/exclusive-groups/{group_id}", status_code=204)
+async def delete_exclusive_group_endpoint(group_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_exclusive_group(conn, group_id)
+    finally:
+        conn.close()
+
+
+@router.put("/{chunk_id}/exclusive-groups", status_code=204)
+async def set_chunk_exclusive_groups_endpoint(chunk_id: str, req: SetChunkExclusiveGroupsRequest) -> None:
+    conn = get_connection()
+    try:
+        set_chunk_exclusive_groups(conn, chunk_id, req.group_ids)
+    finally:
+        conn.close()
+
+
+@router.post("/check-conflicts")
+async def check_conflicts_endpoint(req: ConflictCheckRequest) -> list[dict[str, Any]]:
+    """
+    渡したチャンクID群の中に、同じ排他グループのものが複数含まれていないか確認する。
+    ワード選択ルール実装時に流用する想定の検証エンドポイント。
+    """
+    conn = get_connection()
+    try:
+        return find_conflicts(conn, req.chunk_ids)
+    finally:
+        conn.close()
+
+
+# ===== ワード選択ルール =====
+
+@router.post("/select/scenario")
+async def select_scenario_endpoint(req: ScenarioSelectRequest) -> list[dict[str, Any]]:
+    """指定シチュエーションのチャンクを、排他グループの重複を除いて返す。"""
+    conn = get_connection()
+    try:
+        return select_by_situation(conn, req.situation_id)
+    finally:
+        conn.close()
+
+
+@router.post("/select/random")
+async def select_random_endpoint(req: RandomSelectRequest) -> list[dict[str, Any]]:
+    """(任意でシチュエーション絞り込み後)排他グループの重複を除いてランダムに選ぶ。"""
+    conn = get_connection()
+    try:
+        return select_random(conn, req.situation_id, req.count)
+    finally:
+        conn.close()
+
+
+@router.post("/select/similar")
+async def select_similar_endpoint(req: SimilarSelectRequest) -> list[dict[str, Any]]:
+    """指定チャンクとタグの重なりが大きい順にランキングする。"""
+    conn = get_connection()
+    try:
+        return find_similar(conn, req.chunk_id, req.limit)
+    finally:
+        conn.close()
+
+
+@router.get("/presets", response_model=list[PresetSummary])
+async def get_presets() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_presets(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/presets", response_model=PresetSummary)
+async def create_preset_endpoint(req: PresetCreateRequest) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        return create_preset(conn, req.name, req.chunk_ids)
+    finally:
+        conn.close()
+
+
+@router.get("/presets/{preset_id}")
+async def get_preset_endpoint(preset_id: int) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        preset = get_preset(conn, preset_id)
+        if preset is None:
+            raise HTTPException(status_code=404, detail="preset not found")
+        return preset
+    finally:
+        conn.close()
+
+
+@router.put("/presets/{preset_id}", status_code=204)
+async def update_preset_endpoint(preset_id: int, req: PresetUpdateRequest) -> None:
+    conn = get_connection()
+    try:
+        update_preset_chunks(conn, preset_id, req.chunk_ids)
+    finally:
+        conn.close()
+
+
+@router.delete("/presets/{preset_id}", status_code=204)
+async def delete_preset_endpoint(preset_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_preset(conn, preset_id)
+    finally:
+        conn.close()
+
+
+# ===== 生成履歴(/select 経由の生成のみ対象) =====
+
+@router.post("/select/generate")
+async def select_generate_endpoint(
+    req: WordSelectionGenerateRequest,
+    client: ClientDep,
+) -> dict[str, Any]:
+    """
+    ワード選択(/select)からの画像生成専用エンドポイント。通常の /api/image/generate と同じ
+    生成処理を行うが、使ったチャンクIDと合わせて generation_history に記録する点だけが違う。
+    """
+    try:
+        params = GenerateImageParams(**_build_kwargs(req.generation))
+        images = await client.image.generate(params)
+    except Exception as exc:
+        raise HTTPException(status_code=_http_status(exc), detail=str(exc))
+
+    b64_images = _pil_to_b64(images, "png")
+    entry = save_generation(
+        req.generation,
+        [b64decode(b) for b in b64_images],
+        chunk_ids=req.chunk_ids,
+        based_on=req.based_on,
+    )
+    return {"images": b64_images, "format": "png", "history_id": entry["id"]}
+
+
+@router.get("/history")
+async def get_generation_history(limit: int = 50) -> list[dict[str, Any]]:
+    """
+    画像は base64 で埋め込まず、ファイルパスのまま返す。履歴が増えるほど
+    /history のペイロードが肥大化して重くなっていたため、実体は
+    GET /history-file で都度取得させる方式に変えた。
+    """
+    conn = get_connection()
+    try:
+        return list_generation_history(conn, limit)
+    finally:
+        conn.close()
+
+
+@router.get("/history-file")
+async def get_history_file(path: str) -> FileResponse:
+    """generation_history が指す outputs/history/ 配下の画像ファイルだけを配信する。"""
+    full_path = (_HISTORY_DIR.parent.parent / path).resolve()
+    try:
+        full_path.relative_to(_HISTORY_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="invalid path")
+    if not full_path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(full_path, media_type="image/png")
+
+
+@router.post("/import-images")
+async def import_images_endpoint(req: ImportImagesRequest) -> list[dict[str, Any]]:
+    """
+    NovelAI で過去に生成した画像(埋め込みメタデータ付きPNG)を読み込み、生成履歴として
+    取り込む。チャンク選択を経由していないため chunk_ids は空になる。
+    """
+    conn = get_connection()
+    try:
+        results: list[dict[str, Any]] = []
+        for image_b64 in req.images:
+            try:
+                entry = _import_single_image(conn, image_b64)
+                results.append({"success": True, "id": entry["id"]})
+            except Exception as exc:  # noqa: BLE001 1件の失敗で残りの取り込みを止めない
+                results.append({"success": False, "error": str(exc)})
+        return results
+    finally:
+        conn.close()
+
+
+def _import_single_image(conn: Any, image_b64: str) -> dict[str, Any]:
+    """
+    NovelAI の埋め込みメタデータを読み取れるだけ読み取って履歴に保存する。
+    メタデータが一部/全部読めなくても、画像自体は必ず保存し、欠けた項目は
+    デフォルト値で埋めた上で metadata_incomplete=True としておく（読めない画像だからと
+    言って取り込み自体を諦めない。ここで失敗させて良いのは画像として開けない場合だけ）。
+    """
+    image_bytes = _decode_b64(image_b64)
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    np_img = np.asarray(img, dtype=np.uint8)
+
+    comment: dict[str, Any] = {}
+    source = "unknown"
+    metadata_incomplete = True
+    try:
+        meta = extract_image_metadata(np_img)
+        if isinstance(meta, dict):
+            source = str(meta.get("Source", "unknown"))
+            maybe_comment = meta.get("Comment")
+            if isinstance(maybe_comment, dict):
+                comment = maybe_comment
+                metadata_incomplete = "prompt" not in comment
+    except Exception:  # noqa: BLE001 メタデータが読めなくても画像自体は保存を続ける
+        pass
+
+    width = comment.get("width")
+    height = comment.get("height")
+
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}_import.png"
+    (_HISTORY_DIR / filename).write_bytes(image_bytes)
+
+    return record_generation(
+        conn,
+        prompt=comment.get("prompt", ""),
+        negative_prompt=comment.get("uc"),
+        model=source,
+        size=f"{width}x{height}" if width and height else "unknown",
+        steps=comment.get("steps") or 23,
+        scale=comment.get("scale") or 5.0,
+        seed=comment.get("seed"),
+        chunk_ids=[],
+        image_paths=[f"outputs/history/{filename}"],
+        metadata_incomplete=metadata_incomplete,
+    )

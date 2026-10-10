@@ -70,7 +70,9 @@ Open **two terminals**:
 
 ```bash
 # Terminal 1 — FastAPI backend (port 8000)
-uv run python -m uvicorn python.server:app --app-dir src --host 127.0.0.1 --port 8000 --reload
+# --host 0.0.0.0 so devices on the same LAN (e.g. a phone) can reach it too;
+# use 127.0.0.1 instead if you only need local access.
+uv run python -m uvicorn python.server:app --app-dir src --host 0.0.0.0 --port 8000 --reload
 
 # Terminal 2 — Vite frontend (port 5173)
 npm run dev
@@ -78,6 +80,8 @@ npm run dev
 # Terminal 3 (optional) — vLLM server for AI assistant (requires NVIDIA GPU + Docker)
 docker compose up -d
 ```
+
+On Windows, `scripts/dev-ctl.ps1` starts both services without the `uv run`/`--reload` indirection that has been observed to leave a stuck listening socket behind on this platform — see the script's header comment for details.
 
 Open **http://localhost:5173** in your browser.
 
@@ -160,11 +164,20 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 │           ├── Home.tsx/css     # Dashboard
 │           └── ImageGenerate.tsx/css  # Image generation UI
 ├── scripts/
-│   └── generate_cat_garden.py  # Standalone SDK usage example
+│   ├── generate_cat_garden.py  # Standalone SDK usage example
+│   ├── example.user.js         # Tampermonkey-style userscript calling this app's backend
+│   ├── export-story.naiscript  # NovelAI in-app script: copies story text to the clipboard
+│   │                           # (install via NovelAI's own User Scripts modal, Alt+X)
+│   ├── story-import.user.js    # Tampermonkey userscript: reads that clipboard text and
+│   │                           # imports it into this app directly — pairs with the script
+│   │                           # above for a 2-click NovelAI → app story import, no manual
+│   │                           # copy/paste into the app needed
+│   └── dev-ctl.ps1             # Windows: start/stop/status for backend + frontend
 ├── tests/                       # pytest test files
 ├── docs/                        # Additional documentation
 │   ├── README_jp.md             # Japanese README
-│   └── architecture.md          # System architecture & API reference
+│   ├── architecture.md          # System architecture & API reference
+│   └── content_guard_jp.md      # Content guard for character datasets (Japanese)
 ├── index.html                   # Vite entry point
 ├── vite.config.ts               # Vite config (API proxy to :8000)
 ├── pyproject.toml               # Python dependencies & tools
@@ -194,6 +207,18 @@ Full interactive docs available at **http://localhost:8000/docs** while the back
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
+### Third-party models
+
+These models are downloaded to `data/models/` on first use and are not part of this repository.
+
+- [deepghs/anime_head_detection](https://huggingface.co/deepghs/anime_head_detection) (MIT) — head positions for speech-bubble placement.
+- [deepghs/manga109_yolo](https://huggingface.co/deepghs/manga109_yolo) — panel, face, body and text positions when importing manga for structure reference.
+  It was trained on [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s)
+  (Aizawa et al., "Building a Manga Dataset 'Manga109' with Annotations for Multimedia Applications", IEEE MultiMedia, 2020),
+  whose terms allow using results of machine-learning experiments but forbid redistributing the dataset.
+  The model itself has no stated license, so check with its author (or switch models) before distributing this app or offering it commercially.
+  Without it, panels are found from their border lines instead.
 
 ## Related Projects
 

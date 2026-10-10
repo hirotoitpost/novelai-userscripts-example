@@ -11,10 +11,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from .client import close_client, init_client
 from .llm_client import close_llm_clients, init_llm_clients
 from .routes.auth import router as auth_router
+from .routes.batch import router as batch_router
+from .routes.chunks import router as chunks_router
 from .routes.image import router as image_router
 from .routes.llm import router as llm_router
+from .routes.manga_draft import router as manga_draft_router
+from .routes.manga_import import router as manga_import_router
+from .routes.manga_v2 import router as manga_v2_router
+from .routes.library import router as library_router
+from .routes.lora_dataset import router as lora_dataset_router
 from .routes.metadata import router as metadata_router
+from .routes.ocr import router as ocr_router
+from .routes.push import router as push_router
+from .routes.series import router as series_router
+from .routes.story import router as story_router
 from .routes.user import router as user_router
+from .routes.works import router as works_router
+from .routes.writer import router as writer_router
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _env_path = _PROJECT_ROOT / ".env"
@@ -46,10 +59,23 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(batch_router)
+app.include_router(chunks_router)
 app.include_router(image_router)
 app.include_router(llm_router)
+app.include_router(manga_draft_router)
+app.include_router(manga_import_router)
+app.include_router(manga_v2_router)
+app.include_router(library_router)
+app.include_router(lora_dataset_router)
 app.include_router(metadata_router)
+app.include_router(ocr_router)
+app.include_router(push_router)
+app.include_router(series_router)
+app.include_router(works_router)
+app.include_router(story_router)
 app.include_router(user_router)
+app.include_router(writer_router)
 
 
 if __name__ == "__main__":

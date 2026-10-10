@@ -1,5 +1,20 @@
 const BASE = ''  // Vite proxy が /api/ をバックエンドへ転送
 
+/**
+ * ログインのトークンが NovelAI に拒否された(期限切れなど)ことを知らせるイベント。
+ * AuthProvider が受け取ってログアウトし、ログイン画面で理由を出す。
+ */
+export const AUTH_EXPIRED_EVENT = 'nai-auth-expired'
+
+export function notifyAuthExpired(): void {
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+}
+
+/** NovelAI がトークンを拒否したときの応答か(バックエンドは 401、SDK は "Invalid API key")。 */
+export function isAuthExpired(status: number, detail?: string): boolean {
+  return status === 401 || /invalid api key|unauthorized/i.test(detail ?? '')
+}
+
 export async function apiFetch<T>(
   token: string,
   path: string,
@@ -16,6 +31,7 @@ export async function apiFetch<T>(
 
   const data = await res.json().catch(() => ({ detail: res.statusText }))
   if (!res.ok) {
+    if (isAuthExpired(res.status)) notifyAuthExpired()
     throw new Error(data.detail ?? `HTTP ${res.status}`)
   }
   return data as T
@@ -38,7 +54,43 @@ export interface GenerateRequest {
   quality: boolean
   uc_preset: string
   n_samples: number
+  sampler?: string
+  noise_schedule?: string
+  cfg_rescale?: number
+  variety_boost?: boolean
   i2i?: I2iRequest
+}
+
+/** /api/image/presets の settings。挿絵パネル(MangaImageSettings)と共用。 */
+export interface ImagePresetSettings {
+  model: string
+  width: number
+  height: number
+  steps: number
+  scale: number
+  sampler: string
+  noise_schedule: string
+  cfg_rescale: number
+  negative_prompt: string | null
+  complexity?: string | null
+  seed: number | null
+  variety_boost?: boolean
+}
+
+export interface ImagePreset {
+  id: number
+  name: string
+  settings: ImagePresetSettings
+  created_at: string
+}
+
+/** キャラシートから組み立てた、画像生成ページに読み込む値(/api/lora-dataset/character/{id}/sheet-prompt) */
+export interface CharacterSheetPrompt {
+  character_id: number
+  name: string
+  prompt: string
+  negative_prompt: string
+  seed: number | null
 }
 
 export interface GenerateResponse {
@@ -138,6 +190,351 @@ export interface ReversePromptRequest {
   image: string
 }
 
+function _parseErrorDetail(data: unknown, fallback: string): string {
+  const detail = (data as { detail?: unknown } | null)?.detail
+  if (Array.isArray(detail))
+    return (detail as { msg?: string }[]).map(e => e.msg).filter(Boolean).join('; ') || fallback
+  return typeof detail === 'string' ? detail : fallback
+}
+
+// ===== Batch organize types =====
+
+export interface BatchPreviewRequest {
+  input_path: string
+  similarity_threshold: number
+}
+
+export interface BatchFileInfo {
+  path: string
+  prompt: string
+  date: string
+  has_metadata: boolean
+}
+
+export interface BatchGroupInfo {
+  group_name: string
+  representative_prompt: string
+  files: BatchFileInfo[]
+  file_count: number
+}
+
+export interface BatchPreviewResponse {
+  groups: BatchGroupInfo[]
+  no_metadata_files: BatchFileInfo[]
+  total_files: number
+}
+
+export interface BatchOrganizeRequest {
+  input_path: string
+  output_path: string
+  operation: 'copy' | 'move' | 'clean_copy'
+  similarity_threshold: number
+  save_metadata_json: boolean
+}
+
+export interface BatchScanEvent {
+  current: number
+  total: number
+  file: string
+}
+
+export interface BatchProgressEvent {
+  current: number
+  total: number
+  file: string
+  dest: string
+  status: 'ok' | 'no_metadata' | 'error'
+  message?: string
+}
+
+export interface BatchCompleteEvent {
+  organized: number
+  skipped_no_meta: number
+  errors: number
+}
+
+export async function streamBatchOrganize(
+  token: string,
+  body: BatchOrganizeRequest,
+  onScan: (e: BatchScanEvent) => void,
+  onProgress: (e: BatchProgressEvent) => void,
+  onComplete: (e: BatchCompleteEvent) => void,
+  onError: (msg: string) => void,
+): Promise<void> {
+  const res = await fetch('/api/batch/organize', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok || !res.body) {
+    const errData = await res.json().catch(() => ({ detail: res.statusText }))
+    onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventType = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (line === '') {
+        eventType = ''
+      } else if (line.startsWith('event: ')) {
+        eventType = line.slice(7).trim()
+      } else if (line.startsWith('data: ')) {
+        let chunk: Record<string, unknown>
+        try { chunk = JSON.parse(line.slice(6)) as Record<string, unknown> }
+        catch { continue }
+
+        if (eventType === 'error') {
+          onError((chunk.detail as string | undefined) ?? 'エラー')
+          return
+        } else if (eventType === 'scan') {
+          onScan(chunk as unknown as BatchScanEvent)
+        } else if (eventType === 'progress') {
+          onProgress(chunk as unknown as BatchProgressEvent)
+        } else if (eventType === 'complete') {
+          onComplete(chunk as unknown as BatchCompleteEvent)
+        }
+      }
+    }
+  }
+}
+
+// ===== LoRA dataset generation types =====
+
+export interface CharacterReferenceInput {
+  image: string
+  type: 'character' | 'style' | 'character&style'
+  fidelity: number
+  strength: number
+}
+
+export interface ControlNetImageInput {
+  image: string
+  info_extracted: number
+  strength: number
+  controlnet_model: string
+}
+
+export interface ControlNetInput {
+  images: ControlNetImageInput[]
+  strength: number
+}
+
+export interface LoraDatasetRequest {
+  character_id: string
+  trigger_word: string
+  base_tags: string
+  extra_tags: string
+  outfit_tag: string
+  root_name: string
+  model: string
+  steps: number
+  scale: number
+  sampler: string
+  noise_schedule: string
+  cfg_rescale: number
+  negative_prompt: string
+  seed?: number
+  seed_offset?: boolean
+  micro_variation_tags?: boolean
+  shuffle_tags?: boolean
+  character_reference?: CharacterReferenceInput
+  vibe_transfer?: ControlNetInput
+}
+
+export interface LoraDatasetProgressEvent {
+  current: number
+  total: number
+  category: string
+  file: string
+  status: 'ok' | 'error'
+  message?: string
+  image_b64?: string
+  /** キャラシートからの生成のみ: 採用した画像のプロンプト・試行回数・参照画像との類似度 */
+  prompt?: string
+  attempts?: number
+  score?: number | null
+}
+
+export interface LoraDatasetRetryEvent {
+  current: number
+  total: number
+  file: string
+  attempt: number
+  score: number
+}
+
+export interface CharacterDatasetRequest {
+  root_name: string
+  framings: string[]
+  poses: string[]
+  outfits: string[]
+  expressions: string[]
+  locations: string[]
+  count: number
+  model: string
+  width: number
+  height: number
+  steps: number
+  scale: number
+  sampler: string
+  noise_schedule: string
+  cfg_rescale: number
+  use_reference: boolean
+  reference_fidelity: number
+  reference_strength: number
+  reference_type: 'character' | 'character&style'
+  max_attempts: number
+  similarity_threshold: number
+  scorer: 'color' | 'vlm'
+  guard_profile_id?: number | null
+  /** r18 は成人フラグのあるキャラのみ(サーバー側でも検査する) */
+  rating: 'general' | 'r18'
+}
+
+/** データセット生成のガード。基本(変更不可)にプロファイルの分を上乗せして使う。 */
+export interface GuardProfile {
+  id: number
+  name: string
+  blocked_tags: string[]
+  negative_tags: string
+  created_at: string
+}
+
+export interface GuardCore {
+  blocked_tags: string[]
+  negative_tags: string
+}
+
+export interface LoraDatasetCompleteEvent {
+  total: number
+  succeeded: number
+  failed: number
+  output_path: string
+}
+
+async function _streamLoraDataset(
+  endpoint: string,
+  token: string,
+  body: LoraDatasetRequest | CharacterDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+  signal?: AbortSignal,
+  onRetry?: (e: LoraDatasetRetryEvent) => void,
+): Promise<void> {
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    })
+
+    if (!res.ok || !res.body) {
+      const errData = await res.json().catch(() => ({ detail: res.statusText }))
+      onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
+      return
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let eventType = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        if (line === '') {
+          eventType = ''
+        } else if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          let chunk: Record<string, unknown>
+          try { chunk = JSON.parse(line.slice(6)) as Record<string, unknown> }
+          catch { continue }
+
+          if (eventType === 'error') {
+            onError((chunk.detail as string | undefined) ?? 'エラー')
+            return
+          } else if (eventType === 'progress') {
+            onProgress(chunk as unknown as LoraDatasetProgressEvent)
+          } else if (eventType === 'retry') {
+            onRetry?.(chunk as unknown as LoraDatasetRetryEvent)
+          } else if (eventType === 'complete') {
+            onComplete(chunk as unknown as LoraDatasetCompleteEvent)
+          }
+        }
+      }
+    }
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') return // ユーザーによる中断
+    onError(e instanceof Error ? e.message : String(e))
+  }
+}
+
+export function streamLoraDataset(
+  token: string,
+  body: LoraDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return _streamLoraDataset('/api/lora-dataset/generate', token, body, onProgress, onComplete, onError, signal)
+}
+
+export function streamLoraDatasetPreview(
+  token: string,
+  body: LoraDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return _streamLoraDataset('/api/lora-dataset/preview', token, body, onProgress, onComplete, onError, signal)
+}
+
+/** キャラシートの容姿を固定し、ポーズ/服装/表情/場所を差し替えて1枚ずつ生成する。 */
+export function streamCharacterDataset(
+  token: string,
+  characterId: number,
+  body: CharacterDatasetRequest,
+  onProgress: (e: LoraDatasetProgressEvent) => void,
+  onRetry: (e: LoraDatasetRetryEvent) => void,
+  onComplete: (e: LoraDatasetCompleteEvent) => void,
+  onError: (msg: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return _streamLoraDataset(
+    `/api/lora-dataset/character/${characterId}/generate`, token, body, onProgress, onComplete, onError, signal, onRetry,
+  )
+}
+
 // SSE streaming helper for LLM endpoints
 // Handles: event: token | done | error
 export async function streamLLM(
@@ -159,7 +556,7 @@ export async function streamLLM(
 
   if (!res.ok || !res.body) {
     const errData = await res.json().catch(() => ({ detail: res.statusText }))
-    onError((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    onError(_parseErrorDetail(errData, `HTTP ${res.status}`))
     return
   }
 

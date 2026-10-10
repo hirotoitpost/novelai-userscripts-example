@@ -1,8 +1,14 @@
-import { useState, useCallback, useEffect, useRef, KeyboardEvent } from 'react'
+import { useState, useCallback, useEffect, useRef, KeyboardEvent, ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
-import { apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest } from '../api'
+import ChunkPicker from '../components/ChunkPicker'
+import { naiImageFilename } from '../downloadFilename'
+import type { Character } from '../components/StoryCharacters'
+import {
+  apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
+  ImagePreset, ImagePresetSettings, CharacterSheetPrompt, isAuthExpired, notifyAuthExpired,
+} from '../api'
 import './ImageGenerate.css'
 
 const MODELS = [
@@ -14,12 +20,79 @@ const MODELS = [
 ] as const
 
 const SIZES = [
-  { value: 'portrait',        label: 'Portrait  (832×1216)' },
-  { value: 'landscape',       label: 'Landscape (1216×832)' },
-  { value: 'square',          label: 'Square    (1024×1024)' },
-  { value: 'large_portrait',  label: 'Portrait Large (1024×1536)' },
-  { value: 'large_landscape', label: 'Landscape Large (1536×1024)' },
+  { value: 'portrait',        label: 'Portrait  (832×1216)',        width: 832,  height: 1216 },
+  { value: 'landscape',       label: 'Landscape (1216×832)',        width: 1216, height: 832 },
+  { value: 'square',          label: 'Square    (1024×1024)',       width: 1024, height: 1024 },
+  { value: 'large_portrait',  label: 'Portrait Large (1024×1536)',  width: 1024, height: 1536 },
+  { value: 'large_landscape', label: 'Landscape Large (1536×1024)', width: 1536, height: 1024 },
 ] as const
+
+const SAMPLERS = [
+  { value: 'k_euler_ancestral',    label: 'Euler Ancestral' },
+  { value: 'k_euler',              label: 'Euler' },
+  { value: 'k_dpm_2',              label: 'DPM2' },
+  { value: 'k_dpm_2_ancestral',    label: 'DPM2 Ancestral' },
+  { value: 'k_dpmpp_2m',           label: 'DPM++ 2M' },
+  { value: 'k_dpmpp_2s_ancestral', label: 'DPM++ 2S Ancestral' },
+  { value: 'k_dpmpp_sde',          label: 'DPM++ SDE' },
+  { value: 'ddim',                 label: 'DDIM' },
+] as const
+
+const NOISE_SCHEDULES = ['karras', 'exponential', 'polyexponential'] as const
+
+// プリセットは挿絵パネルと共用しており、バックエンドが受け付けるモデルはこの3つだけ。
+const PRESET_MODELS = new Set(['nai-diffusion-5-full', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
+
+const AI_DEFAULTS = {
+  steps:         27,
+  scale:         6.0,
+  sampler:       'k_euler_ancestral',
+  noiseSchedule: 'karras',
+  cfgRescale:    0.0,
+  varietyBoost:  false,
+}
+
+interface SliderFieldProps {
+  id: string
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  onChange: (v: number) => void
+  extra?: ReactNode
+}
+
+/** 数値ボックス + スライダー(NovelAI の AI設定パネルと同じ並び)。 */
+function SliderField({ id, label, value, min, max, step, onChange, extra }: SliderFieldProps) {
+  return (
+    <div className="ig-ai-field">
+      <div className="ig-ai-field-head">
+        <label className="ig-ai-label" htmlFor={id}>{label}</label>
+        {extra}
+      </div>
+      <div className="ig-ai-slider-row">
+        <input
+          id={id}
+          type="number" min={min} max={max} step={step}
+          value={value}
+          onChange={e => {
+            const v = Number(e.target.value)
+            if (!Number.isNaN(v)) onChange(Math.min(max, Math.max(min, v)))
+          }}
+          className="ig-ai-num"
+        />
+        <input
+          type="range" min={min} max={max} step={step}
+          value={value}
+          onChange={e => onChange(Number(e.target.value))}
+          className="ig-range"
+          aria-label={label}
+        />
+      </div>
+    </div>
+  )
+}
 
 const UC_PRESETS = [
   { value: 'light',       label: 'ライト' },
@@ -37,19 +110,59 @@ export default function ImageGenerate() {
   const [negPrompt, setNegPrompt] = useLocalStorage('nai_gen_neg_prompt', '',                     300)
   const [model,     setModel]     = useLocalStorage('nai_gen_model',     'nai-diffusion-4-5-full')
   const [size,      setSize]      = useLocalStorage('nai_gen_size',      'portrait')
-  const [steps,     setSteps]     = useLocalStorage('nai_gen_steps',     28)
-  const [scale,     setScale]     = useLocalStorage('nai_gen_scale',     6.0)
+  const [steps,     setSteps]     = useLocalStorage('nai_gen_steps',     AI_DEFAULTS.steps)
+  const [scale,     setScale]     = useLocalStorage('nai_gen_scale',     AI_DEFAULTS.scale)
   const [ucPreset,  setUcPreset]  = useLocalStorage('nai_gen_uc_preset', 'light')
   const [quality,   setQuality]   = useLocalStorage('nai_gen_quality',   true)
+  const [sampler,       setSampler]       = useLocalStorage('nai_gen_sampler',        AI_DEFAULTS.sampler)
+  const [noiseSchedule, setNoiseSchedule] = useLocalStorage('nai_gen_noise_schedule', AI_DEFAULTS.noiseSchedule)
+  const [cfgRescale,    setCfgRescale]    = useLocalStorage('nai_gen_cfg_rescale',    AI_DEFAULTS.cfgRescale)
+  const [varietyBoost,  setVarietyBoost]  = useLocalStorage('nai_gen_variety_boost',  AI_DEFAULTS.varietyBoost)
+
+  // プロンプトチャンク
+  const promptRef                     = useRef<HTMLTextAreaElement>(null)
+  const negPromptRef                  = useRef<HTMLTextAreaElement>(null)
+  const [chunksOpen,  setChunksOpen]  = useState(false)
+  // チャンクのボタンを押すと textarea のフォーカスが外れるので、最後のカーソル位置を覚えておく。
+  const caretRef                      = useRef<{ field: 'prompt' | 'neg'; start: number; end: number } | null>(null)
+  const [insertTarget, setInsertTarget] = useState<'prompt' | 'neg'>('prompt')
+
+  const rememberCaret = (field: 'prompt' | 'neg', ta: HTMLTextAreaElement) => {
+    caretRef.current = { field, start: ta.selectionStart, end: ta.selectionEnd }
+    if (field !== insertTarget) setInsertTarget(field)
+  }
+
+  // AI設定パネルの開閉
+  const [aiOpen,       setAiOpen]       = useState(true)
+  const [advancedOpen, setAdvancedOpen] = useState(true)
+
+  // プリセット(/api/image/presets、挿絵パネルと共用)
+  const [presets,    setPresets]    = useState<ImagePreset[]>([])
+  const [presetId,   setPresetId]   = useState<number | null>(null)
+  const [presetName, setPresetName] = useState('')
+  const [presetMsg,  setPresetMsg]  = useState<{ text: string; isError: boolean } | null>(null)
+
+  // キャラシート(キャラ別データセットと共用)からプロンプト・ネガティブ・基準シードを読み込む
+  const [characters,  setCharacters]  = useState<Character[]>([])
+  const [characterId, setCharacterId] = useState<number | null>(null)
+  const [sheetMsg,    setSheetMsg]    = useState<{ text: string; isError: boolean } | null>(null)
 
   // セッション中のみ保持
   const [seed,         setSeed]         = useState<string>('')
   const [loading,      setLoading]      = useState(false)
   const [error,        setError]        = useState<string | null>(null)
-  const [result,       setResult]       = useState<{ src: string; format: string } | null>(null)
+  const [result,       setResult]       = useState<{ src: string; filename: string } | null>(null)
   const [preview,      setPreview]      = useState<string | null>(null)
   const [anlasEst,     setAnlasEst]     = useState<number | null>(null)
   const [anlasLoading, setAnlasLoading] = useState(false)
+
+  // 結果画像は Blob URL で保持する。data URL だとスマホの長押し保存で
+  // ファイル名が「ダウンロード」固定になるため、<a download> で包んで名前を付ける
+  // (Selection の DownloadableImage と同じ方式)。
+  useEffect(() => {
+    if (!result) return
+    return () => URL.revokeObjectURL(result.src)
+  }, [result])
 
   // Image-to-Image
   const i2iFileInputRef               = useRef<HTMLInputElement>(null)
@@ -65,6 +178,173 @@ export default function ImageGenerate() {
     reader.onload = (e) => setI2iImage(e.target?.result as string)
     reader.readAsDataURL(file)
   }, [])
+
+  const loadPresets = useCallback(async () => {
+    if (!token) return
+    try {
+      setPresets(await apiFetch<ImagePreset[]>(token, '/api/image/presets'))
+    } catch {
+      // 一覧が取れなくても生成はできるのでサイレント失敗
+    }
+  }, [token])
+
+  useEffect(() => { loadPresets() }, [loadPresets])
+
+  useEffect(() => {
+    if (!token) return
+    apiFetch<Character[]>(token, '/api/story/characters')
+      .then(setCharacters)
+      .catch(() => {})  // 一覧が取れなくても生成はできるのでサイレント失敗
+  }, [token])
+
+  /**
+   * キャラシートのプロンプト・ネガティブプロンプト・基準シードで入力欄を置き換える。
+   * 組み立てはキャラ別データセット(全年齢)からトリガーワードを除いたもので、データセットと同じ見た目を単発で試せる。
+   */
+  const importCharacterSheet = async () => {
+    const target = characters.find(c => c.id === characterId)
+    if (!token || !target) return
+    if ((prompt.trim() || negPrompt.trim())
+        && !window.confirm(`今のプロンプトとネガティブプロンプトを「${target.name}」のキャラシートで置き換えます。よろしいですか?`)) {
+      return
+    }
+    try {
+      const sheet = await apiFetch<CharacterSheetPrompt>(token, `/api/lora-dataset/character/${target.id}/sheet-prompt`)
+      setPrompt(sheet.prompt)
+      setNegPrompt(sheet.negative_prompt)
+      setSeed(sheet.seed != null ? String(sheet.seed) : '')
+      caretRef.current = null
+      setSheetMsg({
+        text: [
+          `「${sheet.name}」のキャラシートを読み込みました`,
+          sheet.seed == null ? '基準シードが無いため、シード値は空(毎回ランダム)にしました' : '',
+          target.reference_image_path ? '参照画像はこのページでは使いません' : '',
+        ].filter(Boolean).join('。'),
+        isError: false,
+      })
+    } catch (e) {
+      setSheetMsg({ text: e instanceof Error ? e.message : String(e), isError: true })
+    }
+  }
+
+  /**
+   * 最後にカーソルがあった欄(プロンプト/ネガティブ)のカーソル位置にチャンクを挿入する。
+   * 範囲選択中なら選択部分を置き換え、まだどちらにも触れていなければプロンプト末尾に足す。
+   * 前後のタグとはカンマで区切る。
+   */
+  const insertChunk = (text: string) => {
+    const field   = caretRef.current?.field ?? 'prompt'
+    const value   = field === 'prompt' ? prompt : negPrompt
+    const setter  = field === 'prompt' ? setPrompt : setNegPrompt
+    const ref     = field === 'prompt' ? promptRef : negPromptRef
+    const start   = Math.min(caretRef.current?.start ?? value.length, value.length)
+    const end     = Math.min(caretRef.current?.end   ?? value.length, value.length)
+    const before  = value.slice(0, start)
+    const after   = value.slice(end)
+    // 既にあるカンマ・空白は活かし、足りない分だけ補って "a, X, b" の形にそろえる。
+    const lead  = !before.trim() ? '' : /,\s*$/.test(before) ? (/\s$/.test(before) ? '' : ' ') : ', '
+    const trail = !after.trim()  ? '' : /^\s*,/.test(after)  ? '' : (/^\s/.test(after) ? ',' : ', ')
+    setter(before + lead + text + trail + after)
+
+    // 次のチャンクも続けて同じ場所へ入るよう、挿入した直後にカーソルを進める。
+    const caret = (before + lead + text).length
+    caretRef.current = { field, start: caret, end: caret }
+    requestAnimationFrame(() => {
+      ref.current?.focus()
+      ref.current?.setSelectionRange(caret, caret)
+    })
+  }
+
+  const resetAiSettings = () => {
+    setSteps(AI_DEFAULTS.steps)
+    setScale(AI_DEFAULTS.scale)
+    setSampler(AI_DEFAULTS.sampler)
+    setNoiseSchedule(AI_DEFAULTS.noiseSchedule)
+    setCfgRescale(AI_DEFAULTS.cfgRescale)
+    setVarietyBoost(AI_DEFAULTS.varietyBoost)
+    setSeed('')
+  }
+
+  const applyPreset = (preset: ImagePreset) => {
+    const s = preset.settings
+    const notes: string[] = []
+    if (MODELS.some(m => m.value === s.model)) {
+      setModel(s.model)
+    } else {
+      notes.push(`モデル ${s.model} はこのページで使えないため変更していません`)
+    }
+    const matchedSize = SIZES.find(z => z.width === s.width && z.height === s.height)
+    if (matchedSize) {
+      setSize(matchedSize.value)
+    } else {
+      notes.push(`サイズ ${s.width}×${s.height} は選択肢に無いため変更していません`)
+    }
+    setSteps(s.steps)
+    setScale(s.scale)
+    setSampler(s.sampler)
+    setNoiseSchedule(s.noise_schedule)
+    setCfgRescale(s.cfg_rescale)
+    setVarietyBoost(s.variety_boost ?? false)
+    setSeed(s.seed != null ? String(s.seed) : '')
+    setPresetId(preset.id)
+    setPresetName(preset.name)
+    setPresetMsg({
+      text: [`「${preset.name}」を読み込みました`, ...notes].join('。'),
+      isError: false,
+    })
+  }
+
+  const savePreset = async () => {
+    const name = presetName.trim()
+    if (!token || !name) return
+    if (!PRESET_MODELS.has(model)) {
+      setPresetMsg({ text: 'プリセットに保存できるのは V4.5 / V5 系のモデルだけです', isError: true })
+      return
+    }
+    const dims = SIZES.find(z => z.value === size) ?? SIZES[0]
+    // 同名プリセットを上書きするときは、このページに無い項目(ネガティブプロンプト・複雑さ)を残す。
+    const existing = presets.find(p => p.name === name)
+    const settings: ImagePresetSettings = {
+      negative_prompt: null,
+      complexity:      'high',
+      ...existing?.settings,
+      model,
+      width:          dims.width,
+      height:         dims.height,
+      steps,
+      scale,
+      sampler,
+      noise_schedule: noiseSchedule,
+      cfg_rescale:    cfgRescale,
+      variety_boost:  varietyBoost,
+      seed:           seed ? Number(seed) : null,
+    }
+    try {
+      const saved = await apiFetch<ImagePreset>(token, '/api/image/presets', { name, settings })
+      setPresetId(saved.id)
+      setPresetMsg({ text: `「${name}」を保存しました`, isError: false })
+      await loadPresets()
+    } catch (e) {
+      setPresetMsg({ text: e instanceof Error ? e.message : String(e), isError: true })
+    }
+  }
+
+  const deletePreset = async () => {
+    const target = presets.find(p => p.id === presetId)
+    if (!token || !target) return
+    try {
+      const res = await fetch(`/api/image/presets/${target.id}`, {
+        method:  'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setPresetId(null)
+      setPresetMsg({ text: `「${target.name}」を削除しました`, isError: false })
+      await loadPresets()
+    } catch (e) {
+      setPresetMsg({ text: e instanceof Error ? e.message : String(e), isError: true })
+    }
+  }
 
   useEffect(() => {
     if (!token || !prompt.trim()) {
@@ -86,6 +366,10 @@ export default function ImageGenerate() {
             quality,
             uc_preset: ucPreset,
             n_samples: 1,
+            sampler,
+            noise_schedule: noiseSchedule,
+            cfg_rescale:    cfgRescale,
+            variety_boost:  varietyBoost,
           },
           is_opus: false,
         }
@@ -98,7 +382,8 @@ export default function ImageGenerate() {
       }
     }, 500)
     return () => clearTimeout(timer)
-  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset])
+  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset,
+      sampler, noiseSchedule, cfgRescale, varietyBoost])
 
   const generate = useCallback(async () => {
     if (!token || !prompt.trim()) return
@@ -123,6 +408,10 @@ export default function ImageGenerate() {
       quality,
       uc_preset: ucPreset,
       n_samples: 1,
+      sampler,
+      noise_schedule: noiseSchedule,
+      cfg_rescale:    cfgRescale,
+      variety_boost:  varietyBoost,
       i2i,
     }
 
@@ -138,7 +427,9 @@ export default function ImageGenerate() {
 
       if (!res.ok || !res.body) {
         const errData = await res.json().catch(() => ({ detail: res.statusText }))
-        throw new Error((errData as { detail?: string }).detail ?? `HTTP ${res.status}`)
+        const detail = (errData as { detail?: string }).detail
+        if (isAuthExpired(res.status, detail)) notifyAuthExpired()
+        throw new Error(detail ?? `HTTP ${res.status}`)
       }
 
       const reader  = res.body.getReader()
@@ -167,14 +458,20 @@ export default function ImageGenerate() {
               continue
             }
             if (eventType === 'error') {
-              throw new Error((chunk.detail as string | undefined) ?? 'ストリーミングエラー')
+              const detail = chunk.detail as string | undefined
+              if (isAuthExpired(0, detail)) notifyAuthExpired()
+              throw new Error(detail ?? 'ストリーミングエラー')
             }
             const img = chunk.image as string | undefined
             if (!img) continue
             if (eventType === 'intermediate') {
               setPreview(`data:image/png;base64,${img}`)
             } else if (eventType === 'final') {
-              setResult({ src: `data:image/png;base64,${img}`, format: 'png' })
+              const bytes = Uint8Array.from(atob(img), c => c.charCodeAt(0))
+              setResult({
+                src: URL.createObjectURL(new Blob([bytes], { type: 'image/png' })),
+                filename: naiImageFilename(),
+              })
             }
           }
         }
@@ -185,7 +482,9 @@ export default function ImageGenerate() {
       setLoading(false)
       setPreview(null)
     }
-  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset, i2iEnabled, i2iImage, i2iStrength, i2iNoise])
+  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset,
+      sampler, noiseSchedule, cfgRescale, varietyBoost,
+      i2iEnabled, i2iImage, i2iStrength, i2iNoise])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -198,7 +497,7 @@ export default function ImageGenerate() {
     if (!result) return
     const a = document.createElement('a')
     a.href = result.src
-    a.download = `nai_${Date.now()}.${result.format}`
+    a.download = result.filename
     a.click()
   }
 
@@ -233,24 +532,48 @@ export default function ImageGenerate() {
               </button>
             </div>
             <textarea
+              ref={promptRef}
               id="ig-prompt"
               className="ig-textarea ig-textarea--prompt"
               value={prompt}
-              onChange={e => setPrompt(e.target.value)}
+              onChange={e => { setPrompt(e.target.value); rememberCaret('prompt', e.target) }}
+              onSelect={e => rememberCaret('prompt', e.currentTarget)}
               onKeyDown={handleKeyDown}
               placeholder="1girl, masterpiece, best quality, ..."
               rows={5}
             />
           </section>
 
+          {/* Prompt chunks */}
+          <section className="ig-section">
+            <button
+              type="button"
+              className="ig-advanced-toggle"
+              onClick={() => setChunksOpen(!chunksOpen)}
+              aria-expanded={chunksOpen}
+            >
+              プロンプトチャンク {chunksOpen ? '▼' : '▶'}
+            </button>
+            {chunksOpen && (
+              <>
+                <p className="ig-chunk-note">
+                  挿入先: <strong>{insertTarget === 'prompt' ? 'プロンプト' : 'ネガティブプロンプト'}</strong> のカーソル位置
+                </p>
+                <ChunkPicker onInsert={insertChunk} />
+              </>
+            )}
+          </section>
+
           {/* Negative prompt */}
           <section className="ig-section">
             <label className="ig-label" htmlFor="ig-neg-prompt">ネガティブプロンプト</label>
             <textarea
+              ref={negPromptRef}
               id="ig-neg-prompt"
               className="ig-textarea ig-textarea--neg"
               value={negPrompt}
-              onChange={e => setNegPrompt(e.target.value)}
+              onChange={e => { setNegPrompt(e.target.value); rememberCaret('neg', e.target) }}
+              onSelect={e => rememberCaret('neg', e.currentTarget)}
               placeholder="lowres, bad anatomy, ..."
               rows={3}
             />
@@ -284,42 +607,6 @@ export default function ImageGenerate() {
               </select>
             </div>
 
-            <div className="ig-field ig-field--row">
-              <label className="ig-field-label" htmlFor="ig-steps">Steps</label>
-              <input
-                id="ig-steps"
-                type="range" min={1} max={50} step={1}
-                value={steps}
-                onChange={e => setSteps(Number(e.target.value))}
-                className="ig-range"
-              />
-              <span className="ig-field-value" aria-live="polite">{steps}</span>
-            </div>
-
-            <div className="ig-field ig-field--row">
-              <label className="ig-field-label" htmlFor="ig-scale">Scale</label>
-              <input
-                id="ig-scale"
-                type="range" min={0} max={10} step={0.1}
-                value={scale}
-                onChange={e => setScale(Number(e.target.value))}
-                className="ig-range"
-              />
-              <span className="ig-field-value" aria-live="polite">{scale.toFixed(1)}</span>
-            </div>
-
-            <div className="ig-field">
-              <label className="ig-field-label" htmlFor="ig-seed">Seed</label>
-              <input
-                id="ig-seed"
-                type="number" min={0} max={999999999}
-                value={seed}
-                onChange={e => setSeed(e.target.value)}
-                placeholder="ランダム"
-                className="ig-input-number"
-              />
-            </div>
-
             <div className="ig-field">
               <label className="ig-field-label" htmlFor="ig-uc-preset">UC プリセット</label>
               <select
@@ -343,6 +630,203 @@ export default function ImageGenerate() {
                 <span>品質タグを自動付与</span>
               </label>
             </div>
+          </section>
+
+          {/* Presets */}
+          <section className="ig-section ig-settings">
+            <span className="ig-label">プリセット</span>
+            <div className="ig-preset-row">
+              <select
+                className="ig-select"
+                aria-label="プリセットを選択"
+                value={presetId ?? ''}
+                onChange={e => {
+                  const p = presets.find(x => String(x.id) === e.target.value)
+                  if (p) applyPreset(p)
+                  else setPresetId(null)
+                }}
+              >
+                <option value="">選択して読み込み...</option>
+                {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <button
+                type="button"
+                className="ig-preset-btn ig-preset-btn--danger"
+                onClick={deletePreset}
+                disabled={presetId === null}
+                title="選択中のプリセットを削除"
+              >
+                削除
+              </button>
+            </div>
+            <div className="ig-preset-row">
+              <input
+                type="text"
+                className="ig-input-number"
+                aria-label="プリセット名"
+                placeholder="プリセット名(同名は上書き)"
+                value={presetName}
+                onChange={e => setPresetName(e.target.value)}
+              />
+              <button
+                type="button"
+                className="ig-preset-btn"
+                onClick={savePreset}
+                disabled={!presetName.trim()}
+              >
+                保存
+              </button>
+            </div>
+            {presetMsg && (
+              <p className={presetMsg.isError ? 'ig-preset-msg ig-preset-msg--error' : 'ig-preset-msg'}>
+                {presetMsg.text}
+              </p>
+            )}
+          </section>
+
+          {/* Character sheet */}
+          <section className="ig-section ig-settings">
+            <span className="ig-label">キャラシート</span>
+            <div className="ig-preset-row">
+              <select
+                className="ig-select"
+                aria-label="キャラシートを選択"
+                value={characterId ?? ''}
+                onChange={e => {
+                  setCharacterId(e.target.value ? Number(e.target.value) : null)
+                  setSheetMsg(null)
+                }}
+              >
+                <option value="">キャラを選択...</option>
+                {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button
+                type="button"
+                className="ig-preset-btn"
+                onClick={importCharacterSheet}
+                disabled={characterId === null}
+                title="プロンプト・ネガティブプロンプト・シード値をキャラシートの内容で置き換える"
+              >
+                読み込む
+              </button>
+            </div>
+            {sheetMsg && (
+              <p className={sheetMsg.isError ? 'ig-preset-msg ig-preset-msg--error' : 'ig-preset-msg'}>
+                {sheetMsg.text}
+              </p>
+            )}
+          </section>
+
+          {/* AI settings (NovelAI の「AI設定」パネルと同じ項目名・並び) */}
+          <section className="ig-section ig-ai-panel">
+            <div className="ig-ai-header">
+              <span className="ig-ai-title">AI設定</span>
+              <div className="ig-ai-header-actions">
+                <button type="button" className="ig-icon-btn" onClick={resetAiSettings} title="既定値に戻す">↺</button>
+                <button
+                  type="button"
+                  className="ig-icon-btn"
+                  onClick={() => setAiOpen(o => !o)}
+                  title={aiOpen ? '折りたたむ' : '展開する'}
+                  aria-expanded={aiOpen}
+                >
+                  {aiOpen ? '▼' : '▶'}
+                </button>
+              </div>
+            </div>
+
+            {aiOpen && (
+              <div className="ig-ai-body">
+                <SliderField
+                  id="ig-steps" label="ステップ"
+                  value={steps} min={1} max={50} step={1}
+                  onChange={setSteps}
+                />
+
+                <SliderField
+                  id="ig-scale" label="プロンプトガイダンス"
+                  value={scale} min={0} max={10} step={0.1}
+                  onChange={setScale}
+                  extra={
+                    <button
+                      type="button"
+                      className={varietyBoost ? 'ig-toggle-chip ig-toggle-chip--on' : 'ig-toggle-chip'}
+                      onClick={() => setVarietyBoost(!varietyBoost)}
+                      aria-pressed={varietyBoost}
+                      title="Variety Boost"
+                    >
+                      {varietyBoost ? '✓' : '✕'} 多様性
+                    </button>
+                  }
+                />
+
+                <div className="ig-ai-pair">
+                  <div className="ig-ai-field">
+                    <label className="ig-ai-label" htmlFor="ig-seed">シード値</label>
+                    <div className="ig-seed-row">
+                      <input
+                        id="ig-seed"
+                        type="number" min={0} max={4294967295}
+                        value={seed}
+                        onChange={e => setSeed(e.target.value)}
+                        placeholder="シード値を入力"
+                        className="ig-input-number"
+                      />
+                      <button
+                        type="button"
+                        className="ig-icon-btn ig-icon-btn--boxed"
+                        onClick={() => setSeed(String(Math.floor(Math.random() * 4294967296)))}
+                        title="ランダムなシード値を入れる(空欄なら毎回ランダム)"
+                      >
+                        🌱
+                      </button>
+                    </div>
+                  </div>
+                  <div className="ig-ai-field">
+                    <label className="ig-ai-label" htmlFor="ig-sampler">サンプラー</label>
+                    <select
+                      id="ig-sampler"
+                      className="ig-select"
+                      value={sampler}
+                      onChange={e => setSampler(e.target.value)}
+                    >
+                      {SAMPLERS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="ig-advanced-toggle"
+                  onClick={() => setAdvancedOpen(o => !o)}
+                  aria-expanded={advancedOpen}
+                >
+                  詳細設定 {advancedOpen ? '▼' : '▶'}
+                </button>
+
+                {advancedOpen && (
+                  <>
+                    <SliderField
+                      id="ig-cfg-rescale" label="プロンプトガイダンスの再調整"
+                      value={cfgRescale} min={0} max={1} step={0.01}
+                      onChange={setCfgRescale}
+                    />
+
+                    <div className="ig-ai-field">
+                      <label className="ig-ai-label" htmlFor="ig-noise-schedule">ノイズ設定</label>
+                      <select
+                        id="ig-noise-schedule"
+                        className="ig-select"
+                        value={noiseSchedule}
+                        onChange={e => setNoiseSchedule(e.target.value)}
+                      >
+                        {NOISE_SCHEDULES.map(n => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </section>
 
           {/* Image-to-Image */}
@@ -497,11 +981,13 @@ export default function ImageGenerate() {
 
           {!loading && result && (
             <div className="ig-result">
-              <img
-                className="ig-result-img"
-                src={result.src}
-                alt="生成された画像"
-              />
+              <a href={result.src} download={result.filename}>
+                <img
+                  className="ig-result-img"
+                  src={result.src}
+                  alt="生成された画像"
+                />
+              </a>
               <div className="ig-result-actions">
                 <button type="button" className="ig-action-btn" onClick={handleDownload}>
                   ↓ ダウンロード

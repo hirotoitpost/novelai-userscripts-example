@@ -3,9 +3,9 @@ from __future__ import annotations
 import base64
 import io
 import json
-from typing import Any
-
-from typing import Annotated, AsyncGenerator
+from pathlib import Path
+from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -30,16 +30,133 @@ from novelai.types import (
 )
 
 from ..client import get_client
-
-ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
+from ..db import (
+    delete_image_preset,
+    get_connection,
+    list_image_presets,
+    record_generation,
+    save_image_preset,
+)
 from ..models import (
     AnlasEstimateRequest,
     AnlasEstimateResponse,
     GenerateImageRequest,
     GenerateImageResponse,
+    ImagePresetCreateRequest,
+    ImagePresetResponse,
 )
 
+ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
+
 router = APIRouter(prefix="/api/image", tags=["image"])
+
+_HISTORY_DIR = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "history"
+
+
+def _save_reference_image(image_b64: str) -> str:
+    """i2i/キャラクター参照画像を outputs/history/ に保存し、リポジトリルート相対パスを返す。"""
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}_ref.png"
+    (_HISTORY_DIR / filename).write_bytes(_decode_b64(image_b64))
+    return f"outputs/history/{filename}"
+
+
+def save_generation(
+    gen: GenerateImageRequest,
+    images: list[bytes],
+    *,
+    chunk_ids: list[str] | None = None,
+    based_on: int | None = None,
+) -> dict[str, Any]:
+    """
+    生成した画像(PNG)を outputs/history/ に保存し、generation_history に記録する。
+    画像生成ページ・ワード選択のどちらから生成しても、ギャラリーに同じように並ぶ。
+    i2i・キャラクター参照の元画像も、再生成できるよう一緒に保存する。
+    """
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    image_paths: list[str] = []
+    for data in images:
+        filename = f"{uuid4().hex}.png"
+        (_HISTORY_DIR / filename).write_bytes(data)
+        image_paths.append(f"outputs/history/{filename}")
+
+    character_references = (
+        [
+            {
+                "image_path": _save_reference_image(cr.image),
+                "type": cr.type,
+                "fidelity": cr.fidelity,
+                "strength": cr.strength,
+            }
+            for cr in gen.character_references
+        ]
+        if gen.character_references
+        else None
+    )
+    characters = (
+        [
+            {
+                "prompt": c.prompt,
+                "negative_prompt": c.negative_prompt,
+                "position": c.position,
+                "enabled": c.enabled,
+            }
+            for c in gen.characters
+        ]
+        if gen.characters
+        else None
+    )
+    conn = get_connection()
+    try:
+        return record_generation(
+            conn,
+            prompt=gen.prompt,
+            negative_prompt=gen.negative_prompt,
+            model=gen.model,
+            size=str(gen.size),
+            steps=gen.steps,
+            scale=gen.scale,
+            seed=gen.seed,
+            chunk_ids=chunk_ids or [],
+            image_paths=image_paths,
+            i2i_image_path=_save_reference_image(gen.i2i.image) if gen.i2i else None,
+            i2i_strength=gen.i2i.strength if gen.i2i else None,
+            i2i_noise=gen.i2i.noise if gen.i2i else None,
+            character_references=character_references,
+            characters=characters,
+            based_on_id=based_on,
+        )
+    finally:
+        conn.close()
+
+
+@router.get("/presets", response_model=list[ImagePresetResponse])
+async def get_image_presets() -> list[dict[str, Any]]:
+    """挿絵生成のパラメータプリセット一覧。"""
+    conn = get_connection()
+    try:
+        return list_image_presets(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/presets", response_model=ImagePresetResponse)
+async def create_image_preset(req: ImagePresetCreateRequest) -> dict[str, Any]:
+    """プリセットを保存する。同じ名前なら上書きする。"""
+    conn = get_connection()
+    try:
+        return save_image_preset(conn, req.name, req.settings.model_dump())
+    finally:
+        conn.close()
+
+
+@router.delete("/presets/{preset_id}", status_code=204)
+async def delete_image_preset_endpoint(preset_id: int) -> None:
+    conn = get_connection()
+    try:
+        delete_image_preset(conn, preset_id)
+    finally:
+        conn.close()
 
 
 def _decode_b64(b64: str) -> bytes:
@@ -130,7 +247,7 @@ def _build_kwargs(req: GenerateImageRequest) -> dict[str, Any]:
             Character(
                 prompt=c.prompt,
                 negative_prompt=c.negative_prompt,
-                position=tuple(c.position) if isinstance(c.position, list) else c.position,
+                position=c.position,
                 enabled=c.enabled,
             )
             for c in req.characters
@@ -161,10 +278,12 @@ async def generate_image(
     try:
         params = GenerateImageParams(**_build_kwargs(req))
         images = await client.image.generate(params)
-        fmt = req.image_format or "png"
-        return GenerateImageResponse(images=_pil_to_b64(images, fmt), format=fmt)
     except Exception as exc:
         raise HTTPException(status_code=_http_status(exc), detail=str(exc))
+    # ギャラリーに残すため、返す形式(webp 等)とは別に PNG で保存する
+    save_generation(req, [base64.b64decode(b) for b in _pil_to_b64(images, "png")])
+    fmt = req.image_format or "png"
+    return GenerateImageResponse(images=_pil_to_b64(images, fmt), format=fmt)
 
 
 @router.post("/generate/stream")
@@ -173,9 +292,12 @@ async def generate_image_stream(
     client: ClientDep,
 ) -> StreamingResponse:
     async def event_gen():
+        finals: list[bytes] = []
         try:
             params = GenerateImageStreamParams(**_build_kwargs(req))
             async for chunk in client.image.generate_stream(params):
+                if chunk.event_type == "final" and chunk.image:
+                    finals.append(base64.b64decode(chunk.image))
                 payload = json.dumps(
                     {
                         "event_type": chunk.event_type,
@@ -189,6 +311,10 @@ async def generate_image_stream(
                 yield f"event: {chunk.event_type}\ndata: {payload}\n\n"
         except Exception as exc:
             yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+        # 完成した画像だけをギャラリー用に保存する(途中経過の画像は残さない)。
+        # 途中で失敗しても、それまでに完成した分は残す。
+        if finals:
+            save_generation(req, finals)
 
     return StreamingResponse(
         event_gen(),

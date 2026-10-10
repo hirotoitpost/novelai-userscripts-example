@@ -1,0 +1,53 @@
+/*---
+compatibilityVersion: naiscript-1.0
+id: 19949f56-fee6-463c-90e0-88b439592714
+name: Export Story Text
+createdAt: 1788903415044
+updatedAt: 1788903415044
+version: 1.0.0
+author: novelai-userscripts-example
+description: Adds a toolbar button that copies the full story text (paragraph-separated) to the clipboard, ready to paste into novelai-userscripts-example's story import feature.
+memoryLimit: 8
+---*/
+// Export Story Text
+//
+// NovelAI stores story documents in an internal, undocumented binary format
+// (its storage API's decrypted "document" field is not plain text). Rather
+// than reverse-engineering that format, this script uses NovelAI's own
+// Scripting API (api.v1.document.scan) to read the already-decoded section
+// text and copies it to the clipboard, paragraph by paragraph, so it can be
+// pasted directly into the "物語をインポート" (import story) textarea in the
+// novelai-userscripts-example app.
+//
+// Install: NovelAI → goose menu (or right sidebar "Advanced" tab, or Alt+X)
+// → User Scripts → Import this file as an account or story script.
+
+async function exportStoryText() {
+  const granted = await api.v1.permissions.request("clipboardWrite");
+  if (!granted) {
+    api.v1.ui.toast("クリップボードへのアクセス許可が必要です。");
+    return;
+  }
+
+  const sections = await api.v1.document.scan();
+  const text = sections
+    .map((s) => s.section.text)
+    .filter((t) => t && t.trim())
+    .join("\n\n");
+
+  if (!text) {
+    api.v1.ui.toast("本文が空です。");
+    return;
+  }
+
+  await api.v1.clipboard.writeText(text);
+  api.v1.ui.toast(`本文(${text.length}文字)をコピーしました。`);
+}
+
+api.v1.ui.register([
+  {
+    type: "toolbarButton",
+    text: "本文をコピー",
+    callback: exportStoryText,
+  },
+]);

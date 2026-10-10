@@ -1,0 +1,57 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "BE: FastAPI (uvicorn, デバッグ)",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "uvicorn",
+			"args": ["python.server:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"],
+			"cwd": "${workspaceFolder}",
+			"python": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"envFile": "${workspaceFolder}/.env",
+			"justMyCode": true,
+			"jinja": true,
+			"console": "integratedTerminal"
+		},
+		{
+			"name": "BE: pytest (現在のファイル)",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "pytest",
+			"args": ["-v", "${file}"],
+			"cwd": "${workspaceFolder}",
+			"python": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"envFile": "${workspaceFolder}/.env",
+			"justMyCode": true,
+			"console": "integratedTerminal"
+		},
+		{
+			"name": "BE: MCP サーバー",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceFolder}/scripts/run_mcp_server.py",
+			"cwd": "${workspaceFolder}",
+			"python": "${workspaceFolder}/.venv/Scripts/python.exe",
+			"envFile": "${workspaceFolder}/.env",
+			"justMyCode": true,
+			"console": "integratedTerminal"
+		},
+		{
+			"name": "FE: Chrome アタッチ (Vite :5173)",
+			"type": "chrome",
+			"request": "launch",
+			"url": "http://localhost:5173",
+			"webRoot": "${workspaceFolder}",
+			"preLaunchTask": "FE: 起動",
+			"sourceMaps": true
+		}
+	],
+	"compounds": [
+		{
+			"name": "フルスタック: BE + FE デバッグ",
+			"configurations": ["BE: FastAPI (uvicorn, デバッグ)", "FE: Chrome アタッチ (Vite :5173)"],
+			"stopAll": true
+		}
+	]
+}

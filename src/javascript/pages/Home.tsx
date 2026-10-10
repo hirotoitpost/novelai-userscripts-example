@@ -66,6 +66,45 @@ export default function Home() {
         <div className="home-cards">
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/writer')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/writer')}
+          >
+            <div className="home-card-icon">✍️</div>
+            <h2>物語エディタ</h2>
+            <p>NovelAI の最新モデル(Xialong)と対話しながら物語を書き、そのまま漫画にできます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/manga-draft')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/manga-draft')}
+          >
+            <div className="home-card-icon">📝</div>
+            <h2>漫画ドラフト</h2>
+            <p>テーマとキャラから大枠シナリオを選び、4コマの台本を書き進めて、そのまま漫画にします。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/manga-import')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/manga-import')}
+          >
+            <div className="home-card-icon">📚</div>
+            <h2>作品の取り込み</h2>
+            <p>PDF・画像・zip の漫画からコマ運び(構図・人数・セリフ量・役割)を読み取り、漫画ドラフトの参考にします。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/generate')}
             role="button"
             tabIndex={0}
@@ -107,6 +146,123 @@ export default function Home() {
             <div className="home-card-icon">🤖</div>
             <h2>AI アシスタント</h2>
             <p>LLM を活用したプロンプト生成・キャラ設定・物語ドラフト・リバースプロンプトを提供します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/batch')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/batch')}
+          >
+            <div className="home-card-icon">📂</div>
+            <h2>バッチ整理</h2>
+            <p>フォルダ内の NAI 画像をプロンプトの類似性と作成日付でグループ分けして自動整理します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/lora-dataset')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/lora-dataset')}
+          >
+            <div className="home-card-icon">🧬</div>
+            <h2>LoRA データセット生成</h2>
+            <p>トリガーワードやAI設定を指定して、顔/上半身/全身の学習用画像セットを自動生成します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/character-dataset')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/character-dataset')}
+          >
+            <div className="home-card-icon">🎎</div>
+            <h2>キャラ別データセット</h2>
+            <p>登場人物のキャラシートを元に、ポーズ/服装/表情を変えた画像を1枚ずつ生成・取り込みします。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/chunks')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/chunks')}
+          >
+            <div className="home-card-icon">🧩</div>
+            <h2>プロンプトチャンク</h2>
+            <p>NovelAI 公式のプロンプトチャンクを読み取り専用で同期します（セッショントークンが必要）。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/db-status')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/db-status')}
+          >
+            <div className="home-card-icon">📊</div>
+            <h2>DB状態</h2>
+            <p>インポート済みチャンクの件数・カテゴリ構成・タグ付け状況を確認します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/select')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/select')}
+          >
+            <div className="home-card-icon">🎲</div>
+            <h2>ワード選択</h2>
+            <p>シナリオ・ランダム・類似・プリセットの4通りでチャンクを選び、プロンプトに結合します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/story')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/story')}
+          >
+            <div className="home-card-icon">📖</div>
+            <h2>物語 → 漫画</h2>
+            <p>前提からOllamaでドラフトを作り、NovelAI公式(Kayra)で本文を執筆、V5で挿絵を生成して漫画にまとめます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/bookshelf')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/bookshelf')}
+          >
+            <div className="home-card-icon">📚</div>
+            <h2>本棚</h2>
+            <p>生成・取り込みした物語と漫画を、表紙を並べた本棚から選んで読めます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/gallery')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/gallery')}
+          >
+            <div className="home-card-icon">🖼️</div>
+            <h2>ギャラリー</h2>
+            <p>生成した画像・漫画のコマ・挿絵を一覧で見て、ブックマークやダウンロードができます。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
         </div>

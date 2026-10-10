@@ -1,0 +1,109 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "BE: 起動",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "start", "-Target", "backend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "BE: 停止",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "stop", "-Target", "backend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "BE: 再起動",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "restart", "-Target", "backend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "BE: 状態確認",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "status", "-Target", "backend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "FE: 起動",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "start", "-Target", "frontend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "FE: 停止",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "stop", "-Target", "frontend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "FE: 再起動",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "restart", "-Target", "frontend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "FE: 状態確認",
+			"type": "shell",
+			"command": "powershell",
+			"args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/dev-ctl.ps1", "status", "-Target", "frontend"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "LLM: 起動 (docker compose up -d)",
+			"type": "shell",
+			"command": "docker",
+			"args": ["compose", "up", "-d"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "LLM: 停止 (docker compose stop)",
+			"type": "shell",
+			"command": "docker",
+			"args": ["compose", "stop"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"detail": "コンテナ・ボリュームは残したまま停止する（データは消えない）",
+			"problemMatcher": []
+		},
+		{
+			"label": "LLM: 状態確認 (docker compose ps)",
+			"type": "shell",
+			"command": "docker",
+			"args": ["compose", "ps"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated", "group": "novelai" },
+			"problemMatcher": []
+		},
+		{
+			"label": "全サービス: 起動 (BE+FE+LLM)",
+			"dependsOn": ["BE: 起動", "FE: 起動", "LLM: 起動 (docker compose up -d)"],
+			"dependsOrder": "sequence",
+			"problemMatcher": []
+		},
+		{
+			"label": "全サービス: 停止 (BE+FE+LLM)",
+			"dependsOn": ["BE: 停止", "FE: 停止", "LLM: 停止 (docker compose stop)"],
+			"dependsOrder": "sequence",
+			"problemMatcher": []
+		}
+	]
+}

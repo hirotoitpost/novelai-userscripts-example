@@ -163,7 +163,8 @@ uv run pytest
 ├── tests/                       # pytest テストファイル
 ├── docs/
 │   ├── README_jp.md             # 日本語 README（このファイル）
-│   └── architecture.md          # システムアーキテクチャ & API リファレンス
+│   ├── architecture.md          # システムアーキテクチャ & API リファレンス
+│   └── content_guard_jp.md      # キャラ別データセットのコンテンツガード
 ├── index.html                   # Vite エントリーポイント
 ├── vite.config.ts               # Vite 設定（/api/ を :8000 へプロキシ）
 ├── pyproject.toml               # Python 依存関係 & ツール設定
@@ -193,6 +194,18 @@ uv run pytest
 ## ライセンス
 
 MIT — 詳細は [LICENSE](../LICENSE) を参照してください。
+
+### 外部のモデル
+
+初回に使うときに `data/models/` へダウンロードします(このリポジトリには含みません)。
+
+- [deepghs/anime_head_detection](https://huggingface.co/deepghs/anime_head_detection)(MIT)— 吹き出しを置くための頭の位置。
+- [deepghs/manga109_yolo](https://huggingface.co/deepghs/manga109_yolo) — 作品の取り込み(構成の参考)で、コマ・顔・体・文字の位置。
+  学習データは [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s)
+  (Aizawa et al., "Building a Manga Dataset 'Manga109' with Annotations for Multimedia Applications", IEEE MultiMedia, 2020)で、
+  機械学習の結果の利用は認められていますが、データセットの再配布は禁止されています。
+  モデル自体にはライセンスの表記がないため、このアプリを配布・商用提供するときは作者に確認するか、別のモデルに替えてください。
+  モデルが使えないときは、枠線からコマを探します。
 
 ## 関連プロジェクト
 

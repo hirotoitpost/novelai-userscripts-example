@@ -1,0 +1,208 @@
+"""
+描き文字スタンプ(効果音の手描き文字素材)の取り込み。
+
+素材集は「透過PNGの1枚に数十個の擬音を並べたシート」の形で配られていることが多いので、
+シートを1語ずつのスタンプに切り分けて data/stamps/ に保存する。手描きの崩し文字は
+ローカルの画像モデルでは読めない(実機で8個中1個しか読めなかった)ので、読みは付けず、
+使う側で「この効果音にはこのスタンプ」と割り当てる。
+"""
+
+from __future__ import annotations
+
+import io
+import re
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+import numpy as np
+from PIL import Image
+from scipy import ndimage
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+STAMP_DIR = _PROJECT_ROOT / "data" / "stamps"
+
+# 透明な部分がこの割合以上ある画像だけを素材シートとみなす(表紙や使い方の説明ページを除く)
+_MIN_TRANSPARENT_RATIO = 0.5
+_ALPHA_THRESHOLD = 40
+# 同じ語の線をまとめる距離(シート幅1000px換算)。縦書きなので縦方向を広く取る。
+# 実機の素材シートで、縦28/横10だと上下の別の語まで繋がり、縦14/横6でほぼ1語ずつに分かれた。
+_GROUP_GAP_Y = 14
+_GROUP_GAP_X = 6
+# これより小さい塊(シート幅1000px換算の面積)は点やゴミとして捨てる
+_MIN_INK = 40 * 40 * 0.3
+_PADDING = 6
+
+_PIXIV_ARTWORK_RE = re.compile(r"pixiv\.net/(?:[a-z]{2}/)?artworks/(\d+)")
+_PIXIV_HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.pixiv.net/"}
+
+
+@dataclass
+class SheetSource:
+    """取り込み元。クレジット表示に使う。"""
+
+    key: str
+    title: str
+    author: str
+    url: str
+    adult: bool = False
+
+
+def is_stamp_sheet(image: Image.Image) -> bool:
+    alpha = np.asarray(image.convert("RGBA"))[..., 3]
+    return float((alpha == 0).mean()) >= _MIN_TRANSPARENT_RATIO
+
+
+def split_sheet(image: Image.Image) -> list[Image.Image]:
+    """
+    透過シートを、近い線どうしをまとめた塊ごとに切り出す(上の行から、行の中は右から)。
+
+    塊の判定は幅1000pxに縮めた画像で行い(原寸の 3514x4999 で大きな構造要素の膨張をすると
+    遅すぎる)、切り出しは原寸で行う。
+    """
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    factor = rgba.width / 1000
+    small_size = (1000, max(1, round(rgba.height / factor)))
+    small = np.asarray(alpha.resize(small_size, Image.Resampling.BOX)) > _ALPHA_THRESHOLD // 4
+    merged = ndimage.binary_dilation(
+        small, structure=np.ones((_GROUP_GAP_Y * 2 + 1, _GROUP_GAP_X * 2 + 1), dtype=bool)
+    )
+    labels, _ = ndimage.label(merged)
+    full_ink = np.asarray(alpha) > _ALPHA_THRESHOLD
+    boxes: list[tuple[int, int, int, int]] = []
+    for region in ndimage.find_objects(labels):
+        if region is None:
+            continue
+        ys, xs = region
+        if small[region].sum() < _MIN_INK:
+            continue
+        # 縮小画像での範囲を原寸に戻し、その中のインクの外接矩形を取り直す
+        fx0, fy0 = int(xs.start * factor), int(ys.start * factor)
+        fx1, fy1 = min(int(xs.stop * factor) + 1, rgba.width), min(int(ys.stop * factor) + 1, rgba.height)
+        local = full_ink[fy0:fy1, fx0:fx1]
+        if not local.any():
+            continue
+        yy, xx = np.nonzero(local)
+        boxes.append((fx0 + int(xx.min()), fy0 + int(yy.min()), fx0 + int(xx.max()) + 1, fy0 + int(yy.max()) + 1))
+    row = max(1, int(150 * factor))
+    boxes.sort(key=lambda b: (b[1] // row, -b[0]))
+    pad = max(1, int(_PADDING * factor))
+    return [
+        rgba.crop((max(x0 - pad, 0), max(y0 - pad, 0), min(x1 + pad, rgba.width), min(y1 + pad, rgba.height)))
+        for x0, y0, x1, y1 in boxes
+    ]
+
+
+# 1語1ファイルの素材集のファイル名。「くちゅ1_0007.png」= 読み「くちゅ」・デザイン1・色違い7
+_ZIP_NAME_RE = re.compile(r"^(?P<label>.+?)(?P<design>\d+)?(?:_(?P<variant>\d+))?\.png$", re.IGNORECASE)
+_TRIM_PADDING = 8
+
+
+@dataclass
+class ZipStamp:
+    label: str
+    design: int
+    variant: int
+    image: Image.Image
+
+
+def _zip_entry_name(info: zipfile.ZipInfo) -> str:
+    """Windowsで作られたZIPはファイル名がShift_JISのことが多い(UTF-8フラグが無い)。"""
+    if info.flag_bits & 0x800:
+        return info.filename
+    try:
+        return info.filename.encode("cp437").decode("cp932")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return info.filename
+
+
+def trim(image: Image.Image) -> Image.Image:
+    """透明な余白を切り落とす(1920x1080 のキャンバスに1語だけ描かれた素材向け)。"""
+    rgba = image.convert("RGBA")
+    box = rgba.getchannel("A").point(lambda v: 255 if v > _ALPHA_THRESHOLD else 0).getbbox()
+    if box is None:
+        return rgba
+    x0, y0, x1, y1 = box
+    return rgba.crop(
+        (
+            max(x0 - _TRIM_PADDING, 0),
+            max(y0 - _TRIM_PADDING, 0),
+            min(x1 + _TRIM_PADDING, rgba.width),
+            min(y1 + _TRIM_PADDING, rgba.height),
+        )
+    )
+
+
+def stamps_from_zip(data: bytes) -> tuple[str, list[ZipStamp]]:
+    """ZIP内のPNGを1枚1スタンプとして読み、(フォルダ名, スタンプ一覧)を返す。"""
+    folder = ""
+    stamps: list[ZipStamp] = []
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            path = _zip_entry_name(info)
+            name = path.rsplit("/", 1)[-1]
+            match = _ZIP_NAME_RE.match(name)
+            if match is None or name.startswith("."):
+                continue
+            if "/" in path and not folder:
+                folder = path.split("/", 1)[0]
+            image = Image.open(io.BytesIO(archive.read(info)))
+            image.load()
+            stamps.append(
+                ZipStamp(
+                    label=match.group("label").strip(" _-"),
+                    design=int(match.group("design") or 0),
+                    variant=int(match.group("variant") or 0),
+                    image=trim(image),
+                )
+            )
+    stamps.sort(key=lambda s: (s.label, s.design, s.variant))
+    return folder, stamps
+
+
+def is_monochrome(image: Image.Image) -> bool:
+    """インク部分がほぼ無彩色(黒・白・灰)か。モノクロ漫画には色付きの素材より合う。"""
+    rgba = np.asarray(image.convert("RGBA")).astype(np.int16)
+    opaque = rgba[..., 3] > _ALPHA_THRESHOLD
+    if not opaque.any():
+        return True
+    rgb = rgba[..., :3][opaque]
+    chroma = rgb.max(axis=1) - rgb.min(axis=1)
+    return float((chroma > 40).mean()) < 0.05
+
+
+def pixiv_artwork_id(url: str) -> str | None:
+    match = _PIXIV_ARTWORK_RE.search(url)
+    return match.group(1) if match else None
+
+
+async def fetch_pixiv_sheets(artwork_id: str) -> tuple[SheetSource, list[Image.Image]]:
+    """pixiv の作品の全ページを取得し、素材シート(透過画像)だけを返す。"""
+    async with httpx.AsyncClient(headers=_PIXIV_HEADERS, timeout=120, follow_redirects=True) as client:
+        info = (await client.get(f"https://www.pixiv.net/ajax/illust/{artwork_id}")).json()
+        if info.get("error"):
+            raise ValueError(info.get("message") or "作品情報を取得できませんでした。")
+        body = info["body"]
+        pages = (await client.get(f"https://www.pixiv.net/ajax/illust/{artwork_id}/pages")).json()["body"]
+        sheets: list[Image.Image] = []
+        for page in pages:
+            response = await client.get(page["urls"]["original"])
+            response.raise_for_status()
+            image = Image.open(io.BytesIO(response.content))
+            image.load()
+            if is_stamp_sheet(image):
+                sheets.append(image)
+    source = SheetSource(
+        key=f"pixiv-{artwork_id}",
+        title=body.get("title", ""),
+        author=body.get("userName", ""),
+        url=f"https://www.pixiv.net/artworks/{artwork_id}",
+        # pixiv の年齢制限(xRestrict: 1=R-18, 2=R-18G)と R-18 タグで判定する
+        adult=bool(body.get("xRestrict"))
+        or any(t.get("tag") in ("R-18", "R18", "R-18G") for t in (body.get("tags") or {}).get("tags", [])),
+    )
+    return source, sheets

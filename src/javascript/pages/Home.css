@@ -253,3 +253,12 @@
 
 .dot--green  { background: var(--accent-green); }
 .dot--purple { background: var(--accent); opacity: 0.6; }
+
+/* ===== Mobile ===== */
+@media (max-width: 600px) {
+  .home-header { padding: 0.8rem 1rem; flex-wrap: wrap; gap: 0.5rem; }
+  .home-main { padding: 1.5rem 1rem; }
+  .home-welcome h1 { font-size: 1.5rem; }
+  .home-cards { grid-template-columns: 1fr; }
+  .home-sdk-info { padding: 1.2rem 1.4rem; }
+}

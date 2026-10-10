@@ -3,6 +3,8 @@ Integration test: NovelAI アカウントの Anlas 残高・サブスクリプ�
 
 実行要件:
   .env に NOVELAI_TEST_EMAIL と NOVELAI_TEST_PASSWORD が設定されていること。
+  /user/login は reCAPTCHA が必須なため、ブラウザで発行させたトークンを
+  NOVELAI_TEST_RECAPTCHA にも設定すること（有効期限が短いので都度取得が必要）。
   未設定の場合は自動的にスキップされます。
 
 実行方法:
@@ -27,16 +29,17 @@ _NOVELAI_API = "https://api.novelai.net"
 _TIER_NAMES = {0: "Free", 1: "Tablet", 2: "Scroll", 3: "Opus"}
 
 
-def _creds() -> tuple[str, str] | None:
+def _creds() -> tuple[str, str, str] | None:
     email = os.environ.get("NOVELAI_TEST_EMAIL", "").strip()
     password = os.environ.get("NOVELAI_TEST_PASSWORD", "").strip()
-    return (email, password) if email and password else None
+    recaptcha = os.environ.get("NOVELAI_TEST_RECAPTCHA", "").strip()
+    return (email, password, recaptcha) if email and password and recaptcha else None
 
 
 # 認証情報が未設定ならスキップ
 _skip = pytest.mark.skipif(
     _creds() is None,
-    reason="NOVELAI_TEST_EMAIL / NOVELAI_TEST_PASSWORD が .env に未設定",
+    reason="NOVELAI_TEST_EMAIL / NOVELAI_TEST_PASSWORD / NOVELAI_TEST_RECAPTCHA が .env に未設定",
 )
 
 
@@ -45,12 +48,12 @@ def test_subscription() -> None:
     """ログインして /user/subscription を取得し、Anlas 残高を表示・検証する。"""
     creds = _creds()
     assert creds is not None
-    email, password = creds
+    email, password, recaptcha = creds
 
     async def _run() -> dict:  # type: ignore[type-arg]
         from python.auth_utils import login_with_credentials
 
-        token = await login_with_credentials(email, password)
+        token = await login_with_credentials(email, password, recaptcha)
 
         async with httpx.AsyncClient() as http:
             resp = await http.get(

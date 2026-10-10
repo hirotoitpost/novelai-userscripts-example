@@ -1,0 +1,351 @@
+"""
+NovelAI Diffusion V5 (nai-diffusion-5-full) で「1回の生成でコマ割り済みの漫画ページ」を
+作るための薄いラッパー。
+
+V5のコマ割り機能に専用APIパラメータは無く、通常の /ai/generate-image に対して
+自然言語でコマ割りを記述するだけでよい(NovelAI公式journal記事で確認済み)。
+ただし現在の novelai-sdk (0.8.1) は "nai-diffusion-5-full" を model の Literal 型に
+含んでおらず、GenerateImageParams に渡すとpydanticバリデーションで弾かれるため、
+ここでは novelai-sdk を経由せず直接 httpx でリクエストを組み立てる
+(chunks.py の /promptmacros と同じ「生httpx + Bearer」パターン)。
+
+リクエストボディの形は、実際にSDK経由で送られる正常なV4.5リクエストを一度キャプチャして
+確認した上で、V5用に params_version=4 / noise_schedule=karras に変更して組み立てている
+(実機で200 OK・コマ割り画像が返ることを確認済み)。
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import logging
+import re
+import zipfile
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+from PIL import Image
+
+from .client import api_keys_with_fallback
+
+logger = logging.getLogger(__name__)
+
+_IMAGE_API_ADDRESS = "https://image.novelai.net"
+
+V5_MODEL = "nai-diffusion-5-full"
+
+# 実機検証: ポジティブに monochrome だけを入れてもセピア調で出てくることがあったため、
+# 色をネガティブ側からも外している。
+_DEFAULT_NEGATIVE_PROMPT = (
+    ", lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, "
+    "multiple views, very displeasing, too many watermarks, negative space, blank page, "
+    "sepia, colored, watercolor, "
+)
+
+# セリフ1行の上限文字数と、1ページに載せる行数の上限。
+_MAX_PANEL_TEXT_CHARS = 100
+_MAX_TEXT_LINES = 12
+
+# ページ別の指標(routes/story.py)でも同じ定義を使うため公開している。
+DIALOGUE_RE = re.compile(r"[「『]([^」』]*)[」』]")
+
+
+def _panel_dialogue_lines(text: str) -> list[str]:
+    """
+    コマに描かせるセリフだけを取り出す。地の文は使わない。
+
+    実機検証: 1コマ200字の地の文を4コマ分載せるとプロンプトが約1,500字になり、
+    その大半が日本語の散文になる。すると絵の指示である英語タグもコマ割り指示も
+    埋もれてしまい、4コマ指定が8コマで描かれ、全コマが同じ構図になった。
+    """
+    lines = [match.group(1).strip() for match in DIALOGUE_RE.finditer(text)]
+    return [line[:_MAX_PANEL_TEXT_CHARS] for line in lines if line]
+
+
+def build_manga_page_prompt(panels: list[dict[str, Any]], complexity: str | None = None) -> str:
+    """
+    シーン(ページ内の各コマ)のリストから、V5に渡す「コマ割り指示付き」プロンプトを組み立てる。
+
+    panels: [{"draft_text": str, "draft_prompt_tags": str}, ...] (ページに含まれる順)
+
+    セリフは公式が案内する "Text:" ブロックとしてプロンプト末尾に置く。V4.5の
+    リリースノートいわく「"Text:" はプロンプトの最後に来る必要がある。そうでないと、
+    後に続くタグや自然言語部分がそのまま画像に描かれる恐れがある」。以前はセリフを
+    コマ指定の中に混ぜ、その後ろに品質タグを置いていた(まさに警告されている形)。
+    引用符で囲むだけでこのブロックを用意するのは公式フロントエンドの機能であり、
+    このアプリはAPIを直接叩くため自前で組み立てる必要がある。
+    """
+    n = len(panels)
+    layout = f"{n}-panel comic layout" if n > 1 else "single panel manga illustration"
+    parts = [f"manga page, monochrome, greyscale, comic panels with speech bubbles, {layout}, text"]
+    if complexity:
+        parts.append(f"{complexity} complexity")
+
+    for i, panel in enumerate(panels, start=1):
+        tags = panel.get("draft_prompt_tags", "").strip()
+        if tags:
+            parts.append(f"panel {i}: {tags}")
+
+    parts.append("very aesthetic, masterpiece")
+    prompt = ", ".join(parts)
+
+    dialogue: list[str] = []
+    for panel in panels:
+        dialogue.extend(_panel_dialogue_lines(panel.get("draft_text", "")))
+    if dialogue:
+        # 複数のテキストは空行で区切る(公式の指定方法)。
+        prompt += ". Text: " + "\n\n".join(dialogue[:_MAX_TEXT_LINES])
+    return prompt
+
+
+# V5に渡せるキャラクター指定の上限。1ページに複数コマが入るため登場人物が増えがちだが、
+# characterPrompts は画像全体に効く指定でコマごとには分けられないので、多すぎると
+# かえって混ざる。V4系の上限に合わせて絞る。
+_MAX_CHARACTER_PROMPTS = 4
+
+
+def _build_character_prompts(
+    character_tags: list[str],
+    character_negatives: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    (characterPrompts, char_captions) を組み立てる。V4形式のリクエストでは同じ内容を
+    この2箇所に入れる必要がある(SDKのCharacter指定が生成するボディと同じ形)。
+
+    以前は全員を中央(0.5, 0.5)に置いて use_coords を切っていたが、V5のリリースノートは
+    位置指定について「モデルは設定した位置に忠実に従う」「コマ割りの誘導に使える」
+    「キャラクターの一貫性を高め、特徴の混ざりを抑える」と明記している。そこで横方向に
+    均等に振り分けて渡す。
+
+    character_negatives はキャラごとのネガティブ(character_tags と同じ並び)。全体のネガティブに
+    まとめると、一人の「黒髪にしない」がもう一人の黒髪まで消してしまうので、キャラの欄(uc)に分ける。
+    3つ目の戻り値は v4_negative_prompt 側の char_captions(公式クライアントと同じく位置も入れる)。
+    """
+    tags = character_tags[:_MAX_CHARACTER_PROMPTS]
+    negatives = (list(character_negatives or []) + [""] * len(tags))[: len(tags)]
+    prompts: list[dict[str, Any]] = []
+    captions: list[dict[str, Any]] = []
+    negative_captions: list[dict[str, Any]] = []
+    for index, (tag, negative) in enumerate(zip(tags, negatives)):
+        center = {"x": round((index + 1) / (len(tags) + 1), 3), "y": 0.5}
+        prompts.append({"prompt": tag, "uc": negative, "center": center, "enabled": True})
+        captions.append({"char_caption": tag, "centers": [center]})
+        negative_captions.append({"char_caption": negative, "centers": [center]})
+    return prompts, captions, negative_captions
+
+
+def _build_v5_body(
+    prompt: str,
+    negative_prompt: str,
+    *,
+    model: str,
+    width: int,
+    height: int,
+    steps: int,
+    scale: float,
+    sampler: str,
+    noise_schedule: str,
+    cfg_rescale: float,
+    seed: int,
+    character_tags: list[str],
+    character_negatives: list[str] | None = None,
+) -> dict[str, Any]:
+    character_prompts, char_captions, negative_captions = _build_character_prompts(character_tags, character_negatives)
+    parameters: dict[str, Any] = {
+        "width": width,
+        "height": height,
+        "steps": steps,
+        "scale": scale,
+        "sampler": sampler,
+        "seed": seed,
+        "n_samples": 1,
+        "negative_prompt": negative_prompt,
+        "ucPreset": 1,
+        "qualityToggle": True,
+        "v4_prompt": {
+            "caption": {"base_caption": prompt, "char_captions": char_captions},
+            "use_coords": True,
+            "use_order": True,
+        },
+        "v4_negative_prompt": {
+            "caption": {"base_caption": negative_prompt, "char_captions": negative_captions},
+            "legacy_uc": False,
+        },
+        "sm": False,
+        "sm_dyn": False,
+        "autoSmea": False,
+        "dynamic_thresholding": False,
+        "cfg_rescale": cfg_rescale,
+        "noise_schedule": noise_schedule,
+        "legacy": False,
+        "legacy_uc": False,
+        "legacy_v3_extend": False,
+        "deliberate_euler_ancestral_bug": False,
+        "prefer_brownian": True,
+        "strength": 0.7,
+        "add_original_image": False,
+        "controlnet_strength": 1.0,
+        "normalize_reference_strength_multiple": False,
+        "characterPrompts": character_prompts,
+        "params_version": 4,
+        "use_coords": True,
+    }
+    return {
+        "action": "generate",
+        "input": prompt,
+        "model": model,
+        "use_new_shared_trial": True,
+        "parameters": parameters,
+    }
+
+
+async def generate_manga_page(
+    api_key: str,
+    panels: list[dict[str, Any]],
+    *,
+    model: str = V5_MODEL,
+    width: int = 1216,
+    height: int = 1728,
+    steps: int = 27,
+    scale: float = 7.0,
+    sampler: str = "k_euler_ancestral",
+    noise_schedule: str = "karras",
+    cfg_rescale: float = 0.0,
+    seed: int = 0,
+    negative_prompt: str = _DEFAULT_NEGATIVE_PROMPT,
+    character_tags: list[str] | None = None,
+    complexity: str | None = None,
+) -> bytes:
+    """
+    panelsからコマ割りプロンプトを組み立て、1枚の漫画ページ画像(PNGバイト列)を生成する。
+
+    :param api_key: NovelAIのアクセストークン。バックグラウンドジョブから呼ぶため、
+        リクエスト終了時に閉じられるクライアントではなくキーだけを受け取る。
+    """
+
+    prompt = build_manga_page_prompt(panels, complexity)
+    return await generate_image_v5(
+        api_key,
+        prompt,
+        negative_prompt,
+        model=model,
+        width=width,
+        height=height,
+        steps=steps,
+        scale=scale,
+        sampler=sampler,
+        noise_schedule=noise_schedule,
+        cfg_rescale=cfg_rescale,
+        seed=seed,
+        character_tags=character_tags or [],
+    )
+
+
+@dataclass(frozen=True)
+class CharacterReferenceInput:
+    """キャラ参照(Character Reference)。image_b64 は reference_image_b64 で整えたもの。"""
+
+    image_b64: str
+    strength: float = 1.0
+    fidelity: float = 1.0
+
+
+# 参照画像は 1024x1536 に縦横比を保って縮め、余白を黒で埋めて渡す(SDKの crop_and_resize と同じ)
+_REFERENCE_SIZE = (1024, 1536)
+
+
+def reference_image_b64(image_bytes: bytes) -> str:
+    with Image.open(io.BytesIO(image_bytes)) as src:
+        img = src.convert("RGB")
+    target_w, target_h = _REFERENCE_SIZE
+    scale = min(target_w / img.width, target_h / img.height)
+    img = img.resize((int(img.width * scale), int(img.height * scale)))
+    canvas = Image.new("RGB", _REFERENCE_SIZE, (0, 0, 0))
+    canvas.paste(img, ((target_w - img.width) // 2, (target_h - img.height) // 2))
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _apply_character_reference(parameters: dict[str, Any], refs: list[CharacterReferenceInput]) -> None:
+    """
+    SDK(converter._convert_character_references)が送るのと同じ形で director_reference_* を足す。
+    各項目は配列なので、複数のキャラの参照画像を並べて渡せる(1枚ごとに Anlas がかかる)。
+    """
+    parameters["director_reference_images"] = [ref.image_b64 for ref in refs]
+    parameters["director_reference_descriptions"] = [
+        {"caption": {"base_caption": "character&style", "char_captions": []}, "legacy_uc": False} for _ in refs
+    ]
+    parameters["director_reference_strength_values"] = [round(ref.strength, 2) for ref in refs]
+    parameters["director_reference_secondary_strength_values"] = [round(1 - ref.fidelity, 2) for ref in refs]
+    parameters["director_reference_information_extracted"] = [1.0 for _ in refs]
+
+
+async def generate_image_v5(
+    api_key: str,
+    prompt: str,
+    negative_prompt: str,
+    *,
+    model: str = V5_MODEL,
+    width: int,
+    height: int,
+    steps: int = 27,
+    scale: float = 7.0,
+    sampler: str = "k_euler_ancestral",
+    noise_schedule: str = "karras",
+    cfg_rescale: float = 0.0,
+    seed: int = 0,
+    character_tags: list[str] | None = None,
+    character_reference: CharacterReferenceInput | list[CharacterReferenceInput] | None = None,
+    character_negatives: list[str] | None = None,
+) -> bytes:
+    """
+    組み立て済みのプロンプトで1枚生成し、PNGバイト列を返す。漫画ページ(コマ割り込み)にも、
+    漫画v2のコマ単位の画像にも使う。
+
+    character_reference は V4.5 のみ対応(V5に付けると500が返る。2026-10 実機で確認)。
+    複数のキャラの参照をまとめて渡すときはリストにする。character_negatives はキャラごとの
+    ネガティブ(character_tags と同じ並び)。
+    """
+    body = _build_v5_body(
+        prompt,
+        negative_prompt,
+        model=model,
+        width=width,
+        height=height,
+        steps=steps,
+        scale=scale,
+        sampler=sampler,
+        noise_schedule=noise_schedule,
+        cfg_rescale=cfg_rescale,
+        seed=seed,
+        character_tags=character_tags or [],
+        character_negatives=character_negatives,
+    )
+    refs = character_reference if isinstance(character_reference, list) else [character_reference]
+    refs = [ref for ref in refs if ref is not None]
+    if refs:
+        _apply_character_reference(body["parameters"], refs)
+
+    keys = api_keys_with_fallback(api_key)
+    content = b""
+    async with httpx.AsyncClient(timeout=180) as http_client:
+        for index, key in enumerate(keys):
+            response = await http_client.post(
+                f"{_IMAGE_API_ADDRESS}/ai/generate-image", json=body, headers={"Authorization": f"Bearer {key}"}
+            )
+            # 画面のログインのトークンが期限切れなどで 401 なら、.env の永続トークンで1回だけ呼び直す
+            if response.status_code == 401 and index + 1 < len(keys):
+                logger.warning("NovelAI image API が 401 を返したので、.env の永続 API トークンで呼び直します")
+                continue
+            if response.status_code != 200:
+                raise RuntimeError(f"NovelAI V5 image API error {response.status_code}: {response.text}")
+            content = response.content
+            break
+
+    zf = zipfile.ZipFile(io.BytesIO(content))
+    names = zf.namelist()
+    if not names:
+        raise RuntimeError("NovelAI V5 image API returned an empty archive")
+    return zf.read(names[0])

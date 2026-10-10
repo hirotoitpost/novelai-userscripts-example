@@ -58,6 +58,9 @@ async def extract_image_metadata_endpoint(
         img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         np_img: Any = np.asarray(img, dtype=np.uint8)
         metadata = extract_image_metadata(np_img)
+        # get_fec を渡していないので dict が返る。タプルは FEC も要求したときの形。
+        if not isinstance(metadata, dict):
+            metadata = metadata[0]
         return MetadataExtractResponse(metadata=metadata)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))

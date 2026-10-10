@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Header, HTTPException
 
-_NOVELAI_API = "https://api.novelai.net"
+_NOVELAI_API = "https://image.novelai.net"
 
 # Cloudflare が素のスクリプトをブロックするため、ブラウザライクなヘッダーが必要
 _BROWSER_HEADERS = {
