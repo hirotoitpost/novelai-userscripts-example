@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from .client import close_client, init_client
@@ -76,6 +76,22 @@ app.include_router(works_router)
 app.include_router(story_router)
 app.include_router(user_router)
 app.include_router(writer_router)
+
+# LAN 用の認証局の証明書(scripts/make_lan_cert.py)。スマホにインストールすると、この PC のサーバーを
+# https で警告なしに開け、ホーム画面へのインストール(PWA)や通知が使える。秘密鍵(ca.key)は出さない
+_LAN_CA = Path(__file__).resolve().parent.parent.parent / "data" / "certs" / "ca.crt"
+
+
+@app.get("/api/lan-ca.crt", include_in_schema=False)
+async def lan_ca() -> Response:
+    if not _LAN_CA.is_file():
+        raise HTTPException(status_code=404, detail="LAN 用の証明書がまだありません(scripts/make_lan_cert.py)。")
+    # Android は application/x-x509-ca-cert なら CA 証明書としてインストールに進む
+    return Response(
+        _LAN_CA.read_bytes(),
+        media_type="application/x-x509-ca-cert",
+        headers={"Content-Disposition": 'attachment; filename="novelai-lan-ca.crt"'},
+    )
 
 
 if __name__ == "__main__":

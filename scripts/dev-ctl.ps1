@@ -37,6 +37,14 @@ $WorkspaceRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { 
 $RunDir = Join-Path $WorkspaceRoot 'data\run'
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 
+# LAN 用の証明書(scripts/make_lan_cert.py)があれば、バックエンドもフロントも https で開く
+$CertFile = Join-Path $WorkspaceRoot 'data\certs\server.crt'
+$KeyFile = Join-Path $WorkspaceRoot 'data\certs\server.key'
+$UseHttps = (Test-Path $CertFile) -and (Test-Path $KeyFile)
+$Scheme = if ($UseHttps) { 'https' } else { 'http' }
+$BackendArgs = @('-m', 'uvicorn', 'python.server:app', '--app-dir', 'src', '--host', '0.0.0.0', '--port', '8000')
+if ($UseHttps) { $BackendArgs += @('--ssl-certfile', $CertFile, '--ssl-keyfile', $KeyFile) }
+
 $Services = @{
     backend  = @{
         PidFile          = Join-Path $RunDir 'backend.pid'
@@ -44,9 +52,9 @@ $Services = @{
         ErrFile          = Join-Path $RunDir 'backend.err.log'
         FilePath         = Join-Path $WorkspaceRoot '.venv\Scripts\python.exe'
         # 0.0.0.0 で待ち受け、同じLAN上の端末(スマホ等)からもアクセスできるようにする。
-        ArgumentList     = @('-m', 'uvicorn', 'python.server:app', '--app-dir', 'src', '--host', '0.0.0.0', '--port', '8000')
+        ArgumentList     = $BackendArgs
         WorkingDirectory = $WorkspaceRoot
-        DisplayUrl       = 'http://0.0.0.0:8000 (LAN reachable)'
+        DisplayUrl       = "${Scheme}://0.0.0.0:8000 (LAN reachable)"
     }
     frontend = @{
         PidFile          = Join-Path $RunDir 'frontend.pid'
@@ -55,7 +63,7 @@ $Services = @{
         FilePath         = (Get-Command node).Source
         ArgumentList     = @('node_modules\vite\bin\vite.js')
         WorkingDirectory = $WorkspaceRoot
-        DisplayUrl       = 'http://localhost:5173'
+        DisplayUrl       = "${Scheme}://localhost:5173 / ${Scheme}://novelai.lan:5173"
     }
 }
 

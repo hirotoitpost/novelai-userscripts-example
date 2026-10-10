@@ -83,7 +83,37 @@ docker compose up -d
 
 On Windows, `scripts/dev-ctl.ps1` starts both services without the `uv run`/`--reload` indirection that has been observed to leave a stuck listening socket behind on this platform — see the script's header comment for details.
 
-Open **http://localhost:5173** in your browser.
+Open **http://localhost:5173** in your browser (**https://** once you have made the LAN certificate below).
+
+### Install on a phone (PWA, HTTPS on the LAN)
+
+Browsers only install a web app (and only run its service worker, which the completion notifications need) over HTTPS.
+The app can serve HTTPS on the LAN with a certificate from a local certificate authority, the same idea as mkcert:
+
+1. On the PC, make the certificates (once; the server certificate is valid for 800 days):
+
+   ```bash
+   uv run python scripts/make_lan_cert.py
+   ```
+
+   This writes `data/certs/` (not committed): `ca.crt`/`ca.key` (the local CA) and `server.crt`/`server.key` for
+   `novelai.lan`, `localhost` and the PC's LAN IPv4 addresses. Keep `ca.key` on the PC — anyone with it can issue
+   certificates your devices would trust.
+2. Restart with `scripts/dev-ctl.ps1 restart` (or start Vite and uvicorn yourself). When `data/certs/server.*`
+   exist, both the frontend (5173) and the backend (8000, with `--ssl-certfile/--ssl-keyfile`) serve HTTPS.
+3. On the PC, trust the CA so the PC's browser (and the userscripts calling `https://127.0.0.1:8000`) accept it:
+
+   ```powershell
+   certutil -user -addstore Root data\certs\ca.crt
+   ```
+
+4. On the Android phone (same Wi-Fi), open `https://<PC's IP>:5173/api/lan-ca.crt` (accept the one-time warning),
+   then **Settings → Security → Encryption & credentials → Install a certificate → CA certificate** and pick the
+   downloaded `novelai-lan-ca.crt`.
+5. Open `https://novelai.lan:5173` (when a LAN DNS answers that name) or
+   `https://<PC's IP>:5173` in Chrome and choose **Install app** from the menu.
+
+If the PC's IP changes, run `make_lan_cert.py` again (the CA stays the same, so the phone needs nothing new).
 
 ### 4. Log in
 

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>つながりません | NAIツール</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0b0b14;
+      color: #e8e8ff;
+      font-family: system-ui, sans-serif;
+    }
+    main { max-width: 26rem; padding: 1.5rem; text-align: center; line-height: 1.7; }
+    h1 { font-size: 1.2rem; }
+    p { color: #9a9ac0; font-size: 0.9rem; }
+    button {
+      margin-top: 1rem;
+      padding: 0.6rem 1.4rem;
+      border: 1px solid #7b5cf6;
+      border-radius: 8px;
+      background: #5b3fd6;
+      color: #fff;
+      font: inherit;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="/icons/icon-192.png" width="72" height="72" alt="" />
+    <h1>サーバーにつながりません</h1>
+    <p>このアプリは、家の PC で動いているサーバーにつないで使います。PC のサーバーが起動しているか、
+      スマホが同じ Wi-Fi につながっているか確かめてください。</p>
+    <button type="button" onclick="location.reload()">もう一度読み込む</button>
+  </main>
+</body>
+</html>
