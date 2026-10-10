@@ -10,6 +10,33 @@
   font-size: 0.8rem;
 }
 
+.chards-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.chards-candidate {
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.chards-candidate:hover:not(:disabled),
+.chards-candidate:focus-visible {
+  border-color: currentColor;
+}
+
+.chards-candidate img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 832 / 1216;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
 .chards-ref {
   width: 72px;
   height: 108px;

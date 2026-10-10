@@ -848,10 +848,28 @@ class MangaV2PanelsRequest(BaseModel):
 
 
 class MangaV2CharacterReferenceRequest(BaseModel):
-    """キャラ参照の画像。アップロード画像(base64/data URL)か、生成済みのコマ(scene_id)のどちらか。"""
+    """
+    キャラ参照の画像。アップロード画像(base64/data URL)、生成済みのコマ(scene_id)、
+    参照の候補(candidate_path)のどれか。seed を付けると、キャラシートの基準シードにも登録する。
+    """
 
     image: Optional[str] = None
     scene_id: Optional[int] = None
+    candidate_path: Optional[str] = None
+    seed: Optional[int] = Field(default=None, ge=0, le=4294967295)
+
+
+class MangaV2ReferenceCandidatesRequest(BaseModel):
+    """キャラシートから参照画像の候補を生成する。モデルはキャラ参照と同じ V4.5 が既定。"""
+
+    count: int = Field(default=4, ge=1, le=4)
+    color: bool = True
+    model: Optional[str] = None
+
+
+class MangaV2ReferenceCandidate(BaseModel):
+    path: str
+    seed: int
 
 
 class MangaV2SceneSfxRequest(BaseModel):

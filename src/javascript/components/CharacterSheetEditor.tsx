@@ -81,11 +81,15 @@ export default function CharacterSheetEditor({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  // キャラシートから生成した参照画像の候補(選ぶと参照画像と基準シードになる)
+  const [candidates, setCandidates] = useState<{ path: string; seed: number }[]>([])
+  const [generating, setGenerating] = useState(false)
 
   // 別のキャラに切り替えたら、書きかけの内容は捨てる
   useEffect(() => {
     setDraft({})
     setError(null)
+    setCandidates([])
   }, [character.id])
 
   const value = (key: SheetField) => draft[key] ?? sheetValue(character, key)
@@ -203,13 +207,49 @@ export default function CharacterSheetEditor({
     }
   }
 
+  async function generateCandidates() {
+    setError(null)
+    setGenerating(true)
+    try {
+      const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${character.id}/reference-candidates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: 4 }),
+      })
+      if (!res.ok) throw new Error(await errorDetail(res))
+      setCandidates(await res.json())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  async function chooseCandidate(candidate: { path: string; seed: number }) {
+    setError(null)
+    try {
+      const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${character.id}/reference`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidate_path: candidate.path, seed: candidate.seed }),
+      })
+      if (!res.ok) throw new Error(await errorDetail(res))
+      setCandidates([])
+      // 基準シードも変わるので、書きかけのシードは捨てる
+      setDraft(({ seed: _seed, ...rest }) => rest)
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   async function removeReference() {
     if (!window.confirm(`${character.name}の参照画像を外しますか？(画像ファイルは残ります)`)) return
     await fetch(`${apiOrigin}/api/manga-v2/characters/${character.id}/reference`, { method: 'DELETE' }).catch(() => {})
     onSaved()
   }
 
-  const busy = disabled || saving
+  const busy = disabled || saving || generating
 
   return (
     <>
@@ -260,12 +300,36 @@ export default function CharacterSheetEditor({
             <button type="button" className={classes.button} onClick={() => fileRef.current?.click()} disabled={busy}>
               {character.reference_image_path ? '参照画像を差し替え' : '参照画像を登録'}
             </button>
+            <button type="button" className={classes.button} onClick={() => void generateCandidates()} disabled={busy}>
+              {generating ? '候補を生成中…(1分ほど)' : 'キャラシートから候補を生成'}
+            </button>
             {character.reference_image_path && (
               <button type="button" className={classes.button} onClick={() => void removeReference()} disabled={busy}>
                 外す
               </button>
             )}
           </div>
+          {candidates.length > 0 && fileUrl && (
+            <>
+              <span className={classes.label}>
+                気に入った1枚を選ぶと、参照画像と基準シードに登録します(コマの見た目がその絵に寄ります)
+              </span>
+              <div className="chards-candidates">
+                {candidates.map(candidate => (
+                  <button
+                    key={candidate.path}
+                    type="button"
+                    className="chards-candidate"
+                    onClick={() => void chooseCandidate(candidate)}
+                    disabled={busy}
+                    title={`シード ${candidate.seed}`}
+                  >
+                    <img src={fileUrl(candidate.path)} alt={`候補(シード ${candidate.seed})`} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 

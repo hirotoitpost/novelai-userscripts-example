@@ -13,6 +13,7 @@ import base64
 import hashlib
 import io
 import json
+import random
 import re
 import unicodedata
 import zipfile
@@ -31,6 +32,7 @@ from novelai import AsyncNovelAI
 from ..client import get_client
 from ..db import (
     characters_by_scene,
+    get_character,
     get_connection,
     get_manga_v2_compose_settings,
     get_manga_import,
@@ -56,6 +58,7 @@ from ..db import (
     set_manga_v2_sfx_fonts,
     set_manga_v2_sfx_stamps,
     update_character_reference,
+    update_character_sheet,
     update_scene_narration,
     update_scene_sfx,
     update_story_final_image,
@@ -105,6 +108,8 @@ from ..models import (
     MangaV2StampUploadRequest,
     MangaV2StampZipRequest,
     MangaV2CharacterReferenceRequest,
+    MangaV2ReferenceCandidate,
+    MangaV2ReferenceCandidatesRequest,
     MangaV2ComposeRequest,
     MangaV2MakeRequest,
     MangaV2PageLayoutsRequest,
@@ -132,6 +137,10 @@ router = APIRouter(prefix="/api/manga-v2", tags=["manga-v2"])
 
 _PANEL_DIR = _MANGA_DIR / "panels"
 _REFERENCE_DIR = _MANGA_DIR / "refs"
+# 参照画像の候補(選ばれなかったものも残る。選んだものは refs へ写す)
+_CANDIDATE_DIR = _REFERENCE_DIR / "candidates"
+# 候補の構図。顔と服装が分かり、背景が絵柄を引っ張らないもの
+_CANDIDATE_TAGS = "solo, cowboy shot, standing, looking at viewer, smile, simple background, white background"
 # キャラ参照を使うコマの生成モデル。V5はキャラ参照に未対応(500が返る)。
 _REFERENCE_MODEL = "nai-diffusion-4-5-full"
 _PAGE_DIR = _MANGA_DIR / "v2"
@@ -491,10 +500,59 @@ async def get_templates() -> list[dict[str, Any]]:
     return [{"id": t.id, "label": t.label, "panels": len(t.panels)} for t in TEMPLATES.values()]
 
 
+@router.post("/characters/{character_id}/reference-candidates", response_model=list[MangaV2ReferenceCandidate])
+async def generate_reference_candidates(
+    character_id: int, req: MangaV2ReferenceCandidatesRequest, client: ClientDep
+) -> list[dict[str, Any]]:
+    """
+    キャラシート(容姿・服装)だけで、参照画像の候補をシードを変えて数枚生成する。気に入った1枚を
+    PUT .../reference の candidate_path と seed で登録すると、以後のコマはその見た目とシードに寄る。
+    """
+    conn = get_connection()
+    try:
+        character = get_character(conn, character_id)
+    finally:
+        conn.close()
+    if character is None:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    tags = character_prompt_tags(character)
+    if not tags:
+        raise HTTPException(status_code=400, detail="キャラシートに容姿のタグがありません。")
+
+    _CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
+    candidates: list[dict[str, Any]] = []
+    for _ in range(req.count):
+        seed = random.randrange(4294967296)
+        image = await generate_image_v5(
+            client.api_key,
+            build_panel_prompt(_CANDIDATE_TAGS, color=req.color, complexity=None),
+            join_tags(build_panel_negative(None, color=req.color), character.get("negative_tags")),
+            model=req.model or _REFERENCE_MODEL,
+            width=832,
+            height=1216,
+            seed=seed,
+            character_tags=[tags],
+        )
+        filename = f"char{character_id}_{seed}_{uuid4().hex[:6]}.png"
+        (_CANDIDATE_DIR / filename).write_bytes(image)
+        candidates.append({"path": f"outputs/manga/refs/candidates/{filename}", "seed": seed})
+    return candidates
+
+
+def _candidate_bytes(path: str) -> bytes:
+    """候補の画像を読む。候補の置き場所の外は読まない。"""
+    file = (_PROJECT_ROOT / path).resolve()
+    if not file.is_relative_to(_CANDIDATE_DIR.resolve()) or not file.is_file():
+        raise HTTPException(status_code=404, detail="その候補の画像が見つかりません。")
+    return file.read_bytes()
+
+
 @router.put("/characters/{character_id}/reference", status_code=204)
 async def put_character_reference(character_id: int, req: MangaV2CharacterReferenceRequest) -> None:
-    """キャラ参照の画像を登録する。アップロード画像か、生成済みのコマの絵を使う。"""
-    if req.image:
+    """キャラ参照の画像を登録する。アップロード画像・生成済みのコマの絵・参照の候補のどれかを使う。"""
+    if req.candidate_path:
+        image_bytes = _candidate_bytes(req.candidate_path)
+    elif req.image:
         data = req.image.split(",", 1)[1] if req.image.startswith("data:") else req.image
         try:
             image_bytes = base64.b64decode(data)
@@ -510,7 +568,7 @@ async def put_character_reference(character_id: int, req: MangaV2CharacterRefere
             raise HTTPException(status_code=404, detail="そのシーンにはまだコマの絵がありません。")
         image_bytes = (_PROJECT_ROOT / row["image_path"]).read_bytes()
     else:
-        raise HTTPException(status_code=400, detail="image か scene_id を指定してください。")
+        raise HTTPException(status_code=400, detail="image・scene_id・candidate_path のどれかを指定してください。")
 
     _REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"char{character_id}_{uuid4().hex[:8]}.png"
@@ -518,6 +576,8 @@ async def put_character_reference(character_id: int, req: MangaV2CharacterRefere
     conn = get_connection()
     try:
         update_character_reference(conn, character_id, f"outputs/manga/refs/{filename}")
+        if req.seed is not None:
+            update_character_sheet(conn, character_id, {"seed": req.seed})
     finally:
         conn.close()
 
