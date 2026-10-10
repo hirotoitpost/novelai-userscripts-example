@@ -609,3 +609,9 @@ def _as_dict(value: Any) -> dict[str, Any]:
                 return {}
     return {}
 
+
+
+def vocabulary() -> set[str]:
+    """判定モデルが知っているタグ(danbooru の語彙、_ は空白にしたもの)。"""
+    _, tags = _get_session()
+    return {name.replace("_", " ") for name, _ in tags}

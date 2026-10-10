@@ -417,6 +417,23 @@ class MangaImportFile(BaseModel):
     data: str = Field(min_length=1, description="base64 または data URL(PDF・PNG・JPEG・zip など)")
 
 
+class MangaImportAutoRequest(BaseModel):
+    """
+    取り込んだ漫画に似た漫画を続けて作る: 取り込んだページの絵から舞台と人物の見た目を読み取り、新しい話を
+    作って、取り込んだ作品のコマ割りで漫画にする(1ページ=1話)。
+    """
+
+    # 使う登録済みのキャラ。空なら、取り込んだページの人物の見た目から新しいキャラを作る(最大2人)
+    character_ids: list[int] = Field(default_factory=list, max_length=4)
+    genre: str = Field("日常コメディ", max_length=100)
+    # 冒頭のこのページ数だけ漫画にする(生成の数を抑えるため)
+    max_pages: int = Field(4, ge=1, le=10)
+    # None なら取り込んだ作品に合わせる(白黒なら白黒)
+    color: Optional[bool] = None
+    # 参照画像の無いキャラに、キャラシートから自動で参照画像を作る
+    references: bool = True
+
+
 class MangaImportRequest(BaseModel):
     """漫画の取り込み(構成の参考)。files は渡した順にページになる(PDF は全ページ、zip は中の画像と PDF)。"""
 
@@ -424,6 +441,8 @@ class MangaImportRequest(BaseModel):
     files: list[MangaImportFile] = Field(min_length=1, max_length=100)
     # コマの役割・感情をローカルの画像モデルで読む(1コマ十数秒)。False なら人数・構図・セリフ量だけ
     use_vision: bool = True
+    # 読み取りが終わったら、続けて似た漫画を作る
+    auto_manga: Optional[MangaImportAutoRequest] = None
 
 
 class MangaDraftOutline(BaseModel):
@@ -574,7 +593,9 @@ class StoryJobResponse(BaseModel):
     """分割/挿絵生成のバックグラウンドジョブの進捗。"""
 
     story_id: int
-    kind: Literal["split", "illustrate", "characters", "panels", "sfx", "narration", "sfx_fonts", "manga"]
+    kind: Literal[
+        "split", "illustrate", "characters", "cast", "panels", "sfx", "narration", "sfx_fonts", "manga", "auto_manga"
+    ]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
     progress: int = 0
@@ -931,6 +952,18 @@ class MangaV2MakeRequest(BaseModel):
 
     panels: MangaV2PanelsRequest = MangaV2PanelsRequest()
     compose: MangaV2ComposeRequest = MangaV2ComposeRequest()
+
+
+class StoryAutoMangaRequest(BaseModel):
+    """
+    取り込んだ物語を続けて漫画にする(シーン分割 → 登場人物をそろえる・参照画像 → コマの生成と合成)。
+    長い物語でも生成が増えすぎないよう、既定では冒頭の 12 シーンだけを漫画にする。
+    """
+
+    split: StorySplitRequest = Field(default_factory=lambda: StorySplitRequest(max_scenes=12, volume_max_scenes=0))
+    make: MangaV2MakeRequest = MangaV2MakeRequest()
+    # 参照画像の無いキャラに、キャラシートから自動で参照画像を作る
+    references: bool = True
 
 
 class MangaV2DownloadRequest(MangaV2ComposeRequest):

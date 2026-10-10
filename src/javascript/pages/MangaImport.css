@@ -227,3 +227,51 @@
     transform: rotate(360deg);
   }
 }
+
+/* 似た漫画を作る */
+.mi-similar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px dashed #2a2a50;
+  border-radius: 8px;
+}
+
+.mi-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mi-field--inline input { width: 4rem; }
+
+.mi-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mi-chip {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid #2a2a50;
+  border-radius: 999px;
+  background: transparent;
+  color: #c8c8ec;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.mi-chip--on {
+  background: #3b2a7a;
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.mi-made {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}

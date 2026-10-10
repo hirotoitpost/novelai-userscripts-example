@@ -248,6 +248,10 @@ export default function Story() {
   const [overwriteAppearance, setOverwriteAppearance] = useLocalStorage('nai_story_overwrite_appearance', false)
   // 成人向け: タグ付けを NovelAI の文章モデルで行い、露骨なタグ(nsfw 付き)にする
   const [adultTags, setAdultTags] = useLocalStorage('nai_story_adult_tags', false)
+  // 取り込んだら続けて漫画にする(シーン分割 → 登場人物・参照画像 → コマ生成・合成を1つのジョブで)
+  const [autoManga, setAutoManga] = useLocalStorage('nai_story_auto_manga', false)
+  const [autoMangaScenes, setAutoMangaScenes] = useLocalStorage('nai_story_auto_manga_scenes', 12)
+  const [autoMangaColor, setAutoMangaColor] = useLocalStorage('nai_story_auto_manga_color', false)
   const [mangaMode, setMangaMode] = useLocalStorage<'v1' | 'v2'>('nai_story_manga_mode', 'v2')
 
   const [error, setError] = useState<string | null>(null)
@@ -426,7 +430,34 @@ export default function Story() {
       setMangaPages([])
       setImportText('')
       loadHistory()
-      return `${text.length.toLocaleString()}文字の本文を取り込みました`
+      if (!autoManga) return `${text.length.toLocaleString()}文字の本文を取り込みました`
+
+      // 続けて漫画にする(サーバーの1つのジョブ。画面を閉じても進む)
+      task.update('取り込んだ物語を漫画にしています')
+      const started = await fetch(`${API_ORIGIN}/api/story/${data.id}/auto-manga`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          split: {
+            max_paragraphs: maxParagraphs,
+            max_chars: maxChars,
+            max_scenes: autoMangaScenes,
+            volume_max_scenes: 0,
+            adult: adultTags,
+          },
+          make: {
+            panels: { template: 'grid4', color: autoMangaColor, vary_seed: true },
+            compose: { template: 'grid4' },
+          },
+          references: true,
+        }),
+        signal,
+      })
+      if (!started.ok) throw new Error(await readErrorDetail(started))
+      await pollJob(data.id, signal)
+      await loadStory(data.id)
+      loadHistory()
+      return '取り込んだ物語を漫画にしました(下の漫画v2で確認・手直しできます)'
     })
   }
 
@@ -597,6 +628,21 @@ export default function Story() {
     return runTask('登場人物の抽出', async signal => {
       const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/extract-characters?overwrite_appearance=${overwriteAppearance}`, {
         method: 'POST',
+        signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      await pollJob(story.id, signal)
+      await loadStory(story.id)
+    })
+  }
+
+  /** 登場人物をそろえる: 抽出して登録済みのキャラに対応させ、参照画像の無いキャラには自動で作る */
+  function runCast() {
+    if (!story) return
+    return runTask('登場人物をそろえる(参照画像も)', async signal => {
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/cast`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal,
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
@@ -891,9 +937,40 @@ export default function Story() {
                   />
                 </label>
               </div>
+              <div className="story-auto-manga">
+                <label className="story-check">
+                  <input type="checkbox" checked={autoManga} disabled={busy} onChange={e => setAutoManga(e.target.checked)} />
+                  取り込んだら続けて漫画にする
+                </label>
+                {autoManga && (
+                  <>
+                    <label>
+                      冒頭
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={autoMangaScenes}
+                        disabled={busy}
+                        onChange={e => setAutoMangaScenes(Math.min(60, Math.max(1, Number(e.target.value) || 1)))}
+                      />
+                      シーンまで
+                    </label>
+                    <label className="story-check">
+                      <input type="checkbox" checked={autoMangaColor} disabled={busy}
+                        onChange={e => setAutoMangaColor(e.target.checked)} />
+                      カラー
+                    </label>
+                    <p className="story-muted">
+                      シーン分割 → 登場人物をそろえる(参照画像の無いキャラは自動で作る) → コマの生成 → 合成まで続けて進めます。
+                      NovelAI の画像生成を使います(1シーン1コマ、参照画像は1人4枚)。
+                    </p>
+                  </>
+                )}
+              </div>
               <div className="story-actions">
                 <button type="button" onClick={() => importStory()} disabled={!importText.trim() || busy}>
-                  インポート
+                  {autoManga ? 'インポートして漫画にする' : 'インポート'}
                 </button>
                 {busy && (
                   <button type="button" className="story-cancel" onClick={cancel}>
@@ -1189,6 +1266,16 @@ export default function Story() {
               {isWritten && (
                 <button type="button" onClick={runExtractCharacters} disabled={busy}>
                   登場人物を抽出
+                </button>
+              )}
+              {isWritten && (
+                <button
+                  type="button"
+                  onClick={runCast}
+                  disabled={busy}
+                  title="本文から人物を洗い出して登録済みのキャラに対応させ(名前の一部でも)、参照画像の無いキャラには候補を4枚生成して一番近い1枚を自動で選びます(NovelAI の生成を使います)"
+                >
+                  登場人物をそろえる(参照画像も)
                 </button>
               )}
               {isWritten && mangaMode === 'v1' && (

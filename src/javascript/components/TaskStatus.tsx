@@ -37,6 +37,8 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   split: 'シーン分割・タグ付け',
   illustrate: '挿絵の生成',
   characters: '登場人物の抽出',
+  cast: '登場人物をそろえる(参照画像も)',
+  auto_manga: '取り込んだ物語を漫画にする',
   sfx: '効果音の提案',
   narration: 'ナレーションの作成',
   panels: 'コマの絵の生成',

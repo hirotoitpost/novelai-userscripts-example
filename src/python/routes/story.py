@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from novelai import AsyncNovelAI
 
+from ..cast import auto_reference, match_existing
 from ..client import get_client
 from ..db import (
     add_story_scenes,
@@ -42,6 +43,7 @@ from ..db import (
     list_manga_pages,
     list_stories,
     list_characters,
+    list_manga_panels,
     list_story_scenes,
     save_character,
     set_scene_characters,
@@ -88,6 +90,7 @@ from ..models import (
     StoryLayoutRequest,
     StoryPageStats,
     StoryResponse,
+    StoryAutoMangaRequest,
     StorySplitRequest,
     StorySummary,
     SetSceneCharactersRequest,
@@ -1582,6 +1585,75 @@ async def _confirm_people(candidates: list[str]) -> list[str]:
     return [name for name in candidates if _HONORIFIC_RE.fullmatch(name)]
 
 
+# 本文から名前を集められなかったときに、LLM に読ませる本文の長さ
+_NAME_LLM_TEXT_LIMIT = 6000
+
+
+async def _ask_people_names(text: str) -> list[dict[str, Any]]:
+    """
+    本文を LLM に読ませて登場人物の名前を挙げさせる。敬称もカタカナも無い名前(「陽介が」「はるかは」)は
+    _collect_name_candidates では拾えず、短い物語(取り込んだチャットなど)では一人も見つからないことがある。
+    本文にそのまま出てくる名前だけを採り、フルネームとその一部(「高橋はるか」と「はるか」)は1人にまとめる。
+    """
+    system = (
+        "あなたは小説の登場人物を挙げるAIです。\n"
+        "本文に名前が出てくる人物を、本文の表記のまま people 配列に入れてJSONで返してください。\n\n"
+        "- フルネームと下の名前の両方が出てくるなら両方入れる\n"
+        "- 名前の無い人物(「店員」など)や、物・場所の名前は入れない"
+    )
+    sample = text[:_NAME_LLM_TEXT_LIMIT]
+    for _ in range(_DRAFT_MAX_ATTEMPTS):
+        parts: list[str] = []
+        async for delta in stream_llm_text(
+            [{"role": "system", "content": system}, {"role": "user", "content": sample}],
+            max_tokens=_TAG_MAX_TOKENS,
+            json_schema=_people_json_schema(),
+        ):
+            parts.append(delta)
+        try:
+            data = json.loads(strip_think_tags("".join(parts)))
+        except json.JSONDecodeError:
+            continue
+        names = [str(p).strip() for p in data.get("people") or [] if str(p).strip()]
+        # 作られた名前を除く(本文にそのまま出てくるものだけ)
+        names = [n for n in dict.fromkeys(names) if len(n) >= 2 and n in text]
+        if names:
+            return [_add_name_parts(group, text) for group in _group_names(names)]
+    return []
+
+
+def _add_name_parts(group: dict[str, Any], text: str) -> dict[str, Any]:
+    """
+    フルネームの頭(姓)や後ろ(名)が、フルネームの外でも単独で使われていれば呼び名に足す
+    (「高橋はるか」に対する「はるか」)。シーンへの割り当ては呼び名で探すので、これが無いと名前だけの
+    シーンに割り当たらない。
+    """
+    aliases = list(group["aliases"])
+    full = group["name"]
+    # 頭と後ろから、それぞれ一番長いものだけ(「はるか」を足したら、その一部の「るか」は足さない)
+    for side in ("head", "tail"):
+        for size in range(len(full) - 1, 1, -1):
+            part = full[:size] if side == "head" else full[-size:]
+            if text.count(part) > text.count(full):
+                if part not in aliases:
+                    aliases.append(part)
+                break
+    return {"name": full, "aliases": sorted(aliases, key=len, reverse=True)}
+
+
+def _group_names(names: list[str]) -> list[dict[str, Any]]:
+    """フルネームとその一部を1人にまとめる(長い表記を代表にする)。"""
+    groups: list[list[str]] = []
+    for name in sorted(names, key=len, reverse=True):
+        for group in groups:
+            if group[0].endswith(name) or group[0].startswith(name):
+                group.append(name)
+                break
+        else:
+            groups.append([name])
+    return [{"name": group[0], "aliases": group} for group in groups]
+
+
 def _appearance_passages(text: str, aliases: list[str]) -> list[str]:
     """名前と容姿の語が同じ文に出てくる箇所を集める。無ければ空(推測はしない)。"""
     passages: list[str] = []
@@ -1694,6 +1766,11 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
     job.total = 3
     job.message = "本文から名前の候補を集めています"
     candidates = _merge_candidates(defined, _collect_name_candidates(source_text))
+    llm_named = False
+    if not candidates:
+        job.message = "名前の候補が見つからないので、本文を読ませて登場人物を挙げています"
+        candidates = await _ask_people_names(source_text)
+        llm_named = True
     if not candidates:
         job.message = (
             "名前の候補が見つかりませんでした"
@@ -1704,7 +1781,12 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
 
     job.message = f"{len(candidates)}件の候補から人物を判定しています"
     # メモリで人物として定義した名前はLLMの判定にかけない(判定は本文から拾った候補だけ)
-    confirmed = await _confirm_people([c["name"] for c in candidates if c["name"] not in defined])
+    # LLM が本文から挙げた名前は人物なので、判定にはかけない
+    confirmed = (
+        [c["name"] for c in candidates]
+        if llm_named
+        else await _confirm_people([c["name"] for c in candidates if c["name"] not in defined])
+    )
     people = [c for c in candidates if c["name"] in confirmed or c["name"] in defined]
     if not people:
         job.message = "候補から人物を判定できませんでした"
@@ -1713,11 +1795,14 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
 
     conn = get_connection()
     try:
-        existing = {c["name"]: c for c in list_characters(conn)}
+        library = list_characters(conn)
         described = 0
         kept = 0
         for index, person in enumerate(people, start=1):
-            current = existing.get(person["name"])
+            # 同じ名前か、名前の一部(「栄子」→「矢野栄子」)で一人に絞れる登録済みのキャラを使う
+            current = match_existing(person["name"], person["aliases"], library)
+            if current is not None:
+                person["matched"] = current["name"]
             if not overwrite_appearance and current and current["appearance_tags"].strip():
                 # 容姿は登録済みのものを使う(LLMにも問い合わせない)
                 person["id"] = current["id"]
@@ -1730,6 +1815,12 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
             tags = await _describe_appearance(person["name"], passages) if passages else ""
             if tags:
                 described += 1
+            if current is not None:
+                # 名前の一部で対応した登録済みのキャラは、そのキャラの容姿を埋める(同名の別キャラを作らない)
+                person["id"] = current["id"]
+                if tags:
+                    update_character_sheet(conn, current["id"], {"appearance_tags": tags})
+                continue
             person["id"] = save_character(conn, person["name"], tags)["id"]
 
         # 名前が本文に出るシーンへ割り当てる。既知の表記を探すだけなのでLLMは不要。
@@ -1753,6 +1844,126 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
         + (f"、登録済みの容姿をそのまま使ったのは{kept}人" if kept else "")
         + f")、{assigned}/{len(scenes)}シーンに割り当てました"
     )
+
+@router.post("/{story_id}/cast", response_model=StoryJobResponse)
+async def cast_story(story_id: int, client: ClientDep, references: bool = True) -> dict[str, Any]:
+    """
+    物語の登場人物をそろえる: 本文から人物を洗い出して登録済みのキャラに対応させ(無ければ作り)、
+    シーンへ割り当てる。references なら、参照画像の無いキャラにキャラシートから候補を4枚生成し、
+    一番キャラシートに近い1枚を自動で参照画像にする(NovelAI の生成を使う)。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    if story is None or not story["scenes"]:
+        raise HTTPException(status_code=404, detail="先にシーン分割を実行してください。")
+    # get_client はリクエスト終了時にクライアントを閉じるので、トークンだけ持ち出す
+    api_key = client.api_key
+
+    async def runner(job: _Job) -> None:
+        await _run_cast(job, story, api_key, references)
+
+    return _job_response(_start_job(story_id, "cast", runner))
+
+
+async def _run_cast(job: _Job, story: dict[str, Any], api_key: str, references: bool) -> None:
+    await _run_extract_characters(job, story)
+    summary = job.message
+    if not references:
+        return
+    conn = get_connection()
+    try:
+        used = [get_character(conn, c["id"]) for c in story_characters(conn, story["id"])]
+    finally:
+        conn.close()
+    missing = [c for c in used if c and not c.get("reference_image_path") and c.get("appearance_tags", "").strip()]
+    if not missing:
+        job.message = f"{summary}。参照画像は全員そろっています"
+        return
+    job.total = len(missing)
+    made = []
+    for index, character in enumerate(missing):
+        job.progress = index
+        job.message = f"参照画像を作っています {index + 1}/{len(missing)}: {character['name']}(候補4枚から選びます)"
+        result = await auto_reference(api_key, character)
+        made.append(f"{character['name']}(近さ {result['score']:.2f})")
+    job.progress = len(missing)
+    job.message = f"{summary}。参照画像を作りました: {'、'.join(made)}"
+
+
+@router.post("/{story_id}/auto-manga", response_model=StoryJobResponse)
+async def auto_manga(story_id: int, req: StoryAutoMangaRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    取り込んだ物語を、続けて漫画にする(1つのジョブ): まだならシーン分割 → 登場人物をそろえる(参照画像の
+    無いキャラには自動で作る) → コマの生成(参照画像があればキャラ参照を使う) → ページの合成。
+    画面を閉じてもサーバーで最後まで進む。進捗は GET /{story_id}/job。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    if story is None:
+        raise HTTPException(status_code=404, detail="story not found")
+    if not story["scenes"] and not story.get("raw_text"):
+        raise HTTPException(status_code=400, detail="本文がありません。")
+    api_key = client.api_key
+    options = TagOptions(adult=req.split.adult, api_key=api_key if req.split.adult else None)
+
+    async def runner(job: _Job) -> None:
+        await _run_auto_manga(job, story_id, req, api_key, options)
+
+    return _job_response(_start_job(story_id, "auto_manga", runner))
+
+
+async def _run_auto_manga(
+    job: _Job, story_id: int, req: StoryAutoMangaRequest, api_key: str, options: TagOptions
+) -> None:
+    # コマの生成・合成は漫画v2のもの(漫画v2は story を読み込むので、ここでは使うときに読む)
+    from .manga_v2 import _run_panels, compose
+
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    assert story is not None
+    if not story["scenes"]:
+        job.message = "シーンに分けています"
+        await _run_split(job, story_id, req.split, options)
+        conn = get_connection()
+        try:
+            story = get_story(conn, story_id)
+        finally:
+            conn.close()
+        assert story is not None
+        if not story["scenes"]:
+            raise RuntimeError("シーンに分けられませんでした")
+
+    job.progress = job.total = 0
+    await _run_cast(job, story, api_key, req.references)
+
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+        used = [get_character(conn, c["id"]) for c in story_characters(conn, story_id)]
+        existing = {p["scene_id"] for p in list_manga_panels(conn, story_id)}
+    finally:
+        conn.close()
+    targets = [s for s in scenes if s["id"] not in existing]
+    # 参照画像がそろったキャラがいれば、キャラ参照で見た目をそろえる
+    panels = req.make.panels.model_copy(
+        update={"use_character_reference": any(c and c.get("reference_image_path") for c in used)}
+    )
+    if targets:
+        job.progress = 0
+        await _run_panels(job, story_id, panels, api_key, targets)
+    job.message = "ページに合成しています"
+    result = await asyncio.to_thread(compose, story_id, req.make.compose)
+    job.message = f"漫画ができました({len(result['pages'])}ページ・{len(scenes)}コマ)"
+
 
 @router.get("/characters", response_model=list[CharacterResponse])
 async def get_characters() -> list[dict[str, Any]]:
