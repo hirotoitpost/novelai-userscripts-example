@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 
 from PIL import Image
 
+from . import content_guard
+
 # 舞台として使わないタグ(絵柄・構図・人数・画面の作り)
 _NOT_SETTING = {
     "comic",
@@ -56,34 +58,6 @@ _NOT_SETTING = {
     "from below",
     "from behind",
     "profile",
-}
-# 人物の見た目として使わないタグ(体つき・露出。全年齢向けにする)
-_BODY_WORDS = {
-    "breasts",
-    "breast",
-    "nipples",
-    "cleavage",
-    "navel",
-    "thighs",
-    "thigh",
-    "ass",
-    "butt",
-    "hips",
-    "crotch",
-    "pussy",
-    "penis",
-    "nude",
-    "naked",
-    "underwear",
-    "panties",
-    "bra",
-    "lingerie",
-    "swimsuit",
-    "bikini",
-    "topless",
-    "bottomless",
-    "sweat",
-    "wet",
 }
 # 人物の見た目として使う語(髪・目・服・小物)。表情やしぐさは場面ごとに変わるので使わない
 _LOOK_WORDS = {
@@ -154,9 +128,8 @@ def _words(tag: str) -> set[str]:
 
 
 def _is_safe(tag: str) -> bool:
-    from .manga_v2.prompt import is_sexual
-
-    return not (_words(tag) & _BODY_WORDS) and not is_sexual(tag)
+    """人物の見た目・舞台に使ってよいタグか(体つき・露出の語と性的なタグは使わない。中身は content_guard)。"""
+    return not (_words(tag) & content_guard.words("similar.excluded_words")) and not content_guard.is_sexual(tag)
 
 
 @dataclass
@@ -286,9 +259,14 @@ _NAMING_SYSTEM = """あなたは漫画のキャラクター設定を作る編集
 {"characters":[{"name":"姓 名","profile":"人物像(年齢・職業や立場・性格を40文字以内)","look":"足す見た目の英語タグ"}]}
 - characters は渡された人物と同じ数・同じ順
 - 実在の人物や、既存の作品のキャラクターの名前は使わない
-- 全年齢向けの日常の話に出せる人物にする
-- look: 髪の色・髪型・目の色のタグが無い人物には、ほかの人物と見分けやすい髪の色と髪型(と目の色)を英語のdanbooruタグで
+{naming_rule}- look: 髪の色・髪型・目の色のタグが無い人物には、ほかの人物と見分けやすい髪の色と髪型(と目の色)を英語のdanbooruタグで
   足す(例: "brown hair, short hair, green eyes")。渡されたタグとかぶるもの・矛盾するものは書かない。足りていれば空文字"""
+
+
+def _naming_system() -> str:
+    """人物づくりの指示文。内容についての決まりは content_guard(DB)にある(空なら足さない)。"""
+    rule = content_guard.text("similar.naming_rule")
+    return _NAMING_SYSTEM.replace("{naming_rule}", f"- {rule}\n" if rule else "")
 
 
 async def name_people(api_key: str, people: list[Person], genre: str, setting: list[str]) -> list[dict[str, str]]:
@@ -301,7 +279,7 @@ async def name_people(api_key: str, people: list[Person], genre: str, setting: l
     lines = [f"{i + 1}. {p.gender}, {', '.join(p.tags) or '(見た目のタグなし)'}" for i, p in enumerate(people)]
     user = f"ジャンル: {genre}\n舞台のタグ: {', '.join(setting) or '(なし)'}\n人物:\n" + "\n".join(lines)
     for _ in range(3):
-        data = await _ask_json(api_key, _NAMING_SYSTEM, user, max_tokens=800, temperature=0.8)
+        data = await _ask_json(api_key, _naming_system(), user, max_tokens=800, temperature=0.8)
         items = (data or {}).get("characters") if isinstance(data, dict) else None
         if isinstance(items, list) and len(items) >= len(people):
             named = []

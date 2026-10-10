@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from python.character_sheet import (  # noqa: E402
     DEFAULT_NEGATIVE,
-    R18_NEGATIVE,
-    SAFE_NEGATIVE,
+    r18_negative,
+    safe_negative,
     build_variation_shots,
     sheet_negative,
     sheet_prompt,
@@ -50,9 +50,9 @@ def test_sheet_prompt_skips_missing_fields() -> None:
 
 def test_sheet_negative_is_the_general_dataset_negative() -> None:
     tags = split_tags(sheet_negative(YURA))
-    for part in (DEFAULT_NEGATIVE, YURA["negative_tags"], SAFE_NEGATIVE):
+    for part in (DEFAULT_NEGATIVE, YURA["negative_tags"], safe_negative()):
         assert set(split_tags(part)) <= set(tags)
-    assert not set(split_tags(R18_NEGATIVE)) & set(tags) - set(split_tags(SAFE_NEGATIVE))
+    assert not set(split_tags(r18_negative())) & set(tags) - set(split_tags(safe_negative()))
 
 
 def test_sheet_negative_adds_guard_tags_once() -> None:

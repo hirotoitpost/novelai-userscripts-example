@@ -16,8 +16,6 @@ from novelai.types import CharacterReference
 from PIL import Image, UnidentifiedImageError
 
 from ..character_sheet import (
-    CORE_BLOCKED_TAGS,
-    CORE_NEGATIVE,
     EXPRESSIONS,
     FRAMINGS,
     LOCATIONS,
@@ -27,7 +25,9 @@ from ..character_sheet import (
     build_variation_shots,
     caption_for,
     character_minor_tags,
+    core_blocked_tags,
     minor_tags,
+    safe_negative,
     sheet_negative,
     sheet_prompt,
 )
@@ -204,7 +204,7 @@ def _check_tags(character: dict, text: str, guard: dict, r18: bool) -> None:
 
 @router.get("/guards/core", response_model=GuardCoreResponse)
 async def get_core_guard() -> dict:
-    return {"blocked_tags": CORE_BLOCKED_TAGS, "negative_tags": CORE_NEGATIVE}
+    return {"blocked_tags": core_blocked_tags(), "negative_tags": safe_negative()}
 
 
 @router.get("/guards", response_model=list[GuardProfileResponse])
@@ -219,7 +219,7 @@ async def get_guard_profiles() -> list[dict]:
 @router.post("/guards", response_model=GuardProfileResponse)
 async def post_guard_profile(req: GuardProfileSaveRequest) -> dict:
     """ガードプロファイルを保存する(同名は上書き)。基本のガードと重複するタグは保存しない。"""
-    core = {t.lower() for t in CORE_BLOCKED_TAGS}
+    core = {t.lower() for t in core_blocked_tags()}
     tags: list[str] = []
     for tag in (t.strip() for t in req.blocked_tags):
         if tag and tag.lower() not in core and tag.lower() not in {t.lower() for t in tags}:

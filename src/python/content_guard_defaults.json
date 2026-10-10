@@ -1,0 +1,210 @@
+{
+  "_comment": "コンテンツガードのはじめの値。DB(content_guard_rules)に無い項目だけをここから入れる。「既定に戻す」もこの値に戻す。ふだんの編集は API(/api/content-guard)か開発管理者のページで行う。",
+  "rules": [
+    {
+      "key": "dataset.blocked_tags",
+      "group": "キャラ別データセット",
+      "label": "全年齢で止めるタグ(基本のガード)",
+      "description": "全年齢のデータセット生成・取り込みで、これに当たるタグがあると 422 で止める。ガードプロファイルはこれへの上乗せ。",
+      "kind": "patterns",
+      "match": "word",
+      "value": [
+        "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
+        "underwear", "lingerie", "panties", "bra", "brassiere", "swimsuit", "bikini",
+        "see-through", "cleavage", "pussy", "penis", "cum", "bondage"
+      ]
+    },
+    {
+      "key": "dataset.minor_tags",
+      "group": "キャラ別データセット",
+      "label": "未成年を示すタグ(未成年ガード)",
+      "description": "R18 のデータセット生成・取り込みで、これに当たるタグがあると 422 で止める。キャラシートにこれがあると成人フラグを付けられない。",
+      "kind": "patterns",
+      "match": "word",
+      "value": [
+        "jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit",
+        "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?",
+        "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage",
+        "minor", "young", "aged down", "toddler", "little girl", "little boy"
+      ]
+    },
+    {
+      "key": "general.safe_negative",
+      "group": "キャラ別データセット",
+      "label": "全年齢のネガティブ",
+      "description": "全年齢のデータセット生成、キャラシートの読み込み(画像生成ページ)、参照画像の候補で、ネガティブに必ず足す。",
+      "kind": "text",
+      "value": "nsfw, nude, underwear, swimsuit, cleavage"
+    },
+    {
+      "key": "dataset.r18_positive",
+      "group": "キャラ別データセット",
+      "label": "R18 で足すタグ",
+      "description": "R18 のデータセット生成で、容姿タグの直後に足す(成人として描かせる)。",
+      "kind": "text",
+      "value": "adult, mature female"
+    },
+    {
+      "key": "dataset.r18_negative",
+      "group": "キャラ別データセット",
+      "label": "R18 のネガティブ",
+      "description": "R18 のデータセット生成で、全年齢のネガティブの代わりに足す(幼い見た目を避ける)。",
+      "kind": "text",
+      "value": "child, loli, shota, young, teenage, school uniform, student, petite, flat chest"
+    },
+    {
+      "key": "scene.sexual_tags",
+      "group": "物語・漫画の場面",
+      "label": "性的な場面とみなすタグ",
+      "description": "場面のタグにこれがあると性的な場面とみなす。未成年を思わせるタグの除去、コマのネガティブの追加、似た漫画のタグの選別、本棚・ギャラリーの成人向け判定に使う。",
+      "kind": "patterns",
+      "match": "word",
+      "value": [
+        "nsfw", "nude", "naked", "sex", "penis", "pussy", "nipples", "fellatio", "cum", "vaginal", "anal",
+        "masturbation", "fingering", "intercourse", "topless", "bottomless", "erection", "ejaculation", "orgasm"
+      ]
+    },
+    {
+      "key": "scene.minor_tags",
+      "group": "物語・漫画の場面",
+      "label": "性的な場面から取り除くタグ(未成年を思わせるタグ)",
+      "description": "性的な場面(成人向けのタグ付け、または性的なタグがある場面)から取り除く。タグ全体が一致したときだけ当たる。",
+      "kind": "patterns",
+      "match": "tag",
+      "value": [
+        "child", "children", "kid", "kids", "loli", "lolita", "shota", "toddler", "baby",
+        "young girl", "little girl", "young boy", "little boy",
+        "school uniform", "serafuku", "student", "schoolgirl", "schoolboy", "classroom",
+        "elementary school", "middle school", "high school", "randoseru",
+        "children with cameras", "petite child", "underage", "teen", "teenager"
+      ]
+    },
+    {
+      "key": "scene.adult_safety_negative",
+      "group": "物語・漫画の場面",
+      "label": "性的な場面のネガティブ",
+      "description": "漫画のコマ生成で、性的な場面のコマのネガティブに足す(未成年に見える絵を避ける)。",
+      "kind": "text",
+      "value": "child, loli, shota, young, petite, flat chest, school uniform, student"
+    },
+    {
+      "key": "scene.genital_tags",
+      "group": "物語・漫画の場面",
+      "label": "性器が関わるタグ",
+      "description": "成人向けのタグ付けで、これがある場面に explicit, uncensored を足す(ガードではなく、成人向けの絵を意図どおりに出すため)。",
+      "kind": "patterns",
+      "match": "word",
+      "value": [
+        "pussy", "vagina", "vaginal", "clitoris", "labia", "anus", "anal", "penis", "testicles", "sex",
+        "intercourse", "penetration", "creampie", "cum in pussy", "cumdrip", "fingering", "cunnilingus",
+        "spread legs", "pubic hair", "pussy juice"
+      ]
+    },
+    {
+      "key": "scene.female_genital_tags",
+      "group": "物語・漫画の場面",
+      "label": "女性器が関わるタグ",
+      "description": "成人向けのタグ付けで、これがある場面に pussy も足す。",
+      "kind": "patterns",
+      "match": "word",
+      "value": [
+        "pussy", "vagina", "vaginal", "clitoris", "labia", "sex", "intercourse", "penetration", "creampie",
+        "cum in pussy", "cumdrip", "fingering", "cunnilingus", "spread legs", "pubic hair", "pussy juice"
+      ]
+    },
+    {
+      "key": "scene.adult_tagging_premise",
+      "group": "物語・漫画の場面",
+      "label": "成人向けのタグ付けの前提(LLM への指示)",
+      "description": "成人向けのタグ付けの指示文の冒頭に入れる前提(英語)。",
+      "kind": "text",
+      "value": "All characters are adults."
+    },
+    {
+      "key": "scene.adult_tagging_rule",
+      "group": "物語・漫画の場面",
+      "label": "成人向けのタグ付けの決まり(LLM への指示)",
+      "description": "成人向けのタグ付けの指示文に入れる決まり(英語・1文)。",
+      "kind": "text",
+      "value": "never use tags implying minors (child, loli, shota, school uniform, student, classroom)"
+    },
+    {
+      "key": "draft.content_rule",
+      "group": "漫画の下書き・似た漫画",
+      "label": "漫画の下書きの決まり(LLM への指示)",
+      "description": "漫画の下書きの大枠シナリオと台本の指示文に入れる決まり。",
+      "kind": "text",
+      "value": "全年齢向け。露出・性的な描写はしない"
+    },
+    {
+      "key": "draft.default_negative",
+      "group": "漫画の下書き・似た漫画",
+      "label": "漫画の下書きの画面のネガティブ(初期値)",
+      "description": "漫画の下書きの画面で、コマ生成のネガティブの欄にはじめに入る値(画面でその都度書き換えられる)。",
+      "kind": "text",
+      "value": "lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, watermark, signature, nsfw, nude, cleavage, underwear, sexually suggestive"
+    },
+    {
+      "key": "similar.excluded_words",
+      "group": "漫画の下書き・似た漫画",
+      "label": "似た漫画で使わない語(体つき・露出)",
+      "description": "取り込んだ漫画の絵から読み取ったタグのうち、この語を含むタグは舞台・人物の見た目に使わない(語の一致)。",
+      "kind": "words",
+      "match": "word",
+      "value": [
+        "breasts", "breast", "nipples", "cleavage", "navel", "thighs", "thigh", "ass", "butt", "hips", "crotch",
+        "pussy", "penis", "nude", "naked", "underwear", "panties", "bra", "lingerie", "swimsuit", "bikini",
+        "topless", "bottomless", "sweat", "wet"
+      ]
+    },
+    {
+      "key": "similar.naming_rule",
+      "group": "漫画の下書き・似た漫画",
+      "label": "似た漫画の人物づくりの決まり(LLM への指示)",
+      "description": "似た漫画の人物に名前と人物像を付ける指示文に入れる決まり。",
+      "kind": "text",
+      "value": "全年齢向けの日常の話に出せる人物にする"
+    },
+    {
+      "key": "library.adult_tags",
+      "group": "本棚・ギャラリー",
+      "label": "成人向けを示すタグ",
+      "description": "「性的な場面とみなすタグ」に加えて、これがあるプロンプト・場面を成人向けと自動判定する。",
+      "kind": "patterns",
+      "match": "word",
+      "value": ["explicit", "uncensored", "hentai", "r-?18"]
+    },
+    {
+      "key": "library.adult_text",
+      "group": "本棚・ギャラリー",
+      "label": "本文で成人向けと判定する語",
+      "description": "物語の本文にこれらの語が合計で「回数」以上出てくると、成人向けと自動判定する(文中のどこにあっても当たる)。",
+      "kind": "patterns",
+      "match": "substring",
+      "value": [
+        "セックス", "膣", "陰茎", "陰核", "ペニス", "ちんぽ", "ちんちん", "おちんぽ", "まんこ", "クリトリス", "乳首",
+        "愛液", "精液", "射精", "中出し", "フェラ", "手マン", "潮吹き", "全裸", "性器", "勃起", "肉棒", "秘部", "秘所",
+        "アナル", "肛門", "ディルド", "バイブ", "絶頂", "喘ぎ", "喘いで", "イっちゃ", "イッちゃ", "イク[ッっ！!]"
+      ]
+    },
+    {
+      "key": "library.adult_text_min_hits",
+      "group": "本棚・ギャラリー",
+      "label": "本文で成人向けと判定する回数",
+      "description": "上の語が合計でこの回数以上出てきたら成人向けとみなす。",
+      "kind": "int",
+      "minimum": 1,
+      "maximum": 1000,
+      "value": 3
+    },
+    {
+      "key": "stamps.adult_tags",
+      "group": "描き文字の素材",
+      "label": "成人向けの素材とみなす pixiv のタグ",
+      "description": "pixiv から描き文字の素材を取り込むとき、このタグがあれば成人向けの素材にする(pixiv の年齢制限が付いた作品は、タグに関係なく成人向け)。完全一致。",
+      "kind": "words",
+      "match": "exact",
+      "value": ["R-18", "R18", "R-18G"]
+    }
+  ]
+}

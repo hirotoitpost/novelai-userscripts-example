@@ -16,18 +16,14 @@ _NO_TEXT_NEGATIVE = (
 _MONOCHROME_NEGATIVE = ", sepia, colored, watercolor"
 
 
-# 性的な場面のネガティブ。未成年に見える絵にならないようにする
-_ADULT_SAFETY_NEGATIVE = ", child, loli, shota, young, petite, flat chest, school uniform, student"
-
-
 def is_sexual(tags: str) -> bool:
-    from ..routes.story import _SEXUAL_HINT  # 循環 import を避けて遅延で読む
+    from .. import content_guard
 
-    return bool(_SEXUAL_HINT.search(tags))
+    return content_guard.is_sexual(tags)
 
 
 def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None) -> str:
-    from ..routes.story import sanitize_scene_tags
+    from ..content_guard import sanitize_scene_tags
 
     parts = ["manga style" if color else "manga style, monochrome, greyscale, screentone"]
     tags = sanitize_scene_tags(scene_tags.strip().strip(","), adult=False)
@@ -40,13 +36,15 @@ def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None) 
 
 
 def build_panel_negative(custom: str | None, *, color: bool, sexual: bool = False) -> str:
-    from .. import app_settings
+    from .. import app_settings, content_guard
 
     # 既定の品質のネガティブは、開発管理者のページで変えられる(manga.quality_negative)
     quality = custom.strip() if custom and custom.strip() else str(app_settings.get("manga.quality_negative"))
     negative = quality + _NO_TEXT_NEGATIVE
     if not color:
         negative += _MONOCHROME_NEGATIVE
-    if sexual:
-        negative += _ADULT_SAFETY_NEGATIVE
+    # 性的な場面には、未成年に見える絵にならないようにするネガティブを足す(中身は content_guard)
+    safety = content_guard.text("scene.adult_safety_negative")
+    if sexual and safety:
+        negative += ", " + safety
     return negative

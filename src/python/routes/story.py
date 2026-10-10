@@ -25,7 +25,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from novelai import AsyncNovelAI
 
 from ..cast import auto_reference, match_existing
+from .. import content_guard
 from ..client import get_client
+from ..content_guard import sanitize_scene_tags
 from ..db import (
     add_story_scenes,
     characters_by_scene,
@@ -756,10 +758,14 @@ class TagOptions:
 
 
 def _adult_tags_system_prompt(n_scenes: int) -> str:
+    # 未成年についての前提と決まりは content_guard(DB)にある
+    premise = content_guard.text("scene.adult_tagging_premise")
+    rule = content_guard.text("scene.adult_tagging_rule")
+    no_additions = "do not add places or clothes not in the text"
     return (
         "You tag scenes of an adult (18+) Japanese story for the NovelAI image model.\n"
-        "All characters are adults. Read each scene and return JSON only, no prose:\n"
-        '{"scenes": [{"title": "<short Japanese title>", "prompt_tags": "<English danbooru tags>"}]}\n\n'
+        + f"{premise} Read each scene and return JSON only, no prose:\n".lstrip()
+        + '{"scenes": [{"title": "<short Japanese title>", "prompt_tags": "<English danbooru tags>"}]}\n\n'
         f"- exactly {n_scenes} items, in the given order\n"
         "- prompt_tags: comma separated English danbooru-style tags describing what is visible: "
         "people count (1girl, 1boy), clothing state (nude, topless, bikini, clothes pull...), the sexual act "
@@ -772,8 +778,7 @@ def _adult_tags_system_prompt(n_scenes: int) -> str:
         "spread legs, spread pussy, focus pussy, cumdrip, cum in pussy, vaginal, penis, testicles\n"
         "- if clothes are pulled aside or removed, say so (bikini pull, panties aside, clothes lift, nude) so the "
         "genitals are not hidden\n"
-        "- never use tags implying minors (child, loli, shota, school uniform, student, classroom) and do not add "
-        "places or clothes not in the text\n"
+        f"- {f'{rule} and {no_additions}' if rule else no_additions}\n"
         "- no character names"
     )
 
@@ -817,56 +822,6 @@ async def _tag_scene_batch(batch_texts: list[str], options: TagOptions | None = 
                 tag["draft_prompt_tags"] = sanitize_scene_tags(tag["draft_prompt_tags"], adult=options.adult)
             return tags
     return None
-
-
-# 未成年を思わせるタグ。成人向けの場面では必ず取り除く(性的な場面に子どもを描かない)
-_MINOR_TAGS = re.compile(
-    r"^(child|children|kid|kids|loli|lolita|shota|toddler|baby|young girl|little girl|young boy|little boy|"
-    r"school uniform|serafuku|student|schoolgirl|schoolboy|classroom|elementary school|middle school|high school|"
-    r"randoseru|children with cameras|petite child|underage|teen|teenager)$",
-    re.IGNORECASE,
-)
-_SEXUAL_HINT = re.compile(
-    r"\b(nsfw|nude|naked|sex|penis|pussy|nipples|fellatio|cum|vaginal|anal|masturbation|fingering|intercourse|"
-    r"topless|bottomless|erection|ejaculation|orgasm)\b",
-    re.IGNORECASE,
-)
-
-
-# 性器が見える/関わる場面の語。これがあれば explicit, uncensored を必ず付ける(付けないと布や構図で
-# 隠されがち)。女性器が関わる語なら pussy も付ける。チャンクの実データ(191件)でも
-# explicit, uncensored, pussy, pussy juice, spread legs, pubic hair の組み合わせで使われている。
-_GENITAL_HINT = re.compile(
-    r"\b(pussy|vagina|vaginal|clitoris|labia|anus|anal|penis|testicles|sex|intercourse|penetration|creampie|"
-    r"cum in pussy|cumdrip|fingering|cunnilingus|spread legs|pubic hair|pussy juice)\b",
-    re.IGNORECASE,
-)
-_FEMALE_GENITAL_HINT = re.compile(
-    r"\b(pussy|vagina|vaginal|clitoris|labia|sex|intercourse|penetration|creampie|cum in pussy|cumdrip|"
-    r"fingering|cunnilingus|spread legs|pubic hair|pussy juice)\b",
-    re.IGNORECASE,
-)
-
-
-def sanitize_scene_tags(tags: str, *, adult: bool) -> str:
-    """
-    成人向け、または性的な語を含むタグから未成年を思わせるタグを除く。成人向けなら先頭に nsfw を付け、
-    性器が関わる場面には explicit, uncensored(女性器なら pussy も)を足す。
-    """
-    items = [t.strip() for t in tags.split(",") if t.strip()]
-    sexual = adult or any(_SEXUAL_HINT.search(t) for t in items)
-    if sexual:
-        items = [t for t in items if not _MINOR_TAGS.match(t)]
-    lower = [t.lower() for t in items]
-    if adult and any(_GENITAL_HINT.search(t) for t in items):
-        extra = [t for t in ("explicit", "uncensored") if t not in lower]
-        if any(_FEMALE_GENITAL_HINT.search(t) for t in items) and "pussy" not in lower:
-            extra.append("pussy")
-        items = [items[0], *extra, *items[1:]] if lower[0] == "nsfw" else [*extra, *items]
-        lower = [t.lower() for t in items]
-    if adult and items and "nsfw" not in lower and any(_SEXUAL_HINT.search(t) for t in items):
-        items.insert(0, "nsfw")
-    return ", ".join(dict.fromkeys(items))
 
 
 async def _apply_tags(scenes: list[dict[str, Any]], texts: list[str], options: TagOptions | None = None) -> int:

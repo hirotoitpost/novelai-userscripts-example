@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from . import content_guard
 from .manga_v2.speakers import cast_members
 from .novelai_text_oa import INSTRUCT_MODEL, stream_chat
 
@@ -81,16 +82,21 @@ async def _ask_json(api_key: str, system: str, user: str, *, max_tokens: int, te
     raise RuntimeError(f"台本AIの応答を読み取れませんでした({_MAX_ATTEMPTS}回試行)。{last_error}")
 
 
+def _content_rule() -> str:
+    """指示文の末尾に足す、内容についての決まり(content_guard の draft.content_rule。空なら足さない)。"""
+    rule = content_guard.text("draft.content_rule")
+    return f"\n- {rule}" if rule else ""
+
+
 # ---- 大枠シナリオ ----
 
-_OUTLINE_SYSTEM = """あなたは漫画の構成作家です。指定のテーマ・ジャンル・登場人物で、全年齢向けの短編漫画の大枠シナリオ案を{options}つ考えます。
+_OUTLINE_SYSTEM = """あなたは漫画の構成作家です。指定のテーマ・ジャンル・登場人物で、短編漫画の大枠シナリオ案を{options}つ考えます。
 JSONだけを返してください(前置きや```は不要):
 {{"outlines":[{{"title":"作品タイトル","logline":"一文のあらすじ","episodes":["第1話の内容","第2話の内容"]}}]}}
 - episodes はちょうど{episodes}個。1話は4コマ(起承転結のある小話)で、全体で1つの流れになるようにする
 - 各話の内容は、誰が何をしてどうオチるかが分かるように60文字程度で書く
 - {options}つの案は雰囲気や切り口をはっきり変える
-- 登場人物の性格・口調・呼び方を守る。登場人物は指定された人だけを中心にする
-- 露出や性的な描写はしない"""
+- 登場人物の性格・口調・呼び方を守る。登場人物は指定された人だけを中心にする{content_rule}"""
 
 
 # 取り込んだ作品の構成を渡すときの但し書き。市販の作品も入るので、内容は使わせない
@@ -111,7 +117,7 @@ def outline_prompts(
     options: int = 3,
     structure: list[list[str]] | None = None,
 ) -> tuple[str, str]:
-    system = _OUTLINE_SYSTEM.format(options=options, episodes=episodes)
+    system = _OUTLINE_SYSTEM.format(options=options, episodes=episodes, content_rule=_content_rule())
     user = [f"テーマ: {theme}", f"ジャンル: {genre}", "登場人物:", _cast_block(characters)]
     if notes.strip():
         user.append(f"補足: {notes.strip()}")
@@ -172,8 +178,7 @@ _EPISODE_SYSTEM = """あなたは漫画の脚本家です。渡された1話分�
 - sfx はカタカナの擬音・擬態語を0〜1個
 - prompt_tags はそのコマ全体の絵: 人数(1girl, 1boy など)、場所、時間帯、構図、二人の位置関係(facing each other など)を英語のdanbooruタグで。人物の髪型・服装は書かない(別に指定する)
 - actions は characters の人物ごとの表情・動作・視線を英語のdanbooruタグで(例: "blush, looking away, hand on own cheek")。表情や仕草は prompt_tags ではなく必ずここに書く(全体に書くと全員に付いてしまう)
-- characters はそのコマに描く人物(声だけの人は入れない)。人物がいないコマは空で、prompt_tags に no humans
-- 全年齢向け。露出・性的な描写はしない"""
+- characters はそのコマに描く人物(声だけの人は入れない)。人物がいないコマは空で、prompt_tags に no humans{content_rule}"""
 
 
 def episode_prompts(
@@ -211,7 +216,7 @@ def episode_system(count: int) -> str:
     """1話分の台本の指示。コマ数は既定の4、取り込んだ作品の構成を使うときはそのページのコマ数。"""
     arc = "起承転結で、4コマ目にオチ" if count == PANELS_PER_EPISODE else "話に山場をつくり、最後のコマにオチ"
     # JSON の例の { } とぶつからないよう、format ではなく置き換えで埋める
-    return _EPISODE_SYSTEM.replace("{count}", str(count)).replace("{arc}", arc)
+    return _EPISODE_SYSTEM.replace("{count}", str(count)).replace("{arc}", arc).replace("{content_rule}", _content_rule())
 
 
 def _clean_tags(tags: str) -> str:

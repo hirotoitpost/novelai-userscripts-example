@@ -20,6 +20,8 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+from .. import content_guard
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 STAMP_DIR = _PROJECT_ROOT / "data" / "stamps"
 
@@ -201,8 +203,8 @@ async def fetch_pixiv_sheets(artwork_id: str) -> tuple[SheetSource, list[Image.I
         title=body.get("title", ""),
         author=body.get("userName", ""),
         url=f"https://www.pixiv.net/artworks/{artwork_id}",
-        # pixiv の年齢制限(xRestrict: 1=R-18, 2=R-18G)と R-18 タグで判定する
+        # pixiv の年齢制限(xRestrict: 1=R-18, 2=R-18G)と、成人向けを示すタグ(content_guard の stamps.adult_tags)で判定する
         adult=bool(body.get("xRestrict"))
-        or any(t.get("tag") in ("R-18", "R18", "R-18G") for t in (body.get("tags") or {}).get("tags", [])),
+        or any(t.get("tag") in content_guard.words("stamps.adult_tags") for t in (body.get("tags") or {}).get("tags", [])),
     )
     return source, sheets

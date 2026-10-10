@@ -14,6 +14,7 @@ from .routes.admin import router as admin_router
 from .routes.auth import router as auth_router
 from .routes.batch import router as batch_router
 from .routes.chunks import router as chunks_router
+from .routes.content_guard import router as content_guard_router
 from .routes.image import router as image_router
 from .routes.llm import router as llm_router
 from .routes.manga_draft import router as manga_draft_router
@@ -63,6 +64,7 @@ app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(batch_router)
 app.include_router(chunks_router)
+app.include_router(content_guard_router)
 app.include_router(image_router)
 app.include_router(llm_router)
 app.include_router(manga_draft_router)
