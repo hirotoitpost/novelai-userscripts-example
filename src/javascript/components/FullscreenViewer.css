@@ -7,7 +7,9 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  touch-action: pan-y pinch-zoom;
+  /* ピンチ・ドラッグはこちらで扱う(ブラウザの拡大やスクロールにしない) */
+  touch-action: none;
+  user-select: none;
 }
 
 .fsv-image {
@@ -17,24 +19,43 @@
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
+  transform-origin: center center;
+  transition: transform 0.18s ease-out;
+  will-change: transform;
 }
 
-/* 左右の端と真ん中の押せる範囲(見えない) */
-.fsv-zone {
+/* 指やマウスで動かしている間は、遅れずについてくるようにする */
+.fsv-image--dragging { transition: none; }
+.fsv--zoomed { cursor: grab; }
+.fsv--zoomed:active { cursor: grabbing; }
+
+/* ズーム中に絵の端から押し出しているときの目印(十分に押し出すとページが変わる) */
+.fsv-pull {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  border: none;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: #fff;
+  font-size: 0.85rem;
+  pointer-events: none;
 }
 
-.fsv-zone:disabled { cursor: default; }
-.fsv-zone--left { left: 0; width: 30%; }
-.fsv-zone--center { left: 30%; width: 40%; }
-.fsv-zone--right { right: 0; width: 30%; }
+.fsv-pull--left { left: 1rem; }
+.fsv-pull--right { right: 1rem; }
+.fsv-pull--ready { background: #5b3fd6; border-color: #a78bfa; }
+
+/* 画面読み上げ向け(見た目には出さない) */
+.fsv-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 
 .fsv-bar {
   position: absolute;
@@ -59,12 +80,13 @@
 .fsv--hidden { cursor: none; }
 
 .fsv-counter {
+  margin-right: auto;
   font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
 }
 
 .fsv-close {
-  margin-left: auto;
+  margin-left: 0.4rem;
   padding: 0.4rem 0.8rem;
   border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 999px;
@@ -76,5 +98,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fsv-bar { transition: none; }
+  .fsv-bar, .fsv-image { transition: none; }
 }
