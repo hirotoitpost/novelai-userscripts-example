@@ -219,6 +219,9 @@ class _Job:
     total: int = 0
     detail: str | None = None
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+    # 始まった/終わった時刻(UNIX 秒)。画面の経過時間と、終わったジョブを一覧に残す期間に使う
+    started_at: float = field(default_factory=time.time)
+    ended_at: float | None = None
 
 
 # 物語ごとに同時に1ジョブだけ。プロセス内メモリなので再起動で消えるが、
@@ -237,6 +240,8 @@ def _job_response(job: _Job) -> dict[str, Any]:
         "progress": job.progress,
         "total": job.total,
         "detail": job.detail,
+        "started_at": job.started_at,
+        "ended_at": job.ended_at,
     }
 
 
@@ -262,6 +267,7 @@ def _start_job(story_id: int, kind: str, runner: Callable[[_Job], Awaitable[None
             job.status = "error"
             job.detail = str(exc)
         finally:
+            job.ended_at = time.time()
             # キャンセル中でも通知だけは送り切る(スマホを見ていない間に終わることが多い)
             notice = notify_job_finished(
                 story_id,
@@ -1898,6 +1904,26 @@ async def put_scene_characters(scene_id: int, req: SetSceneCharactersRequest) ->
         set_scene_characters(conn, scene_id, req.character_ids, req.actions)
     finally:
         conn.close()
+
+
+# 終わったジョブを一覧(/jobs)に残す時間。再読み込みの前後で終わった処理も「完了」と出せるように
+_RECENT_JOB_SECONDS = 30 * 60
+
+
+@router.get("/jobs", response_model=list[StoryJobResponse])
+async def list_story_jobs() -> list[dict[str, Any]]:
+    """
+    動いているジョブと、少し前に終わったジョブの一覧(新しい順)。画面を再読み込みしたときや、
+    別の端末で開いたときに、どのページからでも処理状況を出し直すのに使う。
+    注意: /{story_id} より前に登録する(manga-file と同じ理由)。
+    """
+    now = time.time()
+    jobs = [
+        job
+        for job in _jobs.values()
+        if job.status == "running" or (job.ended_at is not None and now - job.ended_at <= _RECENT_JOB_SECONDS)
+    ]
+    return [_job_response(job) for job in sorted(jobs, key=lambda j: j.started_at, reverse=True)]
 
 
 @router.get("/manga-file")

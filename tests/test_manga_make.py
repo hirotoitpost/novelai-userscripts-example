@@ -85,3 +85,23 @@ def test_make_rejects_unknown_template(client: TestClient) -> None:
     story = client.post("/api/story/scripted", json={"title": "t", "scenes": [{"text": "「a」"}]}).json()
     res = client.post(f"/api/manga-v2/{story['id']}/make", json={"compose": {"template": "nope"}}, headers=AUTH)
     assert res.status_code == 400
+
+
+def test_jobs_list_keeps_running_and_recent_jobs(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python.routes import story as story_routes
+
+    # 画面を再読み込みしても処理状況を出し直せるよう、終わったジョブもしばらく一覧に残る
+    monkeypatch.setattr(story_routes, "_jobs", {})
+    scenes = [{"text": "「セリフ」", "prompt_tags": "no humans, scenery"}]
+    story = client.post("/api/story/scripted", json={"title": "一覧", "scenes": scenes}).json()
+    body = {"panels": {"template": "vertical4"}, "compose": {"template": "vertical4"}}
+    client.post(f"/api/manga-v2/{story['id']}/make", json=body, headers=AUTH)
+    assert _wait(client, story["id"])["status"] == "done"
+
+    jobs = client.get("/api/story/jobs").json()
+    assert [(j["story_id"], j["kind"], j["status"]) for j in jobs] == [(story["id"], "manga", "done")]
+    assert jobs[0]["started_at"] <= jobs[0]["ended_at"]
+
+    # 終わってから時間が経ったものは出さない
+    monkeypatch.setattr(story_routes, "_RECENT_JOB_SECONDS", -1)
+    assert client.get("/api/story/jobs").json() == []

@@ -32,6 +32,18 @@ const STATE_LABELS: Record<TaskState, string> = {
   cancelled: 'キャンセル',
 }
 
+/** サーバーのジョブの種類 → 表示名(src/python/notify.py の JOB_KIND_LABELS と揃える) */
+export const JOB_KIND_LABELS: Record<string, string> = {
+  split: 'シーン分割・タグ付け',
+  illustrate: '挿絵の生成',
+  characters: '登場人物の抽出',
+  sfx: '効果音の提案',
+  narration: 'ナレーションの作成',
+  panels: 'コマの絵の生成',
+  sfx_fonts: '描き文字の選択',
+  manga: '漫画にする(コマの生成と合成)',
+}
+
 const STATE_ICONS: Record<Exclude<TaskState, 'running'>, string> = {
   done: '✅',
   error: '⚠️',
@@ -57,6 +69,8 @@ interface TaskEntry {
   minimized: boolean
   /** トレイから戻るときに開くページ(処理を始めたページ) */
   returnTo: string
+  /** 再読み込みの後にサーバーのジョブの一覧から出し直したもの。ページが引き継ぐまでトレイが進捗を読む */
+  restored?: boolean
 }
 
 const entries = new Map<string, TaskEntry>()
@@ -99,6 +113,61 @@ function jobStoryId(tag: string): number | null {
   return match ? Number(match[1]) : null
 }
 
+// ---- 再読み込みをまたいで処理状況を出し直すための記録(このブラウザの localStorage) ----
+
+/** このブラウザで見ているサーバーのジョブ(物語ID → 戻り先など)。閉じたら消す */
+const WATCH_KEY = 'nai_task_watch'
+/** ブラウザの中で動いていて、再読み込みで止まった処理(次に開いたときに知らせる) */
+const INTERRUPTED_KEY = 'nai_task_interrupted'
+
+interface WatchedJob {
+  returnTo: string
+  title: string
+  startedAt: number
+}
+
+interface InterruptedTask extends WatchedJob {
+  message: string
+}
+
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeJson(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // 保存できなくても、今の画面の表示は続けられる
+  }
+}
+
+function watchJob(storyId: number, job: WatchedJob) {
+  const all = readJson<Record<string, WatchedJob>>(WATCH_KEY, {})
+  const current = all[storyId]
+  if (current && current.returnTo === job.returnTo && current.title === job.title) return
+  all[storyId] = job
+  writeJson(WATCH_KEY, all)
+}
+
+/** 閉じた処理はもう出し直さない */
+function unwatch(status: TaskStatus | null | undefined) {
+  const storyId = status ? jobStoryId(status.notifyTag) : null
+  if (storyId === null) return
+  const all = readJson<Record<string, WatchedJob>>(WATCH_KEY, {})
+  delete all[storyId]
+  writeJson(WATCH_KEY, all)
+}
+
+function pathOf(url: string): string {
+  return new URL(url, window.location.origin).pathname
+}
+
 /**
  * 長い処理の状態(タイトル・進捗・結果)を持ち、終了時にブラウザ通知を出す。
  * 表示は TaskStatusDialog に渡す。状態はページ(パス)ごとにアプリ全体で持つので、
@@ -116,6 +185,7 @@ export function useTaskStatus() {
     const startedAt = current?.state === 'running' && current.title === title ? current.startedAt : Date.now()
     setEntry(scope, {
       minimized: false,
+      restored: false,
       returnTo: window.location.pathname + window.location.search,
       status: {
         state: 'running', title, message, progress: 0, total: 0,
@@ -131,8 +201,16 @@ export function useTaskStatus() {
       if (!current?.status || current.status.state !== 'running') return
       // 物語のジョブなら、戻り先はその物語を開いた物語ページ(一覧から開いた物語は URL に出ないため)
       const storyId = jobTag ? jobStoryId(jobTag) : null
+      const returnTo = storyId !== null && scope === '/story' ? `/story?story=${storyId}` : current.returnTo
+      if (storyId !== null) {
+        watchJob(storyId, { returnTo, title: current.status.title, startedAt: current.status.startedAt })
+        // 開いた直後にサーバーの一覧から別のページの欄へ出し直したものがあれば、このページが引き継ぐ
+        for (const [other, e] of entries) {
+          if (other !== scope && e.restored && e.status?.notifyTag === jobTag) setEntry(other, { status: null })
+        }
+      }
       setEntry(scope, {
-        returnTo: storyId !== null && scope === '/story' ? `/story?story=${storyId}` : current.returnTo,
+        returnTo,
         status: {
           ...current.status,
           message,
@@ -169,6 +247,7 @@ export function useTaskStatus() {
 
   const dismiss = useCallback(() => {
     clearAutoClose(scope)
+    unwatch(entries.get(scope)?.status)
     setEntry(scope, { status: null })
   }, [scope])
 
@@ -237,6 +316,140 @@ function useTitleProgress(status: TaskStatus | null) {
 
 type ActiveEntry = TaskEntry & { status: TaskStatus }
 
+interface ServerJob {
+  story_id: number
+  kind: string
+  status: TaskState
+  message: string
+  progress: number
+  total: number
+  detail: string | null
+  started_at: number | null
+  ended_at: number | null
+}
+
+const RESTORE_POLL_MS = 3000
+
+/**
+ * 再読み込みの後(や別の端末で開いたとき)に、サーバーで動いているジョブの処理状況を出し直す。
+ * 動いているジョブは全部、終わったジョブはこのブラウザで見ていて閉じていないものだけ。
+ * ページが開いて自分で進捗を読み始める(start)までは、ここで進捗を読み続ける。
+ * あわせて、前回ブラウザの中で動いていて再読み込みで止まった処理を「中断」として出す。
+ */
+function useRestoreServerJobs() {
+  useEffect(() => {
+    const interrupted = readJson<InterruptedTask[]>(INTERRUPTED_KEY, [])
+    try {
+      localStorage.removeItem(INTERRUPTED_KEY)
+    } catch {
+      // 消せなくても次に開いたときに同じ知らせが出るだけ
+    }
+    for (const task of interrupted) {
+      const scope = pathOf(task.returnTo)
+      if (entries.get(scope)?.status) continue
+      setEntry(scope, {
+        returnTo: task.returnTo,
+        restored: true,
+        minimized: true,
+        status: {
+          state: 'cancelled', title: task.title, message: task.message, progress: 0, total: 0,
+          background: false, notifyTag: 'nai-task', startedAt: task.startedAt, endedAt: Date.now(),
+        },
+      })
+    }
+
+    let first = true
+    let stopped = false
+    const poll = async () => {
+      const restoredRunning = [...entries.values()].some(e => e.restored && e.status?.state === 'running')
+      if (!first && !restoredRunning) return
+      first = false
+      const res = await fetch('/api/story/jobs').catch(() => null)
+      if (stopped || !res?.ok) return
+      const jobs: ServerJob[] = await res.json()
+      const watched = readJson<Record<string, WatchedJob>>(WATCH_KEY, {})
+      const seen = new Set<string>()
+      for (const job of jobs) {
+        const tag = `nai-job-${job.story_id}`
+        seen.add(tag)
+        const existing = [...entries.entries()].find(([, e]) => e.status?.notifyTag === tag)
+        // ページが自分で進捗を読んでいるものは触らない
+        if (existing && !existing[1].restored) continue
+        const watch = watched[job.story_id]
+        if (job.status !== 'running' && !watch) continue
+        const returnTo = existing?.[1].returnTo ?? watch?.returnTo ?? `/story?story=${job.story_id}`
+        const scope = existing?.[0] ?? pathOf(returnTo)
+        // そのページでは別の処理が出ている
+        if (!existing && entries.get(scope)?.status) continue
+        setEntry(scope, {
+          returnTo,
+          restored: true,
+          minimized: existing?.[1].minimized ?? true,
+          status: {
+            state: job.status,
+            title: watch?.title ?? JOB_KIND_LABELS[job.kind] ?? '処理',
+            message: job.status === 'error' ? (job.detail ?? job.message) : job.message,
+            progress: job.progress,
+            total: job.total,
+            background: true,
+            notifyTag: tag,
+            startedAt: job.started_at ? job.started_at * 1000 : Date.now(),
+            endedAt: job.ended_at ? job.ended_at * 1000 : null,
+          },
+        })
+      }
+      // 一覧から消えた(バックエンドを再起動した)ジョブは、状況が分からないので止まった扱いにする
+      for (const [scope, e] of entries) {
+        if (e.restored && e.status?.state === 'running' && !seen.has(e.status.notifyTag)) {
+          setEntry(scope, {
+            status: { ...e.status, state: 'error', message: 'サーバーの処理状況が見つかりません(再起動した可能性があります)', endedAt: Date.now() },
+          })
+        }
+      }
+    }
+    void poll()
+    const id = window.setInterval(() => void poll(), RESTORE_POLL_MS)
+    return () => {
+      stopped = true
+      window.clearInterval(id)
+    }
+  }, [])
+}
+
+/**
+ * ブラウザの中で動いている処理(スクショの読み取りなど)は、再読み込みやタブを閉じると止まる。
+ * その前に確認を出し、それでも離れたら、次に開いたときに「中断」と知らせるよう記録する。
+ */
+function useGuardBrowserTasks() {
+  useEffect(() => {
+    const inBrowser = () => [...entries.values()].filter(
+      (entry): entry is ActiveEntry => entry.status?.state === 'running' && !entry.status.background,
+    )
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (inBrowser().length === 0) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    // 本当に離れたときだけ記録する(確認で「留まる」を選んだときは pagehide が来ない)
+    const onPageHide = () => {
+      const tasks = inBrowser()
+      if (tasks.length === 0) return
+      writeJson(INTERRUPTED_KEY, tasks.map(entry => ({
+        returnTo: entry.returnTo,
+        title: entry.status.title,
+        startedAt: entry.status.startedAt,
+        message: `ページを再読み込みしたか閉じたため、途中で止まりました(${entry.status.message})`,
+      })))
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      window.removeEventListener('pagehide', onPageHide)
+    }
+  }, [])
+}
+
 /**
  * どのページにいても、ほかのページで始めた処理の状況を画面の下に出す(押すとそのページへ戻り、
  * ダイアログを開く)。タブのタイトルの進捗と、処理中に画面を消さないのもここで行う。App に1つ置く。
@@ -253,6 +466,8 @@ export function TaskTray() {
   const primary = list.find(([, e]) => e.status.state === 'running') ?? list[0]
   useWakeLock(running)
   useTitleProgress(primary ? primary[1].status : null)
+  useRestoreServerJobs()
+  useGuardBrowserTasks()
 
   useEffect(() => {
     if (!running) return
@@ -305,6 +520,7 @@ export function TaskTray() {
                 className="task-pill-close"
                 onClick={() => {
                   clearAutoClose(scope)
+                  unwatch(status)
                   setEntry(scope, { status: null })
                 }}
                 aria-label="閉じる"
