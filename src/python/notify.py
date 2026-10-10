@@ -34,6 +34,7 @@ JOB_KIND_LABELS = {
     "split": "シーン分割・タグ付け",
     "illustrate": "挿絵の生成",
     "characters": "登場人物の抽出",
+    "cast": "登場人物をそろえる(参照画像も)",
     "sfx": "効果音の提案",
     "narration": "ナレーションの作成",
     "panels": "コマの絵の生成",

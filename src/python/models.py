@@ -574,7 +574,7 @@ class StoryJobResponse(BaseModel):
     """分割/挿絵生成のバックグラウンドジョブの進捗。"""
 
     story_id: int
-    kind: Literal["split", "illustrate", "characters", "panels", "sfx", "narration", "sfx_fonts", "manga"]
+    kind: Literal["split", "illustrate", "characters", "cast", "panels", "sfx", "narration", "sfx_fonts", "manga"]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
     progress: int = 0

@@ -126,7 +126,13 @@ from ..models import (
     MangaV2Template,
     StoryJobResponse,
 )
-from ..character_sheet import character_prompt_tags, characters_negative, characters_seed, join_tags
+from ..character_sheet import (
+    SAFE_NEGATIVE,
+    character_prompt_tags,
+    characters_negative,
+    characters_seed,
+    join_tags,
+)
 from ..novelai_image_v5 import DIALOGUE_RE, CharacterReferenceInput, generate_image_v5, reference_image_b64
 from .llm import stream_llm_text, strip_think_tags
 from .story import _MANGA_DIR, _PROJECT_ROOT, _Job, _job_response, _start_job
@@ -515,28 +521,53 @@ async def generate_reference_candidates(
         conn.close()
     if character is None:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
-    tags = character_prompt_tags(character)
-    if not tags:
+    if not character_prompt_tags(character):
         raise HTTPException(status_code=400, detail="キャラシートに容姿のタグがありません。")
+    return await make_reference_candidates(client.api_key, character, req.count, color=req.color, model=req.model)
 
+
+async def make_reference_candidates(
+    api_key: str, character: dict[str, Any], count: int, *, color: bool = True, model: str | None = None
+) -> list[dict[str, Any]]:
+    """
+    キャラシートから参照画像の候補を count 枚生成して保存し、{path, seed} の並びを返す。
+    参照画像は全年齢の立ち絵にする(露出のある候補が混じらないよう、ネガティブで打ち消す)。
+    """
+    tags = character_prompt_tags(character)
     _CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
     candidates: list[dict[str, Any]] = []
-    for _ in range(req.count):
+    for _ in range(count):
         seed = random.randrange(4294967296)
         image = await generate_image_v5(
-            client.api_key,
-            build_panel_prompt(_CANDIDATE_TAGS, color=req.color, complexity=None),
-            join_tags(build_panel_negative(None, color=req.color), character.get("negative_tags")),
-            model=req.model or _REFERENCE_MODEL,
+            api_key,
+            build_panel_prompt(_CANDIDATE_TAGS, color=color, complexity=None),
+            join_tags(build_panel_negative(None, color=color), SAFE_NEGATIVE, character.get("negative_tags")),
+            model=model or _REFERENCE_MODEL,
             width=832,
             height=1216,
             seed=seed,
             character_tags=[tags],
         )
-        filename = f"char{character_id}_{seed}_{uuid4().hex[:6]}.png"
+        filename = f"char{character['id']}_{seed}_{uuid4().hex[:6]}.png"
         (_CANDIDATE_DIR / filename).write_bytes(image)
         candidates.append({"path": f"outputs/manga/refs/candidates/{filename}", "seed": seed})
     return candidates
+
+
+def register_reference(character_id: int, image_bytes: bytes, seed: int | None = None) -> str:
+    """画像をキャラの参照画像として保存・登録する(seed があれば基準シードにも)。保存先のパスを返す。"""
+    _REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"char{character_id}_{uuid4().hex[:8]}.png"
+    (_REFERENCE_DIR / filename).write_bytes(image_bytes)
+    path = f"outputs/manga/refs/{filename}"
+    conn = get_connection()
+    try:
+        update_character_reference(conn, character_id, path)
+        if seed is not None:
+            update_character_sheet(conn, character_id, {"seed": seed})
+    finally:
+        conn.close()
+    return path
 
 
 def _candidate_bytes(path: str) -> bytes:
@@ -570,16 +601,7 @@ async def put_character_reference(character_id: int, req: MangaV2CharacterRefere
     else:
         raise HTTPException(status_code=400, detail="image・scene_id・candidate_path のどれかを指定してください。")
 
-    _REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"char{character_id}_{uuid4().hex[:8]}.png"
-    (_REFERENCE_DIR / filename).write_bytes(image_bytes)
-    conn = get_connection()
-    try:
-        update_character_reference(conn, character_id, f"outputs/manga/refs/{filename}")
-        if req.seed is not None:
-            update_character_sheet(conn, character_id, {"seed": req.seed})
-    finally:
-        conn.close()
+    register_reference(character_id, image_bytes, req.seed)
 
 
 @router.delete("/characters/{character_id}/reference", status_code=204)

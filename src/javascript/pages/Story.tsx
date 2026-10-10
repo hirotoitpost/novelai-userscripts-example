@@ -605,6 +605,21 @@ export default function Story() {
     })
   }
 
+  /** 登場人物をそろえる: 抽出して登録済みのキャラに対応させ、参照画像の無いキャラには自動で作る */
+  function runCast() {
+    if (!story) return
+    return runTask('登場人物をそろえる(参照画像も)', async signal => {
+      const res = await fetch(`${API_ORIGIN}/api/story/${story.id}/cast`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      await pollJob(story.id, signal)
+      await loadStory(story.id)
+    })
+  }
+
   function runRetag(all = false) {
     if (!story) return
     if (all && !window.confirm('全シーンのタグを付け直します。手で直したタグも置き換わります。よろしいですか?')) return
@@ -1189,6 +1204,16 @@ export default function Story() {
               {isWritten && (
                 <button type="button" onClick={runExtractCharacters} disabled={busy}>
                   登場人物を抽出
+                </button>
+              )}
+              {isWritten && (
+                <button
+                  type="button"
+                  onClick={runCast}
+                  disabled={busy}
+                  title="本文から人物を洗い出して登録済みのキャラに対応させ(名前の一部でも)、参照画像の無いキャラには候補を4枚生成して一番近い1枚を自動で選びます(NovelAI の生成を使います)"
+                >
+                  登場人物をそろえる(参照画像も)
                 </button>
               )}
               {isWritten && mangaMode === 'v1' && (
