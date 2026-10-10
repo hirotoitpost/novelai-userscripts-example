@@ -115,10 +115,10 @@ The app can serve HTTPS on the LAN with a certificate from a local certificate a
 
 If the PC's IP changes, run `make_lan_cert.py` again (the CA stays the same, so the phone needs nothing new).
 
-To run over plain HTTP for debugging while the certificates exist, use `scripts/dev-ctl.ps1 restart -Http`
-(or set `NAI_HTTP=1` before starting Vite and uvicorn yourself). Switch the frontend and the backend together.
+The dev servers run over plain HTTP by default. Steps 4–5 need HTTPS: start with `scripts/dev-ctl.ps1 restart -Https`
+(or set `NAI_HTTPS=1` before starting Vite and uvicorn yourself). Switch the frontend and the backend together.
 The MCP tools follow the scheme dev-ctl last started the backend with (`data/run/backend.scheme`); the userscripts call
-`https://127.0.0.1:8000`, so change their `API_BASE` while on HTTP.
+`http://127.0.0.1:8000`, so change their `API_BASE` while on HTTPS.
 
 ### Admin page (this PC only)
 
