@@ -165,13 +165,14 @@ def test_monochrome_from_pixels() -> None:
     from python.image_tagger import _add_monochrome
 
     grey = Image.new("RGB", (64, 64), (120, 120, 120))
+    # 灰色の絵に、髪のような小さな色の部分(2%)
+    spot = grey.copy()
+    spot.paste((220, 60, 120), (0, 0, 9, 9))
     colour = Image.new("RGB", (64, 64), (200, 60, 60))
-    assert [s.tag for s in _add_monochrome(grey, [TagScore("1girl", 0.9, "general")])] == [
-        "monochrome",
-        "greyscale",
-        "1girl",
-    ]
-    assert [s.tag for s in _add_monochrome(colour, [TagScore("1girl", 0.9, "general")])] == ["1girl"]
+    girl = [TagScore("1girl", 0.9, "general"), TagScore("greyscale", 0.4, "general")]
+    assert [s.tag for s in _add_monochrome(grey, girl)] == ["monochrome", "greyscale", "1girl"]
+    assert [s.tag for s in _add_monochrome(spot, girl)] == ["monochrome", "greyscale", "spot color", "1girl"]
+    assert [s.tag for s in _add_monochrome(colour, girl)] == ["1girl", "greyscale"]
 
 
 def test_broken_image_is_rejected(client: TestClient) -> None:
