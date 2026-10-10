@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from PIL import Image  # noqa: E402
 
 import make_reverse_eval as ev  # noqa: E402
-from python.image_tagger import STYLE_TAGS, TagScore, select_tags, tag_image  # noqa: E402
+from python.image_tagger import STYLE_TAGS, TagScore, select_tags, split_characters, tag_image  # noqa: E402
 
 MANIFEST = ev.OUT_DIR / "manifest.json"
 
@@ -72,6 +72,31 @@ def score(items: list[dict], predictions: dict[str, set[str]]) -> dict:
     }
 
 
+def people_score(items: list[dict]) -> None:
+    """
+    二人の絵で、人物ごとのプロンプト(左から順)に、その人の性別と髪の色が付いたか。正解は絵を目視で確かめた
+    もの(manifest の verified_people)。髪の色がほかの人のプロンプトに付いたら「入れ替わり」。
+    """
+    people = [it for it in items if it.get("verified_people")]
+    if not people:
+        return
+    right = swapped = gender_ok = total = 0
+    for item in people:
+        guesses = split_characters(Image.open(ROOT / item["image"]).convert("RGB"))
+        truth = item["verified_people"]
+        for i, person in enumerate(truth):
+            total += 1
+            if i >= len(guesses):
+                continue
+            gender_ok += guesses[i].gender == person["gender"]
+            right += person["hair"] in guesses[i].tags
+            swapped += any(person["hair"] in g.tags for j, g in enumerate(guesses) if j != i)
+    print(
+        f"\n人物ごと(二人の絵 {len(people)} 枚・{total} 人): 髪の色が正しい人に {right}・ほかの人に {swapped}・"
+        f"性別が合った {gender_ok}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sweep", action="store_true")
@@ -100,6 +125,7 @@ def main() -> None:
     for label, result in results.items():
         groups = "  ".join(f"{name} {value:.2f}" for name, value in result["groups"].items())
         print(f"  {label}: {groups}")
+    people_score(items)
     # 絵柄のタグの定義が評価用データとそろっているか(STYLE_TAGS に無いものは低いしきい値の対象外)
     missing = GROUPS["絵柄"] - set(STYLE_TAGS)
     if missing:

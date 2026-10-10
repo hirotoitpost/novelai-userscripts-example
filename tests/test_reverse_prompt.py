@@ -47,6 +47,8 @@ def _data_url(image: Image.Image, info: PngInfo | None = None) -> str:
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(image_tagger, "tag_image", lambda image: SCORES)
+    # 人物ごとの分け方(頭の判定のモデルを使う)は test_split_characters で確かめる
+    monkeypatch.setattr(image_tagger, "split_characters", lambda image: [])
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as test_client:
@@ -114,8 +116,8 @@ def test_embedded_novelai_prompt_is_returned_as_is(client: TestClient) -> None:
     assert body["source"] == "metadata"
     assert body["positive"] == "1girl, 1boy, kitchen" and body["negative"] == "lowres"
     assert body["characters"] == [
-        {"prompt": "1girl, brown hair", "negative": "short hair"},
-        {"prompt": "1boy, glasses", "negative": ""},
+        {"prompt": "1girl, brown hair", "negative": "short hair", "x": 0.3, "y": 0.5},
+        {"prompt": "1boy, glasses", "negative": "", "x": 0.7, "y": 0.5},
     ]
     assert body["settings"]["seed"] == 39006 and body["settings"]["width"] == 832
     assert body["tags"] == []
@@ -131,6 +133,32 @@ def test_framing_picks_the_single_most_likely() -> None:
     ]
     assert build_prompt(scores) == "1girl, cowboy shot"
     assert build_prompt([TagScore("1girl", 0.99, "general"), TagScore("portrait", 0.15, "general")]) == "1girl"
+
+
+def test_split_characters(monkeypatch: pytest.MonkeyPatch) -> None:
+    from python.manga_v2 import detect
+
+    # 左右に二人。左の人だけ金髪・眼鏡、右の人だけ黒髪。笑顔は二人とも(全体に残す)
+    monkeypatch.setattr(detect, "detect_heads_in_image", lambda image: [(260, 40, 340, 120), (60, 40, 140, 120)])
+    left = [
+        TagScore("1girl", 0.95, "general"),
+        TagScore("blonde hair", 0.9, "general"),
+        TagScore("glasses", 0.8, "general"),
+        TagScore("smile", 0.9, "general"),
+    ]
+    right = [
+        TagScore("1boy", 0.9, "general"),
+        TagScore("black hair", 0.85, "general"),
+        TagScore("smile", 0.8, "general"),
+    ]
+    crops = iter([left, right])
+    monkeypatch.setattr(image_tagger, "tag_image", lambda image: next(crops))
+    guesses = image_tagger.split_characters(Image.new("RGB", (400, 400), "white"))
+    assert [g.prompt for g in guesses] == ["1girl, blonde hair, glasses", "1boy, black hair"]
+    assert [g.center[0] for g in guesses] == [0.3, 0.7]
+    # 一人なら分けない
+    monkeypatch.setattr(detect, "detect_heads_in_image", lambda image: [(60, 40, 140, 120)])
+    assert image_tagger.split_characters(Image.new("RGB", (400, 400), "white")) == []
 
 
 def test_monochrome_from_pixels() -> None:

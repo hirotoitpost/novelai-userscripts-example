@@ -59,6 +59,16 @@ export interface GenerateRequest {
   cfg_rescale?: number
   variety_boost?: boolean
   i2i?: I2iRequest
+  /** キャラごとのプロンプト(V4 以降)。position は画像に対する割合 (x, y) */
+  characters?: { prompt: string; negative_prompt?: string; position: [number, number]; enabled?: boolean }[]
+}
+
+/** 画像生成ページのキャラごとのプロンプト(localStorage の nai_gen_characters)。逆引きからも渡す */
+export interface CharacterPromptInput {
+  prompt: string
+  negative: string
+  x: number
+  y: number
 }
 
 /** /api/image/presets の settings。挿絵パネル(MangaImageSettings)と共用。 */

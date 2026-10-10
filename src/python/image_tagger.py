@@ -248,15 +248,242 @@ def build_prompt(
     scores: list[TagScore],
     general_threshold: float = GENERAL_THRESHOLD,
     character_threshold: float = CHARACTER_THRESHOLD,
+    exclude: set[str] | frozenset[str] = frozenset(),
 ) -> str:
-    """選んだタグを NovelAI の並び(人数 → キャラ名 → 絵柄 → そのほかを確率の高い順)にする。"""
-    chosen = select_tags(scores, general_threshold, character_threshold)
+    """
+    選んだタグを NovelAI の並び(人数 → キャラ名 → 絵柄 → そのほかを確率の高い順)にする。
+    exclude はキャラごとのプロンプトに移したタグ(全体には入れない)。
+    """
+    chosen = [s for s in select_tags(scores, general_threshold, character_threshold) if s.tag not in exclude]
     counts = [s.tag for s in chosen if s.tag in _COUNT_TAGS]
     counts.sort(key=_COUNT_TAGS.index)
     characters = [s.tag for s in chosen if s.category == "character"]
     styles = [s.tag for s in chosen if s.tag in STYLE_TAGS]
     others = [s.tag for s in chosen if s.category == "general" and s.tag not in _COUNT_TAGS and s.tag not in STYLE_TAGS]
     return ", ".join(counts + characters + styles + others)
+
+
+# ---- 人物ごとのタグ(誰がどの髪色・服か) ----
+
+# 人物ごとに分けるのは、この人数まで(NovelAI のキャラごとのプロンプトの上限に合わせる)
+_MAX_CHARACTERS = 4
+# 人物ごとのタグにする条件: その人の切り抜きでの確率がこれ以上で、ほかの人より _CHARACTER_MARGIN 以上高い
+_CHARACTER_TAG_THRESHOLD = 0.5
+_CHARACTER_MARGIN = 0.3
+# 人物ごとには分けないタグ(絵全体のこと)
+_SCENE_ONLY = {"solo", "multiple girls", "multiple boys", "male focus", "female focus", "solo focus"}
+
+# 人物のタグにする語(容姿・服・小物・表情・しぐさ)。切り抜きには近くの物や背景も写るので(cup・brick wall など)、
+# これらの語を含むタグだけを人物に付け、ほかは全体に残す
+_PERSON_WORDS = {
+    # 髪・顔・体
+    "hair",
+    "bangs",
+    "sidelocks",
+    "ahoge",
+    "ponytail",
+    "twintails",
+    "braid",
+    "bun",
+    "bob",
+    "eyes",
+    "eyebrows",
+    "eyelashes",
+    "skin",
+    "mole",
+    "freckles",
+    "ears",
+    "fang",
+    "teeth",
+    "lips",
+    "beard",
+    "mustache",
+    "facial",
+    "breasts",
+    "muscular",
+    # 服・小物
+    "shirt",
+    "jacket",
+    "coat",
+    "dress",
+    "skirt",
+    "pants",
+    "shorts",
+    "jeans",
+    "kimono",
+    "hakama",
+    "yukata",
+    "obi",
+    "apron",
+    "sweater",
+    "hoodie",
+    "cardigan",
+    "vest",
+    "suit",
+    "necktie",
+    "tie",
+    "bowtie",
+    "collar",
+    "sleeves",
+    "gloves",
+    "socks",
+    "thighhighs",
+    "pantyhose",
+    "boots",
+    "shoes",
+    "sneakers",
+    "scarf",
+    "earrings",
+    "jewelry",
+    "necklace",
+    "choker",
+    "uniform",
+    "clothes",
+    "hat",
+    "headwear",
+    "beret",
+    "cap",
+    "hood",
+    "ribbon",
+    "bow",
+    "hairclip",
+    "hairband",
+    "headband",
+    "headphones",
+    "glasses",
+    "eyewear",
+    "belt",
+    "buttons",
+    "lapels",
+    "frills",
+    "maid",
+    "wa",
+    "turtleneck",
+    "camisole",
+    "blazer",
+    "sailor",
+    "overalls",
+    "bag",
+    "backpack",
+    "watch",
+    "bracelet",
+    "ring",
+    "cape",
+    "cloak",
+    "armor",
+    # 表情・しぐさ
+    "smile",
+    "grin",
+    "blush",
+    "mouth",
+    "tongue",
+    "tears",
+    "crying",
+    "frown",
+    "pout",
+    "expressionless",
+    "serious",
+    "surprised",
+    "closed",
+    "looking",
+    "wink",
+    "hand",
+    "hands",
+    "arm",
+    "arms",
+    "finger",
+    "legs",
+    "sitting",
+    "standing",
+    "walking",
+    "running",
+    "holding",
+    "reading",
+    "waving",
+    "v",
+    "crossed",
+    "head",
+    "tilt",
+    "leaning",
+    "pocket",
+}
+
+
+def _is_person_tag(tag: str) -> bool:
+    return any(word in _PERSON_WORDS for word in tag.replace("(", " ").replace(")", " ").split())
+
+
+@dataclass
+class CharacterGuess:
+    """推定した人物。tags はその人だけのタグ(確率の高い順)、center はキャラの位置(画像に対する割合)。"""
+
+    gender: str
+    tags: list[str]
+    center: tuple[float, float]
+
+    @property
+    def prompt(self) -> str:
+        return ", ".join([self.gender, *self.tags])
+
+
+def _person_crops(image: Image.Image, heads: list[tuple[float, float, float, float]]) -> list[Image.Image]:
+    """頭ごとに、その人が写っている範囲(左右は隣の人との中間まで、上は頭の少し上から画像の下まで)。"""
+    width, height = image.size
+    centers = [(b[0] + b[2]) / 2 for b in heads]
+    crops = []
+    for i, (x0, y0, x1, y1) in enumerate(heads):
+        head_w = x1 - x0
+        left = max(0.0, centers[i] - 2 * head_w, (centers[i - 1] + centers[i]) / 2 if i else 0.0)
+        right = min(
+            float(width),
+            centers[i] + 2 * head_w,
+            (centers[i] + centers[i + 1]) / 2 if i + 1 < len(heads) else float(width),
+        )
+        top = max(0.0, y0 - 0.3 * (y1 - y0))
+        crops.append(image.crop((int(left), int(top), int(right), height)))
+    return crops
+
+
+def _grid(value: float) -> float:
+    """NovelAI のキャラの位置は 0.1〜0.9 の 0.2 刻み(5×5 のマス)。"""
+    return round(min(max(round((value - 0.1) / 0.2) * 0.2 + 0.1, 0.1), 0.9), 1)
+
+
+def split_characters(image: Image.Image) -> list[CharacterGuess]:
+    """
+    二人以上写っている絵で、人物ごとのタグを推定する(左から順)。一人以下なら空。
+
+    頭の位置で人物を切り抜き、切り抜きごとにタグを判定する。ある人の切り抜きだけで確率が高いタグ
+    (髪の色・服など)をその人のタグにし、どの人でも同じくらいのタグ(場所・笑顔など)は全体に残す。
+    評価用データの二人の絵 10 枚では、人物ごとの髪の色が全部正しい人に付いた(絵を目視で確かめた正解で)。
+    """
+    from .manga_v2.detect import detect_heads_in_image
+
+    heads = sorted(detect_heads_in_image(image), key=lambda b: (b[0] + b[2]) / 2)[:_MAX_CHARACTERS]
+    if len(heads) < 2:
+        return []
+    per_person = [
+        {s.tag: s.probability for s in tag_image(crop) if s.category == "general"}
+        for crop in _person_crops(image, heads)
+    ]
+    skip = set(_COUNT_TAGS) | set(STYLE_TAGS) | set(FRAMING_TAGS) | _SCENE_ONLY
+    assigned: list[list[tuple[float, str]]] = [[] for _ in heads]
+    for tag in {t for t in set().union(*per_person) - skip if _is_person_tag(t)}:
+        values = [person.get(tag, 0.0) for person in per_person]
+        best = max(range(len(values)), key=values.__getitem__)
+        runner_up = max(v for i, v in enumerate(values) if i != best)
+        if values[best] >= _CHARACTER_TAG_THRESHOLD and values[best] - runner_up >= _CHARACTER_MARGIN:
+            assigned[best].append((values[best], tag))
+    width = image.width
+    guesses = []
+    for (x0, y0, x1, y1), person, tags in zip(heads, per_person, assigned):
+        gender = max(("1girl", "1boy", "1other"), key=lambda g: person.get(g, 0.0))
+        names = [tag for _, tag in sorted(tags, reverse=True)]
+        names = [t for t in names if not _implied(t, names)]
+        # 位置は頭の中心の左右。上下は真ん中にする(座っている・寝ているなどで体の中心が読みにくいため)
+        center = (_grid((x0 + x1) / 2 / width), 0.5)
+        guesses.append(CharacterGuess(gender, names, center))
+    return guesses
 
 
 def build_negative(base: str, prompt: str) -> str:
@@ -318,7 +545,16 @@ def embedded_prompt(data: bytes) -> dict[str, Any] | None:
     negatives = (v4_negative.get("caption") or {}).get("char_captions") or []
     for index, caption in enumerate(captions):
         negative = negatives[index].get("char_caption", "") if index < len(negatives) else ""
-        characters.append({"prompt": caption.get("char_caption", ""), "negative": negative})
+        centers = caption.get("centers") or []
+        center = centers[0] if centers and isinstance(centers[0], dict) else {}
+        characters.append(
+            {
+                "prompt": caption.get("char_caption", ""),
+                "negative": negative,
+                "x": center.get("x"),
+                "y": center.get("y"),
+            }
+        )
     seed, steps, scale = number("seed"), number("steps"), number("scale")
     width, height = number("width"), number("height")
     return {

@@ -148,6 +148,22 @@ LABEL_FIXES: dict[str, tuple[list[str], list[str]]] = {
 }
 
 
+# 二人の絵の人物(左から順に、絵を目視で確かめた性別と髪の色)。生成は1つのプロンプトなので、
+# 指定と違う人に属性が付くことがある(029 は女性が青髪・男性が金髪で、指定と逆。006 は二人とも女性)。
+VERIFIED_PEOPLE: dict[str, list[tuple[str, str]]] = {
+    "eval_006": [("1girl", "blonde hair"), ("1girl", "black hair")],
+    "eval_007": [("1girl", "pink hair"), ("1boy", "grey hair")],
+    "eval_011": [("1girl", "blue hair"), ("1boy", "black hair")],
+    "eval_013": [("1girl", "brown hair"), ("1boy", "red hair")],
+    "eval_014": [("1girl", "brown hair"), ("1boy", "black hair")],
+    "eval_016": [("1boy", "grey hair"), ("1girl", "brown hair")],
+    "eval_029": [("1girl", "blue hair"), ("1boy", "blonde hair")],
+    "eval_031": [("1boy", "brown hair"), ("1girl", "blonde hair")],
+    "eval_045": [("1boy", "black hair"), ("1girl", "green hair")],
+    "eval_047": [("1girl", "pink hair"), ("1boy", "grey hair")],
+}
+
+
 def truth_of(item: dict) -> list[str]:
     """評価の正解(生成に使ったタグを、目視で直したもの)。"""
     remove, add = LABEL_FIXES.get(item["name"], ([], []))
@@ -169,18 +185,24 @@ def make_prompts(count: int) -> list[dict]:
     for index in range(count):
         style = rng.choice(STYLES)
         kind = rng.choices(["girl", "boy", "couple", "none"], weights=[4, 3, 2, 2])[0]
+        # 人物ごとのタグ(誰がどの髪色・服かの評価に使う)。乱数の使い方は変えない(同じデータになるように)
+        people: list[dict] = []
         if kind == "none":
             tags = list(rng.choice(NO_HUMANS))
             size = rng.choice(["landscape", "square"])
         else:
             if kind == "couple":
-                tags = ["1girl", "1boy", *person(rng, "girl"), *person(rng, "boy"), "smile"]
+                people = [{"gender": "1girl", "tags": person(rng, "girl")}, {"gender": "1boy", "tags": person(rng, "boy")}]
+                tags = ["1girl", "1boy", *people[0]["tags"], *people[1]["tags"], "smile"]
             else:
-                tags = ["1girl" if kind == "girl" else "1boy", "solo", *person(rng, kind), rng.choice(EXPRESSIONS)]
+                people = [{"gender": "1girl" if kind == "girl" else "1boy", "tags": person(rng, kind)}]
+                tags = [people[0]["gender"], "solo", *people[0]["tags"], rng.choice(EXPRESSIONS)]
             tags += [rng.choice(FRAMING), *rng.choice(POSES), *rng.choice(PLACES)]
             size = "landscape" if kind == "couple" else rng.choice(["portrait", "portrait", "square"])
         tags = list(dict.fromkeys(style + tags))
-        items.append({"name": f"eval_{index:03d}", "tags": tags, "size": size, "seed": rng.randrange(2**32)})
+        items.append(
+            {"name": f"eval_{index:03d}", "tags": tags, "people": people, "size": size, "seed": rng.randrange(2**32)}
+        )
     return items
 
 
@@ -211,6 +233,8 @@ async def main() -> None:
         path = image_dir / f"{item['name']}.png"
         item["image"] = str(path.relative_to(ROOT)).replace("\\", "/")
         item["truth"] = truth_of(item)
+        if item["name"] in VERIFIED_PEOPLE:
+            item["verified_people"] = [{"gender": g, "hair": h} for g, h in VERIFIED_PEOPLE[item["name"]]]
         if path.exists():
             continue
         width, height = SIZES[item["size"]]

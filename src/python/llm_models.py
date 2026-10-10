@@ -45,6 +45,9 @@ class ReverseTag(BaseModel):
 class ReverseCharacter(BaseModel):
     prompt: str
     negative: str = ""
+    # キャラの位置(画像に対する割合)。推定のときだけ
+    x: Optional[float] = None
+    y: Optional[float] = None
 
 
 class ReverseSettings(BaseModel):
@@ -69,6 +72,8 @@ class ReverseTagsResponse(BaseModel):
     settings: Optional[ReverseSettings] = None
     software: Optional[str] = None
     tags: list[ReverseTag] = []
+    # キャラごとのプロンプトに移したタグ(全体のプロンプトには入れない)
+    character_tags: list[str] = []
     rating: Optional[str] = None
     general_threshold: float
     character_threshold: float
