@@ -608,3 +608,4 @@ def _as_dict(value: Any) -> dict[str, Any]:
             except (ValueError, SyntaxError):
                 return {}
     return {}
+
