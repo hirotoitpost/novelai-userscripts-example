@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import CharacterSheetEditor from './CharacterSheetEditor'
 
 export interface Character {
@@ -45,6 +46,7 @@ interface StoryCharacterUsage {
  * キャラは物語をまたいで共有されるので、他の物語で作った設定もそのまま選べる。
  */
 export default function StoryCharacters({ apiOrigin, onChanged, disabled, storyId }: Props) {
+  const navigate = useNavigate()
   const [characters, setCharacters] = useState<Character[]>([])
   const [editing, setEditing] = useState<Record<number, string>>({})
   const [open, setOpen] = useState<Record<number, boolean>>({})
@@ -219,6 +221,9 @@ export default function StoryCharacters({ apiOrigin, onChanged, disabled, storyI
             <div className="story-actions">
               <button type="button" onClick={() => setOpen({ ...open, [character.id]: !open[character.id] })}>
                 {open[character.id] ? 'キャラシートを閉じる' : 'キャラシートを開く'}
+              </button>
+              <button type="button" onClick={() => navigate(`/character-dataset?character=${character.id}`)}>
+                キャラ別データセットで開く
               </button>
             </div>
           </li>
