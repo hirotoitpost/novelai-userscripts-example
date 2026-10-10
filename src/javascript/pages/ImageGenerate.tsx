@@ -7,7 +7,7 @@ import { naiImageFilename } from '../downloadFilename'
 import type { Character } from '../components/StoryCharacters'
 import {
   apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
-  ImagePreset, ImagePresetSettings, CharacterSheetPrompt, isAuthExpired, notifyAuthExpired,
+  ImagePreset, ImagePresetSettings, CharacterSheetPrompt, isAuthExpired, notifyAuthExpired, CharacterPromptInput,
 } from '../api'
 import './ImageGenerate.css'
 
@@ -101,6 +101,10 @@ const UC_PRESETS = [
   { value: 'furry_focus', label: 'ファーリー重視' },
 ] as const
 
+// キャラの位置の選択肢(NovelAI のキャラの位置は 0.1〜0.9 の 5 段階)
+const CHAR_X: [number, string][] = [[0.1, '左端'], [0.3, '左'], [0.5, '中央'], [0.7, '右'], [0.9, '右端']]
+const CHAR_Y: [number, string][] = [[0.1, '上端'], [0.3, '上'], [0.5, '中'], [0.7, '下'], [0.9, '下端']]
+
 export default function ImageGenerate() {
   const { token } = useAuth()
   const navigate = useNavigate()
@@ -118,6 +122,8 @@ export default function ImageGenerate() {
   const [noiseSchedule, setNoiseSchedule] = useLocalStorage('nai_gen_noise_schedule', AI_DEFAULTS.noiseSchedule)
   const [cfgRescale,    setCfgRescale]    = useLocalStorage('nai_gen_cfg_rescale',    AI_DEFAULTS.cfgRescale)
   const [varietyBoost,  setVarietyBoost]  = useLocalStorage('nai_gen_variety_boost',  AI_DEFAULTS.varietyBoost)
+  // キャラごとのプロンプト(二人以上を描き分ける。逆引きの結果からも入る)
+  const [charPrompts,   setCharPrompts]   = useLocalStorage<CharacterPromptInput[]>('nai_gen_characters', [])
 
   // プロンプトチャンク
   const promptRef                     = useRef<HTMLTextAreaElement>(null)
@@ -413,6 +419,11 @@ export default function ImageGenerate() {
       cfg_rescale:    cfgRescale,
       variety_boost:  varietyBoost,
       i2i,
+      characters: charPrompts.some(c => c.prompt.trim())
+        ? charPrompts
+          .filter(c => c.prompt.trim())
+          .map(c => ({ prompt: c.prompt.trim(), negative_prompt: c.negative.trim(), position: [c.x, c.y] as [number, number], enabled: true }))
+        : undefined,
     }
 
     try {
@@ -577,6 +588,66 @@ export default function ImageGenerate() {
               placeholder="lowres, bad anatomy, ..."
               rows={3}
             />
+          </section>
+
+          {/* キャラごとのプロンプト */}
+          <section className="ig-section">
+            <div className="ig-prompt-header">
+              <span className="ig-label">キャラごとのプロンプト</span>
+              {charPrompts.length > 0 && (
+                <button type="button" className="ig-char-clear" onClick={() => setCharPrompts([])}>すべて外す</button>
+              )}
+            </div>
+            {charPrompts.length === 0 && (
+              <p className="ig-char-hint">二人以上を描き分けるときに使います(髪の色や服を、それぞれの人に付ける)。</p>
+            )}
+            {charPrompts.map((c, i) => (
+              <div key={i} className="ig-char">
+                <div className="ig-char-head">
+                  <span>キャラ{i + 1}</span>
+                  <label>
+                    位置
+                    <select
+                      value={c.x}
+                      onChange={e => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, x: Number(e.target.value) } : p)))}
+                      aria-label={`キャラ${i + 1}の左右の位置`}
+                    >
+                      {CHAR_X.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                    </select>
+                    <select
+                      value={c.y}
+                      onChange={e => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, y: Number(e.target.value) } : p)))}
+                      aria-label={`キャラ${i + 1}の上下の位置`}
+                    >
+                      {CHAR_Y.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => setCharPrompts(charPrompts.filter((_, j) => j !== i))} aria-label={`キャラ${i + 1}を外す`}>×</button>
+                </div>
+                <textarea
+                  className="ig-textarea"
+                  rows={2}
+                  value={c.prompt}
+                  placeholder="1girl, blonde hair, glasses, white shirt"
+                  onChange={e => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, prompt: e.target.value } : p)))}
+                />
+                <input
+                  className="ig-char-neg"
+                  value={c.negative}
+                  placeholder="このキャラのネガティブ(任意)"
+                  onChange={e => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, negative: e.target.value } : p)))}
+                />
+              </div>
+            ))}
+            {charPrompts.length < 6 && (
+              <button
+                type="button"
+                className="ig-char-add"
+                onClick={() => setCharPrompts([...charPrompts, { prompt: '', negative: '', x: charPrompts.length % 2 ? 0.7 : 0.3, y: 0.5 }])}
+              >
+                ＋ キャラを追加
+              </button>
+            )}
           </section>
 
           {/* Settings */}

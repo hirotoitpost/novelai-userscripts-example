@@ -772,3 +772,61 @@
   .ig-canvas { padding: 1rem; min-height: 60vh; }
   .ig-result-img { max-height: 70vh; }
 }
+
+/* ── キャラごとのプロンプト ── */
+.ig-char {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--nai-border);
+  border-radius: 8px;
+}
+
+.ig-char-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--nai-muted);
+}
+
+.ig-char-head label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+
+.ig-char-head select,
+.ig-char-neg {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.35rem;
+}
+
+.ig-char-neg { width: 100%; box-sizing: border-box; }
+
+.ig-char-head button,
+.ig-char-clear,
+.ig-char-add {
+  background: transparent;
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  color: var(--nai-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+
+.ig-char-hint {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  color: var(--nai-muted);
+}

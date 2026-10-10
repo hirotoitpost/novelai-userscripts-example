@@ -366,6 +366,7 @@ def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
         build_prompt,
         embedded_prompt,
         rating_of,
+        split_characters,
         tag_image,
     )
 
@@ -387,10 +388,16 @@ def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
     if embedded is not None:
         return {"source": "metadata", **embedded, **thresholds, "model": MODEL_NAME}
     scores = tag_image(image)
-    positive = build_prompt(scores)
+    # 二人以上なら、髪の色や服を人物ごとのプロンプトに分ける(全体に混ぜると誰の属性か分からなくなる)
+    characters = split_characters(image)
+    moved = {tag for c in characters for tag in c.tags}
+    positive = build_prompt(scores, exclude=moved)
     return {
         "source": "tagger",
         "positive": positive,
+        "characters": [{"prompt": c.prompt, "negative": "", "x": c.center[0], "y": c.center[1]} for c in characters],
+        # 画面でしきい値を変えて全体のプロンプトを組み直すとき、キャラに移したタグは入れない
+        "character_tags": sorted(moved),
         "negative": build_negative(DEFAULT_NEGATIVE, positive),
         "tags": [
             {"tag": s.tag, "probability": round(s.probability, 4), "category": s.category}

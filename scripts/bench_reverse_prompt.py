@@ -1,7 +1,7 @@
 """
 リバースプロンプト(画像 → プロンプトの逆引き)の性能を、評価用データ(scripts/make_reverse_eval.py)で測る。
 
-正解は生成に使ったタグ(すべて danbooru の語彙)。逆引きしたタグとの一致で、精度(P)・再現率(R)・F1 と、
+正解は生成に使ったタグ(すべて danbooru の語彙)を、生成した絵を目視で確かめて直したもの(manifest の truth)。逆引きしたタグとの一致で、精度(P)・再現率(R)・F1 と、
 タグの種類ごとの再現率を出す。画像に埋め込まれた生成情報は使わず、画素だけから推定する。
 
 実行方法:
@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from PIL import Image  # noqa: E402
 
 import make_reverse_eval as ev  # noqa: E402
-from python.image_tagger import STYLE_TAGS, TagScore, select_tags, tag_image  # noqa: E402
+from python.image_tagger import STYLE_TAGS, TagScore, select_tags, split_characters, tag_image  # noqa: E402
 
 MANIFEST = ev.OUT_DIR / "manifest.json"
 
@@ -52,7 +52,7 @@ def score(items: list[dict], predictions: dict[str, set[str]]) -> dict:
     tp = fp = fn = 0
     by_group: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for item in items:
-        truth = set(item["tags"])
+        truth = set(item.get("truth") or item["tags"])
         pred = predictions[item["name"]]
         tp += len(truth & pred)
         fp += len(pred - truth)
@@ -70,6 +70,31 @@ def score(items: list[dict], predictions: dict[str, set[str]]) -> dict:
         "tags": sum(len(v) for v in predictions.values()) / len(items),
         "groups": {name: hit / total for name, (hit, total) in by_group.items()},
     }
+
+
+def people_score(items: list[dict]) -> None:
+    """
+    二人の絵で、人物ごとのプロンプト(左から順)に、その人の性別と髪の色が付いたか。正解は絵を目視で確かめた
+    もの(manifest の verified_people)。髪の色がほかの人のプロンプトに付いたら「入れ替わり」。
+    """
+    people = [it for it in items if it.get("verified_people")]
+    if not people:
+        return
+    right = swapped = gender_ok = total = 0
+    for item in people:
+        guesses = split_characters(Image.open(ROOT / item["image"]).convert("RGB"))
+        truth = item["verified_people"]
+        for i, person in enumerate(truth):
+            total += 1
+            if i >= len(guesses):
+                continue
+            gender_ok += guesses[i].gender == person["gender"]
+            right += person["hair"] in guesses[i].tags
+            swapped += any(person["hair"] in g.tags for j, g in enumerate(guesses) if j != i)
+    print(
+        f"\n人物ごと(二人の絵 {len(people)} 枚・{total} 人): 髪の色が正しい人に {right}・ほかの人に {swapped}・"
+        f"性別が合った {gender_ok}"
+    )
 
 
 def main() -> None:
@@ -100,6 +125,7 @@ def main() -> None:
     for label, result in results.items():
         groups = "  ".join(f"{name} {value:.2f}" for name, value in result["groups"].items())
         print(f"  {label}: {groups}")
+    people_score(items)
     # 絵柄のタグの定義が評価用データとそろっているか(STYLE_TAGS に無いものは低いしきい値の対象外)
     missing = GROUPS["絵柄"] - set(STYLE_TAGS)
     if missing:

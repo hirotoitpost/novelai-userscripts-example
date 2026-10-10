@@ -10,6 +10,7 @@ import {
   MetadataGenRequest,
   ReversePromptRequest,
   apiFetch,
+  type CharacterPromptInput,
 } from '../api'
 import './LLMPage.css'
 
@@ -524,10 +525,12 @@ interface ReverseResult {
   source: 'metadata' | 'tagger'
   positive: string
   negative: string
-  characters: { prompt: string; negative: string }[]
+  characters: { prompt: string; negative: string; x?: number | null; y?: number | null }[]
   settings: { seed: number | null; steps: number | null; scale: number | null; sampler: string | null; width: number | null; height: number | null } | null
   software: string | null
   tags: ReverseTag[]
+  // キャラごとのプロンプトに移したタグ(全体のプロンプトには入れない)
+  character_tags: string[]
   rating: string | null
   general_threshold: number
   character_threshold: number
@@ -546,6 +549,10 @@ const COUNT_TAGS = [
 const RATING_LABELS: Record<string, string> = {
   general: '全年齢', sensitive: 'センシティブ', questionable: 'きわどい', explicit: '成人向け',
 }
+
+// 構図のタグ。一番確かな1つだけを選ぶ(src/python/image_tagger.py の FRAMING_TAGS・FRAMING_THRESHOLD と同じ)
+const FRAMING_TAGS = ['portrait', 'upper body', 'cowboy shot', 'full body']
+const FRAMING_THRESHOLD = 0.2
 
 const SIZE_WORDS = new Set(['large', 'huge', 'gigantic', 'small', 'flat', 'medium', 'big', 'long', 'short', 'thick'])
 
@@ -567,6 +574,11 @@ function tagsToPrompt(tags: ReverseTag[], picked: Set<string>, manual: Record<st
   const styleTags = kept.filter(t => styles.includes(t.tag))
   const others = kept.filter(t => t.category === 'general' && !COUNT_TAGS.includes(t.tag) && !styles.includes(t.tag))
   return [...counts, ...characters, ...styleTags, ...others].map(t => t.tag).join(', ')
+}
+
+/** キャラの位置を NovelAI の 5 段階(0.1〜0.9)にそろえる(画像生成ページの選択肢と合わせる) */
+function toGrid(value: number): number {
+  return Math.round(Math.min(Math.max(Math.round((value - 0.1) / 0.2) * 0.2 + 0.1, 0.1), 0.9) * 10) / 10
 }
 
 function ReversePromptPanel() {
@@ -614,21 +626,23 @@ function ReversePromptPanel() {
     if (result!.style_tags.includes(t.tag)) return Math.min(result!.style_threshold, threshold)
     return threshold
   }
+  // 構図は、しきい値に関係なく一番確かな1つ
+  const framing = (result?.tags ?? [])
+    .filter(t => FRAMING_TAGS.includes(t.tag) && t.probability >= FRAMING_THRESHOLD)
+    .sort((a, b) => b.probability - a.probability)[0]?.tag
   const picked = new Set(
     (result?.tags ?? [])
-      .filter(t => toggled[t.tag] ?? (t.probability >= tagThreshold(t)))
+      .filter(t => toggled[t.tag] ?? (FRAMING_TAGS.includes(t.tag) ? t.tag === framing : t.probability >= tagThreshold(t)))
       .map(t => t.tag),
   )
   const positive = result?.source === 'tagger'
-    ? tagsToPrompt(result.tags, picked, toggled, result.style_tags)
+    ? tagsToPrompt(result.tags.filter(t => !result.character_tags.includes(t.tag)), picked, toggled, result.style_tags)
     : result?.positive ?? ''
   // 画像にあるタグ(手で入れたものも)はネガティブから外す(両方にあると打ち消し合う)
   const positiveTags = new Set(positive.split(',').map(t => t.trim()))
   const negative = result?.source === 'tagger'
     ? result.negative.split(',').map(t => t.trim()).filter(t => t && !positiveTags.has(t)).join(', ')
     : result?.negative ?? ''
-  // 画像生成ページはキャラごとの欄が無いので、キャラのプロンプトは本体の後ろにつなげる
-  const merged = [positive, ...(result?.characters ?? []).map(c => c.prompt)].filter(Boolean).join(', ')
 
   const copy = async (text: string, key: string) => {
     await navigator.clipboard.writeText(text).catch(() => {})
@@ -638,7 +652,15 @@ function ReversePromptPanel() {
 
   const handleUse = () => {
     if (!result) return
-    localStorage.setItem('nai_gen_prompt',     JSON.stringify(merged))
+    // キャラごとのプロンプトは、画像生成ページのキャラの欄に入れる(全体のプロンプトには混ぜない)
+    const chars: CharacterPromptInput[] = result.characters.map((c, i) => ({
+      prompt: c.prompt,
+      negative: c.negative,
+      x: toGrid(c.x ?? (result.characters.length > 1 ? 0.1 + (0.8 * i) / (result.characters.length - 1) : 0.5)),
+      y: toGrid(c.y ?? 0.5),
+    }))
+    localStorage.setItem('nai_gen_characters', JSON.stringify(chars))
+    localStorage.setItem('nai_gen_prompt',     JSON.stringify(positive))
     localStorage.setItem('nai_gen_neg_prompt', JSON.stringify(negative))
     if (result.settings?.steps) localStorage.setItem('nai_gen_steps', JSON.stringify(result.settings.steps))
     if (result.settings?.scale) localStorage.setItem('nai_gen_scale', JSON.stringify(result.settings.scale))
@@ -747,10 +769,13 @@ function ReversePromptPanel() {
             </p>
           )}
           <div className="llm-output-actions">
-            <button className="llm-use-btn" onClick={handleUse} disabled={!merged}>画像生成に使用 →</button>
+            <button className="llm-use-btn" onClick={handleUse} disabled={!positive && !result.characters.length}>画像生成に使用 →</button>
           </div>
           {result.characters.length > 0 && (
-            <p className="llm-aux-explanation">画像生成ページにはキャラごとの欄が無いため、キャラのプロンプトは Positive の後ろにつなげて渡します。</p>
+            <p className="llm-aux-explanation">
+              {result.source === 'tagger' && '写っている人ごとに、髪の色や服をキャラのプロンプトに分けました。'}
+              キャラのプロンプトは、画像生成ページの「キャラごとのプロンプト」に位置と一緒に入ります。
+            </p>
           )}
         </div>
       )}

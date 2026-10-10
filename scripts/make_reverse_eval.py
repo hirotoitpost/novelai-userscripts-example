@@ -12,7 +12,8 @@ Opus プランで Anlas を使わない範囲(約1メガピクセル・27ステ�
   uv run python scripts/make_reverse_eval.py            # 48枚(既定)
   uv run python scripts/make_reverse_eval.py --count 10
 
-出力: data/eval/reverse_prompt/images/*.png と manifest.json(画像ごとの正解タグ・シード・サイズ)
+出力: data/eval/reverse_prompt/images/*.png と manifest.json(画像ごとの生成に使ったタグ tags、
+目視で直した正解 truth、シード・サイズ)。生成済みの画像は作り直さない(正解の直しだけ反映する)
 """
 
 from __future__ import annotations
@@ -113,6 +114,62 @@ NO_HUMANS = [
 ]
 
 
+# 生成した絵が指定どおりでなかったものの正解の直し(2026-10-10 に48枚を目視で確認)。
+# 構図: portrait=顔と肩、upper body=腰より上、cowboy shot=太ももあたりまで、full body=足先まで。
+# 絵柄: flat color を指定した絵は全部、実際には平塗りでなかった。色のある絵の monochrome・sketch も外す。
+# (名前 → (外すタグ, 足すタグ))
+LABEL_FIXES: dict[str, tuple[list[str], list[str]]] = {
+    "eval_001": (["upper body"], ["cowboy shot"]),
+    "eval_004": (["flat color"], []),
+    "eval_005": (["upper body", "flat color"], ["cowboy shot"]),
+    "eval_006": (["upper body"], ["cowboy shot"]),
+    "eval_007": (["upper body"], ["cowboy shot"]),
+    "eval_008": (["flat color"], []),
+    "eval_009": (["flat color"], []),
+    "eval_011": (["flat color"], []),
+    "eval_014": (["upper body"], ["cowboy shot"]),
+    "eval_016": (["cowboy shot"], ["full body"]),
+    "eval_019": (["sketch", "monochrome"], []),
+    "eval_020": (["flat color"], []),
+    "eval_021": (["portrait"], ["upper body"]),
+    "eval_025": (["portrait", "watercolor (medium)", "traditional media"], ["cowboy shot"]),
+    "eval_027": (["portrait", "flat color"], ["upper body"]),
+    "eval_029": (["portrait", "watercolor (medium)", "traditional media"], ["upper body"]),
+    "eval_030": (["upper body"], ["cowboy shot"]),
+    "eval_032": (["sketch"], []),
+    "eval_034": (["portrait"], ["upper body"]),
+    "eval_037": (["portrait"], ["upper body"]),
+    "eval_038": (["watercolor (medium)", "traditional media"], []),
+    "eval_040": (["flat color"], []),
+    "eval_042": (["portrait", "monochrome", "greyscale"], ["cowboy shot"]),
+    "eval_044": (["upper body"], ["portrait"]),
+    "eval_045": (["greyscale"], []),
+    "eval_047": (["portrait"], ["upper body"]),
+}
+
+
+# 二人の絵の人物(左から順に、絵を目視で確かめた性別と髪の色)。生成は1つのプロンプトなので、
+# 指定と違う人に属性が付くことがある(029 は女性が青髪・男性が金髪で、指定と逆。006 は二人とも女性)。
+VERIFIED_PEOPLE: dict[str, list[tuple[str, str]]] = {
+    "eval_006": [("1girl", "blonde hair"), ("1girl", "black hair")],
+    "eval_007": [("1girl", "pink hair"), ("1boy", "grey hair")],
+    "eval_011": [("1girl", "blue hair"), ("1boy", "black hair")],
+    "eval_013": [("1girl", "brown hair"), ("1boy", "red hair")],
+    "eval_014": [("1girl", "brown hair"), ("1boy", "black hair")],
+    "eval_016": [("1boy", "grey hair"), ("1girl", "brown hair")],
+    "eval_029": [("1girl", "blue hair"), ("1boy", "blonde hair")],
+    "eval_031": [("1boy", "brown hair"), ("1girl", "blonde hair")],
+    "eval_045": [("1boy", "black hair"), ("1girl", "green hair")],
+    "eval_047": [("1girl", "pink hair"), ("1boy", "grey hair")],
+}
+
+
+def truth_of(item: dict) -> list[str]:
+    """評価の正解(生成に使ったタグを、目視で直したもの)。"""
+    remove, add = LABEL_FIXES.get(item["name"], ([], []))
+    return [t for t in item["tags"] if t not in remove] + [t for t in add if t not in item["tags"]]
+
+
 def person(rng: random.Random, gender: str) -> list[str]:
     tags = [rng.choice(HAIR), rng.choice(HAIR_LENGTH), rng.choice(EYES), *rng.choice(OUTFITS)]
     if rng.random() < 0.5:
@@ -128,18 +185,24 @@ def make_prompts(count: int) -> list[dict]:
     for index in range(count):
         style = rng.choice(STYLES)
         kind = rng.choices(["girl", "boy", "couple", "none"], weights=[4, 3, 2, 2])[0]
+        # 人物ごとのタグ(誰がどの髪色・服かの評価に使う)。乱数の使い方は変えない(同じデータになるように)
+        people: list[dict] = []
         if kind == "none":
             tags = list(rng.choice(NO_HUMANS))
             size = rng.choice(["landscape", "square"])
         else:
             if kind == "couple":
-                tags = ["1girl", "1boy", *person(rng, "girl"), *person(rng, "boy"), "smile"]
+                people = [{"gender": "1girl", "tags": person(rng, "girl")}, {"gender": "1boy", "tags": person(rng, "boy")}]
+                tags = ["1girl", "1boy", *people[0]["tags"], *people[1]["tags"], "smile"]
             else:
-                tags = ["1girl" if kind == "girl" else "1boy", "solo", *person(rng, kind), rng.choice(EXPRESSIONS)]
+                people = [{"gender": "1girl" if kind == "girl" else "1boy", "tags": person(rng, kind)}]
+                tags = [people[0]["gender"], "solo", *people[0]["tags"], rng.choice(EXPRESSIONS)]
             tags += [rng.choice(FRAMING), *rng.choice(POSES), *rng.choice(PLACES)]
             size = "landscape" if kind == "couple" else rng.choice(["portrait", "portrait", "square"])
         tags = list(dict.fromkeys(style + tags))
-        items.append({"name": f"eval_{index:03d}", "tags": tags, "size": size, "seed": rng.randrange(2**32)})
+        items.append(
+            {"name": f"eval_{index:03d}", "tags": tags, "people": people, "size": size, "seed": rng.randrange(2**32)}
+        )
     return items
 
 
@@ -169,6 +232,9 @@ async def main() -> None:
     for item in items:
         path = image_dir / f"{item['name']}.png"
         item["image"] = str(path.relative_to(ROOT)).replace("\\", "/")
+        item["truth"] = truth_of(item)
+        if item["name"] in VERIFIED_PEOPLE:
+            item["verified_people"] = [{"gender": g, "hair": h} for g, h in VERIFIED_PEOPLE[item["name"]]]
         if path.exists():
             continue
         width, height = SIZES[item["size"]]

@@ -99,11 +99,18 @@ def detect_heads(path: Path) -> list[Box]:
         return []
     if cache_key in _cache:
         return _cache[cache_key]
+    with Image.open(path) as src:
+        result = detect_heads_in_image(src.convert("RGB"))
+    _cache[cache_key] = result
+    return result
+
+
+def detect_heads_in_image(image: Image.Image) -> list[Box]:
+    """画像(読み込み済み)の頭の位置。ファイルに保存していない画像(逆引きで受け取った画像など)に使う。"""
     session = _get_session()
     if session is None:
         return []
-    with Image.open(path) as src:
-        image = src.convert("RGB")
+    image = image.convert("RGB")
     scale = _INPUT / max(image.width, image.height)
     resized = image.resize((round(image.width * scale), round(image.height * scale)))
     canvas = np.full((_INPUT, _INPUT, 3), 114, np.uint8)
@@ -115,5 +122,4 @@ def detect_heads(path: Path) -> list[Box]:
     cx, cy, w, h = (output[keep, i] / scale for i in range(4))
     boxes = np.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], axis=1) if keep.any() else np.zeros((0, 4))
     result = [tuple(float(v) for v in boxes[i]) for i in _nms(boxes, scores[keep])] if len(boxes) else []
-    _cache[cache_key] = result  # type: ignore[assignment]
     return result  # type: ignore[return-value]
