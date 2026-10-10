@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import {
@@ -62,6 +62,15 @@ export default function CharacterDataset() {
 
   const [characters, setCharacters] = useState<Character[]>([])
   const [characterId, setCharacterId] = useLocalStorage<number | null>('nai_chards_character', null)
+  // 物語の「登場人物」から開いたとき(?character=ID)は、そのキャラを選ぶ。選んだら URL からは外す
+  // (後で別のキャラを選んでも、開き直したときに戻されないように)
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const fromLink = Number(searchParams.get('character'))
+    if (!fromLink) return
+    setCharacterId(fromLink)
+    setSearchParams({}, { replace: true })
+  }, [searchParams, setCharacterId, setSearchParams])
   const [defaults, setDefaults] = useState<Variations>({ framings: [], poses: [], outfits: [], expressions: [], locations: [] })
   const [selected, setSelected] = useLocalStorage<Variations>('nai_chards_selected', {
     framings: [], poses: [], outfits: [], expressions: [], locations: [],

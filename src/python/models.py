@@ -580,6 +580,8 @@ class StoryJobResponse(BaseModel):
     progress: int = 0
     total: int = 0
     detail: Optional[str] = None
+    started_at: Optional[float] = None
+    ended_at: Optional[float] = None
 
 
 class ImagePresetCreateRequest(BaseModel):

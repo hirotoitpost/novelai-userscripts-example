@@ -9,7 +9,7 @@ import MangaImageSettings, {
 import StoryCharacters, { SceneCharacter } from '../components/StoryCharacters'
 import MangaV2Studio, { MangaV2ComposeSettings } from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
-import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
+import { JOB_KIND_LABELS, TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import NotificationToggle from '../components/NotificationToggle'
 import { mergeScreenshots, readScreenshots, sortScreenshots } from '../chatOcr'
 import './Story.css'
@@ -172,18 +172,6 @@ async function postSSE<T>(
 
 /** ジョブがサーバー側でキャンセル済みだったことを表す。エラー扱いにしない。 */
 class TaskCancelled extends Error {}
-
-/** サーバーのジョブの種類 → 表示名(src/python/notify.py の JOB_KIND_LABELS と揃える) */
-const JOB_KIND_LABELS: Record<string, string> = {
-  split: 'シーン分割・タグ付け',
-  illustrate: '挿絵の生成',
-  characters: '登場人物の抽出',
-  sfx: '効果音の提案',
-  narration: 'ナレーションの作成',
-  panels: 'コマの絵の生成',
-  sfx_fonts: '描き文字の選択',
-  manga: '漫画にする(コマの生成と合成)',
-}
 
 function mangaFileUrl(path: string): string {
   return `${API_ORIGIN}/api/story/manga-file?path=${encodeURIComponent(path)}`
