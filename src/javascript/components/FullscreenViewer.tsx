@@ -27,6 +27,14 @@ const DOUBLE_TAP_MS = 260
 const MIN_SCALE = 1
 const MAX_SCALE = 5
 const DOUBLE_TAP_SCALE = 2.5
+/** 惰性: 指を離す直前のこの時間の動きから速さを決める */
+const FLING_WINDOW_MS = 100
+/** これより遅ければ惰性で動かさない(px/ms) */
+const FLING_MIN_SPEED = 0.25
+/** 1ミリ秒あたりの減速(摩擦)。1に近いほど長く滑る */
+const FLING_FRICTION = 0.993
+/** これより遅くなったら止める(px/ms) */
+const FLING_STOP_SPEED = 0.02
 
 interface View {
   scale: number
@@ -50,6 +58,11 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
   const [controls, setControls] = useState(true)
   const [view, setView] = useState<View>(FIT)
   const [dragging, setDragging] = useState(false)
+  // 惰性で動いている間(CSS のなめらかな移動を切る)
+  const [gliding, setGliding] = useState(false)
+  const glideFrame = useRef<number | null>(null)
+  // 直近の指の位置(惰性の速さを決める)
+  const samples = useRef<{ t: number; x: number; y: number }[]>([])
   // ズーム中に絵の端から押し出している量(ページ切り替えの手前を見せる)
   const [pull, setPull] = useState(0)
   const viewRef = useRef<View>(FIT)
@@ -82,11 +95,20 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     hideTimer.current = window.setTimeout(() => setControls(false), HIDE_CONTROLS_MS)
   }, [])
 
+  const stopGlide = useCallback(() => {
+    if (glideFrame.current !== null) cancelAnimationFrame(glideFrame.current)
+    glideFrame.current = null
+    setGliding(false)
+  }, [])
+
   // 別の絵に変わったら、ズームを戻す
   useEffect(() => {
+    stopGlide()
     applyView(FIT)
     setPull(0)
-  }, [src, applyView])
+  }, [src, applyView, stopGlide])
+
+  useEffect(() => stopGlide, [stopGlide])
 
   // 開いたらブラウザの全画面にする。Esc などでブラウザの全画面が終わったら、こちらも閉じる
   useEffect(() => {
@@ -190,8 +212,41 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     else showControls()
   }, [left, right, controls, showControls])
 
+  /**
+   * 指を弾いたときの惰性。離す直前の速さで動き続け、摩擦で少しずつ遅くなって止まる。
+   * 絵の端に着いた向きはそこで止める(惰性ではページを切り替えない)。
+   */
+  const glide = useCallback((vx: number, vy: number) => {
+    stopGlide()
+    setGliding(true)
+    let last = performance.now()
+    const step = (now: number) => {
+      const dt = Math.min(now - last, 40)
+      last = now
+      const decay = Math.pow(FLING_FRICTION, dt)
+      vx *= decay
+      vy *= decay
+      const current = viewRef.current
+      const wanted = { ...current, x: current.x + vx * dt, y: current.y + vy * dt }
+      const placed = clamp(wanted)
+      if (placed.x !== wanted.x) vx = 0
+      if (placed.y !== wanted.y) vy = 0
+      applyView(placed)
+      if (Math.hypot(vx, vy) < FLING_STOP_SPEED || placed.scale <= MIN_SCALE) {
+        glideFrame.current = null
+        setGliding(false)
+        return
+      }
+      glideFrame.current = requestAnimationFrame(step)
+    }
+    glideFrame.current = requestAnimationFrame(step)
+  }, [applyView, clamp, stopGlide])
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('.fsv-bar')) return
+    // 惰性で動いている絵は、触ったところで止める
+    stopGlide()
+    samples.current = [{ t: performance.now(), x: e.clientX, y: e.clientY }]
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
     } catch {
@@ -241,6 +296,8 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     const dx = e.clientX - g.startX
     const dy = e.clientY - g.startY
     if (Math.hypot(dx, dy) > TAP_SLOP) g.moved = true
+    const now = performance.now()
+    samples.current = [...samples.current.filter(s => now - s.t <= FLING_WINDOW_MS), { t: now, x: e.clientX, y: e.clientY }]
     if (g.startView.scale > MIN_SCALE) {
       // ズーム中: 絵の中を動かす。端で止まった分は「押し出した量」として数える
       const wanted = { ...g.startView, x: g.startView.x + dx, y: g.startView.y + dy }
@@ -294,7 +351,21 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     const dx = e.clientX - g.startX
     if (g.startView.scale > MIN_SCALE) {
       // ズーム中: 端からの押し出しが大きいときだけページを切り替える(指を左へ = 右側の絵へ)
-      if (Math.abs(g.overflow) > width * ZOOMED_TURN_RATIO) (g.overflow < 0 ? right : left)?.()
+      if (Math.abs(g.overflow) > width * ZOOMED_TURN_RATIO) {
+        ;(g.overflow < 0 ? right : left)?.()
+        return
+      }
+      // 弾いて離したなら、その速さで惰性で動かす
+      const now = performance.now()
+      const recent = samples.current.filter(s => now - s.t <= FLING_WINDOW_MS)
+      if (recent.length >= 2) {
+        const first = recent[0]
+        const lastSample = recent[recent.length - 1]
+        const elapsed = Math.max(lastSample.t - first.t, 1)
+        const vx = (lastSample.x - first.x) / elapsed
+        const vy = (lastSample.y - first.y) / elapsed
+        if (Math.hypot(vx, vy) >= FLING_MIN_SPEED) glide(vx, vy)
+      }
     } else if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(e.clientY - g.startY)) {
       ;(dx < 0 ? right : left)?.()
     }
@@ -325,7 +396,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     >
       <img
         ref={imageRef}
-        className={`fsv-image${dragging ? ' fsv-image--dragging' : ''}`}
+        className={`fsv-image${dragging || gliding ? ' fsv-image--dragging' : ''}`}
         src={src}
         alt={alt}
         draggable={false}
