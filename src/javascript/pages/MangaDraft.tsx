@@ -141,6 +141,14 @@ export default function MangaDraft() {
 
   // 漫画にするときの設定
   const [template, setTemplate] = useState('vertical4')
+  // 構成の参考(取り込んだ作品)があれば、既定はそのコマ割りで漫画にする
+  const IMPORT_LAYOUT = 'import'
+  useEffect(() => {
+    setTemplate(t => (draft.importId != null ? IMPORT_LAYOUT : t === IMPORT_LAYOUT ? 'vertical4' : t))
+  }, [draft.importId])
+  const useImportLayout = template === IMPORT_LAYOUT && draft.importId != null
+  // 写したコマ割りを使い切った後のコマや、合成のテンプレートの指定に使う
+  const baseTemplate = useImportLayout ? 'grid4' : template
   const [color, setColor] = useState(false)
   const [useReference, setUseReference] = useState(false)
   const [presetId, setPresetId] = useState<number | null>(null)
@@ -347,6 +355,8 @@ export default function MangaDraft() {
           profiles: draft.profiles,
           episodes: draft.scripts.map(s => cleanPanels(s ?? [])),
           series_id: draft.seriesId,
+          import_id: draft.importId,
+          use_import_layout: useImportLayout,
         })
         storyId = created.id
         update({ pendingStoryId: storyId })
@@ -360,8 +370,8 @@ export default function MangaDraft() {
         }
       }
       await apiFetch(token, `/api/manga-v2/${storyId}/make`, {
-        panels: { template, color, use_character_reference: useReference, vary_seed: true, settings },
-        compose: { template },
+        panels: { template: baseTemplate, color, use_character_reference: useReference, vary_seed: true, settings },
+        compose: { template: baseTemplate },
       })
     } catch (e) {
       const message = errorText(e)
@@ -605,6 +615,7 @@ export default function MangaDraft() {
               <label className="md-field">
                 <span>コマ割り</span>
                 <select value={template} onChange={e => setTemplate(e.target.value)}>
+                  {draft.importId != null && <option value={IMPORT_LAYOUT}>取り込んだ作品のコマ割り</option>}
                   {templates.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
                 </select>
               </label>

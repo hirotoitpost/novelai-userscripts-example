@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from PIL import Image, ImageDraw
 
 from .detect import detect_heads
 from .speakers import CastMember, identify_heads
-from .layout import PAGE_HEIGHT, PAGE_WIDTH, Rect, fill_template, panel_rects
+from .layout import PAGE_HEIGHT, PAGE_WIDTH, PageLayout, Rect, fill_template, layout_rects, panel_rects
 from .lettering import (
     SFX_MIN_SIZE,
     bubble_shape,
@@ -636,16 +637,27 @@ def compose_page(
 
 
 def compose_pages(
-    template_id: str, panels: list[PanelContent], style: LetteringStyle
+    template_id: str,
+    panels: list[PanelContent],
+    style: LetteringStyle,
+    layouts: Sequence[PageLayout] | None = None,
 ) -> list[tuple[Image.Image, list[Element]]]:
     """
     シーン順のコマをテンプレートのコマ数ずつページに割り付ける。最後のページのコマが
     足りないときは、空きゴマを残さないよう少ないコマ数のテンプレートに切り替える。
+    layouts(取り込んだ作品から写したページごとのコマ割り)があれば、先頭のページから順にそれを使い、
+    使い切った後のコマはテンプレートで続ける。
     """
-    per_page = len(panel_rects(template_id))
     pages = []
-    for i in range(0, len(panels), per_page):
-        chunk = panels[i : i + per_page]
+    rest = panels
+    for layout in layouts or []:
+        if not rest:
+            break
+        chunk, rest = rest[: len(layout)], rest[len(layout) :]
+        pages.append(compose_page(layout_rects(layout)[: len(chunk)], chunk, style))
+    per_page = len(panel_rects(template_id))
+    for i in range(0, len(rest), per_page):
+        chunk = rest[i : i + per_page]
         pages.append(compose_page(panel_rects(fill_template(template_id, len(chunk))), chunk, style))
     return pages
 

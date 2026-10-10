@@ -14,7 +14,6 @@ from novelai import AsyncNovelAI
 from ..client import get_client
 from ..db import get_character, get_connection, get_manga_import, get_series, list_series_volumes
 from ..manga_draft import (
-    PANELS_PER_EPISODE,
     DraftCharacter,
     draft_characters,
     generate_episode,
@@ -26,9 +25,11 @@ from ..models import (
     MangaDraftCreateRequest,
     MangaDraftEpisodeRequest,
     MangaDraftOutlineRequest,
+    MangaV2PageLayoutsRequest,
     ScriptedStoryRequest,
     StoryResponse,
 )
+from .manga_v2 import put_page_layouts
 from .story import create_scripted_story
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
@@ -65,12 +66,16 @@ def _series_context(series_id: int | None) -> tuple[str, list[str], int | None]:
     return series.get("memory") or "", recaps, next_volume
 
 
-# 取り込みから作れる話数の上限(大枠の話数の上限と同じ)
+# 取り込みから作れる話数(ページ数)の上限(大枠の話数の上限と同じ)と、1話のコマ数の上限
 _MAX_EPISODES = 10
+_MAX_PANELS_PER_EPISODE = 8
 
 
 def _import_structure(import_id: int | None) -> list[list[str]]:
-    """取り込んだ作品のコマ運びを、読む順に4コマずつ(1話ずつ)の説明にする。未指定なら空。"""
+    """
+    取り込んだ作品のコマ運びを、1ページ=1話の説明にする(話ごとのコマ数はそのページのコマ数)。未指定なら空。
+    ページで区切るのは、写したコマ割りで漫画にしたときに、話の切れ目とページの切れ目をそろえるため。
+    """
     if import_id is None:
         return []
     conn = get_connection()
@@ -80,12 +85,10 @@ def _import_structure(import_id: int | None) -> list[list[str]]:
         conn.close()
     if item is None:
         raise HTTPException(status_code=404, detail="import not found")
-    panels = [p for page in (item.get("analysis") or {}).get("pages") or [] for p in page["panels"]]
-    if not panels:
+    pages = [page["panels"] for page in (item.get("analysis") or {}).get("pages") or [] if page["panels"]]
+    if not pages:
         raise HTTPException(status_code=409, detail="取り込んだ作品の構成をまだ読み取っていません。")
-    lines = structure_lines(panels)
-    chunks = [lines[i : i + PANELS_PER_EPISODE] for i in range(0, len(lines), PANELS_PER_EPISODE)]
-    return chunks[:_MAX_EPISODES]
+    return [structure_lines(panels)[:_MAX_PANELS_PER_EPISODE] for panels in pages[:_MAX_EPISODES]]
 
 
 def _notes(series_memory: str, notes: str) -> str:
@@ -161,6 +164,8 @@ async def post_create(req: MangaDraftCreateRequest) -> StoryResponse:
     volume_no = req.volume_no
     if req.series_id is not None and volume_no is None:
         volume_no = _series_context(req.series_id)[2]
+    if req.use_import_layout and req.import_id is None:
+        raise HTTPException(status_code=422, detail="コマ割りを写すには import_id が必要です。")
     script = ScriptedStoryRequest.model_validate(
         {
             "title": req.title,
@@ -170,4 +175,8 @@ async def post_create(req: MangaDraftCreateRequest) -> StoryResponse:
             "volume_no": volume_no,
         }
     )
-    return await create_scripted_story(script)
+    story = await create_scripted_story(script)
+    if req.use_import_layout:
+        # 取り込んだ作品のページごとのコマ割りを、この物語のコマ割りにする
+        await put_page_layouts(story.id, MangaV2PageLayoutsRequest(import_id=req.import_id))
+    return story

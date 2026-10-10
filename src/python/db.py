@@ -401,6 +401,9 @@ _STORIES_EXTRA_COLUMNS = {
     # 漫画v2で最後に合成したときの設定(テンプレート・フォント・文字の大きさなど)。JSON。
     # ダウンロードはこの設定で作り直し、スタジオを開いたときにもこの設定に戻す。
     "manga_v2_compose_settings": "TEXT",
+    # 漫画v2のページごとのコマ割り(取り込んだ作品から写したもの)。JSON [[[x0, y0, x1, y1], ...], ...]
+    # (ページに対する割合、読む順)。あればテンプレートの代わりに使う。
+    "manga_v2_page_layouts": "TEXT",
     # シリーズの巻。series_id が NULL なら単巻。(series_id, volume_no) は一意。
     "series_id": "INTEGER REFERENCES series(id) ON DELETE SET NULL",
     "volume_no": "INTEGER",
@@ -505,6 +508,20 @@ def set_manga_v2_compose_settings(conn: sqlite3.Connection, story_id: int, setti
     conn.execute(
         "UPDATE stories SET manga_v2_compose_settings = ? WHERE id = ?",
         (json.dumps(settings, ensure_ascii=False), story_id),
+    )
+    conn.commit()
+
+
+def get_manga_v2_page_layouts(conn: sqlite3.Connection, story_id: int) -> list[list[list[float]]]:
+    row = conn.execute("SELECT manga_v2_page_layouts FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return json.loads(row["manga_v2_page_layouts"]) if row and row["manga_v2_page_layouts"] else []
+
+
+def set_manga_v2_page_layouts(conn: sqlite3.Connection, story_id: int, layouts: list[list[list[float]]] | None) -> None:
+    """None か空でテンプレートに戻す。"""
+    conn.execute(
+        "UPDATE stories SET manga_v2_page_layouts = ? WHERE id = ?",
+        (json.dumps(layouts) if layouts else None, story_id),
     )
     conn.commit()
 

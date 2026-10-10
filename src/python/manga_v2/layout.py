@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 # 出力ページの大きさ(B判に近い縦横比)。セリフのフォントサイズ等もこの幅を基準にしている。
@@ -74,6 +75,45 @@ def panel_rects(template_id: str) -> list[Rect]:
             )
         )
     return rects
+
+
+# ---- 取り込んだ作品から写したコマ割り ----
+
+# ページごとのコマ割り: コマの (x0, y0, x1, y1) をページの幅・高さに対する割合で、読む順に並べたもの
+PageLayout = Sequence[Sequence[float]]
+
+
+def layout_rects(layout: PageLayout) -> list[Rect]:
+    """写したコマ割りを出力ページのピクセル座標にする(余白も元のページの割合のまま)。"""
+    return [
+        (round(x0 * PAGE_WIDTH), round(y0 * PAGE_HEIGHT), round(x1 * PAGE_WIDTH), round(y1 * PAGE_HEIGHT))
+        for x0, y0, x1, y1 in layout
+    ]
+
+
+def normalize_boxes(
+    boxes: Sequence[Sequence[int]], page_width: int, page_height: int
+) -> list[tuple[float, float, float, float]]:
+    """取り込んだページのコマ (x, y, 幅, 高さ)(ピクセル)を、ページに対する割合のコマ割りにする。"""
+    layout: list[tuple[float, float, float, float]] = []
+    for x, y, w, h in boxes:
+        x0, y0 = max(x / page_width, 0.0), max(y / page_height, 0.0)
+        x1, y1 = min((x + w) / page_width, 1.0), min((y + h) / page_height, 1.0)
+        if x1 > x0 and y1 > y0:
+            layout.append((round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4)))
+    return layout
+
+
+def scene_rects(layouts: Sequence[PageLayout], template_id: str, count: int) -> list[Rect]:
+    """
+    シーン順のコマの形(ピクセル座標)。写したコマ割りを先頭のページから順に使い、足りない分は
+    テンプレートのコマで続ける。コマの生成サイズを決めるのに使う。
+    """
+    rects = [rect for layout in layouts for rect in layout_rects(layout)]
+    template = panel_rects(template_id)
+    while len(rects) < count:
+        rects.append(template[(len(rects) - sum(len(layout) for layout in layouts)) % len(template)])
+    return rects[:count]
 
 
 def panels_per_page(template_id: str) -> int:

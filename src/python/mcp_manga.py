@@ -364,6 +364,16 @@ def register_manga_tools(mcp: MCPServer) -> None:
         return content
 
     @mcp.tool()
+    async def manga_set_page_layouts(story_id: int, import_id: int | None) -> dict[str, Any]:
+        """
+        取り込んだ作品(作品の取り込みページ / /api/manga-import)のページごとのコマ割りを、この物語のコマ割りにする。
+        シーンは先頭から順に、写したページのコマに入る(足りない分はテンプレート)。import_id が null なら
+        テンプレートに戻す。写したコマ割りでは、セリフの多いシーンを寄りのコマに分けない。
+        コマの形が変わるので、写した後は manga_generate_panels で描き直してから manga_compose する。
+        """
+        return await _call("PUT", f"/api/manga-v2/{story_id}/page-layouts", {"import_id": import_id})
+
+    @mcp.tool()
     async def manga_set_recap(story_id: int, recap: str) -> str:
         """シリーズの巻のあらすじを付ける。次の巻を作るときの前提(これまでの話)として使われる。"""
         await _call("PUT", f"/api/series/volumes/{story_id}/recap", {"recap": recap})

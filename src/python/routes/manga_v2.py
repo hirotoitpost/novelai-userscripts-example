@@ -33,9 +33,12 @@ from ..db import (
     characters_by_scene,
     get_connection,
     get_manga_v2_compose_settings,
+    get_manga_import,
     get_manga_v2_overrides,
+    get_manga_v2_page_layouts,
     get_manga_v2_sfx_fonts,
     get_manga_v2_sfx_stamps,
+    set_manga_v2_page_layouts,
     adult_stamp_sources,
     set_stamp_source_adult,
     delete_stamp,
@@ -79,7 +82,14 @@ from ..manga_v2.stamps import (
     split_sheet,
     stamps_from_zip,
 )
-from ..manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, TEMPLATES, generation_size, panel_rects
+from ..manga_v2.layout import (
+    PAGE_HEIGHT,
+    PAGE_WIDTH,
+    TEMPLATES,
+    generation_size,
+    normalize_boxes,
+    scene_rects,
+)
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
 from ..manga_v2.speakers import CastMember, attribute_speakers, cast_members
@@ -97,6 +107,7 @@ from ..models import (
     MangaV2CharacterReferenceRequest,
     MangaV2ComposeRequest,
     MangaV2MakeRequest,
+    MangaV2PageLayoutsRequest,
     MangaV2ComposeResponse,
     MangaV2DownloadRequest,
     MangaV2Font,
@@ -931,19 +942,21 @@ async def _run_panels(
     job: _Job, story_id: int, req: MangaV2PanelsRequest, api_key: str, targets: list[dict[str, Any]]
 ) -> None:
     settings = req.settings
-    rects = panel_rects(req.template)
     # 性的な場面は場面ごとに未成年対策のネガティブを足すので、ここでは基本形だけ作る
     conn = get_connection()
     try:
         characters = characters_by_scene(conn, story_id)
+        layouts = get_manga_v2_page_layouts(conn, story_id)
     finally:
         conn.close()
+    # コマの形(生成サイズを決める)。写したコマ割りがあればそれ、無ければテンプレート
+    rects = scene_rects(layouts, req.template, max(s["scene_index"] for s in targets) + 1)
 
     _PANEL_DIR.mkdir(parents=True, exist_ok=True)
     job.total = len(targets)
     for i, scene in enumerate(targets, start=1):
         job.message = f"シーン{scene['scene_index'] + 1}のコマを生成中 ({i}/{len(targets)})"
-        width, height = generation_size(rects[scene["scene_index"] % len(rects)])
+        width, height = generation_size(rects[scene["scene_index"]])
         # そのシーンに出るキャラだけの容姿を渡す(v1はページ内の全員をまとめていた)
         # (キャラシートの普段の服装も含む)
         scene_characters = characters.get(scene["id"], [])
@@ -1056,12 +1069,67 @@ def _compose_inputs(
     return contents, style, {str(s["id"]): s["scene_index"] for s in scenes}
 
 
+def _page_layouts(story_id: int) -> list[Any]:
+    conn = get_connection()
+    try:
+        return get_manga_v2_page_layouts(conn, story_id)
+    finally:
+        conn.close()
+
+
+def _split(contents: list[PanelContent], max_lines: int, layouts: list[Any]) -> list[PanelContent]:
+    """
+    セリフの多いシーンを寄りのコマに分ける。写したコマ割りを使うときは分けない(コマが増えると、
+    元の作品のページの切れ目とずれるため)。
+    """
+    return split_dense_panels(contents, 0 if layouts else max_lines)
+
+
+@router.put("/{story_id}/page-layouts")
+async def put_page_layouts(story_id: int, req: MangaV2PageLayoutsRequest) -> dict[str, Any]:
+    """
+    取り込んだ作品(/api/manga-import)のページごとのコマ割りを、この物語のコマ割りにする(import_id が
+    null ならテンプレートに戻す)。シーンは先頭から順に、写したページのコマに入る。
+    """
+    from .manga_import import _page_path  # 取り込みのページ画像の場所(循環を避けて使うときに読む)
+
+    conn = get_connection()
+    try:
+        if get_story(conn, story_id) is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        if req.import_id is None:
+            set_manga_v2_page_layouts(conn, story_id, None)
+            return {"pages": 0, "panels": 0}
+        item = get_manga_import(conn, req.import_id)
+    finally:
+        conn.close()
+    if item is None:
+        raise HTTPException(status_code=404, detail="import not found")
+    pages = (item.get("analysis") or {}).get("pages") or []
+    if not pages:
+        raise HTTPException(status_code=409, detail="取り込んだ作品のコマをまだ読み取っていません。")
+    layouts = []
+    for index, page in enumerate(pages):
+        with Image.open(_page_path(req.import_id, index)) as image:
+            size = image.size
+        layout = normalize_boxes([tuple(p["box"]) for p in page["panels"]], *size)
+        if layout:
+            layouts.append(layout)
+    conn = get_connection()
+    try:
+        set_manga_v2_page_layouts(conn, story_id, layouts)
+    finally:
+        conn.close()
+    return {"pages": len(layouts), "panels": sum(len(layout) for layout in layouts)}
+
+
 # 画像処理で数秒かかるので、同期関数にしてスレッドプールで実行させる(イベントループを塞がない)
 @router.post("/{story_id}/compose", response_model=MangaV2ComposeResponse)
 def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
     """コマの絵をテンプレートに嵌め込み、セリフを吹き出しで描いてページにする。"""
     contents, style, _ = _compose_inputs(story_id, req)
-    composed = compose_pages(req.template, split_dense_panels(contents, req.max_lines_per_panel), style)
+    layouts = _page_layouts(story_id)
+    composed = compose_pages(req.template, _split(contents, req.max_lines_per_panel, layouts), style, layouts)
     pages = [page for page, _ in composed]
 
     _PAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1125,14 +1193,15 @@ def _download_images(
     style: LetteringStyle,
     scene_numbers: dict[str, int],
     req: MangaV2DownloadRequest,
+    layouts: list[Any] | None = None,
 ) -> list[tuple[str, Image.Image]]:
     """ダウンロードの1種類分を (ファイル名, 画像) の並びで作る。ページ・コマの並びは合成と同じ。"""
-    split = split_dense_panels(contents, req.max_lines_per_panel)
+    split = _split(contents, req.max_lines_per_panel, layouts or [])
     if kind in ("pages", "pages_clean"):
         if kind == "pages_clean":
             # 寄りのコマもセリフありと同じ並びにするため、分けた後で文字だけを外す
             split = [replace(c, dialogue=[], sfx=[], narration="") for c in split]
-        pages = [page for page, _ in compose_pages(req.template, split, style)]
+        pages = [page for page, _ in compose_pages(req.template, split, style, layouts)]
         width = max(2, len(str(len(pages))))
         return [(f"page_{i + 1:0{width}d}.png", page) for i, page in enumerate(pages)]
 
@@ -1229,11 +1298,12 @@ def download(story_id: int, req: MangaV2DownloadRequest) -> Response:
         # 端末ごとの画面の設定ではなく、最後に合成したレイアウトにそろえる
         req = req.model_copy(update=MangaV2ComposeRequest.model_validate(saved).model_dump())
     contents, style, scene_numbers = _compose_inputs(story_id, req)
+    layouts = _page_layouts(story_id)
     title = (story or {}).get("title")
     kinds = list(dict.fromkeys(req.contents))  # 重複を除き、選んだ順を保つ
 
     if req.format == "pdf" and len(kinds) == 1:
-        images = _download_images(kinds[0], contents, style, scene_numbers, req)
+        images = _download_images(kinds[0], contents, style, scene_numbers, req, layouts)
         return Response(
             _pdf_bytes([image for _, image in images]),
             media_type="application/pdf",
@@ -1250,7 +1320,7 @@ def download(story_id: int, req: MangaV2DownloadRequest) -> Response:
                 for name, path in _clean_panel_files(contents, scene_numbers):
                     archive.write(path, f"{folder}/{name}")
                 continue
-            images = _download_images(kind, contents, style, scene_numbers, req)
+            images = _download_images(kind, contents, style, scene_numbers, req, layouts)
             if req.format == "pdf":
                 archive.writestr(f"{folder}.pdf", _pdf_bytes([image for _, image in images]))
             else:

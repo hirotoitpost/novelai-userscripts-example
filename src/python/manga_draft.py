@@ -163,9 +163,9 @@ async def generate_outlines(
 
 # ---- 1話分の台本 ----
 
-_EPISODE_SYSTEM = """あなたは4コマ漫画の脚本家です。渡された1話分の内容を、ちょうど4コマの台本にします。JSONだけを返してください(前置きや```は不要):
+_EPISODE_SYSTEM = """あなたは漫画の脚本家です。渡された1話分の内容を、ちょうど{count}コマの台本にします。JSONだけを返してください(前置きや```は不要):
 {"panels":[{"characters":["登場する人物名"],"actions":{"人物名":"その人の表情・動作の英語タグ"},"lines":[{"speaker":"人物名","kind":"speech","text":"セリフ"}],"narration":"","sfx":["効果音"],"prompt_tags":"英語のdanbooruタグ"}]}
-- panels はちょうど4つ。起承転結で、4コマ目にオチ
+- panels はちょうど{count}つ。{arc}
 - 1コマのセリフは0〜2個、1つ20文字以内。説明ではなく会話で見せる
 - speaker は登場人物名のどれか。kind は声に出すなら speech、心の声なら thought
 - narration は場所や時間の説明が必要なときだけ(15文字以内、不要なら空文字)
@@ -204,7 +204,14 @@ def episode_prompts(
             "セリフの量も合わせる):"
         )
         user.extend(f"{i + 1}コマ目: {line}" for i, line in enumerate(structure))
-    return _EPISODE_SYSTEM, "\n".join(user)
+    return episode_system(len(structure) if structure else PANELS_PER_EPISODE), "\n".join(user)
+
+
+def episode_system(count: int) -> str:
+    """1話分の台本の指示。コマ数は既定の4、取り込んだ作品の構成を使うときはそのページのコマ数。"""
+    arc = "起承転結で、4コマ目にオチ" if count == PANELS_PER_EPISODE else "話に山場をつくり、最後のコマにオチ"
+    # JSON の例の { } とぶつからないよう、format ではなく置き換えで埋める
+    return _EPISODE_SYSTEM.replace("{count}", str(count)).replace("{arc}", arc)
 
 
 def _clean_tags(tags: str) -> str:
@@ -217,14 +224,14 @@ def _clean_tags(tags: str) -> str:
     return ", ".join(seen)
 
 
-def parse_episode(data: Any, characters: list[DraftCharacter]) -> list[dict[str, Any]]:
+def parse_episode(data: Any, characters: list[DraftCharacter], count: int = PANELS_PER_EPISODE) -> list[dict[str, Any]]:
     """
     1話分の台本を検めて、画面で編集する形(話し手は名前)にそろえる。知らない人物の名前は、
     描く人物からは外し、セリフの話し手は空にする(合成では一番近い顔へしっぽが向く)。
     """
     names = {c.name for c in characters}
     panels: list[dict[str, Any]] = []
-    for raw in ((data or {}).get("panels") or [])[:PANELS_PER_EPISODE]:
+    for raw in ((data or {}).get("panels") or [])[:count]:
         if not isinstance(raw, dict):
             continue
         lines = []
@@ -265,8 +272,8 @@ def parse_episode(data: Any, characters: list[DraftCharacter]) -> list[dict[str,
                 "prompt_tags": _clean_tags(raw.get("prompt_tags") or ""),
             }
         )
-    if len(panels) != PANELS_PER_EPISODE:
-        raise ValueError(f"コマ数が{len(panels)}でした(4コマ必要)")
+    if len(panels) != count:
+        raise ValueError(f"コマ数が{len(panels)}でした({count}コマ必要)")
     return panels
 
 
@@ -287,7 +294,7 @@ async def generate_episode(
     for _ in range(_MAX_ATTEMPTS):
         data = await _ask_json(api_key, system, user, max_tokens=3000, temperature=0.7)
         try:
-            return parse_episode(data, characters)
+            return parse_episode(data, characters, len(structure) if structure else PANELS_PER_EPISODE)
         except ValueError as exc:
             last_error = str(exc)
     raise RuntimeError(f"第{episode_index + 1}話の台本を作れませんでした: {last_error}")

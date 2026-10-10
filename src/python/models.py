@@ -485,6 +485,9 @@ class MangaDraftCreateRequest(BaseModel):
     series_id: Optional[int] = None
     # 省略するとシリーズの次の巻
     volume_no: Optional[int] = Field(None, ge=1)
+    # 構成の参考にした取り込み。use_import_layout なら、そのページごとのコマ割りで漫画にする
+    import_id: Optional[int] = None
+    use_import_layout: bool = False
 
 
 class StoryImportRequest(BaseModel):
@@ -890,6 +893,12 @@ class MangaV2ComposeRequest(BaseModel):
 # ダウンロードに入れるもの。pages=合成したページ、pages_clean=セリフ・効果音・ナレーションなしのページ、
 # panels=ページに嵌める前のコマに文字を入れたもの、panels_clean=生成したコマの絵そのもの。
 MangaV2DownloadContent = Literal["pages", "pages_clean", "panels", "panels_clean"]
+
+
+class MangaV2PageLayoutsRequest(BaseModel):
+    """取り込んだ作品のコマ割りを物語に写す。null ならテンプレートに戻す。"""
+
+    import_id: Optional[int] = None
 
 
 class MangaV2MakeRequest(BaseModel):
