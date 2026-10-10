@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 # 出力ページの大きさ(B判に近い縦横比)。セリフのフォントサイズ等もこの幅を基準にしている。
 PAGE_WIDTH = 1200
@@ -77,24 +78,85 @@ def panel_rects(template_id: str) -> list[Rect]:
     return rects
 
 
+# ---- コマの形とページ ----
+
+Point = tuple[int, int]
+
+
+@dataclass(frozen=True)
+class PanelShape:
+    """
+    ページ上のコマ1つ。rect は外接矩形(絵を嵌め込む範囲)、points は輪郭(左上から時計回りの4点)。
+    斜めの枠は points が rect の角からずれる。border が False なら枠線を描かない(枠なしのコマ)。
+    ページの端に接する辺(裁ち落とし)にも枠線は描かない。
+    """
+
+    rect: Rect
+    points: tuple[Point, ...]
+    border: bool = True
+
+    @property
+    def is_rect(self) -> bool:
+        x0, y0, x1, y1 = self.rect
+        return self.points == ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+
+
+def rect_shape(rect: Rect, border: bool = True) -> PanelShape:
+    x0, y0, x1, y1 = rect
+    return PanelShape(rect, ((x0, y0), (x1, y0), (x1, y1), (x0, y1)), border)
+
+
+@dataclass(frozen=True)
+class PageSpec:
+    """合成する1ページ: 大きさ(見開きは横2ページ分)と、読む順のコマ。"""
+
+    width: int
+    height: int
+    panels: tuple[PanelShape, ...]
+
+
+def template_page(template_id: str) -> PageSpec:
+    return PageSpec(PAGE_WIDTH, PAGE_HEIGHT, tuple(rect_shape(r) for r in panel_rects(template_id)))
+
+
 # ---- 取り込んだ作品から写したコマ割り ----
 
-# ページごとのコマ割り: コマの (x0, y0, x1, y1) をページの幅・高さに対する割合で、読む順に並べたもの
-PageLayout = Sequence[Sequence[float]]
+# ページごとのコマ割り。古い形はコマの (x0, y0, x1, y1)(ページの幅・高さに対する割合)を読む順に並べたもの。
+# 今の形は {"spread": 見開きか, "panels": [{"points": [[x, y], ×4](割合), "border": 枠線の有無}]}。
+PageLayout = Sequence[Sequence[float]] | Mapping[str, Any]
+
+
+def layout_page(layout: PageLayout) -> PageSpec:
+    """写したコマ割りを出力ページのピクセル座標にする(余白も元のページの割合のまま)。"""
+    if not isinstance(layout, Mapping):
+        rects = [
+            (round(x0 * PAGE_WIDTH), round(y0 * PAGE_HEIGHT), round(x1 * PAGE_WIDTH), round(y1 * PAGE_HEIGHT))
+            for x0, y0, x1, y1 in layout
+        ]
+        return PageSpec(PAGE_WIDTH, PAGE_HEIGHT, tuple(rect_shape(r) for r in rects))
+    width = PAGE_WIDTH * 2 if layout.get("spread") else PAGE_WIDTH
+    shapes = []
+    for panel in layout.get("panels") or []:
+        points = tuple((round(x * width), round(y * PAGE_HEIGHT)) for x, y in panel["points"])
+        xs, ys = [x for x, _ in points], [y for _, y in points]
+        shapes.append(PanelShape((min(xs), min(ys), max(xs), max(ys)), points, bool(panel.get("border", True))))
+    return PageSpec(width, PAGE_HEIGHT, tuple(shapes))
 
 
 def layout_rects(layout: PageLayout) -> list[Rect]:
-    """写したコマ割りを出力ページのピクセル座標にする(余白も元のページの割合のまま)。"""
-    return [
-        (round(x0 * PAGE_WIDTH), round(y0 * PAGE_HEIGHT), round(x1 * PAGE_WIDTH), round(y1 * PAGE_HEIGHT))
-        for x0, y0, x1, y1 in layout
-    ]
+    """写したコマ割りの各コマの外接矩形(ピクセル座標)。"""
+    return [shape.rect for shape in layout_page(layout).panels]
+
+
+def layout_size(layout: PageLayout) -> int:
+    """そのページのコマ数。"""
+    return len(layout.get("panels") or []) if isinstance(layout, Mapping) else len(layout)
 
 
 def normalize_boxes(
     boxes: Sequence[Sequence[int]], page_width: int, page_height: int
 ) -> list[tuple[float, float, float, float]]:
-    """取り込んだページのコマ (x, y, 幅, 高さ)(ピクセル)を、ページに対する割合のコマ割りにする。"""
+    """取り込んだページのコマ (x, y, 幅, 高さ)(ピクセル)を、ページに対する割合のコマ割り(古い形)にする。"""
     layout: list[tuple[float, float, float, float]] = []
     for x, y, w, h in boxes:
         x0, y0 = max(x / page_width, 0.0), max(y / page_height, 0.0)
@@ -112,7 +174,7 @@ def scene_rects(layouts: Sequence[PageLayout], template_id: str, count: int) -> 
     rects = [rect for layout in layouts for rect in layout_rects(layout)]
     template = panel_rects(template_id)
     while len(rects) < count:
-        rects.append(template[(len(rects) - sum(len(layout) for layout in layouts)) % len(template)])
+        rects.append(template[(len(rects) - sum(layout_size(layout) for layout in layouts)) % len(template)])
     return rects[:count]
 
 

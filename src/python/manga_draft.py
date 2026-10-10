@@ -224,6 +224,39 @@ def _clean_tags(tags: str) -> str:
     return ", ".join(seen)
 
 
+_COUNT_TAG_RE = re.compile(r"^(\d+)\+?\s*(girl|boy|other)s?$", re.IGNORECASE)
+_MULTIPLE_TAGS = {"multiple girls", "multiple boys", "multiple others", "solo"}
+
+
+def reconcile_people(tags: str, drawn: int) -> tuple[str, list[str]]:
+    """
+    作画タグの人数を、描く人物の数に合わせる。台本では「描く人物なし」なのに 1girl, 1boy が
+    付いていたり(知らない人が描かれる)、人物がいるのに no humans が付いていたりする(実機で確認)。
+    人物がいるときの人数は、キャラごとのプロンプトから合成時に足すので、数が合わないタグは外す。
+    戻り値は直したタグと、直した内容(画面に出す)。
+    """
+    items = [t for t in (s.strip() for s in tags.split(",")) if t]
+    counts = [t for t in items if _COUNT_TAG_RE.match(t) or t.lower() in _MULTIPLE_TAGS]
+    total = sum(int(m.group(1)) for t in counts if (m := _COUNT_TAG_RE.match(t)))
+    has_none = any(t.lower() == "no humans" for t in items)
+    notes: list[str] = []
+    if drawn == 0:
+        if counts:
+            items = [t for t in items if t not in counts]
+            notes.append(f"描く人物がいないので人数のタグ({', '.join(counts)})を外しました")
+        if not has_none:
+            items.append("no humans")
+    else:
+        if has_none:
+            items = [t for t in items if t.lower() != "no humans"]
+            notes.append("人物を描くので no humans を外しました")
+        numbered = [t for t in counts if _COUNT_TAG_RE.match(t)]
+        if numbered and total != drawn:
+            items = [t for t in items if t not in numbered]
+            notes.append(f"人数のタグ({', '.join(numbered)})が描く人物({drawn}人)と合わないので外しました")
+    return ", ".join(items), notes
+
+
 def parse_episode(data: Any, characters: list[DraftCharacter], count: int = PANELS_PER_EPISODE) -> list[dict[str, Any]]:
     """
     1話分の台本を検めて、画面で編集する形(話し手は名前)にそろえる。知らない人物の名前は、
@@ -262,6 +295,7 @@ def parse_episode(data: Any, characters: list[DraftCharacter], count: int = PANE
             for name, tags in raw_actions.items()
             if str(name).strip() in drawn and _clean_tags(tags)
         }
+        prompt_tags, fixes = reconcile_people(_clean_tags(raw.get("prompt_tags") or ""), len(drawn))
         panels.append(
             {
                 "characters": drawn,
@@ -269,7 +303,8 @@ def parse_episode(data: Any, characters: list[DraftCharacter], count: int = PANE
                 "lines": lines,
                 "narration": str(raw.get("narration") or "").strip()[:_MAX_NARRATION_CHARS],
                 "sfx": sfx,
-                "prompt_tags": _clean_tags(raw.get("prompt_tags") or ""),
+                "prompt_tags": prompt_tags,
+                "fixes": fixes,
             }
         )
     if len(panels) != count:
@@ -325,11 +360,14 @@ def panel_to_scene(panel: dict[str, Any], characters: list[DraftCharacter], titl
     if not rows:
         # 吹き出しの無いコマも本文は要る(地の文は吹き出しにならない)
         rows.append(panel.get("narration") or "(セリフなし)")
+    character_ids = [by_name[n].id for n in panel.get("characters") or [] if n in by_name]
+    # 画面で描く人物を変えたときのために、ここでも人数を合わせ直す
+    prompt_tags, _ = reconcile_people(_clean_tags(panel.get("prompt_tags") or ""), len(character_ids))
     return {
         "title": title,
         "text": "\n".join(rows),
-        "prompt_tags": _clean_tags(panel.get("prompt_tags") or ""),
-        "character_ids": [by_name[n].id for n in panel.get("characters") or [] if n in by_name],
+        "prompt_tags": prompt_tags,
+        "character_ids": character_ids,
         "character_actions": {
             by_name[n].id: _clean_tags(tags)
             for n, tags in (panel.get("actions") or {}).items()

@@ -450,6 +450,8 @@ class MangaDraftPanel(BaseModel):
     narration: str = Field("", max_length=80)
     sfx: list[str] = Field(default_factory=list, max_length=8)
     prompt_tags: str = ""
+    # 台本を検めたときに自動で直した内容(画面に出すだけ)
+    fixes: list[str] = Field(default_factory=list)
 
 
 class MangaDraftOutlineRequest(BaseModel):
@@ -954,6 +956,7 @@ class MangaV2ComposeResponse(BaseModel):
     final_image_path: str
     page_width: int
     page_height: int
+    page_widths: list[int] = Field(default_factory=list)
     # pages と同じ順の、各ページに置いた要素
     elements: list[list[MangaV2Element]]
 

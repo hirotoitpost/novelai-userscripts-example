@@ -54,6 +54,8 @@ interface ComposeResult {
   pages: string[]
   page_width: number
   page_height: number
+  // ページごとの幅(見開きは横2ページ分)
+  page_widths?: number[]
   elements: MangaV2Element[][]
 }
 
@@ -758,7 +760,7 @@ export default function MangaV2Studio({
           <MangaV2PageEditor
             imageUrl={fileUrl(composed.pages[editPage])}
             elements={composed.elements[editPage] ?? []}
-            pageWidth={composed.page_width}
+            pageWidth={composed.page_widths?.[editPage] ?? composed.page_width}
             pageHeight={composed.page_height}
             busy={busy}
             onMove={moveElement}

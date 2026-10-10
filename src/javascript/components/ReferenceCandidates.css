@@ -1,0 +1,26 @@
+.ref-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.ref-candidate {
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.ref-candidate:hover:not(:disabled),
+.ref-candidate:focus-visible {
+  border-color: currentColor;
+}
+
+.ref-candidate img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 832 / 1216;
+  object-fit: cover;
+  border-radius: 4px;
+}

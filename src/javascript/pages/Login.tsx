@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react'
+import { useEffect, useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AUTH_MESSAGE_KEY, useAuth } from '../context/AuthContext'
 import { getRecaptchaToken } from '../recaptcha'
@@ -7,6 +7,12 @@ import './Login.css'
 export default function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
+
+  // reCAPTCHA を使うのはこの画面だけ。ここではバッジを出す(ほかの画面では index.html で隠している)
+  useEffect(() => {
+    document.body.classList.add('show-recaptcha')
+    return () => document.body.classList.remove('show-recaptcha')
+  }, [])
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

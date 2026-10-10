@@ -446,6 +446,7 @@
   .batch-body { flex-direction: column; overflow: visible; }
   .batch-sidebar {
     width: 100%;
+    box-sizing: border-box;
     max-height: none;
     border-right: none;
     border-bottom: 1px solid var(--nai-border);

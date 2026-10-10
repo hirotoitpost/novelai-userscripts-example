@@ -79,6 +79,7 @@
   -webkit-appearance: none;
   appearance: none;
   box-sizing: border-box;
+  max-width: 100%;
   padding: 0.6rem 0.8rem;
   border-radius: 6px;
   border: 1px solid #2a2a50;
@@ -199,7 +200,8 @@
   min-width: 0;
 }
 
-.selection-settings-numbox {
+/* .selection-settings-grid input[type='number'] の width: 100% に負けないよう、詳しく指定する */
+.selection-settings-grid input.selection-settings-numbox {
   width: 4.5rem;
   flex-shrink: 0;
 }

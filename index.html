@@ -3,7 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>NovelAI Userscripts Example</title>
+    <style>
+      /* reCAPTCHA はログインでだけ使う。ほかの画面では右下のバッジがスマホで入力欄やボタンに重なるので隠す */
+      body:not(.show-recaptcha) .grecaptcha-badge { visibility: hidden; }
+    </style>
     <script src="https://www.google.com/recaptcha/enterprise.js?render=6Lfk9nYqAAAAAP6cKauxBjMa7Z3bbiN2mvG4x59O" async defer></script>
   </head>
   <body>
