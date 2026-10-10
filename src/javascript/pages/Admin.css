@@ -262,6 +262,38 @@
 .adm-preset summary { cursor: pointer; }
 .adm-guards { margin-top: 0.8rem; }
 
+.adm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(4, 4, 10, 0.72);
+}
+
+.adm-dialog {
+  width: min(34rem, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 1.2rem 1.4rem;
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-top: 4px solid #5fd39a;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  line-height: 1.7;
+  font-size: 0.9rem;
+}
+
+.adm-dialog--server { border-top-color: #e8c46a; }
+.adm-dialog--pc { border-top-color: #ff8a9a; }
+.adm-dialog h2 { margin: 0 0 0.6rem; font-size: 1.05rem; }
+.adm-dialog p { margin: 0.4rem 0; }
+.adm-dialog-actions { justify-content: flex-end; margin-top: 1rem; }
+
 @media (max-width: 700px) {
   .adm-table th { width: auto; display: block; padding-bottom: 0; }
   .adm-table td { display: block; }

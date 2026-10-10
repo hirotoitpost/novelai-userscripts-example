@@ -223,7 +223,7 @@ export default function Home() {
           >
             <div className="home-card-icon">🛠️</div>
             <h2>開発管理者</h2>
-            <p>サーバーの状態とログ・動いている処理・設定(.env)・再起動やデータの管理・既定値やプリセット。この PC からだけ開けます。</p>
+            <p>サーバーの状態とログ・動いている処理・設定(.env)・再起動やデータの管理・既定値やプリセット・コンテンツガード。LAN の中から開けます。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
 

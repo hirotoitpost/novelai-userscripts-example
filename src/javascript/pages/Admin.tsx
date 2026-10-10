@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import ContentGuardRules from '../components/ContentGuardRules'
@@ -12,13 +12,17 @@ import './Admin.css'
  * 開発管理者のページ。サーバーの状態とログ、動いている処理と外部サービス、設定(.env)、サーバーの操作とデータの
  * 管理、アプリの既定値・プリセット・コンテンツガードを扱う。
  *
- * この PC 自身から(localhost で)開いたときだけ使える。管理の API(/api/admin)は、フロントの中継を通さずに
- * バックエンド(:8000)へ直接つなぐ(中継を通すと、スマホからでも「この PC から」に見えてしまうため、
- * バックエンドも中継も断るようにしてある)。
+ * LAN の中から使える(この PC のほか、スマホや LAN のほかの端末からも)。インターネット側と、ほかのサイトのページからは
+ * 使えない(バックエンドが断る)。管理の API(/api/admin)は、バックエンド(:8000)へ直接つなぐ。
+ *
+ * 設定を変えたときは、反映に何が要るかをダイアログで知らせる(ApplyDialog):
+ *  - pc: PC の再起動が要る
+ *  - server: サーバーの再起動が要る(ダイアログから起動し直せる)
+ *  - immediate: すぐに反映される
  */
 
-const IS_LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
-const BACKEND = `${window.location.protocol}//${window.location.hostname}:8000`
+const HOST = window.location.hostname
+const BACKEND = `${window.location.protocol}//${HOST}:8000`
 
 async function admin<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BACKEND}/api/admin${path}`, {
@@ -54,46 +58,125 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'defaults', label: '既定値・プリセット・ガード' },
 ]
 
+type RestartTarget = 'all' | 'backend' | 'frontend'
+const TARGET_LABEL: Record<RestartTarget, string> = { all: 'バックエンドとフロント', backend: 'バックエンド', frontend: 'フロント' }
+
+/** サーバーを起動し直してもらう。http は true で http、false で https、null で今のまま。戻り値は画面に出す案内。 */
+async function restartServers(target: RestartTarget, http: boolean | null, scheme: string): Promise<string> {
+  const next = http === null ? scheme : http ? 'http' : 'https'
+  await admin('/restart', { method: 'POST', body: JSON.stringify({ target, http }) })
+  if (next !== window.location.protocol.replace(':', '')) {
+    // 方式が変わると、このページの URL も変わる
+    const url = `${next}://${window.location.host}/admin`
+    window.setTimeout(() => { window.location.href = url }, 12000)
+    return `${next} で起動し直しています。10秒ほどしたら ${url} を開きます。`
+  }
+  window.setTimeout(() => window.location.reload(), 10000)
+  return '起動し直しています。10秒ほどで戻ります…'
+}
+
+/** 変更の反映に何が要るか。 */
+interface Applied {
+  level: 'pc' | 'server' | 'immediate'
+  /** 何を変えたか(例: 「VLLM_MODEL」「全年齢のネガティブ」) */
+  what: string
+  /** server のとき、どれを起動し直すか */
+  target?: RestartTarget
+}
+
+const AppliedContext = createContext<(applied: Applied) => void>(() => {})
+/** 変更を保存したあとに呼ぶ。反映に何が要るかのダイアログを出す。 */
+const useApplied = () => useContext(AppliedContext)
+
+function ApplyDialog({ applied, onClose }: { applied: Applied; onClose: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const target = applied.target ?? 'backend'
+
+  const restart = async () => {
+    setBusy(true)
+    try {
+      const scheme = window.location.protocol.replace(':', '')
+      setMessage(await restartServers(target, null, scheme))
+    } catch (e) {
+      setMessage(errorText(e))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="adm-overlay" onClick={busy ? undefined : onClose}>
+      <div className={`adm-dialog adm-dialog--${applied.level}`} role="alertdialog" aria-modal="true"
+        aria-labelledby="adm-dialog-title" onClick={e => e.stopPropagation()}>
+        {applied.level === 'pc' && (
+          <>
+            <h2 id="adm-dialog-title">PC の再起動が必要です</h2>
+            <p>「{applied.what}」を保存しました。</p>
+            <p>この項目は、<strong>PC を再起動したあと</strong>に反映されます(開いているターミナルや VS Code、そこから起動した
+              プログラムには、起動したときの値が残っているためです)。サーバーの再起動だけでは反映されません。</p>
+          </>
+        )}
+        {applied.level === 'server' && (
+          <>
+            <h2 id="adm-dialog-title">サーバーの再起動が必要です</h2>
+            <p>「{applied.what}」を保存しました。</p>
+            <p>この項目は、<strong>{TARGET_LABEL[target]}を起動し直したあと</strong>に反映されます。
+              起動し直すと、動いている処理は止まります(途中までの結果は残ります)。</p>
+            {target === 'backend' && <p className="adm-hint">MCP のツールも同じ値を使う場合は、Claude Code / VS Code 側の MCP サーバーも起動し直してください。</p>}
+          </>
+        )}
+        {applied.level === 'immediate' && (
+          <>
+            <h2 id="adm-dialog-title">保存しました</h2>
+            <p>「{applied.what}」の変更は、<strong>すぐに反映されます</strong>(次の処理から効きます。再起動は要りません)。</p>
+          </>
+        )}
+        {message && <p className="adm-warn">{message}</p>}
+        <div className="adm-row adm-dialog-actions">
+          {applied.level === 'server' && (
+            <button type="button" className="adm-primary" disabled={busy} onClick={() => void restart()}>
+              {TARGET_LABEL[target]}を今すぐ起動し直す
+            </button>
+          )}
+          <button type="button" disabled={busy} autoFocus onClick={onClose}>
+            {applied.level === 'server' ? 'あとで起動し直す' : '閉じる'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Admin() {
   const navigate = useNavigate()
   const [tab, setTab] = useLocalStorage<Tab>('nai_admin_tab', 'status')
+  const [applied, setApplied] = useState<Applied | null>(null)
 
   return (
-    <div className="adm-root">
-      <header className="adm-header">
-        <button type="button" className="adm-link" onClick={() => navigate('/')}>← ホーム</button>
-        <h1>開発管理者</h1>
-      </header>
-      {!IS_LOCAL ? (
+    <AppliedContext.Provider value={setApplied}>
+      <div className="adm-root">
+        <header className="adm-header">
+          <button type="button" className="adm-link" onClick={() => navigate('/')}>← ホーム</button>
+          <h1>開発管理者</h1>
+        </header>
+        <nav className="adm-tabs" role="tablist">
+          {TABS.map(t => (
+            <button key={t.id} type="button" role="tab" aria-selected={tab === t.id}
+              className={tab === t.id ? 'adm-tab adm-tab--on' : 'adm-tab'} onClick={() => setTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
         <main className="adm-main">
-          <section className="adm-section">
-            <h2>この PC から開いてください</h2>
-            <p className="adm-hint">
-              このページは、サーバーを動かしている PC 自身のブラウザで <code>{window.location.protocol}//localhost:5173/admin</code> を
-              開いたときだけ使えます(設定の秘密や再起動を扱うため、スマホや LAN のほかの端末からは使えません)。
-            </p>
-          </section>
+          {tab === 'status' && <StatusTab />}
+          {tab === 'jobs' && <JobsTab />}
+          {tab === 'env' && <EnvTab />}
+          {tab === 'ops' && <OpsTab />}
+          {tab === 'defaults' && <DefaultsTab />}
         </main>
-      ) : (
-        <>
-          <nav className="adm-tabs" role="tablist">
-            {TABS.map(t => (
-              <button key={t.id} type="button" role="tab" aria-selected={tab === t.id}
-                className={tab === t.id ? 'adm-tab adm-tab--on' : 'adm-tab'} onClick={() => setTab(t.id)}>
-                {t.label}
-              </button>
-            ))}
-          </nav>
-          <main className="adm-main">
-            {tab === 'status' && <StatusTab />}
-            {tab === 'jobs' && <JobsTab />}
-            {tab === 'env' && <EnvTab />}
-            {tab === 'ops' && <OpsTab />}
-            {tab === 'defaults' && <DefaultsTab />}
-          </main>
-        </>
-      )}
-    </div>
+        {applied && <ApplyDialog applied={applied} onClose={() => setApplied(null)} />}
+      </div>
+    </AppliedContext.Provider>
   )
 }
 
@@ -167,13 +250,13 @@ function StatusTab() {
             <tbody>
               <tr>
                 <th>バックエンド</th>
-                <td><span className="adm-ok">● 起動中</span> {s.backend.scheme}://localhost:8000 ・ PID {s.backend.pid} ・
+                <td><span className="adm-ok">● 起動中</span> {s.backend.scheme}://{HOST}:8000 ・ PID {s.backend.pid} ・
                   稼働 {formatDuration(s.backend.uptime_seconds * 1000)}(起動 {when(s.backend.started_at)})・ Python {s.backend.python}</td>
               </tr>
               <tr>
                 <th>フロント(Vite)</th>
                 <td>{s.frontend.alive ? <span className="adm-ok">● 起動中</span> : <span className="adm-bad">● 応答なし</span>}{' '}
-                  {s.frontend.scheme}://localhost:5173{s.frontend.pid && ` ・ PID ${s.frontend.pid}`}
+                  {s.frontend.scheme}://{window.location.host}{s.frontend.pid && ` ・ PID ${s.frontend.pid}`}
                   {s.frontend.scheme !== s.backend.scheme && <span className="adm-bad"> ・ バックエンドと方式が違います(両方を起動し直してください)</span>}</td>
               </tr>
               <tr>
@@ -358,7 +441,11 @@ function JobsTab() {
 
 // ════════ 設定(.env) ════════
 
-interface EnvEntry { key: string; set: boolean; secret: boolean; value: string | null; description: string }
+interface EnvEntry {
+  key: string; set: boolean; secret: boolean; value: string | null; description: string
+  restart: 'pc' | 'server'; restart_target: RestartTarget | ''
+}
+interface EnvSaved { entries: EnvEntry[]; restart: 'pc' | 'server'; restart_target: RestartTarget | '' }
 
 function EnvTab() {
   const [entries, setEntries] = useState<EnvEntry[]>([])
@@ -368,6 +455,7 @@ function EnvTab() {
   const [newValue, setNewValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [changed, setChanged] = useState(false)
+  const applied = useApplied()
 
   useEffect(() => {
     admin<{ path: string; entries: EnvEntry[] }>('/env')
@@ -378,10 +466,11 @@ function EnvTab() {
   const save = async (key: string, value: string | null) => {
     setError(null)
     try {
-      const d = await admin<{ entries: EnvEntry[] }>('/env', { method: 'PUT', body: JSON.stringify({ key, value }) })
+      const d = await admin<EnvSaved>('/env', { method: 'PUT', body: JSON.stringify({ key, value }) })
       setEntries(d.entries)
       setEditing(({ [key]: _done, ...rest }) => rest)
       setChanged(true)
+      applied({ level: d.restart, what: key, target: d.restart_target || undefined })
       return true
     } catch (e) {
       setError(errorText(e))
@@ -394,9 +483,9 @@ function EnvTab() {
       <h2>設定(.env)</h2>
       <p className="adm-hint">
         <code>{path}</code> の項目です。トークンなどの秘密は末尾の数文字だけ出します(全体は画面に出しません。変えるときは新しい値を入れます)。
-        書き換える前の内容は <code>.env.bak</code> に1つだけ残ります。<strong>反映にはバックエンドの再起動が要ります</strong>(「操作とデータ」)。
+        書き換える前の内容は <code>.env.bak</code> に1つだけ残ります。<strong>反映にはサーバーの再起動(項目によっては PC の再起動)が要ります</strong>。保存すると、何が要るかを表示します。
       </p>
-      {changed && <p className="adm-warn">変更を保存しました。バックエンドを起動し直すと反映されます。</p>}
+      {changed && <p className="adm-warn">変更を保存しました。再起動するまでは、前の値で動いています。</p>}
       {error && <p className="adm-error">{error}</p>}
       <table className="adm-table adm-table--rows">
         <tbody>
@@ -404,7 +493,8 @@ function EnvTab() {
             const draft = editing[e.key]
             return (
               <tr key={e.key} className={e.set ? '' : 'adm-unset'}>
-                <th><code>{e.key}</code>{e.secret && <span className="adm-tag">秘密</span>}</th>
+                <th><code>{e.key}</code>{e.secret && <span className="adm-tag">秘密</span>}
+                  <span className="adm-tag">{e.restart === 'pc' ? 'PC の再起動' : e.restart_target === 'frontend' ? 'フロントの再起動' : 'バックエンドの再起動'}</span></th>
                 <td>
                   {draft === undefined
                     ? (e.set ? <code>{e.value || '(空)'}</code> : <span className="adm-hint">(未設定)</span>)
@@ -468,22 +558,13 @@ function OpsTab() {
   const scheme = status.data?.backend.scheme ?? window.location.protocol.replace(':', '')
   const hasCert = services.data?.certificate.exists ?? false
 
-  const restart = async (target: 'all' | 'backend' | 'frontend', http: boolean | null) => {
+  const restart = async (target: RestartTarget, http: boolean | null) => {
     const next = http === null ? scheme : http ? 'http' : 'https'
-    const what = target === 'all' ? 'バックエンドとフロント' : target === 'backend' ? 'バックエンド' : 'フロント'
-    if (!window.confirm(`${what}を起動し直します(${next})。動いている処理は止まります(途中までの結果は残ります)。よろしいですか?`)) return
+    if (!window.confirm(`${TARGET_LABEL[target]}を起動し直します(${next})。動いている処理は止まります(途中までの結果は残ります)。よろしいですか?`)) return
     setBusy(true)
     setMessage(null)
     try {
-      await admin('/restart', { method: 'POST', body: JSON.stringify({ target, http }) })
-      if (next !== window.location.protocol.replace(':', '')) {
-        // 方式が変わると、このページの URL も変わる
-        setMessage(`${next} で起動し直しています。10秒ほどしたら ${next}://localhost:5173/admin を開いてください。`)
-        window.setTimeout(() => { window.location.href = `${next}://localhost:5173/admin` }, 12000)
-      } else {
-        setMessage('起動し直しています。10秒ほどで戻ります…')
-        window.setTimeout(() => window.location.reload(), 10000)
-      }
+      setMessage(await restartServers(target, http, scheme))
     } catch (e) {
       setMessage(errorText(e))
       setBusy(false)
@@ -615,6 +696,7 @@ function DefaultsTab() {
   const [presets, setPresets] = useState<ImagePreset[]>([])
   const [presetDrafts, setPresetDrafts] = useState<Record<number, string>>({})
   const [guardId, setGuardId] = useState<number | null>(null)
+  const applied = useApplied()
 
   const loadPresets = useCallback(() => {
     fetch(`${BACKEND}/api/image/presets`).then(r => r.json()).then(setPresets).catch(() => {})
@@ -631,6 +713,7 @@ function DefaultsTab() {
       const d = await admin<{ settings: Setting[] }>(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) })
       setSettings(d.settings)
       setDrafts(({ [key]: _done, ...rest }) => rest)
+      applied({ level: 'immediate', what: d.settings.find(s => s.key === key)?.label ?? key })
     } catch (e) {
       setError(errorText(e))
     }
@@ -648,6 +731,7 @@ function DefaultsTab() {
       if (!res.ok) throw new Error(JSON.stringify((await res.json()).detail))
       setPresetDrafts(({ [preset.id]: _done, ...rest }) => rest)
       loadPresets()
+      applied({ level: 'immediate', what: `プリセット「${preset.name}」` })
     } catch (e) {
       setError(`プリセット「${preset.name}」: ${errorText(e)}`)
     }
@@ -707,6 +791,7 @@ function DefaultsTab() {
                   if (!window.confirm(`プリセット「${p.name}」を消します。よろしいですか?`)) return
                   await fetch(`${BACKEND}/api/image/presets/${p.id}`, { method: 'DELETE' })
                   loadPresets()
+                  applied({ level: 'immediate', what: `プリセット「${p.name}」の削除` })
                 }}>削除</button>
               </div>
             </details>
@@ -720,11 +805,11 @@ function DefaultsTab() {
           性的な内容と、未成年に見える内容を扱う定義です(止めるタグ・取り除くタグ・足すネガティブ・LLM への指示・成人向けの判定の語)。
           値は DB にあり、保存すると次の処理から効きます(再起動は要りません)。API は <code>/api/content-guard</code> です。
         </p>
-        <ContentGuardRules />
+        <ContentGuardRules onSaved={what => applied({ level: 'immediate', what })} />
         <h3>ガードプロファイル(キャラ別データセット)</h3>
         <p className="adm-hint">「全年齢で止めるタグ」に、データセットごとに足すタグとネガティブです。</p>
         <div className="adm-guards">
-          <GuardProfiles selectedId={guardId} onSelect={setGuardId} />
+          <GuardProfiles selectedId={guardId} onSelect={setGuardId} onSaved={what => applied({ level: 'immediate', what })} />
         </div>
       </section>
     </>

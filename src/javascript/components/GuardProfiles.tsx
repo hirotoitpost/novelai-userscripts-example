@@ -6,6 +6,8 @@ interface Props {
   selectedId: number | null
   onSelect: (id: number | null) => void
   disabled?: boolean
+  /** 保存・削除したときに、何を変えたかを知らせる */
+  onSaved?: (what: string) => void
 }
 
 /**
@@ -13,7 +15,7 @@ interface Props {
  * プロファイルでは、基本のガード(全年齢で止めるタグ)にタグとネガティブを上乗せできる。
  * 基本のガードそのものは、開発管理者のページ(コンテンツガード)か /api/content-guard で編集する。
  */
-export default function GuardProfiles({ selectedId, onSelect, disabled }: Props) {
+export default function GuardProfiles({ selectedId, onSelect, disabled, onSaved }: Props) {
   const [core, setCore] = useState<GuardCore | null>(null)
   const [profiles, setProfiles] = useState<GuardProfile[]>([])
   const [name, setName] = useState('')
@@ -65,6 +67,7 @@ export default function GuardProfiles({ selectedId, onSelect, disabled }: Props)
       const saved: GuardProfile = await res.json()
       load()
       onSelect(saved.id)
+      onSaved?.(`ガードプロファイル「${saved.name}」`)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -77,6 +80,7 @@ export default function GuardProfiles({ selectedId, onSelect, disabled }: Props)
     await fetch(`/api/lora-dataset/guards/${selectedId}`, { method: 'DELETE' }).catch(() => {})
     onSelect(null)
     load()
+    onSaved?.(`ガードプロファイル「${profile?.name ?? ''}」の削除`)
   }
 
   return (

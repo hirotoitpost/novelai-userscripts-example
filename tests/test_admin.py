@@ -1,5 +1,5 @@
 """
-開発管理者のページの API(/api/admin)のテスト: この PC からだけ使えること、.env の伏せ字と書き換え、
+開発管理者のページの API(/api/admin)のテスト: LAN の中からだけ使えること、.env の伏せ字と書き換え、
 アプリの既定値、掃除、バックアップ。DB とファイルの場所は一時フォルダに差し替える。
 
 実行方法:
@@ -53,21 +53,42 @@ def local(app: FastAPI) -> TestClient:
     return TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 50000))
 
 
-def test_only_this_pc_can_use_it(app: FastAPI) -> None:
+def test_only_the_lan_can_use_it(app: FastAPI) -> None:
     assert local(app).get("/api/admin/settings").status_code == 200
-    # LAN のほかの端末
+    # LAN のほかの端末(スマホなど)から、IP でも LAN 内の名前でも
     lan = TestClient(app, base_url="http://192.168.0.9:8000", client=("192.168.0.20", 50000))
-    assert lan.get("/api/admin/settings").status_code == 403
-    # フロントの中継を通ったもの(接続元はこの PC に見えるが、中継の印が付く)
-    proxied = local(app).get("/api/admin/env", headers={"X-Forwarded-For": "192.168.0.20"})
-    assert proxied.status_code == 403
-    # この PC のブラウザで開いた、ほかのサイトのページから
+    assert lan.get("/api/admin/settings").status_code == 200
+    named = TestClient(app, base_url="http://novelai.lan:8000", client=("192.168.0.20", 50000))
+    assert named.get("/api/admin/env", headers={"Origin": "http://novelai.lan:5173"}).status_code == 200
+    # フロントの中継を通ったもの(接続元はこの PC に見え、元の接続元が X-Forwarded-For に入る)
+    assert local(app).get("/api/admin/env", headers={"X-Forwarded-For": "192.168.0.20"}).status_code == 200
+    assert local(app).get("/api/admin/env", headers={"X-Forwarded-For": "203.0.113.5"}).status_code == 403
+    assert local(app).get("/api/admin/env", headers={"X-Forwarded-For": "192.168.0.20, 203.0.113.5"}).status_code == 403
+    # インターネット側から
+    outside = TestClient(app, base_url="http://192.168.0.9:8000", client=("203.0.113.5", 50000))
+    assert outside.get("/api/admin/settings").status_code == 403
+    # ブラウザで開いた、ほかのサイトのページから
     assert local(app).get("/api/admin/env", headers={"Origin": "https://evil.example"}).status_code == 403
-    # 名前を 127.0.0.1 に向けたサイト(DNS rebinding)から
-    rebind = TestClient(app, base_url="http://evil.example:8000", client=("127.0.0.1", 50000))
+    assert lan.get("/api/admin/env", headers={"Origin": "https://evil.example"}).status_code == 403
+    assert local(app).get("/api/admin/env", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    # 外の名前を LAN のアドレスに向けたサイト(DNS rebinding)から
+    rebind = TestClient(app, base_url="http://evil.example:8000", client=("192.168.0.20", 50000))
     assert rebind.get("/api/admin/env").status_code == 403
-    # この PC のフロント(localhost:5173)のページからは使える
+    # この PC・LAN のフロントのページからは使える
     assert local(app).get("/api/admin/env", headers={"Origin": "https://localhost:5173"}).status_code == 200
+    assert lan.get("/api/admin/env", headers={"Origin": "http://192.168.0.9:5173"}).status_code == 200
+
+
+def test_env_says_what_restart_each_item_needs(app: FastAPI) -> None:
+    client = local(app)
+    entries = {e["key"]: e for e in client.get("/api/admin/env").json()["entries"]}
+    assert entries["VLLM_MODEL"]["restart"] == "server" and entries["VLLM_MODEL"]["restart_target"] == "backend"
+    saved = client.put("/api/admin/env", json={"key": "PATH_ADD_TOOLS", "value": "C:/tools/bin"}).json()
+    assert saved["restart"] == "pc"
+    saved = client.put("/api/admin/env", json={"key": "VITE_FLAG", "value": "1"}).json()
+    assert saved["restart"] == "server" and saved["restart_target"] == "frontend"
+    saved = client.put("/api/admin/env", json={"key": "PUSH_MIN_SECONDS", "value": "20"}).json()
+    assert saved["restart"] == "server" and saved["restart_target"] == "backend"
 
 
 def test_env_masks_secrets_and_edits_in_place(app: FastAPI, tmp_path: Path) -> None:

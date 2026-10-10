@@ -2,13 +2,15 @@
 開発管理者のページの API(/api/admin)。サーバーの状態・ログ・動いている処理・外部サービス・設定(.env)・
 データの管理・サーバーの操作・アプリの既定値を扱う。
 
-この PC 自身から開いたときだけ使える(require_local)。.env の秘密やサーバーの再起動を扱うので、LAN のほかの
-端末や、この PC のブラウザで開いたほかのサイトのページからは使えないようにする:
-- 接続元がこの PC(127.0.0.1 / ::1)であること
-- フロント(Vite)の中継を通っていないこと(中継を通ると、スマホからでも接続元がこの PC に見える。
-  vite.config.ts でも /api/admin は中継しない)
-- Host と Origin が localhost / 127.0.0.1 であること(バックエンドの CORS は全部許可なので、これが無いと
-  ほかのサイトのページから読めてしまう。名前を 127.0.0.1 に向ける手口(DNS rebinding)も Host で防ぐ)
+LAN の中から使える(require_lan)。この PC のほか、スマホや LAN のほかの端末からも開ける。.env の秘密やサーバーの
+再起動を扱うので、インターネット側と、ブラウザで開いたほかのサイトのページからは使えないようにする:
+- 接続元が、この PC か LAN の端末(プライベートアドレス)であること。フロント(Vite)の中継を通ったときは、
+  中継が伝える元の接続元(X-Forwarded-For)も同じように確かめる
+- Host と Origin が、この PC・LAN のアドレス・LAN 内の名前(*.lan など)であること(バックエンドの CORS は全部許可
+  なので、これが無いとほかのサイトのページから読めてしまう。外の名前を LAN のアドレスに向ける手口
+  (DNS rebinding)も Host で防ぐ)
+
+.env の秘密は、LAN の中でも末尾の数文字しか返さない。
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import ipaddress
 import os
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -42,16 +45,38 @@ _CERT_DIR = _PROJECT_ROOT / "data" / "certs"
 _MODEL_DIR = _PROJECT_ROOT / "data" / "models"
 _STARTED_AT = time.time()
 
-_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+# LAN 内の名前として認める末尾(lan-dns で付けた novelai.lan、mDNS の <PC名>.local など)
+_LAN_SUFFIXES = (".lan", ".local", ".home.arpa", ".internal")
+# LAN のアドレスの範囲(ipaddress の is_private は文書用のアドレスなども含むので、範囲を並べる)
+_LAN_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10")
+)
 
 
-def _is_loopback(host: str | None) -> bool:
+def _is_lan_ip(host: str | None) -> bool:
+    """この PC(127.0.0.1 / ::1)か、LAN のアドレス(192.168.x.x など)か。"""
     if not host:
         return False
     try:
-        return ipaddress.ip_address(host).is_loopback
+        ip = ipaddress.ip_address(host.split("%", 1)[0])
     except ValueError:
-        return host == "localhost"
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or any(ip.version == net.version and ip in net for net in _LAN_NETWORKS)
+
+
+def _is_lan_name(host: str) -> bool:
+    """Host / Origin のホスト名が、この PC・LAN のアドレス・LAN 内の名前か。"""
+    if not host:
+        return False
+    return (
+        host == "localhost"
+        or _is_lan_ip(host)
+        or host.endswith(_LAN_SUFFIXES)
+        or host == socket.gethostname().lower()
+    )
 
 
 def _hostname(value: str) -> str:
@@ -60,26 +85,28 @@ def _hostname(value: str) -> str:
     return (host or "").lower()
 
 
-def require_local(request: Request) -> None:
-    """この PC 自身から、直接開いたときだけ通す(モジュールの説明を参照)。"""
-    denied = HTTPException(
-        status_code=403, detail="開発管理者のページは、この PC から(localhost で)開いたときだけ使えます。"
-    )
-    if request.client is None or not _is_loopback(request.client.host):
+def require_lan(request: Request) -> None:
+    """LAN の中から開いたときだけ通す(モジュールの説明を参照)。"""
+    denied = HTTPException(status_code=403, detail="開発管理者のページは、LAN の中から開いたときだけ使えます。")
+    if request.client is None or not _is_lan_ip(request.client.host):
         raise denied
-    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("forwarded")
-    if forwarded:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded and not all(_is_lan_ip(part.strip()) for part in forwarded.split(",")):
         raise denied
-    if _hostname(request.headers.get("host", "")) not in _LOCAL_HOSTS:
+    if not _is_lan_name(_hostname(request.headers.get("host", ""))):
+        raise denied
+    # 中継を通ったときの、ブラウザが開いていた名前
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_host and not _is_lan_name(_hostname(forwarded_host)):
         raise denied
     origin = request.headers.get("origin")
-    if origin and _hostname(origin) not in _LOCAL_HOSTS:
+    if origin and not _is_lan_name(_hostname(origin)):
         raise denied
     if request.headers.get("sec-fetch-site") == "cross-site" and not origin:
         raise denied
 
 
-router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_local)])
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_lan)])
 
 
 # ---- 状態とログ ----
@@ -356,6 +383,18 @@ def _unquote(value: str) -> str:
     return re.split(r"\s+#", value, maxsplit=1)[0].strip()
 
 
+def _env_restart(key: str) -> dict[str, str]:
+    """
+    .env のその項目を変えたとき、反映に何が要るか。
+    - pc: PC の再起動(PATH_ADD_* は scripts/load-env.ps1 が PATH に足すもので、開いているターミナル・VS Code と
+      そこから起動したプログラムには、起動したときの PATH が引き継がれている)
+    - server: サーバーの再起動(バックエンドは起動時に .env を読む。VITE_* はフロント)
+    """
+    if key.startswith("PATH_ADD"):
+        return {"restart": "pc", "restart_target": ""}
+    return {"restart": "server", "restart_target": "frontend" if key.startswith("VITE_") else "backend"}
+
+
 def _env_entries() -> list[dict[str, Any]]:
     """.env の項目と、.env.example にある(まだ設定していない)項目。説明は .env.example の直前のコメント。"""
     described: dict[str, str] = {}
@@ -388,6 +427,7 @@ def _env_entries() -> list[dict[str, Any]]:
                 "secret": bool(_SECRET_KEY.search(key)),
                 "value": _mask(key, value) if value is not None else None,
                 "description": described.get(key, ""),
+                **_env_restart(key),
             }
         )
     return entries
@@ -408,7 +448,7 @@ class EnvUpdate(BaseModel):
 async def put_env(req: EnvUpdate) -> dict[str, Any]:
     """
     .env の1項目を書き換える(コメントや並びはそのまま)。無い項目は末尾に足す。値を None にすると、その行を
-    コメントにする。反映にはバックエンドの再起動が要る(起動時に読むため)。
+    コメントにする。反映に何が要るか(サーバーの再起動か、PC の再起動か)を restart で返す。
     """
     if not _VALID_KEY.match(req.key):
         raise HTTPException(status_code=422, detail="項目名は英大文字・数字・_ で、英大文字から始めてください。")
@@ -438,7 +478,7 @@ async def put_env(req: EnvUpdate) -> dict[str, Any]:
         # 書き換える前の .env を1世代だけ残す(.gitignore 済み)
         shutil.copy2(_ENV_FILE, _ENV_FILE.with_name(_ENV_FILE.name + ".bak"))
     _ENV_FILE.write_text(newline.join(lines) + newline, encoding="utf-8", newline="")
-    return {"entries": _env_entries(), "restart_required": True}
+    return {"entries": _env_entries(), "restart_required": True, **_env_restart(req.key)}
 
 
 # ---- データの管理 ----
