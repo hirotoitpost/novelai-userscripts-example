@@ -10,7 +10,8 @@ interface Props {
 
 /**
  * データセット生成のガードプロファイルの選択と編集。
- * 基本のブロックリストは表示のみで外せない。プロファイルではタグとネガティブを上乗せできる。
+ * プロファイルでは、基本のガード(全年齢で止めるタグ)にタグとネガティブを上乗せできる。
+ * 基本のガードそのものは、開発管理者のページ(コンテンツガード)か /api/content-guard で編集する。
  */
 export default function GuardProfiles({ selectedId, onSelect, disabled }: Props) {
   const [core, setCore] = useState<GuardCore | null>(null)
@@ -94,12 +95,13 @@ export default function GuardProfiles({ selectedId, onSelect, disabled }: Props)
       </label>
 
       <button type="button" className="lora-btn lora-btn--secondary" onClick={() => setShowCore(!showCore)}>
-        {showCore ? '基本のガードを隠す' : `基本のガード(${core?.blocked_tags.length ?? 0}件・変更不可)を表示`}
+        {showCore ? '基本のガードを隠す' : `基本のガード(${core?.blocked_tags.length ?? 0}件)を表示`}
       </button>
       {showCore && core && (
         <div className="chards-chips">
-          {core.blocked_tags.map(t => <span key={t} className="chards-chip chards-chip--locked">🔒 {t}</span>)}
+          {core.blocked_tags.map(t => <span key={t} className="chards-chip chards-chip--locked">{t}</span>)}
           <p className="lora-hint">常に付けるネガティブ: {core.negative_tags}</p>
+          <p className="lora-hint">基本のガードは、開発管理者のページの「コンテンツガード」で編集できます。</p>
         </div>
       )}
 

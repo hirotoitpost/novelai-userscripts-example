@@ -84,10 +84,6 @@ interface Job {
 
 const STORAGE_KEY = 'nai_manga_draft'
 const GENRES = ['日常コメディ', '夫婦の日常コメディ', '学園コメディ', 'ラブコメ', 'ほのぼの', 'ちょっといい話', 'ドタバタギャグ']
-// 全年齢の漫画なので、露出を避けるタグを既定で入れる(品質タグはコマ生成の既定値と同じ)
-const DEFAULT_NEGATIVE =
-  'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, ' +
-  'watermark, signature, nsfw, nude, cleavage, underwear, sexually suggestive'
 const PRESET_KEYS = ['model', 'steps', 'scale', 'sampler', 'noise_schedule', 'cfg_rescale', 'complexity'] as const
 
 const EMPTY: DraftState = {
@@ -160,7 +156,14 @@ export default function MangaDraft() {
   // キャラ参照: 自分で切り替えるまでは、登場人物の全員に参照画像があればオン
   const [referenceChoice, setUseReference] = useState<boolean | null>(null)
   const [presetId, setPresetId] = useState<number | null>(null)
-  const [negative, setNegative] = useState(DEFAULT_NEGATIVE)
+  // ネガティブのはじめの値はサーバーの定義(コンテンツガードの draft.default_negative)。自分で書き換えたらそれを使う
+  const [negative, setNegative] = useState<string | null>(null)
+  useEffect(() => {
+    fetch('/api/content-guard/rules/draft.default_negative')
+      .then(r => (r.ok ? r.json() : null))
+      .then(rule => setNegative(prev => prev ?? (typeof rule?.value === 'string' ? rule.value : '')))
+      .catch(() => setNegative(prev => prev ?? ''))
+  }, [])
   // 「漫画にする」の進み具合(物語ページと同じ処理状況ダイアログ)。サーバーのジョブなので、画面を
   // 閉じたり開き直したりしても処理は続き、開き直すと表示を引き継ぐ
   const task = useTaskStatus()
@@ -375,7 +378,7 @@ export default function MangaDraft() {
         update({ pendingStoryId: storyId })
       }
       const preset = presets.find(p => p.id === presetId)
-      const settings: Record<string, unknown> = { negative_prompt: negative.trim() || null }
+      const settings: Record<string, unknown> = { negative_prompt: (negative ?? '').trim() || null }
       if (preset) {
         for (const key of PRESET_KEYS) {
           const value = preset.settings[key]
@@ -685,7 +688,7 @@ export default function MangaDraft() {
             </div>
             <label className="md-field">
               <span>ネガティブ</span>
-              <textarea rows={2} value={negative} onChange={e => setNegative(e.target.value)} />
+              <textarea rows={2} value={negative ?? ''} onChange={e => setNegative(e.target.value)} />
             </label>
             <p className="md-hint">
               全{draft.scripts.reduce((n, s) => n + (s?.length ?? 0), 0)}コマを生成します(NovelAI の Anlas を使います)。

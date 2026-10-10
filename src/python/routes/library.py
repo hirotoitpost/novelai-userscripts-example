@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from .. import content_guard
 from ..db import (
     list_characters,
     delete_generation_entry,
@@ -49,7 +50,6 @@ from ..db import (
     set_bookmark,
     set_generation_image_paths,
 )
-from ..manga_v2.prompt import is_sexual
 from ..relatedness import Item, idf_weights, normalize_tags, rank
 from .lora_dataset import _safe_name
 from .story import _jobs
@@ -73,16 +73,6 @@ _ORIGIN_RE = re.compile(r"^\[([^\]]{1,10})\]\s*(.*)$", re.DOTALL)
 ImageSource = Literal["generate", "panel", "illustration", "dataset"]
 # 一覧の絞り込み: すべて / 一般向けだけ / 成人向けだけ
 Rating = Literal["all", "general", "adult"]
-# 漫画の性的な場面の判定(is_sexual)に加えて、成人向けを示すタグ
-_EXTRA_ADULT_RE = re.compile(r"\b(explicit|uncensored|hentai|r-?18)\b", re.IGNORECASE)
-# 本文で成人向けを判定する語。普通の文章にも出うる語(「挿入」「快楽」など)は入れず、
-# 1語だけで決めないよう _ADULT_TEXT_MIN_HITS 回以上出てきたときだけ成人向けとみなす。
-_ADULT_TEXT_RE = re.compile(
-    r"セックス|膣|陰茎|陰核|ペニス|ちんぽ|ちんちん|おちんぽ|まんこ|クリトリス|乳首|愛液|精液|射精|中出し|"
-    r"フェラ|手マン|潮吹き|全裸|性器|勃起|肉棒|秘部|秘所|アナル|肛門|ディルド|バイブ|絶頂|喘ぎ|喘いで|"
-    r"イっちゃ|イッちゃ|イク[ッっ！!]"
-)
-_ADULT_TEXT_MIN_HITS = 3
 
 
 # ---- 共通 ----
@@ -200,13 +190,13 @@ def put_adult(req: AdultRequest) -> None:
 
 
 def _tags_adult(tags: str | None) -> bool:
-    return bool(tags) and (is_sexual(tags) or bool(_EXTRA_ADULT_RE.search(tags or "")))
+    return content_guard.tags_adult(tags)
 
 
 def _story_adult() -> tuple[dict[int, bool], dict[int, bool]]:
     """
     物語ごとの (自動判定, 手動指定込みの判定)。どれか1シーンでも性的なタグがあるか、本文に露骨な語が
-    _ADULT_TEXT_MIN_HITS 回以上出てくれば成人向けとみなす。外れていれば手動で指定してもらう。
+    決まった回数以上出てくれば成人向けとみなす(語と回数は content_guard の library.adult_text*)。外れていれば手動で指定してもらう。
     """
     conn = get_connection()
     try:
@@ -216,6 +206,7 @@ def _story_adult() -> tuple[dict[int, bool], dict[int, bool]]:
         marks = list_adult_marks(conn, "book")
     finally:
         conn.close()
+    min_hits = int(content_guard.get("library.adult_text_min_hits"))
     auto: dict[int, bool] = {}
     for row in scenes:
         if not auto.get(row["story_id"]) and _tags_adult(row["draft_prompt_tags"]):
@@ -224,7 +215,7 @@ def _story_adult() -> tuple[dict[int, bool], dict[int, bool]]:
     for row in texts:
         if (
             not auto.get(row["story_id"])
-            and len(_ADULT_TEXT_RE.findall(row["text"] or "")) >= _ADULT_TEXT_MIN_HITS
+            and content_guard.count("library.adult_text", row["text"] or "") >= min_hits
         ):
             auto[row["story_id"]] = True
     # シリーズのどれか1巻が成人向けなら、シリーズ全体を成人向けとみなす(続きの巻は同じ内容になりやすい)

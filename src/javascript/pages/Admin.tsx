@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import ContentGuardRules from '../components/ContentGuardRules'
 import GuardProfiles from '../components/GuardProfiles'
 import { formatDuration } from '../components/TaskStatus'
 import type { ImagePreset } from '../api'
@@ -613,7 +614,6 @@ function DefaultsTab() {
   const [error, setError] = useState<string | null>(null)
   const [presets, setPresets] = useState<ImagePreset[]>([])
   const [presetDrafts, setPresetDrafts] = useState<Record<number, string>>({})
-  const [core, setCore] = useState<{ blocked_tags: string[]; negative_tags: string } | null>(null)
   const [guardId, setGuardId] = useState<number | null>(null)
 
   const loadPresets = useCallback(() => {
@@ -623,7 +623,6 @@ function DefaultsTab() {
   useEffect(() => {
     admin<{ settings: Setting[] }>('/settings').then(d => setSettings(d.settings)).catch(e => setError(errorText(e)))
     loadPresets()
-    fetch(`${BACKEND}/api/lora-dataset/guards/core`).then(r => r.json()).then(setCore).catch(() => {})
   }, [loadPresets])
 
   const saveSetting = async (key: string, value: string | number | null) => {
@@ -718,16 +717,12 @@ function DefaultsTab() {
       <section className="adm-section">
         <h2>コンテンツガード</h2>
         <p className="adm-hint">
-          キャラ別データセットの生成で、使えないタグを止める仕組みです。<strong>基本のガードは変えられません</strong>(未成年を示すタグなどを常に止めます)。
-          下のプロファイルで、止めるタグとネガティブを足せます。
+          性的な内容と、未成年に見える内容を扱う定義です(止めるタグ・取り除くタグ・足すネガティブ・LLM への指示・成人向けの判定の語)。
+          値は DB にあり、保存すると次の処理から効きます(再起動は要りません)。API は <code>/api/content-guard</code> です。
         </p>
-        {core && (
-          <details className="adm-preset">
-            <summary><strong>基本のガード</strong> <span className="adm-hint">{core.blocked_tags.length}件・変更不可</span></summary>
-            <p className="adm-hint">止めるタグ: {core.blocked_tags.join(', ')}</p>
-            <p className="adm-hint">ネガティブ: {core.negative_tags}</p>
-          </details>
-        )}
+        <ContentGuardRules />
+        <h3>ガードプロファイル(キャラ別データセット)</h3>
+        <p className="adm-hint">「全年齢で止めるタグ」に、データセットごとに足すタグとネガティブです。</p>
         <div className="adm-guards">
           <GuardProfiles selectedId={guardId} onSelect={setGuardId} />
         </div>

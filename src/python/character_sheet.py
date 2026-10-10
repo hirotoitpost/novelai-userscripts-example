@@ -7,7 +7,7 @@
 データセットのバリエーション(ポーズ/服装/表情/場所)は既定で全年齢向けに限る。
 水着・下着・裸などは選択肢に入れず、手入力されても弾く。
 R18 は成人フラグ(is_adult)の付いたキャラだけで使え、その場合は性的なタグの代わりに
-未成年を示すタグを弾く。
+未成年を示すタグを弾く。弾くタグ・足すネガティブの中身は DB にある(content_guard.py)。
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ import random
 import re
 from dataclasses import dataclass
 from typing import Any
+
+from . import content_guard
 
 # --- バリエーションの既定リスト(UIのチェックボックスの初期値) ---
 
@@ -54,17 +56,6 @@ LOCATIONS = [
     "cafe", "bedroom", "train interior", "shrine", "simple background, white background",
 ]
 
-# 全年齢向けに限るため、データセット生成では次のタグを受け付けない。
-_BLOCKED_PATTERNS = [
-    r"nsfw", r"nude", r"naked", r"nipples?", r"topless", r"bottomless", r"sex",
-    r"underwear", r"lingerie", r"panties", r"bra", r"brassiere", r"swimsuit", r"bikini",
-    r"see-through", r"cleavage", r"pussy", r"penis", r"cum", r"bondage",
-]
-_BLOCKED_RE = re.compile(r"\b(" + "|".join(_BLOCKED_PATTERNS) + r")\b", re.IGNORECASE)
-
-# データセット生成で常に付けるネガティブ(全年齢向けを保つため)
-SAFE_NEGATIVE = "nsfw, nude, underwear, swimsuit, cleavage"
-
 DEFAULT_NEGATIVE = (
     "lowres, worst quality, low quality, blurry, bad anatomy, bad hands, "
     "extra fingers, missing fingers, text, watermark"
@@ -88,24 +79,27 @@ def join_tags(*parts: str | None) -> str:
     return ", ".join(out)
 
 
-# --- R18(成人キャラ限定) ---
-# 未成年を示すタグ。R18 では性的なタグの代わりにこちらで弾く。基本のガードと同じく固定で、
-# ガードプロファイルからは外せない。成人フラグの保存時にもキャラシートを検査する。
-_MINOR_PATTERNS = [
-    r"jk", r"joshi ?kousei", r"school ?uniform", r"serafuku", r"gym uniform", r"school ?swimsuit",
-    r"randoseru", r"kindergarten", r"(high|middle|elementary) school", r"school ?(girl|boy)s?",
-    r"students?", r"loli", r"shota", r"child(ren)?", r"kids?", r"teen(age|ager)?", r"underage",
-    r"minor", r"young", r"aged down", r"toddler", r"little girl", r"little boy",
-]
-_MINOR_RE = re.compile(r"\b(" + "|".join(_MINOR_PATTERNS) + r")\b", re.IGNORECASE)
+# --- 全年齢 / R18(成人キャラ限定) ---
+# 全年齢では性的なタグを、R18 では代わりに未成年を示すタグを弾く。弾くタグと、足すタグ・ネガティブの中身は
+# content_guard(DB)にある。成人フラグの保存時にもキャラシートを検査する。
 
-# R18 生成で常に付けるタグ/ネガティブ(成人として描かせるため)
-R18_POSITIVE = "adult, mature female"
-R18_NEGATIVE = "child, loli, shota, young, teenage, school uniform, student, petite, flat chest"
+
+def safe_negative() -> str:
+    """全年齢で常に付けるネガティブ。"""
+    return content_guard.text("general.safe_negative")
+
+
+def r18_positive() -> str:
+    """R18 生成で常に付けるタグ(成人として描かせるため)。"""
+    return content_guard.text("dataset.r18_positive")
+
+
+def r18_negative() -> str:
+    return content_guard.text("dataset.r18_negative")
 
 
 def minor_tags(tags: str) -> list[str]:
-    return sorted({m.group(0).lower() for m in _MINOR_RE.finditer(tags)})
+    return content_guard.find("dataset.minor_tags", tags)
 
 
 def character_minor_tags(character: dict[str, Any]) -> list[str]:
@@ -116,9 +110,9 @@ def character_minor_tags(character: dict[str, Any]) -> list[str]:
     return minor_tags(text)
 
 
-# 基本のガード。ガードプロファイル(DBの guard_profiles)からは上乗せはできるが外せない。
-CORE_BLOCKED_TAGS = [p.replace("?", "") for p in _BLOCKED_PATTERNS]
-CORE_NEGATIVE = SAFE_NEGATIVE
+def core_blocked_tags() -> list[str]:
+    """基本のガード(全年齢で止めるタグ)の表示用の一覧。ガードプロファイルはこれへの上乗せ。"""
+    return [p.replace("?", "") for p in content_guard.get("dataset.blocked_tags")]
 
 
 def blocked_tags(tags: str, extra: list[str] | None = None, *, include_core: bool = True) -> list[str]:
@@ -127,7 +121,7 @@ def blocked_tags(tags: str, extra: list[str] | None = None, *, include_core: boo
     extra は正規表現ではなくタグそのものとして扱う(記号入りのタグでも誤動作しないように)。
     include_core=False は R18(成人キャラ)用で、代わりに minor_tags() で未成年を弾く。
     """
-    found = {m.group(0).lower() for m in _BLOCKED_RE.finditer(tags)} if include_core else set()
+    found = set(content_guard.find("dataset.blocked_tags", tags)) if include_core else set()
     words = [re.escape(t.strip()) for t in extra or [] if t.strip()]
     if words:
         extra_re = re.compile(r"(?<![\w-])(" + "|".join(words) + r")(?![\w-])", re.IGNORECASE)
@@ -152,7 +146,7 @@ def sheet_prompt(character: dict[str, Any], *, r18: bool = False) -> str:
     """
     return join_tags(
         character.get("appearance_tags"),
-        R18_POSITIVE if r18 else "",
+        r18_positive() if r18 else "",
         character.get("outfit_tags"),
         character.get("style_tags"),
     )
@@ -164,7 +158,7 @@ def sheet_negative(character: dict[str, Any], *, r18: bool = False, extra: str |
 
     # 基本のネガティブは、開発管理者のページで変えられる(sheet.default_negative)
     base = str(app_settings.get("sheet.default_negative"))
-    return join_tags(base, character.get("negative_tags"), R18_NEGATIVE if r18 else SAFE_NEGATIVE, extra)
+    return join_tags(base, character.get("negative_tags"), r18_negative() if r18 else safe_negative(), extra)
 
 
 def characters_seed(characters: list[dict[str, Any]]) -> int | None:
@@ -253,7 +247,7 @@ def build_variation_shots(
     outfit_choices = outfits or [character.get("outfit_tags") or ""]
     axes = [framings or [""], poses or [""], outfit_choices, expressions or [""], locations or [""]]
 
-    head = join_tags(character.get("trigger_word"), character.get("appearance_tags"), R18_POSITIVE if r18 else "")
+    head = join_tags(character.get("trigger_word"), character.get("appearance_tags"), r18_positive() if r18 else "")
     total = 1
     for axis in axes:
         total *= len(axis)

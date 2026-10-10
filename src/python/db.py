@@ -215,6 +215,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # コンテンツガードの定義(content_guard.py。値は JSON)。はじめの値は content_guard_defaults.json から入れる
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS content_guard_rules (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     # アプリの既定値のうち、開発管理者のページで変えたもの(app_settings.py。値は JSON)
     conn.execute(
         """

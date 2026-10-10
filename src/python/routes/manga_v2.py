@@ -128,7 +128,7 @@ from ..models import (
 )
 from .. import app_settings
 from ..character_sheet import (
-    SAFE_NEGATIVE,
+    safe_negative,
     character_prompt_tags,
     characters_negative,
     characters_seed,
@@ -542,7 +542,7 @@ async def make_reference_candidates(
         image = await generate_image_v5(
             api_key,
             build_panel_prompt(app_settings.get("reference.candidate_tags"), color=color, complexity=None),
-            join_tags(build_panel_negative(None, color=color), SAFE_NEGATIVE, character.get("negative_tags")),
+            join_tags(build_panel_negative(None, color=color), safe_negative(), character.get("negative_tags")),
             model=model or _REFERENCE_MODEL,
             width=832,
             height=1216,
