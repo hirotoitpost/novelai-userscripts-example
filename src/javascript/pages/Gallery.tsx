@@ -13,6 +13,7 @@ import {
   setBookmark,
   thumbUrl,
 } from '../library'
+import FullscreenViewer from '../components/FullscreenViewer'
 import './Gallery.css'
 
 type Source = 'generate' | 'panel' | 'illustration' | 'dataset'
@@ -94,6 +95,8 @@ export default function Gallery() {
   const [error, setError] = useState<string | null>(null)
 
   const [viewing, setViewing] = useState<number | null>(null)
+  // 見ている画像を全画面で出しているか
+  const [fullscreen, setFullscreen] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [downloading, setDownloading] = useState(false)
@@ -208,7 +211,8 @@ export default function Gallery() {
   )
 
   useEffect(() => {
-    if (viewing === null) return
+    // 全画面のときは、全画面の表示がキーを受ける
+    if (viewing === null || fullscreen) return
     function onKey(e: KeyboardEvent) {
       if (e.key === 'ArrowRight') step(1)
       else if (e.key === 'ArrowLeft') step(-1)
@@ -216,7 +220,7 @@ export default function Gallery() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [viewing, step])
+  }, [viewing, step, fullscreen])
 
   function toggleSource(id: Source) {
     setSources(sources.includes(id) ? sources.filter(s => s !== id) : [...sources, id])
@@ -494,10 +498,30 @@ export default function Gallery() {
         </div>
       )}
 
+      {current && viewing !== null && fullscreen && (
+        <FullscreenViewer
+          src={fileUrl(current.path)}
+          alt={describe(current) || SOURCE_LABELS[current.source]}
+          counter={`${viewing + 1} / ${total}`}
+          onPrev={viewing > 0 ? () => step(-1) : undefined}
+          onNext={viewing < items.length - 1 || hasMore ? () => step(1) : undefined}
+          onClose={() => setFullscreen(false)}
+        />
+      )}
+
       {current && viewing !== null && (
         <div className="gallery-viewer" role="dialog" aria-modal="true" aria-label="画像を見る">
           <div className="gallery-viewer-top">
             <span>{viewing + 1} / {total}</span>
+            <button
+              type="button"
+              className="gallery-viewer-full"
+              onClick={() => setFullscreen(true)}
+              disabled={blurs(current) && !revealed.has(current.key)}
+              title={blurs(current) && !revealed.has(current.key) ? '成人向けの画像は、表示してから全画面にできます' : undefined}
+            >
+              ⛶ 全画面
+            </button>
             <button type="button" className="gallery-viewer-close" onClick={() => setViewing(null)} aria-label="閉じる">
               ✕
             </button>

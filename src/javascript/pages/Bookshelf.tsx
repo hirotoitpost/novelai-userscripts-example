@@ -16,6 +16,7 @@ import {
   thumbUrl,
 } from '../library'
 import WorkRelations, { Author } from '../components/WorkRelations'
+import FullscreenViewer from '../components/FullscreenViewer'
 import './Bookshelf.css'
 
 interface Book {
@@ -464,6 +465,8 @@ function Reader({
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<ReaderTab>('manga')
   const [page, setPage] = useState(0)
+  // 漫画のページを全画面で読んでいるか
+  const [fullscreen, setFullscreen] = useState(false)
   const [downloading, setDownloading] = useState<string | null>(null)
   const [fontSize, setFontSize] = useLocalStorage('nai_bookshelf_font_size', 18)
   const [vertical, setVertical] = useLocalStorage('nai_bookshelf_vertical', false)
@@ -505,6 +508,8 @@ function Reader({
 
   // 漫画は右から左へ読むので、← が次のページ、→ が前のページ
   useEffect(() => {
+    // 全画面のときは、全画面の表示がキーを受ける(Esc で本棚まで閉じないように)
+    if (fullscreen) return
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
       if (tab !== 'manga') return
@@ -513,7 +518,7 @@ function Reader({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [tab, page, goTo, onClose])
+  }, [tab, page, goTo, onClose, fullscreen])
 
   // 次のページを先に読み込んでおく
   useEffect(() => {
@@ -748,7 +753,19 @@ function Reader({
                   onChange={e => goTo(Number(e.target.value))} aria-label="ページ" />
                 <button type="button" onClick={() => goTo(page - 1)} disabled={page === 0}>前 ›</button>
                 <span className="reader-pageno">{page + 1} / {pageCount}</span>
+                <button type="button" onClick={() => setFullscreen(true)}>⛶ 全画面</button>
               </div>
+              {fullscreen && (
+                <FullscreenViewer
+                  src={fileUrl(book.pages[page])}
+                  alt={`${book.title} ${page + 1}ページ`}
+                  counter={`${page + 1} / ${pageCount}`}
+                  rtl
+                  onPrev={page > 0 ? () => goTo(page - 1) : undefined}
+                  onNext={page < pageCount - 1 ? () => goTo(page + 1) : undefined}
+                  onClose={() => setFullscreen(false)}
+                />
+              )}
               {atEnd && (
                 <div className="reader-end">
                   <span>おわり</span>

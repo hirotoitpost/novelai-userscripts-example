@@ -541,3 +541,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.gallery-viewer-full {
+  margin-left: auto;
+  margin-right: 0.6rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  background: transparent;
+  color: #c8c8ec;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.gallery-viewer-full:disabled { opacity: 0.45; cursor: not-allowed; }
