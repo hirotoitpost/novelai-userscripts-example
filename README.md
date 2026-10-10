@@ -120,6 +120,17 @@ To run over plain HTTP for debugging while the certificates exist, use `scripts/
 The MCP tools follow the scheme dev-ctl last started the backend with (`data/run/backend.scheme`); the userscripts call
 `https://127.0.0.1:8000`, so change their `API_BASE` while on HTTP.
 
+### Admin page (this PC only)
+
+`/admin` (the "開発管理者" card on the home page) shows the servers' state and logs, running jobs and external
+services (NovelAI token, Ollama, models, certificate), edits `.env` (secrets are shown masked and never sent to the
+page in full), restarts the servers or switches http/https, shows storage use, cleans up unused images, backs up
+the database, and edits app defaults, image presets and content-guard profiles (the core guard is read-only).
+
+Its API (`/api/admin`) only answers a browser on the PC itself talking to the backend directly: the caller must be
+loopback, not forwarded by the Vite proxy (which also refuses to relay it), and the `Host`/`Origin` must be
+localhost — the backend's CORS allows any origin, so without this any site open in the PC's browser could read it.
+
 ### 4. Log in
 
 Enter your NovelAI account **email** and **password**.  

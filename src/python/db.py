@@ -215,6 +215,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # アプリの既定値のうち、開発管理者のページで変えたもの(app_settings.py。値は JSON)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
     # 漫画v2: シーン1つ = コマ1つの絵。コマ割り・吹き出しは合成時に行うので、絵だけを持つ。
     conn.execute(
         """

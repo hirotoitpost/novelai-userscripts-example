@@ -14,6 +14,7 @@ import MangaDraft from './pages/MangaDraft'
 import MangaImport from './pages/MangaImport'
 import CharacterDataset from './pages/CharacterDataset'
 import Chunks from './pages/Chunks'
+import Admin from './pages/Admin'
 import DbStatus from './pages/DbStatus'
 import Selection from './pages/Selection'
 import Story from './pages/Story'
@@ -65,6 +66,10 @@ function AppRoutes() {
       <Route
         path="/chunks"
         element={<ProtectedRoute><Chunks /></ProtectedRoute>}
+      />
+      <Route
+        path="/admin"
+        element={<ProtectedRoute><Admin /></ProtectedRoute>}
       />
       <Route
         path="/db-status"

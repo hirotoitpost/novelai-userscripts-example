@@ -40,7 +40,11 @@ def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None) 
 
 
 def build_panel_negative(custom: str | None, *, color: bool, sexual: bool = False) -> str:
-    negative = (custom.strip() if custom and custom.strip() else _QUALITY_NEGATIVE) + _NO_TEXT_NEGATIVE
+    from .. import app_settings
+
+    # 既定の品質のネガティブは、開発管理者のページで変えられる(manga.quality_negative)
+    quality = custom.strip() if custom and custom.strip() else str(app_settings.get("manga.quality_negative"))
+    negative = quality + _NO_TEXT_NEGATIVE
     if not color:
         negative += _MONOCHROME_NEGATIVE
     if sexual:

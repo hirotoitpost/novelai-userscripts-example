@@ -126,6 +126,7 @@ from ..models import (
     MangaV2Template,
     StoryJobResponse,
 )
+from .. import app_settings
 from ..character_sheet import (
     SAFE_NEGATIVE,
     character_prompt_tags,
@@ -146,7 +147,7 @@ _REFERENCE_DIR = _MANGA_DIR / "refs"
 # 参照画像の候補(選ばれなかったものも残る。選んだものは refs へ写す)
 _CANDIDATE_DIR = _REFERENCE_DIR / "candidates"
 # 候補の構図。顔と服装が分かり、背景が絵柄を引っ張らないもの
-_CANDIDATE_TAGS = "solo, cowboy shot, standing, looking at viewer, smile, simple background, white background"
+# (既定は app_settings の reference.candidate_tags。開発管理者のページで変えられる)
 # キャラ参照を使うコマの生成モデル。V5はキャラ参照に未対応(500が返る)。
 _REFERENCE_MODEL = "nai-diffusion-4-5-full"
 _PAGE_DIR = _MANGA_DIR / "v2"
@@ -540,7 +541,7 @@ async def make_reference_candidates(
         seed = random.randrange(4294967296)
         image = await generate_image_v5(
             api_key,
-            build_panel_prompt(_CANDIDATE_TAGS, color=color, complexity=None),
+            build_panel_prompt(app_settings.get("reference.candidate_tags"), color=color, complexity=None),
             join_tags(build_panel_negative(None, color=color), SAFE_NEGATIVE, character.get("negative_tags")),
             model=model or _REFERENCE_MODEL,
             width=832,

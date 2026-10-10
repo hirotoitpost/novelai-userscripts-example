@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .client import close_client, init_client
 from .llm_client import close_llm_clients, init_llm_clients
+from .routes.admin import router as admin_router
 from .routes.auth import router as auth_router
 from .routes.batch import router as batch_router
 from .routes.chunks import router as chunks_router
@@ -58,6 +59,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(batch_router)
 app.include_router(chunks_router)
