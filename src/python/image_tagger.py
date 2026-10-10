@@ -164,23 +164,41 @@ def tag_image(image: Image.Image) -> list[TagScore]:
     return _add_monochrome(image, result)
 
 
-# 彩度の平均がこれ未満なら白黒とみなす(評価用データの白黒の絵は 0.02〜0.05、カラーは 0.1 以上)
-_MONOCHROME_SATURATION = 0.06
+# 白っぽい背景を除いた画素のうち、灰色(彩度 0.15 未満)がこの割合以上なら白黒の絵。評価用データでは
+# 白黒の絵が 0.84〜1.00、カラーの絵が 0.70 以下ではっきり分かれた(平均の彩度だと、髪だけ色のある白黒の絵が
+# カラーと区別できなかった)
+_MONOCHROME_GREY = 0.8
+# 白黒の絵のうち、色のある画素(彩度 0.3 超)がこれ以上あれば一部だけ色付き(spot color)
+_SPOT_COLOR = 0.005
+_MONO_TAGS = ("monochrome", "greyscale", "spot color")
+
+
+def colour_profile(image: Image.Image) -> tuple[float, float]:
+    """(白っぽい背景を除いた画素のうち灰色の割合, 色のある画素の割合)。"""
+    small = image.convert("RGB")
+    small.thumbnail((256, 256))
+    hsv = np.asarray(small.convert("HSV")).astype(np.float32) / 255
+    saturation, value = hsv[..., 1], hsv[..., 2]
+    body = ~((value > 0.9) & (saturation < 0.1))
+    count = max(int(body.sum()), 1)
+    grey = float(((saturation < 0.15) & body).sum()) / count
+    coloured = float(((saturation > 0.3) & (value > 0.25) & body).sum()) / count
+    return grey, coloured
 
 
 def _add_monochrome(image: Image.Image, result: list[TagScore]) -> list[TagScore]:
     """
-    白黒の絵に monochrome・greyscale を確実に付ける。モデルは白黒の絵でも monochrome を落とすことがある
-    (評価用データの白黒の絵の半分ほど)が、色の有無は画素から確実に分かる。
+    白黒の絵に monochrome・greyscale を確実に付ける。髪や小物だけ色があれば spot color も(danbooru でも
+    一部だけ色のある白黒の絵は greyscale と spot color の両方を付ける)。
+    モデルは白黒の絵でも monochrome を落とすことがある(評価用データの白黒の絵の半分ほど)が、
+    色の有無は画素から確実に分かる。
     """
-    small = image.convert("RGB")
-    small.thumbnail((256, 256))
-    saturation = float(np.asarray(small.convert("HSV"))[:, :, 1].mean()) / 255
-    if saturation >= _MONOCHROME_SATURATION:
+    grey, coloured = colour_profile(image)
+    if grey < _MONOCHROME_GREY:
         return result
-    added = [TagScore(tag, 1.0, "general") for tag in ("monochrome", "greyscale")]
-    rest = [s for s in result if s.tag not in ("monochrome", "greyscale")]
-    return added + rest
+    tags = ("monochrome", "greyscale", "spot color") if coloured >= _SPOT_COLOR else ("monochrome", "greyscale")
+    rest = [s for s in result if s.tag not in _MONO_TAGS]
+    return [TagScore(tag, 1.0, "general") for tag in tags] + rest
 
 
 def _threshold(score: TagScore, general_threshold: float, character_threshold: float) -> float:
