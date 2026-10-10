@@ -27,7 +27,11 @@ from mcp.types import ImageContent, TextContent
 from PIL import Image
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_DEFAULT_BACKEND = "http://127.0.0.1:8000"
+# LAN 用の証明書(scripts/make_lan_cert.py)があると、バックエンドは https で動く
+_CA_FILE = _PROJECT_ROOT / "data" / "certs" / "ca.crt"
+_DEFAULT_BACKEND = (
+    "https://127.0.0.1:8000" if (_PROJECT_ROOT / "data" / "certs" / "server.crt").exists() else "http://127.0.0.1:8000"
+)
 # 同じシードだと構図が似るので、シーンごとにこの間隔でずらす
 _SEED_STEP = 37
 # プリセットのうち、コマの生成設定(MangaImageSettings)に使う項目
@@ -39,8 +43,13 @@ def _backend() -> str:
     return os.environ.get("MANGA_BACKEND_URL", _DEFAULT_BACKEND).rstrip("/")
 
 
+def _verify() -> str | bool:
+    """https のバックエンドは、自前の認証局(ca.crt)で証明書を確かめる。"""
+    return str(_CA_FILE) if _CA_FILE.exists() else True
+
+
 async def _call(method: str, path: str, body: Any = None, timeout: float = 120) -> Any:
-    async with httpx.AsyncClient(base_url=_backend(), timeout=timeout) as client:
+    async with httpx.AsyncClient(base_url=_backend(), timeout=timeout, verify=_verify()) as client:
         try:
             response = await client.request(method, path, json=body)
         except httpx.ConnectError as exc:

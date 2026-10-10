@@ -1,0 +1,23 @@
+{
+  "name": "NovelAI 漫画・物語ツール",
+  "short_name": "NAIツール",
+  "description": "NovelAI で物語を書き、漫画にするツール(このPCのサーバーにつないで使います)",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "ja",
+  "background_color": "#0b0b14",
+  "theme_color": "#1d1d2e",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "漫画ドラフト", "url": "/manga-draft", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "本棚", "url": "/bookshelf", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "ギャラリー", "url": "/gallery", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
