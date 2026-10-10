@@ -25,6 +25,7 @@ from ..llm_models import (
     MetadataGenRequest,
     PromptFormatRequest,
     ReversePromptRequest,
+    ReverseTagsResponse,
     StoryDraftRequest,
 )
 
@@ -339,6 +340,67 @@ async def stream_metadata_gen(req: MetadataGenRequest) -> StreamingResponse:
         {"role": "system", "content": system},
         {"role": "user", "content": req.concept},
     ], max_tokens=1024)
+
+
+# 画像の判定は数秒かかるので、同期関数にしてスレッドプールで実行させる(イベントループを塞がない)
+@router.post("/reverse-prompt/tags", response_model=ReverseTagsResponse)
+def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
+    """
+    画像から NovelAI のプロンプトを逆引きする。NovelAI で生成した画像なら埋め込まれたプロンプトと設定を、
+    そうでなければ WD Tagger で推定したタグを返す(src/python/image_tagger.py)。
+    """
+    import base64
+    import io
+
+    from fastapi import HTTPException
+    from PIL import Image, UnidentifiedImageError
+
+    from ..character_sheet import DEFAULT_NEGATIVE
+    from ..image_tagger import (
+        CHARACTER_THRESHOLD,
+        GENERAL_THRESHOLD,
+        MODEL_NAME,
+        STYLE_THRESHOLD,
+        STYLE_TAGS,
+        build_negative,
+        build_prompt,
+        embedded_prompt,
+        rating_of,
+        tag_image,
+    )
+
+    data_text = req.image.split(",", 1)[1] if req.image.startswith("data:") else req.image
+    try:
+        data = base64.b64decode(data_text)
+        image = Image.open(io.BytesIO(data))
+        image.load()
+    except (ValueError, UnidentifiedImageError, OSError):
+        raise HTTPException(status_code=400, detail="画像を読み取れませんでした。")
+
+    thresholds = {
+        "general_threshold": GENERAL_THRESHOLD,
+        "character_threshold": CHARACTER_THRESHOLD,
+        "style_threshold": STYLE_THRESHOLD,
+        "style_tags": list(STYLE_TAGS),
+    }
+    embedded = embedded_prompt(data)
+    if embedded is not None:
+        return {"source": "metadata", **embedded, **thresholds, "model": MODEL_NAME}
+    scores = tag_image(image)
+    positive = build_prompt(scores)
+    return {
+        "source": "tagger",
+        "positive": positive,
+        "negative": build_negative(DEFAULT_NEGATIVE, positive),
+        "tags": [
+            {"tag": s.tag, "probability": round(s.probability, 4), "category": s.category}
+            for s in scores
+            if s.category != "rating"
+        ],
+        "rating": rating_of(scores),
+        **thresholds,
+        "model": MODEL_NAME,
+    }
 
 
 @router.post("/reverse-prompt")

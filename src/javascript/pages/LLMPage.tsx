@@ -9,6 +9,7 @@ import {
   AuxTextRequest,
   MetadataGenRequest,
   ReversePromptRequest,
+  apiFetch,
 } from '../api'
 import './LLMPage.css'
 
@@ -518,41 +519,139 @@ function MetadataGenPanel() {
 // ════════════════════════════════════════
 // Panel: リバースプロンプト
 // ════════════════════════════════════════
-interface ReversePromptResult { positive: string; negative: string; analysis: string; confidence: string }
+interface ReverseTag { tag: string; probability: number; category: 'general' | 'character' }
+interface ReverseResult {
+  source: 'metadata' | 'tagger'
+  positive: string
+  negative: string
+  characters: { prompt: string; negative: string }[]
+  settings: { seed: number | null; steps: number | null; scale: number | null; sampler: string | null; width: number | null; height: number | null } | null
+  software: string | null
+  tags: ReverseTag[]
+  rating: string | null
+  general_threshold: number
+  character_threshold: number
+  style_threshold: number
+  style_tags: string[]
+  model: string
+}
+
+// プロンプトの先頭に置く人数のタグ(src/python/image_tagger.py の _COUNT_TAGS と揃える)
+const COUNT_TAGS = [
+  '1girl', '2girls', '3girls', '4girls', '5girls', '6+girls', 'multiple girls',
+  '1boy', '2boys', '3boys', '4boys', '5boys', '6+boys', 'multiple boys',
+  '1other', '2others', '3others', 'multiple others', 'no humans',
+]
+
+const RATING_LABELS: Record<string, string> = {
+  general: '全年齢', sensitive: 'センシティブ', questionable: 'きわどい', explicit: '成人向け',
+}
+
+const SIZE_WORDS = new Set(['large', 'huge', 'gigantic', 'small', 'flat', 'medium', 'big', 'long', 'short', 'thick'])
+
+/** 大きさの語を付けたタグ(large breasts)があるときの元のタグ(breasts)か(src/python/image_tagger.py の _implied と同じ) */
+function isImplied(tag: string, others: string[]): boolean {
+  return others.some(other => other.endsWith(` ${tag}`) && SIZE_WORDS.has(other.slice(0, -tag.length - 1)))
+}
+
+/**
+ * しきい値と手での選び直しから、NovelAI の並び(人数 → キャラ名 → 絵柄 → そのほか確率の高い順)のプロンプトを
+ * 作る。手で入れたタグは、詳しいタグに含まれていても残す。
+ */
+function tagsToPrompt(tags: ReverseTag[], picked: Set<string>, manual: Record<string, boolean>, styles: string[]): string {
+  const chosen = tags.filter(t => picked.has(t.tag))
+  const names = chosen.map(t => t.tag)
+  const kept = chosen.filter(t => COUNT_TAGS.includes(t.tag) || manual[t.tag] || !isImplied(t.tag, names))
+  const counts = kept.filter(t => COUNT_TAGS.includes(t.tag)).sort((a, b) => COUNT_TAGS.indexOf(a.tag) - COUNT_TAGS.indexOf(b.tag))
+  const characters = kept.filter(t => t.category === 'character')
+  const styleTags = kept.filter(t => styles.includes(t.tag))
+  const others = kept.filter(t => t.category === 'general' && !COUNT_TAGS.includes(t.tag) && !styles.includes(t.tag))
+  return [...counts, ...characters, ...styleTags, ...others].map(t => t.tag).join(', ')
+}
 
 function ReversePromptPanel() {
   const { token } = useAuth()
   const navigate  = useNavigate()
-  const { output, streaming, error, copied, run, copy } = useLLMStream()
   const [image,    setImage]    = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
+  const [running,  setRunning]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
+  const [result,   setResult]   = useState<ReverseResult | null>(null)
+  const [threshold, setThreshold] = useState(0.5)
+  // しきい値で選んだ後に、手で外した/足したタグ
+  const [toggled,  setToggled]  = useState<Record<string, boolean>>({})
+  const [copied,   setCopied]   = useState<string | null>(null)
   const fileInputRef            = useRef<HTMLInputElement>(null)
-
-  const parsed = tryParseJSON<ReversePromptResult>(output)
 
   const handleFile = useCallback((file: File) => {
     if (!file.type.match(/^image\//)) return
     const reader = new FileReader()
-    reader.onload = e => setImage(e.target?.result as string)
+    reader.onload = e => { setImage(e.target?.result as string); setResult(null); setError(null) }
     reader.readAsDataURL(file)
   }, [])
 
-  const handleRun = () => {
+  const handleRun = async () => {
     if (!token || !image) return
-    const req: ReversePromptRequest = { image }
-    run(token, '/api/llm/reverse-prompt', req)
+    setRunning(true)
+    setError(null)
+    setResult(null)
+    setToggled({})
+    try {
+      const req: ReversePromptRequest = { image }
+      const data = await apiFetch<ReverseResult>(token, '/api/llm/reverse-prompt/tags', req)
+      setResult(data)
+      setThreshold(data.general_threshold)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  // 絵柄・色のタグは低いしきい値で拾う(一般タグのしきい値を下げたときはそちらに合わせる)
+  const tagThreshold = (t: ReverseTag) => {
+    if (t.category === 'character') return result!.character_threshold
+    if (result!.style_tags.includes(t.tag)) return Math.min(result!.style_threshold, threshold)
+    return threshold
+  }
+  const picked = new Set(
+    (result?.tags ?? [])
+      .filter(t => toggled[t.tag] ?? (t.probability >= tagThreshold(t)))
+      .map(t => t.tag),
+  )
+  const positive = result?.source === 'tagger'
+    ? tagsToPrompt(result.tags, picked, toggled, result.style_tags)
+    : result?.positive ?? ''
+  // 画像にあるタグ(手で入れたものも)はネガティブから外す(両方にあると打ち消し合う)
+  const positiveTags = new Set(positive.split(',').map(t => t.trim()))
+  const negative = result?.source === 'tagger'
+    ? result.negative.split(',').map(t => t.trim()).filter(t => t && !positiveTags.has(t)).join(', ')
+    : result?.negative ?? ''
+  // 画像生成ページはキャラごとの欄が無いので、キャラのプロンプトは本体の後ろにつなげる
+  const merged = [positive, ...(result?.characters ?? []).map(c => c.prompt)].filter(Boolean).join(', ')
+
+  const copy = async (text: string, key: string) => {
+    await navigator.clipboard.writeText(text).catch(() => {})
+    setCopied(key)
+    window.setTimeout(() => setCopied(null), 1500)
   }
 
   const handleUse = () => {
-    if (!parsed) return
-    localStorage.setItem('nai_gen_prompt',     JSON.stringify(parsed.positive))
-    localStorage.setItem('nai_gen_neg_prompt', JSON.stringify(parsed.negative))
+    if (!result) return
+    localStorage.setItem('nai_gen_prompt',     JSON.stringify(merged))
+    localStorage.setItem('nai_gen_neg_prompt', JSON.stringify(negative))
+    if (result.settings?.steps) localStorage.setItem('nai_gen_steps', JSON.stringify(result.settings.steps))
+    if (result.settings?.scale) localStorage.setItem('nai_gen_scale', JSON.stringify(result.settings.scale))
     navigate('/generate')
   }
 
   return (
     <div className="llm-panel">
-      <p className="llm-panel-desc">アニメ・イラスト画像をアップロード → 再現用 NovelAI プロンプトを逆算します。</p>
+      <p className="llm-panel-desc">
+        画像から、似た画像を生成するための NovelAI プロンプトを逆引きします。NovelAI で生成した画像なら、画像に埋め込まれた
+        プロンプトと設定をそのまま取り出します。それ以外は danbooru タグの判定モデル(WD Tagger)で推定します(初回はモデルの
+        ダウンロードに数分かかります)。
+      </p>
       <div
         className={['llm-drop', dragOver ? 'llm-drop--over' : '', image ? 'llm-drop--has-image' : ''].join(' ')}
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
@@ -572,42 +671,86 @@ function ReversePromptPanel() {
         const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''
       }} />
       {image && (
-        <button type="button" className="llm-clear-btn" onClick={() => setImage(null)}>✕ 画像をクリア</button>
+        <button type="button" className="llm-clear-btn" onClick={() => { setImage(null); setResult(null) }}>✕ 画像をクリア</button>
       )}
-      <button className="llm-run-btn" onClick={handleRun} disabled={streaming || !image}>
-        {streaming ? <span className="llm-spinner" /> : '解析してプロンプト生成'}
+      <button className="llm-run-btn" onClick={() => void handleRun()} disabled={running || !image}>
+        {running ? <span className="llm-spinner" /> : 'プロンプトを逆引き'}
       </button>
       {error && <p className="llm-error">{error}</p>}
-      {(output || streaming) && (
+
+      {result && (
         <div className="llm-output-box">
-          {parsed ? (
-            <>
-              {parsed.analysis && <p className="llm-aux-explanation">{parsed.analysis}</p>}
-              {parsed.confidence && (
-                <p className="llm-confidence">信頼度: <strong>{parsed.confidence}</strong></p>
-              )}
-              <div className="llm-aux-row">
-                <span className="llm-aux-label">Positive</span>
-                <pre className="llm-aux-text">{parsed.positive}</pre>
-                <button className="llm-copy-btn llm-copy-btn--sm" onClick={() => copy(parsed.positive)}>コピー</button>
-              </div>
-              <div className="llm-aux-row">
-                <span className="llm-aux-label llm-aux-label--neg">Negative</span>
-                <pre className="llm-aux-text llm-aux-text--neg">{parsed.negative}</pre>
-                <button className="llm-copy-btn llm-copy-btn--sm" onClick={() => copy(parsed.negative)}>コピー</button>
-              </div>
-              <div className="llm-output-actions">
-                <button className="llm-copy-btn" onClick={() => copy(output)}>{copied ? '✓ JSON コピー済み' : 'JSON コピー'}</button>
-                <button className="llm-use-btn" onClick={handleUse}>画像生成に使用 →</button>
-              </div>
-            </>
+          {result.source === 'metadata' ? (
+            <p className="llm-confidence">
+              ✅ <strong>画像に埋め込まれた生成時のプロンプト</strong>です(同じ設定・シードなら同じ画像になります)
+              {result.software && ` ・ ${result.software}`}
+            </p>
           ) : (
             <>
-              <div className="llm-output-actions">
-                <button className="llm-copy-btn" onClick={() => copy(output)}>{copied ? '✓ コピー済み' : 'コピー'}</button>
+              <p className="llm-confidence">
+                🔎 <strong>WD Tagger で推定</strong>しました
+                {result.rating && ` ・ 判定: ${RATING_LABELS[result.rating] ?? result.rating}`}
+                。タグを押すと入れる/外すを切り替えられます。
+              </p>
+              <label className="llm-rev-threshold">
+                <span>しきい値 {threshold.toFixed(2)}(下げるとタグが増え、上げると確かなものだけになります)</span>
+                <input
+                  type="range" min={0.2} max={0.9} step={0.05} value={threshold}
+                  onChange={e => { setThreshold(Number(e.target.value)); setToggled({}) }}
+                />
+              </label>
+              <div className="llm-rev-tags">
+                {result.tags.map(t => (
+                  <button
+                    key={t.tag}
+                    type="button"
+                    className={[
+                      'llm-rev-tag',
+                      picked.has(t.tag) ? 'llm-rev-tag--on' : '',
+                      t.category === 'character' ? 'llm-rev-tag--character' : '',
+                    ].join(' ')}
+                    onClick={() => setToggled({ ...toggled, [t.tag]: !picked.has(t.tag) })}
+                    title={`確率 ${(t.probability * 100).toFixed(0)}%${t.category === 'character' ? '(キャラ名)' : ''}`}
+                  >
+                    {t.tag} <small>{Math.round(t.probability * 100)}</small>
+                  </button>
+                ))}
               </div>
-              <pre className="llm-output">{output}{streaming && <span className="llm-cursor">|</span>}</pre>
             </>
+          )}
+          <div className="llm-aux-row">
+            <span className="llm-aux-label">Positive</span>
+            <pre className="llm-aux-text">{positive}</pre>
+            <button className="llm-copy-btn llm-copy-btn--sm" onClick={() => void copy(positive, 'pos')}>{copied === 'pos' ? '✓' : 'コピー'}</button>
+          </div>
+          {result.characters.map((c, i) => (
+            <div key={i} className="llm-aux-row">
+              <span className="llm-aux-label">キャラ{i + 1}</span>
+              <pre className="llm-aux-text">{c.prompt}{c.negative && `\n(ネガティブ: ${c.negative})`}</pre>
+              <button className="llm-copy-btn llm-copy-btn--sm" onClick={() => void copy(c.prompt, `c${i}`)}>{copied === `c${i}` ? '✓' : 'コピー'}</button>
+            </div>
+          ))}
+          <div className="llm-aux-row">
+            <span className="llm-aux-label llm-aux-label--neg">Negative</span>
+            <pre className="llm-aux-text llm-aux-text--neg">{negative}</pre>
+            <button className="llm-copy-btn llm-copy-btn--sm" onClick={() => void copy(negative, 'neg')}>{copied === 'neg' ? '✓' : 'コピー'}</button>
+          </div>
+          {result.settings && (
+            <p className="llm-aux-explanation">
+              設定: {[
+                result.settings.width && result.settings.height && `${result.settings.width}×${result.settings.height}`,
+                result.settings.steps && `steps ${result.settings.steps}`,
+                result.settings.scale && `scale ${result.settings.scale}`,
+                result.settings.sampler,
+                result.settings.seed != null && `シード ${result.settings.seed}`,
+              ].filter(Boolean).join(' ・ ')}
+            </p>
+          )}
+          <div className="llm-output-actions">
+            <button className="llm-use-btn" onClick={handleUse} disabled={!merged}>画像生成に使用 →</button>
+          </div>
+          {result.characters.length > 0 && (
+            <p className="llm-aux-explanation">画像生成ページにはキャラごとの欄が無いため、キャラのプロンプトは Positive の後ろにつなげて渡します。</p>
           )}
         </div>
       )}

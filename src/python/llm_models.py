@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from typing import Optional
 
 from .models import ImageModelLiteral, ImageSizePresetLiteral
 
@@ -33,3 +34,45 @@ class MetadataGenRequest(BaseModel):
 
 class ReversePromptRequest(BaseModel):
     image: str  # base64 data URL
+
+
+class ReverseTag(BaseModel):
+    tag: str
+    probability: float
+    category: str  # general | character
+
+
+class ReverseCharacter(BaseModel):
+    prompt: str
+    negative: str = ""
+
+
+class ReverseSettings(BaseModel):
+    seed: Optional[int] = None
+    steps: Optional[int] = None
+    scale: Optional[float] = None
+    sampler: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class ReverseTagsResponse(BaseModel):
+    """
+    画像からの逆引きの結果。source が "metadata" なら画像に埋め込まれた生成時のプロンプト(完全に
+    再現できる)、"tagger" なら WD Tagger の推定。tags は推定のときの候補で、画面でしきい値を変えて選び直せる。
+    """
+
+    source: str
+    positive: str
+    negative: str
+    characters: list[ReverseCharacter] = []
+    settings: Optional[ReverseSettings] = None
+    software: Optional[str] = None
+    tags: list[ReverseTag] = []
+    rating: Optional[str] = None
+    general_threshold: float
+    character_threshold: float
+    # 絵柄・色のタグ(しきい値を低くして拾う)
+    style_threshold: float
+    style_tags: list[str] = []
+    model: str

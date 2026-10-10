@@ -219,6 +219,8 @@ These models are downloaded to `data/models/` on first use and are not part of t
   whose terms allow using results of machine-learning experiments but forbid redistributing the dataset.
   The model itself has no stated license, so check with its author (or switch models) before distributing this app or offering it commercially.
   Without it, panels are found from their border lines instead.
+- [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) (Apache-2.0) — danbooru tags for the reverse prompt
+  (image → NovelAI prompt) when the image has no embedded NovelAI metadata. About 1.3 GB.
 
 ## Related Projects
 
