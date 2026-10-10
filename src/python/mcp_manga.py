@@ -27,19 +27,19 @@ from mcp.types import ImageContent, TextContent
 from PIL import Image
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-# LAN 用の証明書(scripts/make_lan_cert.py)があると、バックエンドは https で動く(dev-ctl.ps1 -Http なら http)
+# バックエンドは既定で http、dev-ctl.ps1 -Https なら LAN 用の証明書(scripts/make_lan_cert.py)で https で動く
 _CA_FILE = _PROJECT_ROOT / "data" / "certs" / "ca.crt"
 _SCHEME_FILE = _PROJECT_ROOT / "data" / "run" / "backend.scheme"
 
 
 def _default_backend() -> str:
-    """dev-ctl.ps1 がバックエンドを起動したときの方式(data/run/backend.scheme)。無ければ証明書の有無で決める。"""
+    """dev-ctl.ps1 がバックエンドを起動したときの方式(data/run/backend.scheme)。無ければ既定の http。"""
     try:
         scheme = _SCHEME_FILE.read_text(encoding="utf-8-sig").strip()
     except OSError:
         scheme = ""
     if scheme not in ("http", "https"):
-        scheme = "https" if (_PROJECT_ROOT / "data" / "certs" / "server.crt").exists() else "http"
+        scheme = "http"
     return f"{scheme}://127.0.0.1:8000"
 # 同じシードだと構図が似るので、シーンごとにこの間隔でずらす
 _SEED_STEP = 37

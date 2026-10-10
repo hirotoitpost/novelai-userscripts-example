@@ -5,10 +5,11 @@
 #   .\scripts\dev-ctl.ps1 stop    [-Target backend|frontend|all]
 #   .\scripts\dev-ctl.ps1 restart [-Target backend|frontend|all]
 #   .\scripts\dev-ctl.ps1 status  [-Target backend|frontend|all]
-#   .\scripts\dev-ctl.ps1 restart -Http   # 証明書があっても http で動かす(デバッグ用)
+#   .\scripts\dev-ctl.ps1 restart -Https  # https で動かす(スマホへのインストール・通知を試すとき)
 #
-# https: data/certs/server.* (scripts/make_lan_cert.py) があれば https で起動する。-Http を付けるか、
-#   環境変数 NAI_HTTP=1 なら http。どちらで起動したかはサーバーごとに data/run/<名前>.scheme に残し、
+# http / https: 開発中の既定は http。-Https を付けるか、環境変数 NAI_HTTPS=1 なら https で起動する
+#   (data/certs/server.* が要る。scripts/make_lan_cert.py で作る)。-Http は既定と同じ(明示したいとき用)。
+#   どちらで起動したかはサーバーごとに data/run/<名前>.scheme に残し、
 #   status と MCP のツール(backend.scheme)が使う。
 #   フロント(Vite)とバックエンドは同じ方式でそろえること(片方だけ変えると中継や直接の呼び出しが合わない)。
 #
@@ -38,7 +39,10 @@ param(
     [ValidateSet('backend', 'frontend', 'all')]
     [string]$Target = 'all',
 
-    # 証明書があっても http で動かす(デバッグ用。ブラウザの開発ツールやプロキシで中身を見たいときなど)
+    # https で動かす(スマホへのインストール(PWA)・通知は https でしか使えない)。証明書が要る
+    [switch]$Https,
+
+    # http で動かす(既定と同じ。-Https や NAI_HTTPS=1 より優先する)
     [switch]$Http
 )
 
@@ -46,13 +50,17 @@ $WorkspaceRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { 
 $RunDir = Join-Path $WorkspaceRoot 'data\run'
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 
-# LAN 用の証明書(scripts/make_lan_cert.py)があれば、バックエンドもフロントも https で開く。
-# -Http か環境変数 NAI_HTTP=1 なら、証明書があっても http(フロントの Vite にも NAI_HTTP で伝える)
+# 既定は http。-Https か環境変数 NAI_HTTPS=1 なら、LAN 用の証明書(scripts/make_lan_cert.py)を使って
+# バックエンドもフロントも https で開く(フロントの Vite には NAI_HTTPS で伝える)
 $CertFile = Join-Path $WorkspaceRoot 'data\certs\server.crt'
 $KeyFile = Join-Path $WorkspaceRoot 'data\certs\server.key'
-$ForceHttp = $Http -or ($env:NAI_HTTP -eq '1')
-$UseHttps = (Test-Path $CertFile) -and (Test-Path $KeyFile) -and (-not $ForceHttp)
-if ($ForceHttp) { $env:NAI_HTTP = '1' } else { Remove-Item Env:NAI_HTTP -ErrorAction SilentlyContinue }
+$WantHttps = ($Https -or ($env:NAI_HTTPS -eq '1')) -and (-not $Http)
+$HasCert = (Test-Path $CertFile) -and (Test-Path $KeyFile)
+if ($WantHttps -and (-not $HasCert) -and ($Action -in @('start', 'restart'))) {
+    Write-Warning 'https の証明書がありません(scripts/make_lan_cert.py で作れます)。http で起動します。'
+}
+$UseHttps = $WantHttps -and $HasCert
+if ($UseHttps) { $env:NAI_HTTPS = '1' } else { Remove-Item Env:NAI_HTTPS -ErrorAction SilentlyContinue }
 $Scheme = if ($UseHttps) { 'https' } else { 'http' }
 
 function Get-StartedScheme($svc) {

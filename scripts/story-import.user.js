@@ -25,7 +25,7 @@
   "use strict";
 
   // LAN 用の証明書を作った場合はバックエンドが https になる(scripts/make_lan_cert.py。PC にも ca.crt を入れる)
-  const API_BASE = "https://127.0.0.1:8000";
+  const API_BASE = "http://127.0.0.1:8000";
   const DEFAULT_N_SCENES = 4;
   const DEFAULT_PANELS_PER_PAGE = 4;
 

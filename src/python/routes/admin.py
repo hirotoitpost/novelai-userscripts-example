@@ -612,10 +612,10 @@ async def post_restart(req: RestartRequest) -> dict[str, Any]:
         "-Target",
         req.target,
     ]
-    # 証明書があるのに http で動かすときだけ -Http を付ける(証明書が無ければ付けなくても http)
-    if use_http and has_cert:
-        args.append("-Http")
-    env = {k: v for k, v in os.environ.items() if k != "NAI_HTTP"}
+    # dev-ctl.ps1 の既定は http。https で動かすときだけ -Https を付ける
+    if not use_http:
+        args.append("-Https")
+    env = {k: v for k, v in os.environ.items() if k != "NAI_HTTPS"}
     # 窓を出さずに、このバックエンドが止まっても動き続けるプロセスにする。DETACHED_PROCESS(コンソール無し)だと
     # PowerShell は何もせずに終わる(実機で確認)ので、CREATE_NO_WINDOW を使う
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
