@@ -148,7 +148,9 @@ def register_manga_tools(mcp: MCPServer) -> None:
                     "title": s["draft_title"],
                     "text": s["novelai_text"] or s["draft_text"],
                     "prompt_tags": s["draft_prompt_tags"],
-                    "characters": [{"id": c["id"], "name": c["name"]} for c in s["characters"]],
+                    "characters": [
+                        {"id": c["id"], "name": c["name"], "action_tags": c.get("action_tags")} for c in s["characters"]
+                    ],
                     "narration": s.get("narration"),
                     "sfx": s.get("sfx"),
                     "has_panel": s["id"] in panels,
@@ -173,6 +175,9 @@ def register_manga_tools(mcp: MCPServer) -> None:
           title: 見出し(任意) / text: セリフ「…」・心の声（…）だけの行と、話し手の手がかりになる地の文
           prompt_tags: コマの作画タグ(英語の danbooru タグ。人数・表情・場所・構図。キャラの容姿はキャラシートから入る)
           character_ids: このコマに描くキャラ(コマでは名前順に左から並ぶ) / narration: ナレーション(80字まで)
+          character_actions: {キャラID: そのキャラの表情・動作の英語タグ}。キャラごとのプロンプトに入るので、
+              表情や仕草は prompt_tags ではなくここに書く(全体に書くと全員に付いてしまう)。
+              prompt_tags には人数・場所・時間帯・構図・二人の位置関係など全体のことだけを書く
           sfx: 描き文字の効果音のリスト
         話し手は「〜が言った/〜は笑った」などの地の文・呼びかけ・会話の交互から判定する。地の文は吹き出しにならない。
         series_id と volume_no を渡すと、そのシリーズの巻にする。
@@ -199,18 +204,25 @@ def register_manga_tools(mcp: MCPServer) -> None:
         text: str | None = None,
         prompt_tags: str | None = None,
         character_ids: list[int] | None = None,
+        character_actions: dict[int, str] | None = None,
         narration: str | None = None,
         sfx: list[str] | None = None,
     ) -> str:
         """
         シーンを手直しする(渡した項目だけ)。narration を空文字にするとナレーションを消す。
-        絵に効く項目(prompt_tags・character_ids)を変えたら manga_generate_panels で描き直す。
+        character_actions(キャラID → 表情・動作の英語タグ)を変えるときは character_ids も渡す。
+        絵に効く項目(prompt_tags・character_ids・character_actions)を変えたら manga_generate_panels で描き直す。
         """
+        if character_actions is not None and character_ids is None:
+            raise ValueError("character_actions を変えるときは character_ids も渡してください")
         fields = {"title": title, "text": text, "prompt_tags": prompt_tags}
         if any(v is not None for v in fields.values()):
             await _call("PATCH", f"/api/story/scenes/{scene_id}", {k: v for k, v in fields.items() if v is not None})
         if character_ids is not None:
-            await _call("PUT", f"/api/story/scenes/{scene_id}/characters", {"character_ids": character_ids})
+            body: dict[str, Any] = {"character_ids": character_ids}
+            if character_actions is not None:
+                body["actions"] = character_actions
+            await _call("PUT", f"/api/story/scenes/{scene_id}/characters", body)
         if narration is not None:
             await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/narration", {"narration": narration})
         if sfx is not None:

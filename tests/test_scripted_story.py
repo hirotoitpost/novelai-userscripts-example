@@ -129,3 +129,31 @@ def test_series_volume(client: TestClient) -> None:
     assert client.post("/api/story/scripted", json=body).status_code == 409
     half = {"title": "x", "scenes": _script(eiko, sensei), "series_id": series["id"]}
     assert client.post("/api/story/scripted", json=half).status_code == 422
+
+
+def test_character_actions_are_kept_per_scene(client: TestClient) -> None:
+    eiko = _character(client, "矢野栄子", "1girl")
+    sensei = _character(client, "矢野先生", "1boy")
+    scenes = [
+        {
+            "text": "「ねえ、先生」",
+            "prompt_tags": "2people, living room",
+            "character_ids": [eiko, sensei],
+            "character_actions": {str(eiko): "blush, looking away", str(sensei): "hand on own chin, thinking"},
+        }
+    ]
+    story = client.post("/api/story/scripted", json={"title": "t", "scenes": scenes}).json()
+    scene = story["scenes"][0]
+    actions = {c["id"]: c["action_tags"] for c in scene["characters"]}
+    assert actions == {eiko: "blush, looking away", sensei: "hand on own chin, thinking"}
+
+    # 付け替えで動作を渡さなければ、残るキャラの動作はそのまま
+    client.put(f"/api/story/scenes/{scene['id']}/characters", json={"character_ids": [eiko]})
+    chars = client.get(f"/api/story/{story['id']}").json()["scenes"][0]["characters"]
+    assert [(c["id"], c["action_tags"]) for c in chars] == [(eiko, "blush, looking away")]
+
+    # 渡せば置き換える(空はなし)
+    body = {"character_ids": [eiko, sensei], "actions": {str(eiko): "smile", str(sensei): ""}}
+    client.put(f"/api/story/scenes/{scene['id']}/characters", json=body)
+    chars = client.get(f"/api/story/{story['id']}").json()["scenes"][0]["characters"]
+    assert {c["id"]: c["action_tags"] for c in chars} == {eiko: "smile", sensei: None}

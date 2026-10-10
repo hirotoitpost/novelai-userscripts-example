@@ -903,10 +903,15 @@ _COUNT_TAGS = {"1girl": "girls", "1boy": "boys", "1other": "others"}
 def _cast_prompt(scene_characters: list[dict[str, Any]]) -> tuple[list[str], list[str], str]:
     """
     (キャラごとの容姿, キャラごとのネガティブ, 全体のプロンプトに足す人数タグ)。
+    キャラごとの容姿には、そのシーンでのそのキャラの表情・動作(action_tags)も入れる。全体のタグに書くと
+    仕草や表情が全員に付いてしまう(実機: 先生の「あごに手」を栄子もしていた)。
     一人なら従来どおり。二人以上なら各キャラの「solo」を外し(一人しか描かれなくなる)、
     「2girls」のような人数を全体に足す。
     """
-    pairs = [(character_prompt_tags(c), c.get("negative_tags") or "") for c in scene_characters]
+    pairs = [
+        (join_tags(character_prompt_tags(c), c.get("action_tags")), c.get("negative_tags") or "")
+        for c in scene_characters
+    ]
     pairs = [(tags, negative) for tags, negative in pairs if tags][:_MAX_CHARACTERS]
     if len(pairs) < 2:
         return [tags for tags, _ in pairs], [negative for _, negative in pairs], ""

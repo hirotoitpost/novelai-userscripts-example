@@ -213,3 +213,15 @@ def test_character_negatives_go_to_each_character() -> None:
     assert [p["uc"] for p in prompts] == ["black hair", "brown hair"]
     assert [n["char_caption"] for n in negatives] == ["black hair", "brown hair"]
     assert [n["centers"] for n in negatives] == [c["centers"] for c in captions]
+
+
+def test_cast_prompt_puts_actions_in_each_character() -> None:
+    from python.routes.manga_v2 import _cast_prompt
+
+    characters = [
+        {"appearance_tags": "1girl, solo, brown hair", "outfit_tags": "apron", "action_tags": "blush, looking away"},
+        {"appearance_tags": "1boy, solo, glasses", "outfit_tags": None, "action_tags": "hand on own chin"},
+    ]
+    tags, _, count = _cast_prompt(characters)
+    assert tags == ["1girl, brown hair, apron, blush, looking away", "1boy, glasses, hand on own chin"]
+    assert count == "1girl, 1boy"

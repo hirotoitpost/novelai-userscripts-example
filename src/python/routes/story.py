@@ -670,7 +670,7 @@ async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
         )
         for row, scene in zip(list_story_scenes(conn, story["id"]), req.scenes):
             if scene.character_ids:
-                set_scene_characters(conn, row["id"], scene.character_ids)
+                set_scene_characters(conn, row["id"], scene.character_ids, scene.character_actions)
             if scene.narration:
                 update_scene_narration(conn, row["id"], scene.narration)
             # 効果音は未設定(None)だとAI提案の対象になるので、台本で無しなら空にしておく
@@ -1895,7 +1895,7 @@ async def put_scene_characters(scene_id: int, req: SetSceneCharactersRequest) ->
     """シーンに登場するキャラを設定し直す(抽出結果の手直し用)。"""
     conn = get_connection()
     try:
-        set_scene_characters(conn, scene_id, req.character_ids)
+        set_scene_characters(conn, scene_id, req.character_ids, req.actions)
     finally:
         conn.close()
 

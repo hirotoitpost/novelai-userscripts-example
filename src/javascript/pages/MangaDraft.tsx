@@ -26,6 +26,8 @@ interface DraftLine {
 
 interface DraftPanel {
   characters: string[]
+  // 呼び名 → そのコマでのその人の表情・動作(英語タグ)。キャラごとのプロンプトに入る
+  actions?: Record<string, string>
   lines: DraftLine[]
   narration: string
   sfx: string[]
@@ -547,6 +549,13 @@ export default function MangaDraft() {
                         ))}
                         <span className="md-hint">(このコマに描く人)</span>
                       </div>
+                      {p.characters.map(name => (
+                        <label className="md-field" key={name}>
+                          <span>{name} の表情・動作(英語タグ。この人だけに効く)</span>
+                          <input value={p.actions?.[name] ?? ''} placeholder="例: blush, looking away, hand on own cheek"
+                            onChange={ev => editPanel(e, i, { actions: { ...(p.actions ?? {}), [name]: ev.target.value } })} />
+                        </label>
+                      ))}
                       {p.lines.map((l, k) => (
                         <div className="md-line" key={k}>
                           <select value={l.speaker} onChange={ev => editLine(e, i, k, { speaker: ev.target.value })}>
@@ -577,7 +586,7 @@ export default function MangaDraft() {
                         </label>
                       </div>
                       <label className="md-field">
-                        <span>作画タグ(英語)</span>
+                        <span>作画タグ(英語。人数・場所・構図など全体のこと)</span>
                         <input value={p.prompt_tags} onChange={ev => editPanel(e, i, { prompt_tags: ev.target.value })} />
                       </label>
                     </div>

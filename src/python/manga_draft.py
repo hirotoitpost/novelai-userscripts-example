@@ -164,13 +164,14 @@ async def generate_outlines(
 # ---- 1話分の台本 ----
 
 _EPISODE_SYSTEM = """あなたは4コマ漫画の脚本家です。渡された1話分の内容を、ちょうど4コマの台本にします。JSONだけを返してください(前置きや```は不要):
-{"panels":[{"characters":["登場する人物名"],"lines":[{"speaker":"人物名","kind":"speech","text":"セリフ"}],"narration":"","sfx":["効果音"],"prompt_tags":"英語のdanbooruタグ"}]}
+{"panels":[{"characters":["登場する人物名"],"actions":{"人物名":"その人の表情・動作の英語タグ"},"lines":[{"speaker":"人物名","kind":"speech","text":"セリフ"}],"narration":"","sfx":["効果音"],"prompt_tags":"英語のdanbooruタグ"}]}
 - panels はちょうど4つ。起承転結で、4コマ目にオチ
 - 1コマのセリフは0〜2個、1つ20文字以内。説明ではなく会話で見せる
 - speaker は登場人物名のどれか。kind は声に出すなら speech、心の声なら thought
 - narration は場所や時間の説明が必要なときだけ(15文字以内、不要なら空文字)
 - sfx はカタカナの擬音・擬態語を0〜1個
-- prompt_tags はそのコマの絵: 人数(1girl, 1boy など)、表情、動作、場所、時間帯、構図を英語のdanbooruタグで。人物の髪型・服装は書かない(別に指定する)
+- prompt_tags はそのコマ全体の絵: 人数(1girl, 1boy など)、場所、時間帯、構図、二人の位置関係(facing each other など)を英語のdanbooruタグで。人物の髪型・服装は書かない(別に指定する)
+- actions は characters の人物ごとの表情・動作・視線を英語のdanbooruタグで(例: "blush, looking away, hand on own cheek")。表情や仕草は prompt_tags ではなく必ずここに書く(全体に書くと全員に付いてしまう)
 - characters はそのコマに描く人物(声だけの人は入れない)。人物がいないコマは空で、prompt_tags に no humans
 - 全年齢向け。露出・性的な描写はしない"""
 
@@ -244,11 +245,20 @@ def parse_episode(data: Any, characters: list[DraftCharacter]) -> list[dict[str,
         if len(sfx) > 1 and all(len(s) == 1 for s in sfx):
             sfx = ["".join(sfx)]
         sfx = sfx[:2]
+        drawn = [n for n in dict.fromkeys(str(n).strip() for n in raw.get("characters") or []) if n in names]
+        raw_actions = raw.get("actions")
+        if not isinstance(raw_actions, dict):
+            raw_actions = {}
+        # 描く人物の分だけ残す(描かない人の動作は使い道がない)
+        actions = {
+            str(name).strip(): _clean_tags(tags)
+            for name, tags in raw_actions.items()
+            if str(name).strip() in drawn and _clean_tags(tags)
+        }
         panels.append(
             {
-                "characters": [
-                    n for n in dict.fromkeys(str(n).strip() for n in raw.get("characters") or []) if n in names
-                ],
+                "characters": drawn,
+                "actions": actions,
                 "lines": lines,
                 "narration": str(raw.get("narration") or "").strip()[:_MAX_NARRATION_CHARS],
                 "sfx": sfx,
@@ -313,6 +323,11 @@ def panel_to_scene(panel: dict[str, Any], characters: list[DraftCharacter], titl
         "text": "\n".join(rows),
         "prompt_tags": _clean_tags(panel.get("prompt_tags") or ""),
         "character_ids": [by_name[n].id for n in panel.get("characters") or [] if n in by_name],
+        "character_actions": {
+            by_name[n].id: _clean_tags(tags)
+            for n, tags in (panel.get("actions") or {}).items()
+            if n in by_name and n in (panel.get("characters") or []) and _clean_tags(tags)
+        },
         "narration": (panel.get("narration") or "").strip() or None,
         "sfx": [s for s in panel.get("sfx") or [] if str(s).strip()],
     }

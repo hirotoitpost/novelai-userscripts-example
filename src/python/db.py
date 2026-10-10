@@ -380,6 +380,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_stories(conn)
     _migrate_manga_pages(conn)
     _migrate_story_scenes(conn)
+    _migrate_scene_characters(conn)
     _migrate_characters(conn)
     _migrate_stamp_sources(conn)
 
@@ -433,6 +434,14 @@ def _migrate_story_scenes(conn: sqlite3.Connection) -> None:
     for column, column_type in _STORY_SCENES_EXTRA_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE story_scenes ADD COLUMN {column} {column_type}")
+    conn.commit()
+
+
+def _migrate_scene_characters(conn: sqlite3.Connection) -> None:
+    """action_tags: そのコマでのそのキャラの表情・動作(英語タグ)。コマ生成でキャラごとのプロンプトに入れる。"""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(scene_characters)")}
+    if "action_tags" not in existing:
+        conn.execute("ALTER TABLE scene_characters ADD COLUMN action_tags TEXT")
     conn.commit()
 
 
@@ -1563,11 +1572,23 @@ def delete_character(conn: sqlite3.Connection, character_id: int) -> None:
     conn.commit()
 
 
-def set_scene_characters(conn: sqlite3.Connection, scene_id: int, character_ids: list[int]) -> None:
+def set_scene_characters(
+    conn: sqlite3.Connection, scene_id: int, character_ids: list[int], actions: dict[int, str] | None = None
+) -> None:
+    """
+    シーンに出るキャラを設定し直す。actions はキャラごとの表情・動作(英語タグ)。actions を渡さなければ、
+    残るキャラの動作はそのまま残す(登場人物の付け替えで、書いた動作が消えないように)。
+    """
+    kept = {
+        row["character_id"]: row["action_tags"]
+        for row in conn.execute("SELECT character_id, action_tags FROM scene_characters WHERE scene_id = ?", (scene_id,))
+    }
+    if actions is not None:
+        kept = {character_id: (actions.get(character_id) or "").strip() or None for character_id in character_ids}
     conn.execute("DELETE FROM scene_characters WHERE scene_id = ?", (scene_id,))
     conn.executemany(
-        "INSERT OR IGNORE INTO scene_characters (scene_id, character_id) VALUES (?, ?)",
-        [(scene_id, character_id) for character_id in character_ids],
+        "INSERT OR IGNORE INTO scene_characters (scene_id, character_id, action_tags) VALUES (?, ?, ?)",
+        [(scene_id, character_id, kept.get(character_id)) for character_id in character_ids],
     )
     conn.commit()
 
@@ -1576,7 +1597,7 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     """物語内の scene_id → 登場キャラの一覧。"""
     rows = conn.execute(
         """
-        SELECT sc.scene_id, c.*
+        SELECT sc.scene_id, sc.action_tags AS scene_action_tags, c.*
         FROM scene_characters sc
         JOIN characters c ON c.id = sc.character_id
         JOIN story_scenes s ON s.id = sc.scene_id
@@ -1590,6 +1611,8 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     for row in rows:
         character = dict(row)
         del character["scene_id"]
+        # そのシーンでのこのキャラの表情・動作(キャラシートの列と名前がぶつからないよう別名で取り出す)
+        character["action_tags"] = character.pop("scene_action_tags")
         result.setdefault(row["scene_id"], []).append(character)
     return result
 

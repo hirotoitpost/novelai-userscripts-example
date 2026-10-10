@@ -159,3 +159,19 @@ def test_create_story_from_the_draft(client: TestClient) -> None:
     assert [v["volume_no"] for v in volumes] == [1, 2]
     speakers = client.get(f"/api/manga-v2/{story['id']}/speakers").json()
     assert speakers[0]["lines"] == [{"text": "先生、見て！", "speaker_id": eiko, "speaker_name": "矢野栄子"}]
+
+
+def test_actions_are_per_character() -> None:
+    raw = [
+        _raw_panel(actions={"栄子": "blush, looking_away", "先生": "hand on own chin", "通行人": "running"}),
+        _raw_panel(characters=["栄子"], actions={"先生": "smile"}),
+        _raw_panel(actions="壊れた値"),
+        _raw_panel(),
+    ]
+    panels = parse_episode({"panels": raw}, CAST)
+    # 描く人物の分だけ残し、タグを整える
+    assert panels[0]["actions"] == {"栄子": "blush, looking away", "先生": "hand on own chin"}
+    assert panels[1]["actions"] == {}
+    assert panels[2]["actions"] == {}
+    scene = panel_to_scene(panels[0], CAST)
+    assert scene["character_actions"] == {1: "blush, looking away", 2: "hand on own chin"}

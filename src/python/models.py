@@ -386,6 +386,9 @@ class ScriptSceneInput(BaseModel):
     text: str = Field(min_length=1, description="セリフと、話し手の手がかりになる地の文")
     prompt_tags: str = Field("", description="コマの作画タグ(英語の danbooru タグ)")
     character_ids: list[int] = Field(default_factory=list, description="このコマに描くキャラ(コマでは名前順に左から並ぶ)")
+    # キャラID → そのコマでのそのキャラの表情・動作(英語タグ)。キャラごとのプロンプトに入るので、
+    # 仕草や表情が別のキャラに移らない。prompt_tags には人数・場所・時間帯・構図など全体のことだけを書く
+    character_actions: dict[int, str] = Field(default_factory=dict)
     narration: Optional[str] = Field(None, max_length=80)
     sfx: Optional[list[str]] = Field(None, max_length=8)
 
@@ -441,6 +444,8 @@ class MangaDraftPanel(BaseModel):
     """画面で編集する台本の1コマ。characters と speaker はキャラの呼び名(共通の姓を除いた名前)。"""
 
     characters: list[str] = Field(default_factory=list)
+    # 呼び名 → そのコマでのそのキャラの表情・動作(英語タグ)
+    actions: dict[str, str] = Field(default_factory=dict)
     lines: list[MangaDraftLine] = Field(default_factory=list, max_length=4)
     narration: str = Field("", max_length=80)
     sfx: list[str] = Field(default_factory=list, max_length=8)
@@ -589,6 +594,8 @@ class SceneCharacterResponse(BaseModel):
     name: str
     appearance_tags: str
     reference_image_path: Optional[str] = None
+    # そのシーンでのこのキャラの表情・動作(英語タグ)
+    action_tags: Optional[str] = None
 
 
 class CharacterResponse(BaseModel):
@@ -654,6 +661,8 @@ class ReplaceStoryCharacterResponse(BaseModel):
 
 class SetSceneCharactersRequest(BaseModel):
     character_ids: list[int]
+    # キャラID → そのシーンでの表情・動作(英語タグ)。省略すると、残るキャラの動作はそのまま
+    actions: Optional[dict[int, str]] = None
 
 
 class StorySceneResponse(BaseModel):
