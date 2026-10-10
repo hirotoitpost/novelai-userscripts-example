@@ -675,6 +675,7 @@ export default function MangaDraft() {
                       fileUrl={fileUrl}
                       onChosen={reloadCharacters}
                       disabled={!!busy || task.busy}
+                      buttonClass="md-small"
                       labelClass="md-hint"
                       errorClass="md-error"
                     />

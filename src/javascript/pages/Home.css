@@ -118,6 +118,8 @@
   margin: 0 auto;
   padding: 3rem 2rem;
   width: 100%;
+  /* 幅100%に余白を足すと、スマホで画面からはみ出す */
+  box-sizing: border-box;
 }
 
 /* ===== Welcome ===== */
