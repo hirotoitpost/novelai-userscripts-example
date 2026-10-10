@@ -24,6 +24,7 @@ from python.manga_draft import (  # noqa: E402
     extract_json,
     panel_to_scene,
     parse_episode,
+    reconcile_people,
     parse_outlines,
 )
 from python.routes.manga_draft import router as draft_router  # noqa: E402
@@ -92,7 +93,8 @@ def test_parse_episode_cleans_the_script() -> None:
     assert panels[1]["characters"] == ["栄子"]
     assert panels[1]["lines"] == [{"speaker": "", "kind": "speech", "text": "あの"}]
     assert panels[2]["lines"] == [{"speaker": "先生", "kind": "thought", "text": "かわいい"}]
-    assert panels[3]["prompt_tags"] == "1girl, smile"
+    # 重複は除く。二人を描くのに 1girl だけでは人数が合わないので外す
+    assert panels[3]["prompt_tags"] == "smile"
     assert panels[3]["sfx"] == ["ニヤ"]  # 1文字ずつに分かれた効果音はつなげる
     with pytest.raises(ValueError):
         parse_episode({"panels": raw[:3]}, CAST)
@@ -175,3 +177,22 @@ def test_actions_are_per_character() -> None:
     assert panels[2]["actions"] == {}
     scene = panel_to_scene(panels[0], CAST)
     assert scene["character_actions"] == {1: "blush, looking away", 2: "hand on own chin"}
+
+
+def test_people_tags_follow_the_drawn_characters() -> None:
+    # 描く人物がいないのに人数のタグ(実機で GLM が返した形)
+    tags, fixes = reconcile_people("1girl, 1boy, cafe, no humans", 0)
+    assert tags == "cafe, no humans" and len(fixes) == 1
+    assert reconcile_people("street, night", 0) == ("street, night, no humans", [])
+    # 人物がいるのに no humans、人数の合わないタグ
+    tags, fixes = reconcile_people("2girls, no humans, kitchen", 1)
+    assert tags == "kitchen" and len(fixes) == 2
+    # 合っていればそのまま
+    assert reconcile_people("1girl, 1boy, park", 2) == ("1girl, 1boy, park", [])
+
+    raw = [_raw_panel(characters=[], prompt_tags="1girl, 1boy, no humans, cafe")] + [_raw_panel()] * 3
+    panels = parse_episode({"panels": raw}, CAST)
+    assert panels[0]["prompt_tags"] == "no humans, cafe" and panels[0]["fixes"]
+    # 画面で描く人物を外したときも、シーンにするときに合わせ直す
+    scene = panel_to_scene({**panels[1], "characters": []}, CAST)
+    assert scene["prompt_tags"] == "autumn leaves, park, no humans"
