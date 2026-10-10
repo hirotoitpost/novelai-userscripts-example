@@ -73,14 +73,17 @@ def score_candidate(image: Image.Image, tags: list[str]) -> float:
     return sum(probs.get(t, 0.0) for t in known) / len(known)
 
 
-async def auto_reference(api_key: str, character: dict[str, Any], count: int = 4) -> dict[str, Any]:
+async def auto_reference(api_key: str, character: dict[str, Any], count: int | None = None) -> dict[str, Any]:
     """
     キャラシートから参照画像の候補を count 枚生成し、score_candidate が一番高い1枚を参照画像と基準シードに
     登録する。戻り値は {path, seed, score, scores}。
     """
     from .routes.manga_v2 import _PROJECT_ROOT, make_reference_candidates, register_reference
 
+    from . import app_settings
+
     tags = sheet_tags(character)
+    count = count or int(app_settings.get("reference.auto_count"))
     candidates = await make_reference_candidates(api_key, character, count)
     scored = []
     for candidate in candidates:

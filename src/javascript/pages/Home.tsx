@@ -216,6 +216,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/admin')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/admin')}
+          >
+            <div className="home-card-icon">🛠️</div>
+            <h2>開発管理者</h2>
+            <p>サーバーの状態とログ・動いている処理・設定(.env)・再起動やデータの管理・既定値やプリセット。この PC からだけ開けます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/select')}
             role="button"
             tabIndex={0}

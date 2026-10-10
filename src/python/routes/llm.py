@@ -355,10 +355,8 @@ def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
     from fastapi import HTTPException
     from PIL import Image, UnidentifiedImageError
 
-    from ..character_sheet import DEFAULT_NEGATIVE
+    from .. import app_settings
     from ..image_tagger import (
-        CHARACTER_THRESHOLD,
-        GENERAL_THRESHOLD,
         MODEL_NAME,
         STYLE_THRESHOLD,
         STYLE_TAGS,
@@ -378,9 +376,12 @@ def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
     except (ValueError, UnidentifiedImageError, OSError):
         raise HTTPException(status_code=400, detail="画像を読み取れませんでした。")
 
+    # しきい値と基本のネガティブは、開発管理者のページで変えられる
+    general = float(app_settings.get("reverse.general_threshold"))
+    character_threshold = float(app_settings.get("reverse.character_threshold"))
     thresholds = {
-        "general_threshold": GENERAL_THRESHOLD,
-        "character_threshold": CHARACTER_THRESHOLD,
+        "general_threshold": general,
+        "character_threshold": character_threshold,
         "style_threshold": STYLE_THRESHOLD,
         "style_tags": list(STYLE_TAGS),
     }
@@ -391,14 +392,14 @@ def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
     # 二人以上なら、髪の色や服を人物ごとのプロンプトに分ける(全体に混ぜると誰の属性か分からなくなる)
     characters = split_characters(image)
     moved = {tag for c in characters for tag in c.tags}
-    positive = build_prompt(scores, exclude=moved)
+    positive = build_prompt(scores, general, character_threshold, exclude=moved)
     return {
         "source": "tagger",
         "positive": positive,
         "characters": [{"prompt": c.prompt, "negative": "", "x": c.center[0], "y": c.center[1]} for c in characters],
         # 画面でしきい値を変えて全体のプロンプトを組み直すとき、キャラに移したタグは入れない
         "character_tags": sorted(moved),
-        "negative": build_negative(DEFAULT_NEGATIVE, positive),
+        "negative": build_negative(str(app_settings.get("sheet.default_negative")), positive),
         "tags": [
             {"tag": s.tag, "probability": round(s.probability, 4), "category": s.category}
             for s in scores

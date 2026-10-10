@@ -160,7 +160,11 @@ def sheet_prompt(character: dict[str, Any], *, r18: bool = False) -> str:
 
 def sheet_negative(character: dict[str, Any], *, r18: bool = False, extra: str | None = None) -> str:
     """キャラ別データセットと同じネガティブ(基本+キャラシート+年齢区分ごとの安全タグ+上乗せ分)。"""
-    return join_tags(DEFAULT_NEGATIVE, character.get("negative_tags"), R18_NEGATIVE if r18 else SAFE_NEGATIVE, extra)
+    from . import app_settings
+
+    # 基本のネガティブは、開発管理者のページで変えられる(sheet.default_negative)
+    base = str(app_settings.get("sheet.default_negative"))
+    return join_tags(base, character.get("negative_tags"), R18_NEGATIVE if r18 else SAFE_NEGATIVE, extra)
 
 
 def characters_seed(characters: list[dict[str, Any]]) -> int | None:
