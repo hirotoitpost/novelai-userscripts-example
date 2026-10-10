@@ -27,11 +27,20 @@ from mcp.types import ImageContent, TextContent
 from PIL import Image
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-# LAN 用の証明書(scripts/make_lan_cert.py)があると、バックエンドは https で動く
+# LAN 用の証明書(scripts/make_lan_cert.py)があると、バックエンドは https で動く(dev-ctl.ps1 -Http なら http)
 _CA_FILE = _PROJECT_ROOT / "data" / "certs" / "ca.crt"
-_DEFAULT_BACKEND = (
-    "https://127.0.0.1:8000" if (_PROJECT_ROOT / "data" / "certs" / "server.crt").exists() else "http://127.0.0.1:8000"
-)
+_SCHEME_FILE = _PROJECT_ROOT / "data" / "run" / "backend.scheme"
+
+
+def _default_backend() -> str:
+    """dev-ctl.ps1 がバックエンドを起動したときの方式(data/run/backend.scheme)。無ければ証明書の有無で決める。"""
+    try:
+        scheme = _SCHEME_FILE.read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        scheme = ""
+    if scheme not in ("http", "https"):
+        scheme = "https" if (_PROJECT_ROOT / "data" / "certs" / "server.crt").exists() else "http"
+    return f"{scheme}://127.0.0.1:8000"
 # 同じシードだと構図が似るので、シーンごとにこの間隔でずらす
 _SEED_STEP = 37
 # プリセットのうち、コマの生成設定(MangaImageSettings)に使う項目
@@ -40,7 +49,7 @@ _JOB_POLL_SECONDS = 4
 
 
 def _backend() -> str:
-    return os.environ.get("MANGA_BACKEND_URL", _DEFAULT_BACKEND).rstrip("/")
+    return os.environ.get("MANGA_BACKEND_URL", _default_backend()).rstrip("/")
 
 
 def _verify() -> str | bool:
