@@ -547,17 +547,11 @@ const RATING_LABELS: Record<string, string> = {
   general: '全年齢', sensitive: 'センシティブ', questionable: 'きわどい', explicit: '成人向け',
 }
 
-const PREPOSITIONS = new Set(['under', 'on', 'in', 'between', 'over', 'behind', 'from', 'of', 'around', 'with'])
+const SIZE_WORDS = new Set(['large', 'huge', 'gigantic', 'small', 'flat', 'medium', 'big', 'long', 'short', 'thick'])
 
-/** より詳しいタグに含まれる広いタグか(src/python/image_tagger.py の _implied と同じ) */
+/** 大きさの語を付けたタグ(large breasts)があるときの元のタグ(breasts)か(src/python/image_tagger.py の _implied と同じ) */
 function isImplied(tag: string, others: string[]): boolean {
-  const words = tag.split(' ')
-  return others.some(other => {
-    const o = other.split(' ')
-    if (other === tag || o.length <= words.length) return false
-    if (o.slice(-words.length).join(' ') === tag) return true
-    return o.slice(0, words.length).join(' ') === tag && PREPOSITIONS.has(o[words.length])
-  })
+  return others.some(other => other.endsWith(` ${tag}`) && SIZE_WORDS.has(other.slice(0, -tag.length - 1)))
 }
 
 /**

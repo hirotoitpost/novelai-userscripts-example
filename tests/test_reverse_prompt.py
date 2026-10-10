@@ -121,6 +121,19 @@ def test_embedded_novelai_prompt_is_returned_as_is(client: TestClient) -> None:
     assert body["tags"] == []
 
 
+def test_monochrome_from_pixels() -> None:
+    from python.image_tagger import _add_monochrome
+
+    grey = Image.new("RGB", (64, 64), (120, 120, 120))
+    colour = Image.new("RGB", (64, 64), (200, 60, 60))
+    assert [s.tag for s in _add_monochrome(grey, [TagScore("1girl", 0.9, "general")])] == [
+        "monochrome",
+        "greyscale",
+        "1girl",
+    ]
+    assert [s.tag for s in _add_monochrome(colour, [TagScore("1girl", 0.9, "general")])] == ["1girl"]
+
+
 def test_broken_image_is_rejected(client: TestClient) -> None:
     res = client.post("/api/llm/reverse-prompt/tags", json={"image": "data:image/png;base64,AAAA"})
     assert res.status_code == 400
@@ -140,8 +153,8 @@ def test_tuning_style_implied_and_panel_negative() -> None:
         TagScore("hat", 0.3, "general"),
     ]
     prompt = build_prompt(scores)
-    # breasts ⊂ large breasts、mole ⊂ mole under eye は詳しい方だけ残す
-    assert prompt == "1girl, monochrome, large breasts, mole under eye, kitchen"
+    # 大きさの語を付けたタグ(large breasts)があれば元のタグ(breasts)は外す。ほかの詳しいタグでは外さない
+    assert prompt == "1girl, monochrome, large breasts, mole, mole under eye, kitchen"
     # コマ割りの漫画でなければ、コマが並んだ絵にならないようネガティブに足す
     assert build_negative("lowres", prompt) == "lowres, multiple views, comic, panels, border"
     assert build_negative("lowres", "comic, 1girl") == "lowres"

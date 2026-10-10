@@ -161,7 +161,26 @@ def tag_image(image: Image.Image) -> list[TagScore]:
             result.append(TagScore(name, p, "rating"))
         elif p >= _CANDIDATE_FLOOR and category in (_GENERAL, _CHARACTER):
             result.append(TagScore(name.replace("_", " "), p, "character" if category == _CHARACTER else "general"))
-    return result
+    return _add_monochrome(image, result)
+
+
+# 彩度の平均がこれ未満なら白黒とみなす(評価用データの白黒の絵は 0.02〜0.05、カラーは 0.1 以上)
+_MONOCHROME_SATURATION = 0.06
+
+
+def _add_monochrome(image: Image.Image, result: list[TagScore]) -> list[TagScore]:
+    """
+    白黒の絵に monochrome・greyscale を確実に付ける。モデルは白黒の絵でも monochrome を落とすことがある
+    (評価用データの白黒の絵の半分ほど)が、色の有無は画素から確実に分かる。
+    """
+    small = image.convert("RGB")
+    small.thumbnail((256, 256))
+    saturation = float(np.asarray(small.convert("HSV"))[:, :, 1].mean()) / 255
+    if saturation >= _MONOCHROME_SATURATION:
+        return result
+    added = [TagScore(tag, 1.0, "general") for tag in ("monochrome", "greyscale")]
+    rest = [s for s in result if s.tag not in ("monochrome", "greyscale")]
+    return added + rest
 
 
 def _threshold(score: TagScore, general_threshold: float, character_threshold: float) -> float:
@@ -174,24 +193,17 @@ def _threshold(score: TagScore, general_threshold: float, character_threshold: f
 
 def _implied(tag: str, others: list[str]) -> bool:
     """
-    より詳しいタグに含まれる広いタグか(breasts ⊂ large breasts、mole ⊂ mole under eye など)。
-    両方入れると同じ要素が2回数えられて強く出すぎる(生成し直すと胸が大きくなりすぎた)。
-    含むとみなすのは、詳しいタグの末尾にある(large breasts・white shirt)か、先頭にあって前置詞が続く
-    (mole under eye)ときだけ。kitchen と kitchen knife のように、別のものを指す組み合わせは残す。
+    大きさの語を付けたタグがあるときの、元のタグか(breasts と large breasts)。両方入れると大きさが
+    強く出すぎる(生成し直すと胸が大きくなりすぎた)。
+
+    ほかの詳しいタグ(white apron・black necktie・single hair bun)に含まれるタグは外さない。
+    評価用データ(scripts/make_reverse_eval.py)で、広く外すと apron・sweater・necktie などを
+    取りこぼし、服・小物の再現率が 0.87 → 0.50 に落ちた。
     """
-    words = tag.split()
-    for other in others:
-        other_words = other.split()
-        if other == tag or len(other_words) <= len(words):
-            continue
-        if other_words[-len(words) :] == words:
-            return True
-        if other_words[: len(words)] == words and other_words[len(words)] in _PREPOSITIONS:
-            return True
-    return False
+    return any(other.endswith(" " + tag) and other[: -len(tag) - 1] in _SIZE_WORDS for other in others)
 
 
-_PREPOSITIONS = {"under", "on", "in", "between", "over", "behind", "from", "of", "around", "with"}
+_SIZE_WORDS = {"large", "huge", "gigantic", "small", "flat", "medium", "big", "long", "short", "thick"}
 
 
 def select_tags(
