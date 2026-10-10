@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import type { Character } from '../components/StoryCharacters'
+import ReferenceCandidates from '../components/ReferenceCandidates'
 import { apiFetch, ImagePreset } from '../api'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './MangaDraft.css'
@@ -32,6 +33,8 @@ interface DraftPanel {
   narration: string
   sfx: string[]
   prompt_tags: string
+  // 台本を検めたときに自動で直した内容
+  fixes?: string[]
 }
 
 interface Series {
@@ -117,6 +120,10 @@ function cleanPanels(panels: DraftPanel[]): DraftPanel[] {
   return panels.map(p => ({ ...p, lines: p.lines.filter(l => l.text.trim()) }))
 }
 
+function fileUrl(path: string): string {
+  return `/api/story/manga-file?path=${encodeURIComponent(path)}`
+}
+
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
@@ -150,7 +157,8 @@ export default function MangaDraft() {
   // 写したコマ割りを使い切った後のコマや、合成のテンプレートの指定に使う
   const baseTemplate = useImportLayout ? 'grid4' : template
   const [color, setColor] = useState(false)
-  const [useReference, setUseReference] = useState(false)
+  // キャラ参照: 自分で切り替えるまでは、登場人物の全員に参照画像があればオン
+  const [referenceChoice, setUseReference] = useState<boolean | null>(null)
   const [presetId, setPresetId] = useState<number | null>(null)
   const [negative, setNegative] = useState(DEFAULT_NEGATIVE)
   // 「漫画にする」の進み具合(物語ページと同じ処理状況ダイアログ)。サーバーのジョブなので、画面を
@@ -166,9 +174,14 @@ export default function MangaDraft() {
     }
   }, [draft])
 
-  useEffect(() => {
+  const reloadCharacters = useCallback(() => {
     if (!token) return
     apiFetch<Character[]>(token, '/api/story/characters').then(setCharacters).catch(() => {})
+  }, [token])
+
+  useEffect(() => {
+    if (!token) return
+    reloadCharacters()
     apiFetch<Series[]>(token, '/api/series').then(setSeriesList).catch(() => {})
     apiFetch<Template[]>(token, '/api/manga-v2/templates').then(setTemplates).catch(() => {})
     apiFetch<ImportSummary[]>(token, '/api/manga-import').then(setImports).catch(() => {})
@@ -399,6 +412,9 @@ export default function MangaDraft() {
     ? draft.names
     : characters.filter(c => draft.characterIds.includes(c.id)).map(c => ({ id: c.id, name: c.name }))
   const selectedSeries = seriesList.find(s => s.id === draft.seriesId)
+  const cast = characters.filter(c => draft.characterIds.includes(c.id))
+  const allReferenced = cast.length > 0 && cast.every(c => c.reference_image_path)
+  const useReference = referenceChoice ?? allReferenced
 
   return (
     <div className="md-root">
@@ -599,6 +615,9 @@ export default function MangaDraft() {
                         <span>作画タグ(英語。人数・場所・構図など全体のこと)</span>
                         <input value={p.prompt_tags} onChange={ev => editPanel(e, i, { prompt_tags: ev.target.value })} />
                       </label>
+                      {p.fixes && p.fixes.length > 0 && (
+                        <p className="md-fixes">自動で直しました: {p.fixes.join(' / ')}</p>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -634,6 +653,35 @@ export default function MangaDraft() {
                 キャラ参照を使う(V4.5、1人あたり Anlas 追加)
               </label>
             </div>
+            <div className="md-field">
+              <span>キャラの見た目(参照画像)</span>
+              {!allReferenced && (
+                <p className="md-hint">
+                  参照画像のないキャラは、コマごとに顔や髪型がぶれやすくなります。候補から1枚選ぶと、その絵とシードに寄せて描きます。
+                </p>
+              )}
+              <div className="md-refs">
+                {cast.map(c => (
+                  <div key={c.id} className="md-ref">
+                    <div className="md-ref-head">
+                      {c.reference_image_path
+                        ? <img src={fileUrl(c.reference_image_path)} alt={`${c.name}の参照画像`} />
+                        : <span className="md-ref-none">参照なし</span>}
+                      <strong>{c.name}</strong>
+                    </div>
+                    <ReferenceCandidates
+                      apiOrigin=""
+                      characterId={c.id}
+                      fileUrl={fileUrl}
+                      onChosen={reloadCharacters}
+                      disabled={!!busy || task.busy}
+                      labelClass="md-hint"
+                      errorClass="md-error"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
             <label className="md-field">
               <span>ネガティブ</span>
               <textarea rows={2} value={negative} onChange={e => setNegative(e.target.value)} />
@@ -659,7 +707,7 @@ export default function MangaDraft() {
             {result && (
               <div className="md-result">
                 <p>漫画ができました。</p>
-                <img src={`/api/story/manga-file?path=${encodeURIComponent(result.finalImage)}`} alt="できあがった漫画" />
+                <img src={fileUrl(result.finalImage)} alt="できあがった漫画" />
                 <button type="button" className="md-primary" onClick={() => navigate(`/story?story=${result.storyId}`)}>
                   物語ページで開く(描き直し・吹き出しの調整)
                 </button>
