@@ -3,9 +3,10 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // LAN 用の証明書(scripts/make_lan_cert.py で作る)があれば https で開く。スマホへのインストール(PWA)と
-// 通知(Service Worker)は https でしか使えないため。バックエンド(:8000)も同じ証明書で https になる
+// 通知(Service Worker)は https でしか使えないため。バックエンド(:8000)も同じ証明書で https になる。
+// 環境変数 NAI_HTTP=1 なら証明書があっても http(デバッグ用。dev-ctl.ps1 -Http が付ける)
 const certDir = 'data/certs'
-const https = existsSync(`${certDir}/server.crt`) && existsSync(`${certDir}/server.key`)
+const https = process.env.NAI_HTTP !== '1' && existsSync(`${certDir}/server.crt`) && existsSync(`${certDir}/server.key`)
   ? { cert: readFileSync(`${certDir}/server.crt`), key: readFileSync(`${certDir}/server.key`) }
   : undefined
 
