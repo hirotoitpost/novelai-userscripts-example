@@ -164,7 +164,7 @@ uv run pytest
 ├── docs/
 │   ├── README_jp.md             # 日本語 README（このファイル）
 │   ├── architecture.md          # システムアーキテクチャ & API リファレンス
-│   └── content_guard_jp.md      # キャラ別データセットのコンテンツガード
+│   └── content_guard_jp.md      # コンテンツガード(アプリ全体。定義の場所と効く範囲)
 ├── index.html                   # Vite エントリーポイント
 ├── vite.config.ts               # Vite 設定（/api/ を :8000 へプロキシ）
 ├── pyproject.toml               # Python 依存関係 & ツール設定
