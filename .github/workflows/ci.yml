@@ -22,7 +22,7 @@ jobs:
       # 吹き出しの合成のテストで日本語フォントを使う(Windows では C:/Windows/Fonts のもの)
       - name: Install Japanese fonts
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
       - name: Install dependencies
