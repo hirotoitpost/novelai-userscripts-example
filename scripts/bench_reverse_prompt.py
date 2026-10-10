@@ -1,7 +1,7 @@
 """
 リバースプロンプト(画像 → プロンプトの逆引き)の性能を、評価用データ(scripts/make_reverse_eval.py)で測る。
 
-正解は生成に使ったタグ(すべて danbooru の語彙)。逆引きしたタグとの一致で、精度(P)・再現率(R)・F1 と、
+正解は生成に使ったタグ(すべて danbooru の語彙)を、生成した絵を目視で確かめて直したもの(manifest の truth)。逆引きしたタグとの一致で、精度(P)・再現率(R)・F1 と、
 タグの種類ごとの再現率を出す。画像に埋め込まれた生成情報は使わず、画素だけから推定する。
 
 実行方法:
@@ -52,7 +52,7 @@ def score(items: list[dict], predictions: dict[str, set[str]]) -> dict:
     tp = fp = fn = 0
     by_group: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for item in items:
-        truth = set(item["tags"])
+        truth = set(item.get("truth") or item["tags"])
         pred = predictions[item["name"]]
         tp += len(truth & pred)
         fp += len(pred - truth)

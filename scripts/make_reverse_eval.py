@@ -12,7 +12,8 @@ Opus プランで Anlas を使わない範囲(約1メガピクセル・27ステ�
   uv run python scripts/make_reverse_eval.py            # 48枚(既定)
   uv run python scripts/make_reverse_eval.py --count 10
 
-出力: data/eval/reverse_prompt/images/*.png と manifest.json(画像ごとの正解タグ・シード・サイズ)
+出力: data/eval/reverse_prompt/images/*.png と manifest.json(画像ごとの生成に使ったタグ tags、
+目視で直した正解 truth、シード・サイズ)。生成済みの画像は作り直さない(正解の直しだけ反映する)
 """
 
 from __future__ import annotations
@@ -113,6 +114,46 @@ NO_HUMANS = [
 ]
 
 
+# 生成した絵が指定どおりでなかったものの正解の直し(2026-10-10 に48枚を目視で確認)。
+# 構図: portrait=顔と肩、upper body=腰より上、cowboy shot=太ももあたりまで、full body=足先まで。
+# 絵柄: flat color を指定した絵は全部、実際には平塗りでなかった。色のある絵の monochrome・sketch も外す。
+# (名前 → (外すタグ, 足すタグ))
+LABEL_FIXES: dict[str, tuple[list[str], list[str]]] = {
+    "eval_001": (["upper body"], ["cowboy shot"]),
+    "eval_004": (["flat color"], []),
+    "eval_005": (["upper body", "flat color"], ["cowboy shot"]),
+    "eval_006": (["upper body"], ["cowboy shot"]),
+    "eval_007": (["upper body"], ["cowboy shot"]),
+    "eval_008": (["flat color"], []),
+    "eval_009": (["flat color"], []),
+    "eval_011": (["flat color"], []),
+    "eval_014": (["upper body"], ["cowboy shot"]),
+    "eval_016": (["cowboy shot"], ["full body"]),
+    "eval_019": (["sketch", "monochrome"], []),
+    "eval_020": (["flat color"], []),
+    "eval_021": (["portrait"], ["upper body"]),
+    "eval_025": (["portrait", "watercolor (medium)", "traditional media"], ["cowboy shot"]),
+    "eval_027": (["portrait", "flat color"], ["upper body"]),
+    "eval_029": (["portrait", "watercolor (medium)", "traditional media"], ["upper body"]),
+    "eval_030": (["upper body"], ["cowboy shot"]),
+    "eval_032": (["sketch"], []),
+    "eval_034": (["portrait"], ["upper body"]),
+    "eval_037": (["portrait"], ["upper body"]),
+    "eval_038": (["watercolor (medium)", "traditional media"], []),
+    "eval_040": (["flat color"], []),
+    "eval_042": (["portrait", "monochrome", "greyscale"], ["cowboy shot"]),
+    "eval_044": (["upper body"], ["portrait"]),
+    "eval_045": (["greyscale"], []),
+    "eval_047": (["portrait"], ["upper body"]),
+}
+
+
+def truth_of(item: dict) -> list[str]:
+    """評価の正解(生成に使ったタグを、目視で直したもの)。"""
+    remove, add = LABEL_FIXES.get(item["name"], ([], []))
+    return [t for t in item["tags"] if t not in remove] + [t for t in add if t not in item["tags"]]
+
+
 def person(rng: random.Random, gender: str) -> list[str]:
     tags = [rng.choice(HAIR), rng.choice(HAIR_LENGTH), rng.choice(EYES), *rng.choice(OUTFITS)]
     if rng.random() < 0.5:
@@ -169,6 +210,7 @@ async def main() -> None:
     for item in items:
         path = image_dir / f"{item['name']}.png"
         item["image"] = str(path.relative_to(ROOT)).replace("\\", "/")
+        item["truth"] = truth_of(item)
         if path.exists():
             continue
         width, height = SIZES[item["size"]]

@@ -547,6 +547,10 @@ const RATING_LABELS: Record<string, string> = {
   general: '全年齢', sensitive: 'センシティブ', questionable: 'きわどい', explicit: '成人向け',
 }
 
+// 構図のタグ。一番確かな1つだけを選ぶ(src/python/image_tagger.py の FRAMING_TAGS・FRAMING_THRESHOLD と同じ)
+const FRAMING_TAGS = ['portrait', 'upper body', 'cowboy shot', 'full body']
+const FRAMING_THRESHOLD = 0.2
+
 const SIZE_WORDS = new Set(['large', 'huge', 'gigantic', 'small', 'flat', 'medium', 'big', 'long', 'short', 'thick'])
 
 /** 大きさの語を付けたタグ(large breasts)があるときの元のタグ(breasts)か(src/python/image_tagger.py の _implied と同じ) */
@@ -614,9 +618,13 @@ function ReversePromptPanel() {
     if (result!.style_tags.includes(t.tag)) return Math.min(result!.style_threshold, threshold)
     return threshold
   }
+  // 構図は、しきい値に関係なく一番確かな1つ
+  const framing = (result?.tags ?? [])
+    .filter(t => FRAMING_TAGS.includes(t.tag) && t.probability >= FRAMING_THRESHOLD)
+    .sort((a, b) => b.probability - a.probability)[0]?.tag
   const picked = new Set(
     (result?.tags ?? [])
-      .filter(t => toggled[t.tag] ?? (t.probability >= tagThreshold(t)))
+      .filter(t => toggled[t.tag] ?? (FRAMING_TAGS.includes(t.tag) ? t.tag === framing : t.probability >= tagThreshold(t)))
       .map(t => t.tag),
   )
   const positive = result?.source === 'tagger'

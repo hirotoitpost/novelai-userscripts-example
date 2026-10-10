@@ -121,6 +121,18 @@ def test_embedded_novelai_prompt_is_returned_as_is(client: TestClient) -> None:
     assert body["tags"] == []
 
 
+def test_framing_picks_the_single_most_likely() -> None:
+    # 構図は確率が低めに出るので、しきい値に関係なく一番確かな1つだけ
+    scores = [
+        TagScore("1girl", 0.99, "general"),
+        TagScore("upper body", 0.33, "general"),
+        TagScore("cowboy shot", 0.41, "general"),
+        TagScore("full body", 0.1, "general"),
+    ]
+    assert build_prompt(scores) == "1girl, cowboy shot"
+    assert build_prompt([TagScore("1girl", 0.99, "general"), TagScore("portrait", 0.15, "general")]) == "1girl"
+
+
 def test_monochrome_from_pixels() -> None:
     from python.image_tagger import _add_monochrome
 

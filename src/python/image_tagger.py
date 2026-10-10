@@ -211,15 +211,37 @@ def select_tags(
     general_threshold: float = GENERAL_THRESHOLD,
     character_threshold: float = CHARACTER_THRESHOLD,
 ) -> list[TagScore]:
-    """しきい値を超え、より詳しいタグに含まれないタグ(確率の高い順)。"""
+    """
+    しきい値を超え、大きさの語を付けたタグに含まれないタグ(確率の高い順)。構図のタグは、しきい値に
+    関係なく一番確かな1つだけにする(_framing)。
+    """
     chosen = [
         s
         for s in scores
         if s.category in ("general", "character")
+        and s.tag not in FRAMING_TAGS
         and s.probability >= _threshold(s, general_threshold, character_threshold)
     ]
     tags = [s.tag for s in chosen]
-    return [s for s in chosen if s.tag in _COUNT_TAGS or not _implied(s.tag, tags)]
+    chosen = [s for s in chosen if s.tag in _COUNT_TAGS or not _implied(s.tag, tags)]
+    framing = _framing(scores)
+    if framing is not None:
+        # 確率の高い順を保って入れる
+        chosen = sorted([*chosen, framing], key=lambda s: -s.probability)
+    return chosen
+
+
+# 構図のタグ。モデルはどれか1つに確率を寄せるが、値は低め(正しい cowboy shot でも 0.2〜0.45)に出る。
+# 評価用データ(目視で直した正解)では、しきい値 0.5 だと構図の当たりは 37 枚中 19 枚、一番確かな
+# 1つを選ぶと 26 枚になった。顔の大きさからも決めてみたが、upper body と cowboy shot は顔の高さ
+# (画像の 0.22〜0.43)が重なって分けられなかった。
+FRAMING_TAGS = ("portrait", "upper body", "cowboy shot", "full body")
+FRAMING_THRESHOLD = 0.2
+
+
+def _framing(scores: list[TagScore]) -> TagScore | None:
+    candidates = [s for s in scores if s.tag in FRAMING_TAGS and s.probability >= FRAMING_THRESHOLD]
+    return max(candidates, key=lambda s: s.probability, default=None)
 
 
 def build_prompt(
