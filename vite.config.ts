@@ -25,18 +25,8 @@ export default defineConfig({
         changeOrigin: true,
         // 自前の認証局で発行した証明書なので、中継では検証しない(同じ PC の中だけの通信)
         secure: false,
-        // 中継したことをバックエンドに伝える(X-Forwarded-For)。開発管理者の API はこれがあると断る
+        // 元の接続元をバックエンドに伝える(X-Forwarded-For)。開発管理者の API は、これが LAN の外なら断る
         xfwd: true,
-        // 開発管理者の API(.env や再起動を扱う)は中継しない。中継すると、LAN のほかの端末からでも
-        // バックエンドには「この PC から」に見えてしまう。管理のページはバックエンドへ直接つなぐ
-        bypass(req, res) {
-          if (res && req.url?.startsWith('/api/admin')) {
-            res.statusCode = 403
-            res.setHeader('Content-Type', 'application/json; charset=utf-8')
-            res.end(JSON.stringify({ detail: '開発管理者の API は中継しません(この PC からバックエンドへ直接つなぎます)。' }))
-            return false
-          }
-        },
       },
     },
   },

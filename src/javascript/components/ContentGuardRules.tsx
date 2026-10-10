@@ -49,9 +49,9 @@ async function errorOf(res: Response): Promise<string> {
 
 /**
  * コンテンツガードの定義(止めるタグ・取り除くタグ・足すネガティブ・LLM への指示・成人向けの判定の語)の編集。
- * 値は DB にあり、保存すると次の処理から効く。
+ * 値は DB にあり、保存すると次の処理から効く。保存・戻したときは onSaved で知らせる。
  */
-export default function ContentGuardRules() {
+export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string) => void }) {
   const [rules, setRules] = useState<Rule[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
@@ -80,6 +80,7 @@ export default function ContentGuardRules() {
     })
     if (!res.ok) return setError(`${rule.label}: ${await errorOf(res)}`)
     replace(await res.json())
+    onSaved?.(rule.label)
   }
 
   async function reset(rule: Rule) {
@@ -88,6 +89,7 @@ export default function ContentGuardRules() {
     const res = await fetch(`${API}/rules/${rule.key}`, { method: 'DELETE' })
     if (!res.ok) return setError(`${rule.label}: ${await errorOf(res)}`)
     replace(await res.json())
+    onSaved?.(`${rule.label}(はじめの値に戻す)`)
   }
 
   async function resetAll() {
@@ -97,6 +99,7 @@ export default function ContentGuardRules() {
     if (!res.ok) return setError(await errorOf(res))
     setRules((await res.json()).rules)
     setDrafts({})
+    onSaved?.('コンテンツガードのすべての項目(はじめの値に戻す)')
   }
 
   async function check() {

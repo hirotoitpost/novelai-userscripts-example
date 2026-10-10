@@ -180,7 +180,7 @@ curl -X PUT https://localhost:8000/api/content-guard/rules/dataset.blocked_tags 
   -d '{"value": ["nsfw", "nude", "swimwear"]}'
 ```
 
-この API は、ほかの API と同じく LAN の中から使えます(開発管理者の API `/api/admin` と違い、この PC に限っていません)。
+この API は、ほかの API と同じく LAN の中から使えます。
 
 画面は、開発管理者のページ(`/admin`)の「既定値・プリセット・ガード」→「コンテンツガード」です。項目ごとに編集・保存・はじめの値に戻す、ができ、「タグで確かめる」で `/check` の結果を見られます。
 
