@@ -19,6 +19,7 @@ import Selection from './pages/Selection'
 import Story from './pages/Story'
 import StoryLibrary from './pages/StoryLibrary'
 import Writer from './pages/Writer'
+import { TaskTray } from './components/TaskStatus'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -111,6 +112,8 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <AppRoutes />
+        {/* ほかのページで始めた処理の状況(どのページにいても出す) */}
+        <TaskTray />
       </BrowserRouter>
     </AuthProvider>
   )

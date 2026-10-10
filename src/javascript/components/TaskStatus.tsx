@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { enableNotifications, notifySupport, NotifySupport, showNotification } from '../notify'
 import './TaskStatus.css'
 
@@ -47,83 +48,149 @@ export function formatDuration(ms: number): string {
   return `${s}秒`
 }
 
+// ---- 処理状況の置き場所(アプリ全体で1つ) ----
+// ページごとの useTaskStatus が自分のページ(パス)の欄を使う。ページを離れても処理(サーバーの
+// ジョブの進捗の読み取りなど)は続くので、状態をここに置き、どのページからでも TaskTray で見られるようにする。
+
+interface TaskEntry {
+  status: TaskStatus | null
+  minimized: boolean
+  /** トレイから戻るときに開くページ(処理を始めたページ) */
+  returnTo: string
+}
+
+const entries = new Map<string, TaskEntry>()
+let snapshot: ReadonlyMap<string, TaskEntry> = new Map()
+const listeners = new Set<() => void>()
+const autoCloseTimers = new Map<string, number>()
+
+function emit() {
+  snapshot = new Map(entries)
+  listeners.forEach(listener => listener())
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
+function setEntry(scope: string, patch: Partial<TaskEntry>) {
+  const current = entries.get(scope) ?? { status: null, minimized: false, returnTo: scope }
+  const next = { ...current, ...patch }
+  if (next.status === null) entries.delete(scope)
+  else entries.set(scope, next)
+  emit()
+}
+
+function clearAutoClose(scope: string) {
+  const id = autoCloseTimers.get(scope)
+  if (id !== undefined) window.clearTimeout(id)
+  autoCloseTimers.delete(scope)
+}
+
+/** 全ページの処理状況(ページのパス → 状態) */
+export function useTaskEntries(): ReadonlyMap<string, TaskEntry> {
+  return useSyncExternalStore(subscribe, () => snapshot)
+}
+
+/** サーバーのジョブの通知 tag(nai-job-{物語ID})から物語のIDを読む */
+function jobStoryId(tag: string): number | null {
+  const match = /^nai-job-(\d+)$/.exec(tag)
+  return match ? Number(match[1]) : null
+}
+
 /**
  * 長い処理の状態(タイトル・進捗・結果)を持ち、終了時にブラウザ通知を出す。
- * 表示は TaskStatusDialog に渡す。
+ * 表示は TaskStatusDialog に渡す。状態はページ(パス)ごとにアプリ全体で持つので、
+ * 別のページへ移っても処理と表示は続き(TaskTray)、戻ってくるとダイアログに戻る。
  */
 export function useTaskStatus() {
-  const [status, setStatus] = useState<TaskStatus | null>(null)
-  const [minimized, setMinimized] = useState(false)
-  const statusRef = useRef<TaskStatus | null>(null)
-  const autoCloseRef = useRef<number | null>(null)
-
-  const apply = useCallback((next: TaskStatus | null) => {
-    statusRef.current = next
-    setStatus(next)
-  }, [])
-
-  const clearAutoClose = () => {
-    if (autoCloseRef.current !== null) window.clearTimeout(autoCloseRef.current)
-    autoCloseRef.current = null
-  }
+  const scope = useLocation().pathname
+  const entry = useTaskEntries().get(scope)
+  const status = entry?.status ?? null
 
   const start = useCallback((title: string, message = START_MESSAGE) => {
-    clearAutoClose()
-    setMinimized(false)
-    apply({
-      state: 'running', title, message, progress: 0, total: 0,
-      background: false, notifyTag: 'nai-task', startedAt: Date.now(), endedAt: null,
+    clearAutoClose(scope)
+    const current = entries.get(scope)?.status
+    // 開き直したときの引き継ぎで同じ処理を始め直すときは、経過時間をそのまま続ける
+    const startedAt = current?.state === 'running' && current.title === title ? current.startedAt : Date.now()
+    setEntry(scope, {
+      minimized: false,
+      returnTo: window.location.pathname + window.location.search,
+      status: {
+        state: 'running', title, message, progress: 0, total: 0,
+        background: false, notifyTag: 'nai-task', startedAt, endedAt: null,
+      },
     })
-  }, [apply])
+  }, [scope])
 
   const update = useCallback(
     /** jobTag を渡すと、サーバーのバックグラウンドジョブとして扱う */
     (message: string, progress?: number, total?: number, jobTag?: string) => {
-      const current = statusRef.current
-      if (!current || current.state !== 'running') return
-      apply({
-        ...current,
-        message,
-        progress: progress ?? current.progress,
-        total: total ?? current.total,
-        background: current.background || jobTag !== undefined,
-        notifyTag: jobTag ?? current.notifyTag,
+      const current = entries.get(scope)
+      if (!current?.status || current.status.state !== 'running') return
+      // 物語のジョブなら、戻り先はその物語を開いた物語ページ(一覧から開いた物語は URL に出ないため)
+      const storyId = jobTag ? jobStoryId(jobTag) : null
+      setEntry(scope, {
+        returnTo: storyId !== null && scope === '/story' ? `/story?story=${storyId}` : current.returnTo,
+        status: {
+          ...current.status,
+          message,
+          progress: progress ?? current.status.progress,
+          total: total ?? current.status.total,
+          background: current.status.background || jobTag !== undefined,
+          notifyTag: jobTag ?? current.status.notifyTag,
+        },
       })
     },
-    [apply],
+    [scope],
   )
 
   const finish = useCallback((state: Exclude<TaskState, 'running'>, message?: string) => {
-    const current = statusRef.current
+    const current = entries.get(scope)?.status
     if (!current) return
     const endedAt = Date.now()
     const elapsed = endedAt - current.startedAt
     // 途中経過を出さない処理は「開始しています...」のままなので、完了の言葉に置き換える
     const text = message ?? (current.message === START_MESSAGE ? `${STATE_LABELS[state]}しました` : current.message)
-    apply({ ...current, state, message: text, endedAt })
+    setEntry(scope, { status: { ...current, state, message: text, endedAt } })
 
     if (state === 'done' && elapsed < QUICK_MS) {
-      autoCloseRef.current = window.setTimeout(() => apply(null), 1200)
+      autoCloseTimers.set(scope, window.setTimeout(() => setEntry(scope, { status: null }), 1200))
       return
     }
     // 結果は閉じるまで出したままにする(スマホから戻ってきたときに見えるように)
-    setMinimized(false)
+    setEntry(scope, { minimized: false })
     if (elapsed >= NOTIFY_MS || document.hidden) {
       const head = state === 'done' ? '✅ 完了' : state === 'error' ? '⚠️ 失敗' : '⏹️ キャンセル'
       void showNotification(`${head}: ${current.title}`, `${text}\n(${formatDuration(elapsed)})`, current.notifyTag)
     }
-  }, [apply])
+  }, [scope])
 
   const dismiss = useCallback(() => {
-    clearAutoClose()
-    apply(null)
-  }, [apply])
+    clearAutoClose(scope)
+    setEntry(scope, { status: null })
+  }, [scope])
 
-  useEffect(() => clearAutoClose, [])
+  const setMinimized = useCallback((minimized: boolean) => setEntry(scope, { minimized }), [scope])
 
-  // 処理中は画面を消さない。スマホは画面が消えるとページが止まり、通信も切れる
-  // (OCR で72枚を読ませたとき、17枚目で止まって結果ごと失われた)。
-  const running = status?.state === 'running'
+  return {
+    status,
+    busy: status?.state === 'running',
+    minimized: entry?.minimized ?? false,
+    setMinimized,
+    start,
+    update,
+    finish,
+    dismiss,
+  }
+}
+
+/**
+ * 処理中は画面を消さない。スマホは画面が消えるとページが止まり、通信も切れる
+ * (OCR で72枚を読ませたとき、17枚目で止まって結果ごと失われた)。
+ */
+function useWakeLock(running: boolean) {
   useEffect(() => {
     if (!running || !('wakeLock' in navigator)) return
     let lock: WakeLockSentinel | null = null
@@ -149,10 +216,14 @@ export function useTaskStatus() {
       void lock?.release()
     }
   }, [running])
+}
 
-  // タブのタイトルに進捗を出す(スマホのタブ一覧や、別タブで作業中でも見える)
+const TITLE_PREFIX = /^(⏳|✅|⚠️|⏹️)[^|]*\| /
+
+/** タブのタイトルに進捗を出す(スマホのタブ一覧や、別タブで作業中でも見える) */
+function useTitleProgress(status: TaskStatus | null) {
   useEffect(() => {
-    const base = document.title.replace(/^(⏳|✅|⚠️|⏹️)[^|]*\| /, '')
+    const base = document.title.replace(TITLE_PREFIX, '')
     if (!status) {
       document.title = base
       return
@@ -162,20 +233,90 @@ export function useTaskStatus() {
       : `${STATE_ICONS[status.state]} ${STATE_LABELS[status.state]}`
     document.title = `${prefix} | ${base}`
   }, [status])
-  useEffect(() => () => {
-    document.title = document.title.replace(/^(⏳|✅|⚠️|⏹️)[^|]*\| /, '')
-  }, [])
+}
 
-  return {
-    status,
-    busy: status?.state === 'running',
-    minimized,
-    setMinimized,
-    start,
-    update,
-    finish,
-    dismiss,
-  }
+type ActiveEntry = TaskEntry & { status: TaskStatus }
+
+/**
+ * どのページにいても、ほかのページで始めた処理の状況を画面の下に出す(押すとそのページへ戻り、
+ * ダイアログを開く)。タブのタイトルの進捗と、処理中に画面を消さないのもここで行う。App に1つ置く。
+ */
+export function TaskTray() {
+  const all = useTaskEntries()
+  const here = useLocation().pathname
+  const navigate = useNavigate()
+  const [now, setNow] = useState(() => Date.now())
+
+  const list = [...all.entries()].filter((item): item is [string, ActiveEntry] => item[1].status !== null)
+  const running = list.some(([, e]) => e.status.state === 'running')
+  // タイトルは処理中のものを優先し、無ければ終わったもの
+  const primary = list.find(([, e]) => e.status.state === 'running') ?? list[0]
+  useWakeLock(running)
+  useTitleProgress(primary ? primary[1].status : null)
+
+  useEffect(() => {
+    if (!running) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [running])
+
+  // このページの処理は、ページ自身のダイアログ(または最小化の表示)が出す
+  const others = list.filter(([scope]) => scope !== here)
+  if (others.length === 0) return null
+
+  return (
+    <div className="task-tray" aria-label="ほかのページの処理">
+      {others.map(([scope, { status, returnTo }]) => {
+        const finished = status.state !== 'running'
+        const elapsed = (status.endedAt ?? now) - status.startedAt
+        const determinate = status.total > 0
+        const percent = determinate ? Math.min(100, Math.round((status.progress / status.total) * 100)) : 0
+        return (
+          <div key={scope} className={`task-pill task-pill--tray task-pill--${status.state}`}>
+            <button
+              type="button"
+              className="task-pill-open"
+              onClick={() => {
+                setEntry(scope, { minimized: false })
+                navigate(returnTo)
+              }}
+              aria-label={`${status.title}の処理状況を開く`}
+            >
+              {finished
+                ? <span className="task-pill-icon" aria-hidden>{STATE_ICONS[status.state as Exclude<TaskState, 'running'>]}</span>
+                : <span className="task-spinner task-spinner--small" aria-hidden />}
+              <span className="task-pill-text">
+                <span className="task-pill-title">
+                  {status.title}
+                  {finished ? ` ・ ${STATE_LABELS[status.state]}` : determinate && ` ${status.progress}/${status.total}`}
+                </span>
+                <span className={`task-bar${determinate || finished ? '' : ' task-bar--indeterminate'}`}>
+                  <span
+                    className={`task-bar-fill task-bar-fill--${status.state}`}
+                    style={determinate || finished ? { width: `${finished ? 100 : percent}%` } : undefined}
+                  />
+                </span>
+              </span>
+              <span className="task-pill-time">{finished ? '開く' : formatDuration(elapsed)}</span>
+            </button>
+            {finished && (
+              <button
+                type="button"
+                className="task-pill-close"
+                onClick={() => {
+                  clearAutoClose(scope)
+                  setEntry(scope, { status: null })
+                }}
+                aria-label="閉じる"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 interface DialogProps {

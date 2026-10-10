@@ -238,3 +238,63 @@
   .task-overlay, .task-dialog { animation: none; }
   .task-spinner { animation-duration: 3s; }
 }
+
+/* ほかのページで始めた処理(どのページにいても画面の下に出す。押すとそのページへ戻る) */
+.task-tray {
+  position: fixed;
+  z-index: 999;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-tray .task-pill {
+  position: static;
+  transform: none;
+  width: 100%;
+  padding: 0;
+  cursor: default;
+}
+
+.task-pill--done { border-color: #3fbf7f; }
+.task-pill--error { border-color: #ff6b81; }
+.task-pill--cancelled { border-color: #9a9ac0; }
+
+.task-pill-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.9rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-pill-icon { font-size: 1rem; }
+
+.task-pill-close {
+  flex-shrink: 0;
+  margin-right: 0.4rem;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #9a9ac0;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.task-pill-close:hover { background: #2a2a50; color: #e8e8ff; }
+
+.task-tray .task-bar,
+.task-tray .task-bar-fill { display: block; }
