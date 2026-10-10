@@ -12,6 +12,8 @@ import {
 import type { Character } from '../components/StoryCharacters'
 import CharacterSheetEditor, { type SheetEditorClasses } from '../components/CharacterSheetEditor'
 import GuardProfiles from '../components/GuardProfiles'
+import ImagePreview from '../components/ImagePreview'
+import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './LoraDataset.css'
 import './CharacterDataset.css'
 
@@ -103,6 +105,10 @@ export default function CharacterDataset() {
   const [summary, setSummary] = useState<LoraDatasetCompleteEvent | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // 生成の進み具合(ほかの画面と同じ処理状況のダイアログ。最小化すれば別のページへ移っても見える)
+  const task = useTaskStatus()
+  // 生成結果の拡大表示(results の番号)
+  const [preview, setPreview] = useState<number | null>(null)
 
   // 手動取り込み
   const [importImages, setImportImages] = useState<{ name: string; data: string }[]>([])
@@ -176,7 +182,10 @@ export default function CharacterDataset() {
     setSummary(null)
     setErrorMsg(null)
     setRetryNote(null)
+    setPreview(null)
     setProgress({ current: 0, total: planned })
+    task.start(`データセットの生成: ${character.name}`, `${planned}枚を生成します`)
+    task.update(`1枚目を生成中(${planned}枚)`, 0, planned)
 
     const body: CharacterDatasetRequest = {
       root_name: rootName.trim() || 'training_data',
@@ -208,12 +217,28 @@ export default function CharacterDataset() {
         setRetryNote(null)
         setProgress({ current: e.current, total: e.total })
         setResults(prev => [e, ...prev])
+        const last = e.status === 'ok' ? `${e.file} ができました` : `${e.file} は失敗しました`
+        task.update(e.current < e.total ? `${last}。${e.current + 1}枚目を生成中` : last, e.current, e.total)
       },
       (e: LoraDatasetRetryEvent) => {
-        setRetryNote(`${e.file}: 類似度 ${e.score.toFixed(2)} が基準未満のため引き直し中 (${e.attempt}/${maxAttempts})`)
+        const note = `${e.file}: 類似度 ${e.score.toFixed(2)} が基準未満のため引き直し中 (${e.attempt}/${maxAttempts})`
+        setRetryNote(note)
+        task.update(note)
       },
-      e => { setSummary(e); setPhase('complete') },
-      msg => { setErrorMsg(msg); setPhase('error') },
+      e => {
+        setSummary(e)
+        setPhase('complete')
+        task.finish(
+          // 一部だけ失敗したときは完了扱い(できた分は保存されている)。1枚もできなければ失敗
+          e.succeeded > 0 ? 'done' : 'error',
+          `成功 ${e.succeeded}枚${e.failed > 0 ? `・失敗 ${e.failed}枚` : ''}(保存先: ${e.output_path})`,
+        )
+      },
+      msg => {
+        setErrorMsg(msg)
+        setPhase('error')
+        task.finish('error', msg)
+      },
       controller.signal,
     )
   }
@@ -221,6 +246,7 @@ export default function CharacterDataset() {
   function handleCancel() {
     abortRef.current?.abort()
     setPhase('cancelled')
+    task.finish('cancelled', '中断しました。生成済みの画像は保存されています。')
   }
 
   async function addImportFiles(files: FileList | File[]) {
@@ -261,6 +287,8 @@ export default function CharacterDataset() {
   }
 
   const percent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0
+  // 拡大表示できる(生成できた)結果
+  const previewable = results.filter(e => e.status === 'ok' && e.image_b64)
 
   return (
     <div className="lora-root">
@@ -528,11 +556,29 @@ export default function CharacterDataset() {
                       {e.attempts != null && e.attempts > 1 && ` · ${e.attempts}回目`}
                     </span>
                     {e.status === 'ok' && e.image_b64
-                      ? <img className="lora-preview-img" src={`data:image/png;base64,${e.image_b64}`} alt={e.file} />
+                      ? (
+                        <button
+                          type="button"
+                          className="chards-zoom"
+                          onClick={() => setPreview(previewable.findIndex(p => p.file === e.file))}
+                          aria-label={`${e.file}を拡大`}
+                        >
+                          <img className="lora-preview-img" src={`data:image/png;base64,${e.image_b64}`} alt={e.file} />
+                        </button>
+                      )
                       : <span className="lora-preview-failed">✖ 失敗{e.message ? `: ${e.message}` : ''}</span>}
                   </div>
                 ))}
               </div>
+              <ImagePreview
+                images={previewable.map(e => ({
+                  src: `data:image/png;base64,${e.image_b64}`,
+                  alt: e.file,
+                  caption: [e.file, e.score != null ? `類似度 ${e.score.toFixed(2)}` : '', e.prompt].filter(Boolean).join(' ・ '),
+                }))}
+                index={preview}
+                onIndexChange={setPreview}
+              />
             </section>
           )}
           {errorMsg && <p className="lora-error" role="alert">{errorMsg}</p>}
@@ -573,6 +619,14 @@ export default function CharacterDataset() {
           </section>
         </main>
       </div>
+
+      <TaskStatusDialog
+        status={task.status}
+        minimized={task.minimized}
+        onMinimize={task.setMinimized}
+        onCancel={handleCancel}
+        onClose={task.dismiss}
+      />
     </div>
   )
 }
