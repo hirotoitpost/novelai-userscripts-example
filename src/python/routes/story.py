@@ -43,6 +43,7 @@ from ..db import (
     list_manga_pages,
     list_stories,
     list_characters,
+    list_manga_panels,
     list_story_scenes,
     save_character,
     set_scene_characters,
@@ -89,6 +90,7 @@ from ..models import (
     StoryLayoutRequest,
     StoryPageStats,
     StoryResponse,
+    StoryAutoMangaRequest,
     StorySplitRequest,
     StorySummary,
     SetSceneCharactersRequest,
@@ -1889,6 +1891,78 @@ async def _run_cast(job: _Job, story: dict[str, Any], api_key: str, references: 
         made.append(f"{character['name']}(近さ {result['score']:.2f})")
     job.progress = len(missing)
     job.message = f"{summary}。参照画像を作りました: {'、'.join(made)}"
+
+
+@router.post("/{story_id}/auto-manga", response_model=StoryJobResponse)
+async def auto_manga(story_id: int, req: StoryAutoMangaRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    取り込んだ物語を、続けて漫画にする(1つのジョブ): まだならシーン分割 → 登場人物をそろえる(参照画像の
+    無いキャラには自動で作る) → コマの生成(参照画像があればキャラ参照を使う) → ページの合成。
+    画面を閉じてもサーバーで最後まで進む。進捗は GET /{story_id}/job。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    if story is None:
+        raise HTTPException(status_code=404, detail="story not found")
+    if not story["scenes"] and not story.get("raw_text"):
+        raise HTTPException(status_code=400, detail="本文がありません。")
+    api_key = client.api_key
+    options = TagOptions(adult=req.split.adult, api_key=api_key if req.split.adult else None)
+
+    async def runner(job: _Job) -> None:
+        await _run_auto_manga(job, story_id, req, api_key, options)
+
+    return _job_response(_start_job(story_id, "auto_manga", runner))
+
+
+async def _run_auto_manga(
+    job: _Job, story_id: int, req: StoryAutoMangaRequest, api_key: str, options: TagOptions
+) -> None:
+    # コマの生成・合成は漫画v2のもの(漫画v2は story を読み込むので、ここでは使うときに読む)
+    from .manga_v2 import _run_panels, compose
+
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    assert story is not None
+    if not story["scenes"]:
+        job.message = "シーンに分けています"
+        await _run_split(job, story_id, req.split, options)
+        conn = get_connection()
+        try:
+            story = get_story(conn, story_id)
+        finally:
+            conn.close()
+        assert story is not None
+        if not story["scenes"]:
+            raise RuntimeError("シーンに分けられませんでした")
+
+    job.progress = job.total = 0
+    await _run_cast(job, story, api_key, req.references)
+
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+        used = [get_character(conn, c["id"]) for c in story_characters(conn, story_id)]
+        existing = {p["scene_id"] for p in list_manga_panels(conn, story_id)}
+    finally:
+        conn.close()
+    targets = [s for s in scenes if s["id"] not in existing]
+    # 参照画像がそろったキャラがいれば、キャラ参照で見た目をそろえる
+    panels = req.make.panels.model_copy(
+        update={"use_character_reference": any(c and c.get("reference_image_path") for c in used)}
+    )
+    if targets:
+        job.progress = 0
+        await _run_panels(job, story_id, panels, api_key, targets)
+    job.message = "ページに合成しています"
+    result = await asyncio.to_thread(compose, story_id, req.make.compose)
+    job.message = f"漫画ができました({len(result['pages'])}ページ・{len(scenes)}コマ)"
 
 
 @router.get("/characters", response_model=list[CharacterResponse])
