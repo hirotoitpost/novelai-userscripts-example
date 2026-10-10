@@ -20,8 +20,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from python import db  # noqa: E402
 from python.manga_draft import episode_system  # noqa: E402
-from python.manga_v2.compose import LetteringStyle, PanelContent, compose_pages  # noqa: E402
-from python.manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, layout_rects, normalize_boxes, scene_rects  # noqa: E402
+from PIL import ImageDraw  # noqa: E402
+
+from python.manga_v2.compose import LetteringStyle, PanelContent, compose_page, compose_pages  # noqa: E402
+from python.manga_v2.layout import (  # noqa: E402
+    PAGE_HEIGHT,
+    PAGE_WIDTH,
+    layout_page,
+    layout_rects,
+    normalize_boxes,
+    scene_rects,
+)
+from python.manga_v2.panel_shapes import trace_page  # noqa: E402
 from python.manga_v2.lettering import resolve_font  # noqa: E402
 from python.routes import manga_import as import_routes  # noqa: E402
 from python.routes import manga_v2  # noqa: E402
@@ -98,13 +108,13 @@ def test_put_page_layouts(client: TestClient, tmp_path: Path) -> None:
 
     res = client.put(f"/api/manga-v2/{story['id']}/page-layouts", json={"import_id": import_id})
     assert res.status_code == 200, res.text
-    assert res.json() == {"pages": 2, "panels": 4}
+    assert res.json() == {"pages": 2, "panels": 4, "spreads": 0}
     conn = db.get_connection()
     try:
         layouts = db.get_manga_v2_page_layouts(conn, story["id"])
     finally:
         conn.close()
-    assert [len(layout) for layout in layouts] == [3, 1]
+    assert [len(layout["panels"]) for layout in layouts] == [3, 1]
 
     # null でテンプレートに戻す
     assert client.put(f"/api/manga-v2/{story['id']}/page-layouts", json={"import_id": None}).json()["pages"] == 0
@@ -124,3 +134,64 @@ def test_episode_system_uses_panel_count() -> None:
     assert "ちょうど3コマ" in three and "ちょうど3つ" in three and "最後のコマにオチ" in three
     # JSON の例はそのまま残る
     assert '{"panels":[' in three
+
+
+# ---- 斜めの枠・枠なし・裁ち落とし・見開き ----
+
+
+def _drawn_page() -> tuple[Image.Image, list[tuple[int, int, int, int]]]:
+    """斜めの枠(下辺が右上がり)・枠なし(絵だけ)・裁ち落とし(右下がページの端)の3コマのページ。"""
+    image = Image.new("L", PAGE, 255)
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(50, 50), (950, 50), (950, 500), (50, 600)], outline=0, width=5)
+    for i in range(0, 420, 6):  # 枠なしのコマの絵(縦縞)
+        draw.line([(60 + i, 700 + (i * 7) % 90), (60 + i, 1400 - (i * 5) % 120)], fill=(i * 3) % 200)
+    draw.rectangle((520, 680, PAGE[0] + 4, PAGE[1] + 4), outline=0, width=5)
+    return image, [(50, 50, 905, 555), (60, 700, 420, 700), (520, 680, 480, 820)]
+
+
+def test_trace_page_reads_slants_frameless_and_bleeds() -> None:
+    image, boxes = _drawn_page()
+    layout = trace_page(image, boxes)
+    slanted, frameless, bleed = layout["panels"]
+    assert not layout["spread"]
+    # 斜めの下辺: 左端は y=600、右端は y=500
+    assert slanted["border"] and abs(slanted["points"][3][1] * PAGE[1] - 600) <= 6
+    assert abs(slanted["points"][2][1] * PAGE[1] - 500) <= 6
+    assert not frameless["border"]
+    assert bleed["border"] and bleed["points"][2] == [1.0, 1.0]
+
+
+def test_wide_page_is_a_spread() -> None:
+    layout = trace_page(Image.new("L", (2000, 1400), 255), [(50, 50, 900, 1300), (1050, 50, 900, 1300)])
+    assert layout["spread"]
+    spec = layout_page(layout)
+    assert (spec.width, spec.height) == (PAGE_WIDTH * 2, PAGE_HEIGHT)
+
+
+def test_legacy_layout_still_reads() -> None:
+    spec = layout_page(normalize_boxes(BOXES, *PAGE))
+    assert spec.width == PAGE_WIDTH and all(shape.is_rect and shape.border for shape in spec.panels)
+
+
+def test_compose_clips_slanted_panels_and_skips_bleed_edges(tmp_path: Path) -> None:
+    style = LetteringStyle(font_path=resolve_font(None), sfx_font_path=resolve_font(None))
+    red, blue = tmp_path / "red.png", tmp_path / "blue.png"
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(red)
+    Image.new("RGB", (64, 64), (0, 0, 255)).save(blue)
+    # 上のコマの下辺が斜め(左が低い)。下のコマは上辺がそれに沿った斜めで、左右と下は裁ち落とし
+    layout = {
+        "spread": False,
+        "panels": [
+            {"points": [[0.1, 0.05], [0.9, 0.05], [0.9, 0.3], [0.1, 0.4]], "border": True},
+            {"points": [[0.0, 0.42], [1.0, 0.32], [1.0, 1.0], [0.0, 1.0]], "border": True},
+        ],
+    }
+    page, _ = compose_page(layout_page(layout), [PanelContent(red, key="a"), PanelContent(blue, key="b")], style)
+    # 下のコマを後から描いても、上のコマの斜めの部分(左下)は赤のまま
+    assert page.getpixel((round(0.15 * PAGE_WIDTH), round(0.37 * PAGE_HEIGHT))) == (255, 0, 0)
+    # 右側は上のコマの下辺より下なので青
+    assert page.getpixel((round(0.85 * PAGE_WIDTH), round(0.34 * PAGE_HEIGHT))) == (0, 0, 255)
+    # ページの端(裁ち落とし)には枠線を描かない
+    assert page.getpixel((1, round(0.7 * PAGE_HEIGHT))) == (0, 0, 255)
+    assert page.getpixel((PAGE_WIDTH // 2, PAGE_HEIGHT - 1)) == (0, 0, 255)

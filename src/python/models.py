@@ -956,6 +956,7 @@ class MangaV2ComposeResponse(BaseModel):
     final_image_path: str
     page_width: int
     page_height: int
+    page_widths: list[int] = Field(default_factory=list)
     # pages と同じ順の、各ページに置いた要素
     elements: list[list[MangaV2Element]]
 

@@ -11,7 +11,20 @@ from PIL import Image, ImageDraw
 
 from .detect import detect_heads
 from .speakers import CastMember, identify_heads
-from .layout import PAGE_HEIGHT, PAGE_WIDTH, PageLayout, Rect, fill_template, layout_rects, panel_rects
+from .layout import (
+    PAGE_HEIGHT,
+    PAGE_WIDTH,
+    PageLayout,
+    PageSpec,
+    PanelShape,
+    Rect,
+    fill_template,
+    layout_page,
+    layout_size,
+    panel_rects,
+    rect_shape,
+    template_page,
+)
 from .lettering import (
     SFX_MIN_SIZE,
     bubble_shape,
@@ -626,13 +639,43 @@ def _draw_panel(
     return elements
 
 
+def _draw_border(page: Image.Image, shape: PanelShape) -> None:
+    """コマの枠線。ページの端に接する辺(裁ち落とし)には描かない。"""
+    draw = ImageDraw.Draw(page)
+    width, height = page.size
+    x0, y0, x1, y1 = shape.rect
+    if shape.is_rect and x0 > 0 and y0 > 0 and x1 < width and y1 < height:
+        draw.rectangle(shape.rect, outline=(0, 0, 0), width=_BORDER)
+        return
+    points = shape.points
+    for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1]):
+        on_edge = (ax == bx and ax in (0, width)) or (ay == by and ay in (0, height))
+        if not on_edge:
+            draw.line([(ax, ay), (bx, by)], fill=(0, 0, 0), width=_BORDER, joint="curve")
+
+
 def compose_page(
-    rects: list[Rect], panels: list[PanelContent], style: LetteringStyle
+    spec: PageSpec | list[Rect], panels: list[PanelContent], style: LetteringStyle
 ) -> tuple[Image.Image, list[Element]]:
-    page = Image.new("RGB", (PAGE_WIDTH, PAGE_HEIGHT), (255, 255, 255))
+    """
+    1ページを合成する。斜めの枠のコマは、外接矩形に描いてから輪郭で切り抜いて重ねる
+    (隣のコマと外接矩形が重なるので、ページに直接描くと隣を上書きしてしまう)。
+    """
+    if not isinstance(spec, PageSpec):
+        spec = PageSpec(PAGE_WIDTH, PAGE_HEIGHT, tuple(rect_shape(r) for r in spec))
+    page = Image.new("RGB", (spec.width, spec.height), (255, 255, 255))
     elements: list[Element] = []
-    for rect, content in zip(rects, panels):
-        elements.extend(_draw_panel(page, rect, content, style))
+    for shape, content in zip(spec.panels, panels):
+        if shape.is_rect:
+            elements.extend(_draw_panel(page, shape.rect, content, style, border=False))
+        else:
+            layer = page.copy()
+            elements.extend(_draw_panel(layer, shape.rect, content, style, border=False))
+            mask = Image.new("L", page.size, 0)
+            ImageDraw.Draw(mask).polygon(list(shape.points), fill=255)
+            page.paste(layer, (0, 0), mask)
+        if shape.border:
+            _draw_border(page, shape)
     return page, elements
 
 
@@ -653,12 +696,13 @@ def compose_pages(
     for layout in layouts or []:
         if not rest:
             break
-        chunk, rest = rest[: len(layout)], rest[len(layout) :]
-        pages.append(compose_page(layout_rects(layout)[: len(chunk)], chunk, style))
+        size = layout_size(layout)
+        chunk, rest = rest[:size], rest[size:]
+        pages.append(compose_page(layout_page(layout), chunk, style))
     per_page = len(panel_rects(template_id))
     for i in range(0, len(rest), per_page):
         chunk = rest[i : i + per_page]
-        pages.append(compose_page(panel_rects(fill_template(template_id, len(chunk))), chunk, style))
+        pages.append(compose_page(template_page(fill_template(template_id, len(chunk))), chunk, style))
     return pages
 
 
@@ -684,10 +728,11 @@ def concat_pages(pages: list[Image.Image]) -> bytes:
     if not pages:
         raise ValueError("pages is empty")
     total = sum(p.height for p in pages) + _PAGE_GAP * (len(pages) - 1)
-    canvas = Image.new("RGB", (PAGE_WIDTH, total), (255, 255, 255))
+    # 見開きのページは横2ページ分あるので、一番広いページに合わせる
+    canvas = Image.new("RGB", (max(p.width for p in pages), total), (255, 255, 255))
     y = 0
     for page in pages:
-        canvas.paste(page, (0, y))
+        canvas.paste(page, ((canvas.width - page.width) // 2, y))
         y += page.height + _PAGE_GAP
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")

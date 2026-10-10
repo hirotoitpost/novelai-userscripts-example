@@ -90,10 +90,10 @@ from ..manga_v2.layout import (
     PAGE_WIDTH,
     TEMPLATES,
     generation_size,
-    normalize_boxes,
     scene_rects,
 )
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
+from ..manga_v2.panel_shapes import trace_page
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
 from ..manga_v2.speakers import CastMember, attribute_speakers, cast_members
 from ..models import (
@@ -1170,17 +1170,21 @@ async def put_page_layouts(story_id: int, req: MangaV2PageLayoutsRequest) -> dic
         raise HTTPException(status_code=409, detail="取り込んだ作品のコマをまだ読み取っていません。")
     layouts = []
     for index, page in enumerate(pages):
+        # コマの枠の形(斜め・枠なし・裁ち落とし)と見開きかどうかは、ページの画像から読む
         with Image.open(_page_path(req.import_id, index)) as image:
-            size = image.size
-        layout = normalize_boxes([tuple(p["box"]) for p in page["panels"]], *size)
-        if layout:
+            layout = trace_page(image, [tuple(p["box"]) for p in page["panels"]])
+        if layout["panels"]:
             layouts.append(layout)
     conn = get_connection()
     try:
         set_manga_v2_page_layouts(conn, story_id, layouts)
     finally:
         conn.close()
-    return {"pages": len(layouts), "panels": sum(len(layout) for layout in layouts)}
+    return {
+        "pages": len(layouts),
+        "panels": sum(len(layout["panels"]) for layout in layouts),
+        "spreads": sum(1 for layout in layouts if layout["spread"]),
+    }
 
 
 # 画像処理で数秒かかるので、同期関数にしてスレッドプールで実行させる(イベントループを塞がない)
@@ -1215,6 +1219,8 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         "final_image_path": final_path,
         "page_width": PAGE_WIDTH,
         "page_height": PAGE_HEIGHT,
+        # 見開きのページは横2ページ分の幅になる
+        "page_widths": [page.width for page in pages],
         "elements": [
             [
                 {
