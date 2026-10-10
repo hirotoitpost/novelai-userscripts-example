@@ -24,3 +24,52 @@
   object-fit: cover;
   border-radius: 4px;
 }
+
+/* まだできていない候補の枠 */
+.ref-candidate--pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 832 / 1216;
+  border: 2px dashed rgba(154, 154, 192, 0.45);
+  font-size: 0.75rem;
+  color: #9a9ac0;
+  cursor: default;
+}
+
+.ref-candidate--active {
+  border-color: #7b5cf6;
+  color: #c8b8ff;
+  animation: ref-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ref-pulse { 50% { opacity: 0.55; } }
+
+.ref-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ref-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #2a2a50;
+  overflow: hidden;
+}
+
+.ref-progress-fill {
+  height: 100%;
+  background: #7b5cf6;
+  transition: width 0.4s ease;
+}
+
+.ref-progress-text {
+  font-size: 0.8rem;
+  color: #9a9ac0;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ref-candidate--active { animation: none; }
+}

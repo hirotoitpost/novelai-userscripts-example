@@ -1,0 +1,93 @@
+.ipv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(5, 5, 15, 0.85);
+}
+
+.ipv-dialog {
+  box-sizing: border-box;
+  max-width: min(960px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ipv-stage {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.ipv-image {
+  display: block;
+  max-width: 100%;
+  /* 説明とボタンの分を残す */
+  max-height: calc(100vh - 120px);
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.ipv-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(20, 20, 40, 0.7);
+  color: #fff;
+  font-size: 1.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ipv-nav:hover { background: rgba(91, 63, 214, 0.85); }
+.ipv-nav--prev { left: 8px; }
+.ipv-nav--next { right: 8px; }
+
+.ipv-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.ipv-caption {
+  font-size: 0.85rem;
+  color: #c8c8e8;
+  font-variant-numeric: tabular-nums;
+}
+
+.ipv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ipv-btn {
+  padding: 0.5rem 1rem;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  background: #1a1a33;
+  color: #e8e8ff;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.ipv-btn--primary {
+  background: #5b3fd6;
+  border-color: #7b5cf6;
+  font-weight: 600;
+}
+
+.ipv-btn:disabled { opacity: 0.5; cursor: not-allowed; }
