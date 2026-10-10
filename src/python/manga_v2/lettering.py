@@ -46,6 +46,13 @@ _FONT_CANDIDATES: list[tuple[str, str, str]] = [
     ("hg-gyosho", "HG行書体", "HGRGY.TTC"),
     ("hg-seikaisho", "HG正楷書体-PRO", "HGRSKP.TTF"),
 ]
+# Windows 以外(Linux の CI など)で使う日本語フォント。Debian/Ubuntu の fonts-noto-cjk の置き場所
+_LINUX_FONTS: list[tuple[str, str, Path]] = [
+    ("noto-serif-cjk", "Noto Serif CJK", Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc")),
+    ("noto-sans-cjk", "Noto Sans CJK", Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")),
+    ("noto-sans-cjk-bold", "Noto Sans CJK Bold", Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc")),
+]
+
 DEFAULT_FONT_ID = "yu-mincho-demibold"
 DEFAULT_SFX_FONT_ID = "hg-soei-kakugothic-ub"
 
@@ -63,7 +70,7 @@ def available_fonts() -> list[FontChoice]:
         FontChoice(font_id, label, _FONT_DIR / filename)
         for font_id, label, filename in _FONT_CANDIDATES
         if (_FONT_DIR / filename).is_file()
-    ]
+    ] + [FontChoice(font_id, label, path) for font_id, label, path in _LINUX_FONTS if path.is_file()]
     downloaded = [FontChoice(f.id, f.label, f.path) for f in CATALOG if f.installed]
     return system + downloaded
 
@@ -77,7 +84,7 @@ def resolve_font(font_id: str | None, default_id: str = DEFAULT_FONT_ID) -> Path
             return fonts[fallback]
     if fonts:
         return next(iter(fonts.values()))
-    raise RuntimeError("日本語フォントが見つかりません(C:/Windows/Fonts)。")
+    raise RuntimeError("日本語フォントが見つかりません(C:/Windows/Fonts、Linux は fonts-noto-cjk)。")
 
 
 # 縦書きで90度回す文字(横向きの線・括弧類)

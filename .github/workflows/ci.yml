@@ -1,0 +1,45 @@
+# PR と main への push で、テスト・lint・フロントエンドの型チェックとビルドを回す。
+# テストは NovelAI や Ollama に接続しない(必要なものは差し替えている)。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 吹き出しの合成のテストで日本語フォントを使う(Windows では C:/Windows/Fonts のもの)
+      - name: Install Japanese fonts
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check src/python tests
+      - name: Test
+        run: uv run pytest tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # tsc -b(型チェック)と vite build
+      - run: npm run build
