@@ -13,6 +13,8 @@ import {
 import './ImageGenerate.css'
 
 const MODELS = [
+  { value: 'nai-diffusion-5-full',      label: 'NAI Diffusion V5 Full' },
+  { value: 'nai-diffusion-5-curated',   label: 'NAI Diffusion V5 Curated' },
   { value: 'nai-diffusion-4-5-full',    label: 'NAI Diffusion V4.5 Full' },
   { value: 'nai-diffusion-4-5-curated', label: 'NAI Diffusion V4.5 Curated' },
   { value: 'nai-diffusion-4-full',      label: 'NAI Diffusion V4 Full' },
@@ -128,6 +130,8 @@ export default function ImageGenerate() {
   const [varietyBoost,  setVarietyBoost]  = useLocalStorage('nai_gen_variety_boost',  AI_DEFAULTS.varietyBoost)
   // キャラごとのプロンプト(二人以上を描き分ける。逆引きの結果からも入る)
   const [charPrompts,   setCharPrompts]   = useLocalStorage<CharacterPromptInput[]>('nai_gen_characters', [])
+  // キャラの位置を指定するか。オフなら位置は AI にまかせる(NovelAI の「AI におまかせ」)
+  const [charUseCoords, setCharUseCoords] = useLocalStorage('nai_gen_char_use_coords', false)
 
   // プロンプトチャンク
   const promptRef                     = useRef<HTMLTextAreaElement>(null)
@@ -223,6 +227,7 @@ export default function ImageGenerate() {
     setQuality(false)
     setUcPreset('none')
     setCharPrompts(s.characters.map(c => ({ prompt: c.prompt, negative: c.negative, x: c.x ?? 0.5, y: c.y ?? 0.5 })))
+    setCharUseCoords(s.use_coords)
     if (s.model && MODELS.some(m => m.value === s.model)) setModel(s.model)
     if (s.size_preset) {
       setSize(s.size_preset)
@@ -507,7 +512,13 @@ export default function ImageGenerate() {
       characters: charPrompts.some(c => c.prompt.trim())
         ? charPrompts
           .filter(c => c.prompt.trim())
-          .map(c => ({ prompt: c.prompt.trim(), negative_prompt: c.negative.trim(), position: [c.x, c.y] as [number, number], enabled: true }))
+          .map(c => ({
+            prompt: c.prompt.trim(),
+            negative_prompt: c.negative.trim(),
+            // 位置を指定しないときは送らない(AI にまかせる)
+            position: charUseCoords ? [c.x, c.y] as [number, number] : undefined,
+            enabled: true,
+          }))
         : undefined,
     }
 
@@ -579,7 +590,7 @@ export default function ImageGenerate() {
       setPreview(null)
     }
   }, [token, prompt, negPrompt, model, size, customSize, steps, scale, seed, quality, ucPreset,
-      sampler, noiseSchedule, cfgRescale, varietyBoost, charPrompts,
+      sampler, noiseSchedule, cfgRescale, varietyBoost, charPrompts, charUseCoords,
       i2iEnabled, i2iImage, i2iStrength, i2iNoise])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -686,6 +697,12 @@ export default function ImageGenerate() {
             {charPrompts.length === 0 && (
               <p className="ig-char-hint">二人以上を描き分けるときに使います(髪の色や服を、それぞれの人に付ける)。</p>
             )}
+            {charPrompts.length > 0 && (
+              <label className="ig-checkbox-label ig-char-coords">
+                <input type="checkbox" checked={charUseCoords} onChange={e => setCharUseCoords(e.target.checked)} />
+                キャラの位置を指定する(オフなら位置は AI におまかせ)
+              </label>
+            )}
             {charPrompts.map((c, i) => (
               <div key={i} className="ig-char">
                 <div className="ig-char-head">
@@ -693,6 +710,7 @@ export default function ImageGenerate() {
                   <label>
                     位置
                     <select
+                      disabled={!charUseCoords}
                       value={c.x}
                       onChange={e => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, x: Number(e.target.value) } : p)))}
                       aria-label={`キャラ${i + 1}の左右の位置`}
@@ -700,6 +718,7 @@ export default function ImageGenerate() {
                       {CHAR_X.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
                     </select>
                     <select
+                      disabled={!charUseCoords}
                       value={c.y}
                       onChange={e => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, y: Number(e.target.value) } : p)))}
                       aria-label={`キャラ${i + 1}の上下の位置`}

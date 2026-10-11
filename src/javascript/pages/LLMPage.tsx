@@ -660,6 +660,8 @@ function ReversePromptPanel() {
       y: toGrid(c.y ?? 0.5),
     }))
     localStorage.setItem('nai_gen_characters', JSON.stringify(chars))
+    // 位置は絵から読んだものなので、位置を指定して生成する
+    if (chars.length > 0) localStorage.setItem('nai_gen_char_use_coords', JSON.stringify(true))
     localStorage.setItem('nai_gen_prompt',     JSON.stringify(positive))
     localStorage.setItem('nai_gen_neg_prompt', JSON.stringify(negative))
     if (result.settings?.steps) localStorage.setItem('nai_gen_steps', JSON.stringify(result.settings.steps))

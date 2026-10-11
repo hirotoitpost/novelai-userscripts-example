@@ -6,7 +6,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
-    "novelai-sdk>=0.8.1",
+    "novelai-sdk>=0.14.1",
     "fastapi[standard]>=0.100.0",
     "python-dotenv>=1.0.0",
     "argon2-cffi>=23.1.0",

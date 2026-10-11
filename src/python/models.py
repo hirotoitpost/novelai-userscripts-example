@@ -6,6 +6,8 @@ from novelai.constants.positions import PositionPreset
 from pydantic import BaseModel, Field
 
 ImageModelLiteral = Literal[
+    "nai-diffusion-5-full",
+    "nai-diffusion-5-curated",
     "nai-diffusion-4-5-full",
     "nai-diffusion-4-5-curated",
     "nai-diffusion-4-full",
@@ -70,7 +72,9 @@ class CharacterReferenceRequest(BaseModel):
 class CharacterRequest(BaseModel):
     prompt: str
     negative_prompt: str = ""
-    position: Union[PositionPreset, tuple[float, float]] = (0.5, 0.5)
+    # キャラの位置(画像に対する割合)。None なら位置は AI にまかせる。1人でも位置を指定すると、指定の無い
+    # キャラは中央になる(novelai-sdk 0.14.1 以降。それより前の SDK は位置を送っても NovelAI に無視されていた)
+    position: Optional[Union[PositionPreset, tuple[float, float]]] = None
     enabled: bool = True
 
 
@@ -381,6 +385,8 @@ class MetadataGenerationResponse(BaseModel):
     prompt: str
     negative_prompt: str = ""
     characters: list[MetadataGenerationCharacter] = Field(default_factory=list)
+    # キャラの位置を指定して生成した画像か(False なら位置は AI まかせ)
+    use_coords: bool = False
     model: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None

@@ -857,3 +857,8 @@
   padding-left: 1.1rem;
   color: #e8c46a;
 }
+
+.ig-char-coords {
+  margin: 0.2rem 0 0.5rem;
+  font-size: 0.8rem;
+}

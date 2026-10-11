@@ -33,6 +33,7 @@ assert set(SIZE_PRESETS) == set(get_args(ImageSizePresetLiteral))
 
 # 埋め込みの Source の末尾の印(モデルごとに決まった値)。Full と Curated を見分けるのに使う
 _SOURCE_MODELS = {
+    "0ADF9AB7": "nai-diffusion-5-full",
     "4BDE2A90": "nai-diffusion-4-5-full",
     "C02D4F98": "nai-diffusion-4-5-curated",
     "37442FCA": "nai-diffusion-4-full",
@@ -130,11 +131,20 @@ def final_negative(comment: dict[str, Any]) -> str:
     return _base_caption(comment.get("v4_negative_prompt")) or str(comment.get("uc") or "")
 
 
+def uses_coords(comment: dict[str, Any]) -> bool:
+    """キャラの位置を指定して生成した画像か(use_coords)。指定していなければ、位置は AI まかせ。"""
+    if isinstance(comment.get("use_coords"), bool):
+        return comment["use_coords"]
+    return bool(_as_dict(comment.get("v4_prompt")).get("use_coords"))
+
+
 def model_of(source: str) -> tuple[str | None, str | None]:
     """埋め込みの Source から(このアプリのモデル名, 注意書き)。分からなければモデル名は None。"""
     code = source.rsplit(" ", 1)[-1].upper() if source else ""
     if code in _SOURCE_MODELS:
         return _SOURCE_MODELS[code], None
+    if "V5" in source:
+        return "nai-diffusion-5-full", f"モデルの種類(Full / Curated)が分からないので、V5 Full にしました({source})"
     if "V4.5" in source:
         return "nai-diffusion-4-5-full", f"モデルの種類(Full / Curated)が分からないので、V4.5 Full にしました({source})"
     if re.search(r"V4(\s|$)", source):
@@ -221,6 +231,7 @@ def generation_settings(data: bytes) -> dict[str, Any] | None:
         "prompt": final_prompt(comment),
         "negative_prompt": final_negative(comment),
         "characters": characters_of(comment),
+        "use_coords": uses_coords(comment),
         "model": model,
         "width": int(width) if size_ok and width is not None else None,
         "height": int(height) if size_ok and height is not None else None,

@@ -1650,7 +1650,7 @@ wheels = [
 
 [[package]]
 name = "novelai-sdk"
-version = "0.8.1"
+version = "0.14.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1662,9 +1662,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f2/a0/974cafac3f63df1090c74e0f33a2cdfd53b6646251949193b9c7130352c7/novelai_sdk-0.8.1.tar.gz", hash = "sha256:533d7e50b6dd6b248ee72759c7e806923e00390720d8235ea94493661c2bfe10", size = 3541287, upload-time = "2026-04-26T09:33:53.104Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/34/cc/ec1f76706c425aff6783fa8832dedd44648c1539fe22d2a5794ac217062d/novelai_sdk-0.14.1.tar.gz", hash = "sha256:7d3d5127a5ab05b0c56f9dee8ed7e15b2a4706bd713cf00742733416564ef5e8", size = 1882208, upload-time = "2026-09-05T10:34:50.201Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/43/32f14723e664b14a27d9b09d0fed33630ac3f4fffcdcb8d8dc14e590087a/novelai_sdk-0.8.1-py3-none-any.whl", hash = "sha256:eeb0997b82850dd4985c3d898774f60d6f265d48a4e40ceb88ad4db4cced6400", size = 47706, upload-time = "2026-04-26T09:33:50.886Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/47/48c55af12721a9d2ea532a7350a39ee075fb826dc0ea41d63a4b44d58057/novelai_sdk-0.14.1-py3-none-any.whl", hash = "sha256:1871864735cbab1987080c185efa96805a2521977e2ca35a033dbfcd40d27897", size = 59704, upload-time = "2026-09-05T10:34:48.473Z" },
 ]
 
 [[package]]
@@ -1706,7 +1706,7 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.100.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.1.1" },
-    { name = "novelai-sdk", specifier = ">=0.8.1" },
+    { name = "novelai-sdk", specifier = ">=0.14.1" },
     { name = "onnxruntime", specifier = ">=1.24.3" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "pynacl", specifier = ">=1.6.2" },

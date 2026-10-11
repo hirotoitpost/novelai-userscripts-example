@@ -87,6 +87,11 @@ def test_settings_are_read_for_the_generate_page() -> None:
         {"prompt": "girl, blonde hair, waving", "negative": "", "x": 0.7, "y": 0.5},
     ]
     assert settings["notes"] == []
+    # 位置を指定していない画像(use_coords が無い・偽)は、位置を AI まかせとして読む
+    assert settings["use_coords"] is False
+    placed = {**COMMENT, "v4_prompt": {**COMMENT["v4_prompt"], "use_coords": True}}
+    assert generation_settings(png(placed))["use_coords"] is True
+    assert generation_settings(png({**COMMENT, "use_coords": True}))["use_coords"] is True
 
 
 def test_unusual_values_are_kept_within_what_the_page_accepts() -> None:
@@ -136,7 +141,11 @@ def test_model_is_read_from_the_source() -> None:
     assert model_of("NovelAI Diffusion V4 37442FCA") == ("nai-diffusion-4-full", None)
     assert model_of("NovelAI Diffusion V4 00000000")[0] == "nai-diffusion-4-full"
     assert model_of("Stable Diffusion XL C1E1DE52") == ("nai-diffusion-3", None)
+    # V5 は Full / Curated を見分ける印が分からないので、Full にして注意書きを付ける
+    assert model_of("NovelAI Diffusion V5 0ADF9AB7") == ("nai-diffusion-5-full", None)
     model, note = model_of("NovelAI Diffusion V5 12345678")
+    assert model == "nai-diffusion-5-full" and note and "Full / Curated" in note
+    model, note = model_of("Some Other Model 12345678")
     assert model is None and note and "変えていません" in note
     assert model_of("")[0] is None
 
