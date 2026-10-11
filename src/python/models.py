@@ -101,6 +101,30 @@ class GenerateImageRequest(BaseModel):
     characters: Optional[list[CharacterRequest]] = None
 
 
+EmotionLiteral = Literal[
+    "neutral", "happy", "sad", "angry", "scared", "surprised", "tired", "excited", "nervous", "thinking",
+    "confused", "shy", "disgusted", "smug", "bored", "laughing", "irritated", "aroused", "embarrassed",
+    "worried", "love", "determined", "hurt", "playful",
+]  # fmt: skip
+
+
+class EmotionToolRequest(BaseModel):
+    """絵はそのままで、人物の表情だけを変える(NovelAI のディレクターツール)。"""
+
+    image: str = Field(min_length=1, description="base64 または data URL")
+    emotion: EmotionLiteral
+    # 変えたい内容の補足(任意。英語のタグ)
+    prompt: str = Field("", max_length=500)
+    # 元の絵からどれだけ離れてよいか(0 が最も元に近い)
+    defry: int = Field(0, ge=0, le=5)
+
+
+class UpscaleToolRequest(BaseModel):
+    """画像を縦横2倍に拡大する(NovelAI の拡大)。"""
+
+    image: str = Field(min_length=1, description="base64 または data URL")
+
+
 class GenerateImageResponse(BaseModel):
     images: list[str]
     format: str = "png"

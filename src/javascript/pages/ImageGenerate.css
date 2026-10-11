@@ -862,3 +862,21 @@
   margin: 0.2rem 0 0.5rem;
   font-size: 0.8rem;
 }
+
+.ig-result-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.ig-result-tools-label {
+  font-size: 0.8rem;
+  color: #9a9ac0;
+}
+
+.ig-result-tools .ig-select {
+  width: auto;
+}

@@ -39,6 +39,8 @@ from ..db import (
     save_image_preset,
 )
 from ..models import (
+    EmotionToolRequest,
+    UpscaleToolRequest,
     AnlasEstimateRequest,
     AnlasEstimateResponse,
     GenerateImageRequest,
@@ -271,6 +273,84 @@ def _http_status(exc: Exception) -> int:
     if isinstance(exc, NetworkError):
         return 503
     return 500
+
+
+# ---- ディレクターツール(表情の変更・拡大) ----
+
+
+def _tool_history_request(source: bytes, label: str) -> GenerateImageRequest:
+    """
+    ツールで作った画像をギャラリーに残すときの記録。元の画像に NovelAI の設定が入っていれば、そのプロンプトを
+    引き継ぐ(ギャラリーの検索や成人向けの判定が、元の画像と同じように働く)。先頭に、何をした画像かを付ける。
+    """
+    from ..nai_metadata import generation_settings
+
+    settings = generation_settings(source) or {}
+    prompt = f"[{label}] {settings.get('prompt') or ''}".strip()
+    fields: dict[str, Any] = {"prompt": prompt, "negative_prompt": settings.get("negative_prompt") or None}
+    if settings.get("width") and settings.get("height"):
+        fields["size"] = [settings["width"], settings["height"]]
+    for key in ("model", "steps", "scale", "sampler", "seed"):
+        if settings.get(key) is not None:
+            fields[key] = settings[key]
+    try:
+        return GenerateImageRequest(**fields)
+    except ValueError:
+        return GenerateImageRequest(prompt=prompt)
+
+
+async def _is_opus(client: AsyncNovelAI) -> bool:
+    """Opus の契約か(ディレクターツールの Anlas の見積もりに使う)。分からなければ False(高い方の見積もり)。"""
+    try:
+        subscription = await client.user.get_subscription()
+    except Exception:  # noqa: BLE001 見積もりのためだけなので、取れなければ高い方で出す
+        return False
+    return bool(subscription.active) and int(subscription.tier) >= 3
+
+
+@router.get("/tools/anlas")
+async def estimate_tool_anlas(width: int, height: int, client: ClientDep, tool: str = "emotion") -> dict[str, Any]:
+    """ディレクターツール(表情の変更など)の Anlas の見積もり。Opus なら 1MP 以内は 0。"""
+    from typing import get_args
+
+    from novelai.types.user.tools import DirectorTool
+    from novelai.utils.anlas import calculate_augment_anlas
+
+    if tool not in get_args(DirectorTool):
+        raise HTTPException(status_code=422, detail=f"知らないツールです: {tool}")
+    if not (64 <= width <= 4096 and 64 <= height <= 4096):
+        raise HTTPException(status_code=422, detail="画像の大きさが範囲の外です。")
+    opus = await _is_opus(client)
+    estimate = calculate_augment_anlas(tool, width, height, is_opus=opus)  # type: ignore[arg-type]
+    return {"tool": tool, "total_anlas": estimate.total_anlas, "is_opus": opus}
+
+
+@router.post("/tools/emotion", response_model=GenerateImageResponse)
+async def change_emotion(req: EmotionToolRequest, client: ClientDep) -> GenerateImageResponse:
+    """絵はそのままで、人物の表情だけを変える。結果はギャラリーにも残す。"""
+    source = _decode_b64(req.image)
+    try:
+        images = await client.tools.emotion(source, req.emotion, prompt=req.prompt.strip(), defry=req.defry)
+    except Exception as exc:
+        raise HTTPException(status_code=_http_status(exc), detail=str(exc))
+    encoded = _pil_to_b64(images, "png")
+    save_generation(_tool_history_request(source, f"表情: {req.emotion}"), [base64.b64decode(b) for b in encoded])
+    return GenerateImageResponse(images=encoded, format="png")
+
+
+@router.post("/tools/upscale", response_model=GenerateImageResponse)
+async def upscale_image(req: UpscaleToolRequest, client: ClientDep) -> GenerateImageResponse:
+    """画像を縦横2倍に拡大する。結果はギャラリーにも残す。"""
+    from novelai.types import UpscaleParams
+
+    source = _decode_b64(req.image)
+    try:
+        images = await client.tools.upscale(UpscaleParams(image=source))
+    except Exception as exc:
+        raise HTTPException(status_code=_http_status(exc), detail=str(exc))
+    encoded = _pil_to_b64(images, "png")
+    save_generation(_tool_history_request(source, "2倍に拡大"), [base64.b64decode(b) for b in encoded])
+    return GenerateImageResponse(images=encoded, format="png")
 
 
 # タグの候補は同じ問い合わせが続くので、少しだけ覚えておく(NovelAI への問い合わせを減らす)

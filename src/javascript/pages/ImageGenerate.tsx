@@ -106,6 +106,15 @@ const UC_PRESETS = [
   { value: 'furry_focus', label: 'ファーリー重視' },
 ] as const
 
+// 表情の変更(NovelAI のディレクターツール)で選べる表情
+const EMOTIONS: [string, string][] = [
+  ['happy', '嬉しい'], ['laughing', '笑う'], ['excited', 'わくわく'], ['playful', 'いたずらっぽい'], ['love', '好き'],
+  ['shy', '照れる'], ['embarrassed', '恥ずかしい'], ['smug', '得意げ'], ['determined', '決意'], ['neutral', 'ふつう'],
+  ['thinking', '考える'], ['confused', '困惑'], ['surprised', '驚く'], ['nervous', '緊張'], ['worried', '心配'],
+  ['scared', '怖がる'], ['sad', '悲しい'], ['hurt', '傷つく'], ['tired', '疲れ'], ['bored', '退屈'],
+  ['irritated', 'いらだつ'], ['angry', '怒る'], ['disgusted', '嫌悪'], ['aroused', '昂ぶる'],
+]
+
 // キャラの位置の選択肢(NovelAI のキャラの位置は 0.1〜0.9 の 5 段階)
 const CHAR_X: [number, string][] = [[0.1, '左端'], [0.3, '左'], [0.5, '中央'], [0.7, '右'], [0.9, '右端']]
 const CHAR_Y: [number, string][] = [[0.1, '上端'], [0.3, '上'], [0.5, '中'], [0.7, '下'], [0.9, '下端']]
@@ -176,6 +185,11 @@ export default function ImageGenerate() {
   const [preview,      setPreview]      = useState<string | null>(null)
   const [anlasEst,     setAnlasEst]     = useState<number | null>(null)
   const [anlasLoading, setAnlasLoading] = useState(false)
+  // できた画像の仕上げ(表情の変更・2倍に拡大)
+  const [toolEmotion, setToolEmotion] = useLocalStorage('nai_gen_tool_emotion', 'happy')
+  const [toolBusy,    setToolBusy]    = useState<'emotion' | 'upscale' | null>(null)
+  const [toolAnlas,   setToolAnlas]   = useState<number | null>(null)
+  const [toolMsg,     setToolMsg]     = useState<{ text: string; isError: boolean } | null>(null)
 
   // 結果画像は Blob URL で保持する。data URL だとスマホの長押し保存で
   // ファイル名が「ダウンロード」固定になるため、<a download> で包んで名前を付ける
@@ -598,6 +612,57 @@ export default function ImageGenerate() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       generate()
+    }
+  }
+
+  // 表情の変更にかかる Anlas(画像の大きさで決まる。Opus なら 1MP 以内は 0)
+  useEffect(() => {
+    setToolAnlas(null)
+    if (!token || !result) return
+    let cancelled = false
+    const img = new Image()
+    img.onload = async () => {
+      try {
+        const res = await fetch(`/api/image/tools/anlas?tool=emotion&width=${img.naturalWidth}&height=${img.naturalHeight}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (res.ok && !cancelled) setToolAnlas((await res.json()).total_anlas)
+      } catch {
+        // 見積もりが取れなくても、実行はできる
+      }
+    }
+    img.src = result.src
+    return () => { cancelled = true }
+  }, [token, result])
+
+  /** できた画像を NovelAI のツールにかけ、結果を表示する(元の画像はギャラリーに残っている)。 */
+  const runTool = async (tool: 'emotion' | 'upscale') => {
+    if (!token || !result || toolBusy) return
+    setToolBusy(tool)
+    setToolMsg(null)
+    try {
+      const blob = await (await fetch(result.src)).blob()
+      const image = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => reject(reader.error)
+        reader.readAsDataURL(blob)
+      })
+      const body = tool === 'emotion' ? { image, emotion: toolEmotion } : { image }
+      const data = await apiFetch<{ images: string[] }>(token, `/api/image/tools/${tool}`, body)
+      const bytes = Uint8Array.from(atob(data.images[0]), c => c.charCodeAt(0))
+      setResult({ src: URL.createObjectURL(new Blob([bytes], { type: 'image/png' })), filename: naiImageFilename() })
+      const label = EMOTIONS.find(([v]) => v === toolEmotion)?.[1] ?? toolEmotion
+      setToolMsg({
+        text: tool === 'emotion'
+          ? `表情を「${label}」に変えました。元の画像はギャラリーに残っています。`
+          : '2倍に拡大しました。元の画像はギャラリーに残っています。',
+        isError: false,
+      })
+    } catch (e) {
+      setToolMsg({ text: e instanceof Error ? e.message : String(e), isError: true })
+    } finally {
+      setToolBusy(null)
     }
   }
 
@@ -1239,6 +1304,29 @@ export default function ImageGenerate() {
                   🔄 再生成
                 </button>
               </div>
+              <div className="ig-result-tools">
+                <span className="ig-result-tools-label">仕上げ</span>
+                <select
+                  className="ig-select"
+                  aria-label="変える表情"
+                  value={toolEmotion}
+                  onChange={e => setToolEmotion(e.target.value)}
+                  disabled={toolBusy !== null}
+                >
+                  {EMOTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+                <button type="button" className="ig-action-btn ig-action-btn--secondary" onClick={() => void runTool('emotion')}
+                  disabled={toolBusy !== null} title="絵はそのままで、人物の表情だけを変えます(NovelAI のディレクターツール)">
+                  {toolBusy === 'emotion' ? <span className="ig-spinner" /> : `🙂 表情を変える${toolAnlas != null ? `(${toolAnlas} Anlas)` : ''}`}
+                </button>
+                <button type="button" className="ig-action-btn ig-action-btn--secondary" onClick={() => void runTool('upscale')}
+                  disabled={toolBusy !== null} title="画像を縦横2倍に拡大します(Anlas を使います。大きい画像は拡大できないことがあります)">
+                  {toolBusy === 'upscale' ? <span className="ig-spinner" /> : '🔍 2倍に拡大'}
+                </button>
+              </div>
+              {toolMsg && (
+                <p className={toolMsg.isError ? 'ig-error' : 'ig-preset-msg ig-from-image-msg'} role="status">{toolMsg.text}</p>
+              )}
             </div>
           )}
         </main>
