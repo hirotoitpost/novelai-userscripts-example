@@ -16,8 +16,6 @@ WD Tagger は CPU で1枚3秒、danbooru の語彙にある正解タグの約56%
 from __future__ import annotations
 
 import csv
-import io
-import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -526,29 +524,12 @@ def embedded_prompt(data: bytes) -> dict[str, Any] | None:
     NovelAI で生成した PNG に埋め込まれたプロンプトと設定。無ければ None。
     文字の埋め込み(PNG のテキスト)と、画素に隠した埋め込み(Stealth)の両方を読む。
     """
-    from novelai._utils.nai_meta import extract_image_metadata
+    from .nai_metadata import characters_of, read_comment
 
-    try:
-        image = Image.open(io.BytesIO(data))
-    except Exception:  # noqa: BLE001 読めない画像は呼び出し側で扱う
+    found = read_comment(data)
+    if found is None:
         return None
-    # PNG のテキスト(保存し直すと消えることがある)を先に見て、無ければ画素に隠した埋め込みを読む
-    metadata: Any = dict(image.info) if image.info.get("Comment") else None
-    if metadata is None:
-        try:
-            metadata = extract_image_metadata(image)
-        except Exception:  # noqa: BLE001 埋め込みが無い・壊れている画像は推定に回す
-            return None
-        if not isinstance(metadata, dict):
-            metadata = metadata[0]
-    comment = metadata.get("Comment")
-    if isinstance(comment, str):
-        try:
-            comment = json.loads(comment)
-        except json.JSONDecodeError:
-            return None
-    if not isinstance(comment, dict) or not comment.get("prompt"):
-        return None
+    metadata, comment = found
 
     def number(key: str) -> float | None:
         try:
@@ -556,23 +537,7 @@ def embedded_prompt(data: bytes) -> dict[str, Any] | None:
         except (KeyError, TypeError, ValueError):
             return None
 
-    characters: list[dict[str, str]] = []
-    v4 = _as_dict(comment.get("v4_prompt"))
-    v4_negative = _as_dict(comment.get("v4_negative_prompt"))
-    captions = (v4.get("caption") or {}).get("char_captions") or []
-    negatives = (v4_negative.get("caption") or {}).get("char_captions") or []
-    for index, caption in enumerate(captions):
-        negative = negatives[index].get("char_caption", "") if index < len(negatives) else ""
-        centers = caption.get("centers") or []
-        center = centers[0] if centers and isinstance(centers[0], dict) else {}
-        characters.append(
-            {
-                "prompt": caption.get("char_caption", ""),
-                "negative": negative,
-                "x": center.get("x"),
-                "y": center.get("y"),
-            }
-        )
+    characters = characters_of(comment)
     seed, steps, scale = number("seed"), number("steps"), number("scale")
     width, height = number("width"), number("height")
     return {
@@ -589,26 +554,6 @@ def embedded_prompt(data: bytes) -> dict[str, Any] | None:
         },
         "software": metadata.get("Source") or metadata.get("Software"),
     }
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    """v4_prompt は JSON 文字列のことも、Python の repr の文字列のこともある(SDK の版による)。"""
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            loaded = json.loads(value)
-            return loaded if isinstance(loaded, dict) else {}
-        except json.JSONDecodeError:
-            import ast
-
-            try:
-                loaded = ast.literal_eval(value)
-                return loaded if isinstance(loaded, dict) else {}
-            except (ValueError, SyntaxError):
-                return {}
-    return {}
-
 
 
 def vocabulary() -> set[str]:

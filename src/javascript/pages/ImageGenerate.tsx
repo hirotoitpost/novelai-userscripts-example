@@ -8,6 +8,7 @@ import type { Character } from '../components/StoryCharacters'
 import {
   apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
   ImagePreset, ImagePresetSettings, CharacterSheetPrompt, isAuthExpired, notifyAuthExpired, CharacterPromptInput,
+  MetadataGenerationSettings, GENERATE_FROM_IMAGE_KEY,
 } from '../api'
 import './ImageGenerate.css'
 
@@ -95,6 +96,7 @@ function SliderField({ id, label, value, min, max, step, onChange, extra }: Slid
 }
 
 const UC_PRESETS = [
+  { value: 'none',        label: 'なし' },
   { value: 'light',       label: 'ライト' },
   { value: 'strong',      label: 'ストロング' },
   { value: 'human_focus', label: '人物重視' },
@@ -114,6 +116,8 @@ export default function ImageGenerate() {
   const [negPrompt, setNegPrompt] = useLocalStorage('nai_gen_neg_prompt', '',                     300)
   const [model,     setModel]     = useLocalStorage('nai_gen_model',     'nai-diffusion-4-5-full')
   const [size,      setSize]      = useLocalStorage('nai_gen_size',      'portrait')
+  // 選択肢に無いサイズ(画像やプリセットから読み込んだ 幅×高さ)。あるときは size より優先する
+  const [customSize, setCustomSize] = useLocalStorage<[number, number] | null>('nai_gen_custom_size', null)
   const [steps,     setSteps]     = useLocalStorage('nai_gen_steps',     AI_DEFAULTS.steps)
   const [scale,     setScale]     = useLocalStorage('nai_gen_scale',     AI_DEFAULTS.scale)
   const [ucPreset,  setUcPreset]  = useLocalStorage('nai_gen_uc_preset', 'light')
@@ -152,6 +156,12 @@ export default function ImageGenerate() {
   const [characters,  setCharacters]  = useState<Character[]>([])
   const [characterId, setCharacterId] = useState<number | null>(null)
   const [sheetMsg,    setSheetMsg]    = useState<{ text: string; isError: boolean } | null>(null)
+
+  // NovelAI で生成した画像から、埋め込まれた設定を読み込む
+  const fromImageInputRef             = useRef<HTMLInputElement>(null)
+  const [fromImageBusy, setFromImageBusy] = useState(false)
+  const [fromImageOver, setFromImageOver] = useState(false)
+  const [fromImageMsg,  setFromImageMsg]  = useState<{ text: string; notes: string[]; isError: boolean } | null>(null)
 
   // セッション中のみ保持
   const [seed,         setSeed]         = useState<string>('')
@@ -202,6 +212,79 @@ export default function ImageGenerate() {
       .then(setCharacters)
       .catch(() => {})  // 一覧が取れなくても生成はできるのでサイレント失敗
   }, [token])
+
+  /**
+   * 画像に埋め込まれていた設定を、このページの設定にする。プロンプトは NovelAI に送られた最終形
+   * (品質タグ・UC プリセットを足した後)なので、品質タグと UC プリセットは切る。読めなかった項目は今のまま。
+   */
+  const applyImageSettings = useCallback((s: MetadataGenerationSettings, name: string) => {
+    setPrompt(s.prompt)
+    setNegPrompt(s.negative_prompt)
+    setQuality(false)
+    setUcPreset('none')
+    setCharPrompts(s.characters.map(c => ({ prompt: c.prompt, negative: c.negative, x: c.x ?? 0.5, y: c.y ?? 0.5 })))
+    if (s.model && MODELS.some(m => m.value === s.model)) setModel(s.model)
+    if (s.size_preset) {
+      setSize(s.size_preset)
+      setCustomSize(null)
+    } else if (s.width && s.height) {
+      setCustomSize([s.width, s.height])
+    }
+    if (s.steps != null) setSteps(s.steps)
+    if (s.scale != null) setScale(s.scale)
+    if (s.sampler) setSampler(s.sampler)
+    if (s.noise_schedule) setNoiseSchedule(s.noise_schedule)
+    if (s.cfg_rescale != null) setCfgRescale(s.cfg_rescale)
+    setVarietyBoost(s.variety_boost)
+    setSeed(s.seed != null ? String(s.seed) : '')
+    setPresetId(null)
+    caretRef.current = null
+    setFromImageMsg({
+      text: `${name ? `「${name}」` : '画像'}の設定を読み込みました(${s.source || 'NovelAI'})。「生成」を押すと、この設定で生成します。`
+        + '品質タグと UC プリセットは、プロンプトに含まれているので切りました。',
+      notes: s.notes,
+      isError: false,
+    })
+    // useLocalStorage の setter は毎回同じ関数ではないので、依存には入れない
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** NovelAI で生成した画像を受け取り、埋め込まれた設定を読み込む。 */
+  const loadFromImage = useCallback((file: File) => {
+    if (!token) return
+    if (!file.type.match(/^image\//)) {
+      setFromImageMsg({ text: '画像ファイルを選んでください', notes: [], isError: true })
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = async (e) => {
+      setFromImageBusy(true)
+      try {
+        const settings = await apiFetch<MetadataGenerationSettings>(
+          token, '/api/metadata/generation', { image: e.target?.result as string },
+        )
+        applyImageSettings(settings, file.name)
+      } catch (err) {
+        setFromImageMsg({ text: err instanceof Error ? err.message : String(err), notes: [], isError: true })
+      } finally {
+        setFromImageBusy(false)
+      }
+    }
+    reader.readAsDataURL(file)
+  }, [token, applyImageSettings])
+
+  // メタデータ管理ページで「この設定で画像生成へ」を押して来たとき
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(GENERATE_FROM_IMAGE_KEY)
+      if (!raw) return
+      sessionStorage.removeItem(GENERATE_FROM_IMAGE_KEY)
+      const { settings, name } = JSON.parse(raw) as { settings: MetadataGenerationSettings; name: string }
+      applyImageSettings(settings, name)
+    } catch {
+      // 壊れた受け渡しは無視する
+    }
+  }, [applyImageSettings])
 
   /**
    * キャラシートのプロンプト・ネガティブプロンプト・基準シードで入力欄を置き換える。
@@ -282,8 +365,9 @@ export default function ImageGenerate() {
     const matchedSize = SIZES.find(z => z.width === s.width && z.height === s.height)
     if (matchedSize) {
       setSize(matchedSize.value)
+      setCustomSize(null)
     } else {
-      notes.push(`サイズ ${s.width}×${s.height} は選択肢に無いため変更していません`)
+      setCustomSize([s.width, s.height])
     }
     setSteps(s.steps)
     setScale(s.scale)
@@ -307,7 +391,8 @@ export default function ImageGenerate() {
       setPresetMsg({ text: 'プリセットに保存できるのは V4.5 / V5 系のモデルだけです', isError: true })
       return
     }
-    const dims = SIZES.find(z => z.value === size) ?? SIZES[0]
+    const preset = SIZES.find(z => z.value === size) ?? SIZES[0]
+    const dims = customSize ? { width: customSize[0], height: customSize[1] } : preset
     // 同名プリセットを上書きするときは、このページに無い項目(ネガティブプロンプト・複雑さ)を残す。
     const existing = presets.find(p => p.name === name)
     const settings: ImagePresetSettings = {
@@ -365,7 +450,7 @@ export default function ImageGenerate() {
             prompt:          prompt.trim(),
             negative_prompt: negPrompt.trim() || undefined,
             model,
-            size,
+            size: customSize ?? size,
             steps,
             scale,
             seed:      seed ? Number(seed) : undefined,
@@ -388,7 +473,7 @@ export default function ImageGenerate() {
       }
     }, 500)
     return () => clearTimeout(timer)
-  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset,
+  }, [token, prompt, negPrompt, model, size, customSize, steps, scale, seed, quality, ucPreset,
       sampler, noiseSchedule, cfgRescale, varietyBoost])
 
   const generate = useCallback(async () => {
@@ -407,7 +492,7 @@ export default function ImageGenerate() {
       prompt:          prompt.trim(),
       negative_prompt: negPrompt.trim() || undefined,
       model,
-      size,
+      size: customSize ?? size,
       steps,
       scale,
       seed:      seed ? Number(seed) : undefined,
@@ -493,8 +578,8 @@ export default function ImageGenerate() {
       setLoading(false)
       setPreview(null)
     }
-  }, [token, prompt, negPrompt, model, size, steps, scale, seed, quality, ucPreset,
-      sampler, noiseSchedule, cfgRescale, varietyBoost,
+  }, [token, prompt, negPrompt, model, size, customSize, steps, scale, seed, quality, ucPreset,
+      sampler, noiseSchedule, cfgRescale, varietyBoost, charPrompts,
       i2iEnabled, i2iImage, i2iStrength, i2iNoise])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -671,9 +756,14 @@ export default function ImageGenerate() {
               <select
                 id="ig-size"
                 className="ig-select"
-                value={size}
-                onChange={e => setSize(e.target.value)}
+                value={customSize ? 'custom' : size}
+                onChange={e => {
+                  if (e.target.value === 'custom') return
+                  setSize(e.target.value)
+                  setCustomSize(null)
+                }}
               >
+                {customSize && <option value="custom">読み込んだサイズ ({customSize[0]}×{customSize[1]})</option>}
                 {SIZES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </div>
@@ -752,6 +842,54 @@ export default function ImageGenerate() {
               <p className={presetMsg.isError ? 'ig-preset-msg ig-preset-msg--error' : 'ig-preset-msg'}>
                 {presetMsg.text}
               </p>
+            )}
+          </section>
+
+          {/* 画像から設定を読み込む */}
+          <section className="ig-section ig-settings">
+            <span className="ig-label">画像から設定を読み込む</span>
+            <div
+              className={fromImageOver ? 'ig-from-image ig-from-image--over' : 'ig-from-image'}
+              role="button"
+              tabIndex={0}
+              aria-label="NovelAI で生成した画像をドロップまたはクリックして選択"
+              onClick={() => fromImageInputRef.current?.click()}
+              onKeyDown={e => e.key === 'Enter' && fromImageInputRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); setFromImageOver(true) }}
+              onDragLeave={() => setFromImageOver(false)}
+              onDrop={e => {
+                e.preventDefault()
+                setFromImageOver(false)
+                const file = e.dataTransfer.files[0]
+                if (file) loadFromImage(file)
+              }}
+            >
+              {fromImageBusy
+                ? '読み込み中…'
+                : 'NovelAI で生成した画像(PNG / WebP)をドロップ、またはクリックして選択'}
+            </div>
+            <input
+              ref={fromImageInputRef}
+              type="file"
+              accept="image/png,image/webp"
+              hidden
+              onChange={e => {
+                const file = e.target.files?.[0]
+                if (file) loadFromImage(file)
+                e.target.value = ''
+              }}
+            />
+            <p className="ig-preset-msg">
+              画像に埋め込まれたプロンプト・キャラごとのプロンプト・モデル・サイズ・ステップ数・サンプラー・シード値などを、
+              このページの設定に入れます(今の設定は置き換わります)。
+            </p>
+            {fromImageMsg && (
+              <div className={fromImageMsg.isError ? 'ig-preset-msg ig-preset-msg--error' : 'ig-preset-msg ig-from-image-msg'} role="status">
+                {fromImageMsg.text}
+                {fromImageMsg.notes.length > 0 && (
+                  <ul>{fromImageMsg.notes.map(n => <li key={n}>{n}</li>)}</ul>
+                )}
+              </div>
             )}
           </section>
 

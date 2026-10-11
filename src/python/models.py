@@ -364,6 +364,40 @@ class MetadataExtractResponse(BaseModel):
     metadata: dict[str, Any]
 
 
+class MetadataGenerationCharacter(BaseModel):
+    prompt: str
+    negative: str = ""
+    x: Optional[float] = None
+    y: Optional[float] = None
+
+
+class MetadataGenerationResponse(BaseModel):
+    """
+    画像に埋め込まれた NovelAI の設定を、画像生成ページの設定にしたもの。読めなかった・このページで選べない
+    項目は None(その項目は今の設定のままにする)。prompt / negative_prompt は NovelAI に送られた最終形なので、
+    読み込んだら品質タグと UC プリセットは切る。
+    """
+
+    prompt: str
+    negative_prompt: str = ""
+    characters: list[MetadataGenerationCharacter] = Field(default_factory=list)
+    model: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    # width × height がサイズのプリセットと同じなら、その名前
+    size_preset: Optional[str] = None
+    steps: Optional[int] = None
+    scale: Optional[float] = None
+    sampler: Optional[str] = None
+    noise_schedule: Optional[str] = None
+    cfg_rescale: Optional[float] = None
+    variety_boost: bool = False
+    seed: Optional[int] = None
+    source: str = ""
+    # 再現できない設定や、収めた値の説明(画面に出す)
+    notes: list[str] = Field(default_factory=list)
+
+
 class MetadataEraseRequest(BaseModel):
     image: str
     target: Literal["alpha", "png_info", "both"] = "both"

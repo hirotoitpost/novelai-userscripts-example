@@ -30,6 +30,7 @@ from novelai.types import (
 )
 
 from ..client import get_client
+from ..sdk_compat import allow_uc_preset_none
 from ..db import (
     delete_image_preset,
     get_connection,
@@ -49,6 +50,8 @@ from ..models import (
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
 router = APIRouter(prefix="/api/image", tags=["image"])
+# UC プリセット「なし」を SDK が API へ送れるようにする(sdk_compat.py)
+allow_uc_preset_none()
 
 _HISTORY_DIR = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "history"
 
