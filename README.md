@@ -223,7 +223,8 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ├── docs/                        # Additional documentation
 │   ├── README_jp.md             # Japanese README
 │   ├── architecture.md          # System architecture & API reference
-│   └── content_guard_jp.md      # Content guards: coverage, DB-backed rules and the edit API (Japanese)
+│   ├── content_guard_jp.md      # Content guards: coverage, DB-backed rules and the edit API (Japanese)
+│   └── manga_import_jp.md       # Manga import: similar-manga and rebuild modes, what is read and kept (Japanese)
 ├── index.html                   # Vite entry point
 ├── vite.config.ts               # Vite config (API proxy to :8000)
 ├── pyproject.toml               # Python dependencies & tools

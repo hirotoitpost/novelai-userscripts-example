@@ -402,6 +402,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_scene_characters(conn)
     _migrate_characters(conn)
     _migrate_stamp_sources(conn)
+    _migrate_manga_imports(conn)
 
 
 _STORIES_EXTRA_COLUMNS = {
@@ -2262,10 +2263,26 @@ def list_panel_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 # ---- 漫画の取り込み(構成の参考) ----
 
 
-def create_manga_import(conn: sqlite3.Connection, title: str, page_count: int) -> dict[str, Any]:
+# 取り込みの使い方。structure: 構成だけ(この列ができる前の取り込み)、similar: 似た漫画を作る、
+# rebuild: 自分の作品を作り直す(セリフの文面も持つ)
+_MANGA_IMPORTS_EXTRA_COLUMNS = {"purpose": "TEXT NOT NULL DEFAULT 'structure'"}
+
+
+def _migrate_manga_imports(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(manga_imports)")}
+    for column, column_type in _MANGA_IMPORTS_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE manga_imports ADD COLUMN {column} {column_type}")
+    conn.commit()
+
+
+def create_manga_import(
+    conn: sqlite3.Connection, title: str, page_count: int, purpose: str = "structure"
+) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
-        "INSERT INTO manga_imports (title, page_count, created_at) VALUES (?, ?, ?)", (title, page_count, now)
+        "INSERT INTO manga_imports (title, page_count, purpose, created_at) VALUES (?, ?, ?, ?)",
+        (title, page_count, purpose, now),
     )
     conn.commit()
     return get_manga_import(conn, int(cur.lastrowid or 0)) or {}
@@ -2286,8 +2303,15 @@ def list_manga_imports(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def update_manga_import(
-    conn: sqlite3.Connection, import_id: int, *, status: str | None = None, analysis: Any = None
+    conn: sqlite3.Connection,
+    import_id: int,
+    *,
+    status: str | None = None,
+    analysis: Any = None,
+    purpose: str | None = None,
 ) -> None:
+    if purpose is not None:
+        conn.execute("UPDATE manga_imports SET purpose = ? WHERE id = ?", (purpose, import_id))
     if status is not None:
         conn.execute("UPDATE manga_imports SET status = ? WHERE id = ?", (status, import_id))
     if analysis is not None:
