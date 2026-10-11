@@ -99,10 +99,20 @@ JSONだけを返してください(前置きや```は不要):
 - 登場人物の性格・口調・呼び方を守る。登場人物は指定された人だけを中心にする{content_rule}"""
 
 
-# 取り込んだ作品の構成を渡すときの但し書き。市販の作品も入るので、内容は使わせない
+# 取り込んだ作品の構成を渡すときの但し書き。市販の作品も入るので、筋書き・設定・セリフの文面は使わせない
 _STRUCTURE_NOTE = (
-    "参考にするコマ運び(別の作品から読み取った、各コマの構図・人数・セリフの量・役割だけ。"
-    "このテンポや山場・オチの位置に合わせるが、話の内容・設定・セリフは新しく考える):"
+    "参考にするコマ運び(別の作品から読み取った、各コマの構図・人数・セリフの量と型・場面・所作・役割。"
+    "このテンポや山場・オチの位置に合わせ、「場面」と「所作」のあるコマはその場面・所作が自然に出てくる話にする。"
+    "話の筋・設定・セリフの文面は新しく考える):"
+)
+# 1話分の台本で、構成に合わせるときの決まり
+_STRUCTURE_RULES = (
+    "各コマはこの構成に合わせる:\n"
+    "- 構図は prompt_tags にも close-up / cowboy shot / full body などで入れる\n"
+    "- 「場面」のあるコマは、その場面を再現する(場面のタグを prompt_tags に入れる)\n"
+    "- 「所作」のあるコマは、その表情・動作を再現する(所作のタグを、当てはまる人物の actions に入れる)\n"
+    "- セリフの数・長さ・調子は構成に合わせる(「丁寧」は丁寧な口調)。文面は新しく考える\n"
+    "- 「セリフなし」のコマは lines を空にして、絵だけで見せる"
 )
 
 
@@ -172,7 +182,7 @@ async def generate_outlines(
 _EPISODE_SYSTEM = """あなたは漫画の脚本家です。渡された1話分の内容を、ちょうど{count}コマの台本にします。JSONだけを返してください(前置きや```は不要):
 {"panels":[{"characters":["登場する人物名"],"actions":{"人物名":"その人の表情・動作の英語タグ"},"lines":[{"speaker":"人物名","kind":"speech","text":"セリフ"}],"narration":"","sfx":["効果音"],"prompt_tags":"英語のdanbooruタグ"}]}
 - panels はちょうど{count}つ。{arc}
-- 1コマのセリフは0〜2個、1つ20文字以内。説明ではなく会話で見せる
+- {lines_rule}
 - speaker は登場人物名のどれか。kind は声に出すなら speech、心の声なら thought
 - narration は場所や時間の説明が必要なときだけ(15文字以内、不要なら空文字)
 - sfx はカタカナの擬音・擬態語を0〜1個
@@ -204,19 +214,29 @@ def episode_prompts(
             user.append("直前の話のセリフ: " + " / ".join(recent))
     user.append(f"この話(第{episode_index + 1}話): {episodes[episode_index]}")
     if structure:
-        user.append(
-            "各コマはこの構成に合わせる(構図は prompt_tags にも close-up / cowboy shot / full body などで入れる。"
-            "セリフの量も合わせる):"
-        )
+        user.append(_STRUCTURE_RULES)
         user.extend(f"{i + 1}コマ目: {line}" for i, line in enumerate(structure))
-    return episode_system(len(structure) if structure else PANELS_PER_EPISODE), "\n".join(user)
+    return episode_system(len(structure) if structure else PANELS_PER_EPISODE, bool(structure)), "\n".join(user)
 
 
-def episode_system(count: int) -> str:
-    """1話分の台本の指示。コマ数は既定の4、取り込んだ作品の構成を使うときはそのページのコマ数。"""
+def episode_system(count: int, structured: bool = False) -> str:
+    """
+    1話分の台本の指示。コマ数は既定の4、取り込んだ作品の構成を使うときはそのページのコマ数。
+    構成を使うとき(structured)は、セリフの数と長さを構成に合わせる。
+    """
+    lines_rule = (
+        "1コマのセリフは構成に書いてある数(多くても4個)、長さも構成に合わせる(1つ40文字以内)。説明ではなく会話で見せる"
+        if structured
+        else "1コマのセリフは0〜2個、1つ20文字以内。説明ではなく会話で見せる"
+    )
     arc = "起承転結で、4コマ目にオチ" if count == PANELS_PER_EPISODE else "話に山場をつくり、最後のコマにオチ"
     # JSON の例の { } とぶつからないよう、format ではなく置き換えで埋める
-    return _EPISODE_SYSTEM.replace("{count}", str(count)).replace("{arc}", arc).replace("{content_rule}", _content_rule())
+    return (
+        _EPISODE_SYSTEM.replace("{count}", str(count))
+        .replace("{arc}", arc)
+        .replace("{lines_rule}", lines_rule)
+        .replace("{content_rule}", _content_rule())
+    )
 
 
 def _clean_tags(tags: str) -> str:
