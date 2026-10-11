@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import ChunkPicker from '../components/ChunkPicker'
+import TagTextarea from '../components/TagTextarea'
 import { naiImageFilename } from '../downloadFilename'
 import type { Character } from '../components/StoryCharacters'
 import {
@@ -638,12 +639,18 @@ export default function ImageGenerate() {
                 🤖 強化
               </button>
             </div>
-            <textarea
+            <TagTextarea
               ref={promptRef}
               id="ig-prompt"
               className="ig-textarea ig-textarea--prompt"
               value={prompt}
-              onChange={e => { setPrompt(e.target.value); rememberCaret('prompt', e.target) }}
+              token={token}
+              model={model}
+              onValueChange={(v, caret) => {
+                setPrompt(v)
+                caretRef.current = { field: 'prompt', start: caret, end: caret }
+                if (insertTarget !== 'prompt') setInsertTarget('prompt')
+              }}
               onSelect={e => rememberCaret('prompt', e.currentTarget)}
               onKeyDown={handleKeyDown}
               placeholder="1girl, masterpiece, best quality, ..."
@@ -674,12 +681,18 @@ export default function ImageGenerate() {
           {/* Negative prompt */}
           <section className="ig-section">
             <label className="ig-label" htmlFor="ig-neg-prompt">ネガティブプロンプト</label>
-            <textarea
+            <TagTextarea
               ref={negPromptRef}
               id="ig-neg-prompt"
               className="ig-textarea ig-textarea--neg"
               value={negPrompt}
-              onChange={e => { setNegPrompt(e.target.value); rememberCaret('neg', e.target) }}
+              token={token}
+              model={model}
+              onValueChange={(v, caret) => {
+                setNegPrompt(v)
+                caretRef.current = { field: 'neg', start: caret, end: caret }
+                if (insertTarget !== 'neg') setInsertTarget('neg')
+              }}
               onSelect={e => rememberCaret('neg', e.currentTarget)}
               placeholder="lowres, bad anatomy, ..."
               rows={3}
@@ -728,12 +741,14 @@ export default function ImageGenerate() {
                   </label>
                   <button type="button" onClick={() => setCharPrompts(charPrompts.filter((_, j) => j !== i))} aria-label={`キャラ${i + 1}を外す`}>×</button>
                 </div>
-                <textarea
+                <TagTextarea
                   className="ig-textarea"
                   rows={2}
                   value={c.prompt}
+                  token={token}
+                  model={model}
                   placeholder="1girl, blonde hair, glasses, white shirt"
-                  onChange={e => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, prompt: e.target.value } : p)))}
+                  onValueChange={v => setCharPrompts(charPrompts.map((p, j) => (j === i ? { ...p, prompt: v } : p)))}
                 />
                 <input
                   className="ig-char-neg"

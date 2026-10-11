@@ -273,6 +273,54 @@ def _http_status(exc: Exception) -> int:
     return 500
 
 
+# タグの候補は同じ問い合わせが続くので、少しだけ覚えておく(NovelAI への問い合わせを減らす)
+_SUGGEST_CACHE: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+_SUGGEST_CACHE_MAX = 500
+_SUGGEST_MAX_ITEMS = 12
+
+
+def _suggest_model(model: str) -> str:
+    """タグの候補を引けるモデル名。知らないモデルなら V4.5 Full。"""
+    from typing import get_args
+
+    from novelai.types import SuggestTagsParams
+
+    allowed = get_args(SuggestTagsParams.model_fields["model"].annotation)
+    return model if model in allowed else "nai-diffusion-4-5-full"
+
+
+@router.get("/suggest-tags")
+async def suggest_tags(q: str, client: ClientDep, model: str = "nai-diffusion-4-5-full") -> dict[str, Any]:
+    """
+    打っている途中のタグから、NovelAI のタグの候補を返す(プロンプト欄の補完用)。英数字だけなら英語のタグの候補、
+    日本語が入っていれば、日本語のタグ名から英語のタグを引く。items の tag がプロンプトに入れる英語のタグ、
+    label は日本語で引いたときの日本語のタグ名、count は使われている多さの目安。
+    """
+    from novelai.types import SuggestTagsParams
+
+    query = q.strip()
+    if not query or len(query) > 60:
+        return {"lang": "en", "items": []}
+    lang = "en" if query.isascii() else "jp"
+    model = _suggest_model(model)
+    key = (lang, model, query.lower())
+    if key not in _SUGGEST_CACHE:
+        params = SuggestTagsParams(prompt=query, model=model)  # type: ignore[arg-type]
+        try:
+            if lang == "jp":
+                found = await client.image.suggest_tags_jp(params)
+                items = [{"tag": s.en_tag, "label": s.jp_tag, "count": s.power} for s in found]
+            else:
+                found = await client.image.suggest_tags(params)
+                items = [{"tag": s.tag, "label": None, "count": s.count} for s in found]
+        except Exception as exc:
+            raise HTTPException(status_code=_http_status(exc), detail=str(exc))
+        if len(_SUGGEST_CACHE) >= _SUGGEST_CACHE_MAX:
+            _SUGGEST_CACHE.clear()
+        _SUGGEST_CACHE[key] = items[:_SUGGEST_MAX_ITEMS]
+    return {"lang": lang, "items": _SUGGEST_CACHE[key]}
+
+
 @router.post("/generate", response_model=GenerateImageResponse)
 async def generate_image(
     req: GenerateImageRequest,
