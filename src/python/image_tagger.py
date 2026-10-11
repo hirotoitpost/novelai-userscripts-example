@@ -291,8 +291,8 @@ _SCENE_ONLY = {"solo", "multiple girls", "multiple boys", "male focus", "female 
 
 # 人物のタグにする語(容姿・服・小物・表情・しぐさ)。切り抜きには近くの物や背景も写るので(cup・brick wall など)、
 # これらの語を含むタグだけを人物に付け、ほかは全体に残す
-_PERSON_WORDS = {
-    # 髪・顔・体
+# 髪・顔・体(その人の容姿)
+BODY_WORDS = {
     "hair",
     "bangs",
     "sidelocks",
@@ -317,7 +317,9 @@ _PERSON_WORDS = {
     "facial",
     "breasts",
     "muscular",
-    # 服・小物
+}
+# 服・小物(その人の服装)
+CLOTHES_WORDS = {
     "shirt",
     "jacket",
     "coat",
@@ -387,7 +389,9 @@ _PERSON_WORDS = {
     "cape",
     "cloak",
     "armor",
-    # 表情・しぐさ
+}
+# 表情・しぐさ(場面ごとに変わるもの)
+POSE_WORDS = {
     "smile",
     "grin",
     "blush",
@@ -423,6 +427,7 @@ _PERSON_WORDS = {
     "leaning",
     "pocket",
 }
+_PERSON_WORDS = BODY_WORDS | CLOTHES_WORDS | POSE_WORDS
 
 
 def _is_person_tag(tag: str) -> bool:

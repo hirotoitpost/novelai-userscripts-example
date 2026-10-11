@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import ChunkPicker from '../components/ChunkPicker'
 import TagTextarea from '../components/TagTextarea'
+import SheetFromPromptDialog, { SheetSource } from '../components/SheetFromPromptDialog'
 import { naiImageFilename } from '../downloadFilename'
 import type { Character } from '../components/StoryCharacters'
 import {
@@ -170,6 +171,8 @@ export default function ImageGenerate() {
   const [characters,  setCharacters]  = useState<Character[]>([])
   const [characterId, setCharacterId] = useState<number | null>(null)
   const [sheetMsg,    setSheetMsg]    = useState<{ text: string; isError: boolean } | null>(null)
+  // 今の入力値をキャラシートに反映するダイアログ(開いているときだけ、反映する元の入力を持つ)
+  const [sheetSource, setSheetSource] = useState<SheetSource | null>(null)
 
   // NovelAI で生成した画像から、埋め込まれた設定を読み込む
   const fromImageInputRef             = useRef<HTMLInputElement>(null)
@@ -1017,6 +1020,20 @@ export default function ImageGenerate() {
               >
                 読み込む
               </button>
+              <button
+                type="button"
+                className="ig-preset-btn"
+                onClick={() => setSheetSource({
+                  prompt,
+                  negative: negPrompt,
+                  seed: seed ? Number(seed) : null,
+                  characters: charPrompts.map(c => ({ prompt: c.prompt, negative: c.negative })),
+                })}
+                disabled={!prompt.trim() && !charPrompts.some(c => c.prompt.trim())}
+                title="今のプロンプト・ネガティブプロンプト・シード値を、キャラシートに反映する(新しく追加、または既存のキャラに上書き)"
+              >
+                キャラシートに反映
+              </button>
             </div>
             {sheetMsg && (
               <p className={sheetMsg.isError ? 'ig-preset-msg ig-preset-msg--error' : 'ig-preset-msg'}>
@@ -1331,6 +1348,24 @@ export default function ImageGenerate() {
           )}
         </main>
       </div>
+      {sheetSource && token && (
+        <SheetFromPromptDialog
+          source={sheetSource}
+          token={token}
+          onClose={() => setSheetSource(null)}
+          onSaved={(character, created) => {
+            setSheetSource(null)
+            setCharacterId(character.id)
+            setSheetMsg({
+              text: created
+                ? `「${character.name}」をキャラシートに追加しました`
+                : `「${character.name}」のキャラシートに上書きしました`,
+              isError: false,
+            })
+            apiFetch<Character[]>(token, '/api/story/characters').then(setCharacters).catch(() => {})
+          }}
+        />
+      )}
     </div>
   )
 }

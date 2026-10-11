@@ -129,6 +129,61 @@ def blocked_tags(tags: str, extra: list[str] | None = None, *, include_core: boo
     return sorted(found)
 
 
+# 画風・品質のタグ(キャラシートの「画風」に入れる)
+_STYLE_PHRASES = {
+    "masterpiece", "best quality", "very aesthetic", "amazing quality", "high quality", "absurdres", "highres",
+    "no text", "official art", "anime coloring", "anime screencap", "game cg", "illustration", "realistic",
+    "photorealistic", "3d", "pixel art", "chibi", "flat color", "sketch", "lineart", "monochrome", "greyscale",
+    "watercolor (medium)", "traditional media", "screentone", "halftone", "sepia", "limited palette", "spot color",
+}  # fmt: skip
+_STYLE_RE = re.compile(r"(^artist:|\bstyle$|^year \d{4}$|\bcomplexity$|\bquality$)")
+# 人物を表す語(キャラごとのプロンプトの先頭に書く girl / boy など)と、人数のタグ
+_PERSON_NOUNS = {"girl", "boy", "woman", "man", "female", "male", "other"}
+_COUNT_RE = re.compile(r"^\d\+?(girls?|boys?|others?)$")
+# 強調の記号と重み(1.2::tag::、{tag}、[tag]、-tag)を、見分けるときだけ外す
+_WEIGHT_RE = re.compile(r"^-?\d+(\.\d+)?::|::$")
+
+
+def _plain(tag: str) -> str:
+    """見分けるための形(強調の記号・重みを外し、小文字に、_ を空白に)。"""
+    text = tag.strip().lower().replace("_", " ")
+    previous = None
+    while previous != text:
+        previous = text
+        text = _WEIGHT_RE.sub("", text).strip().strip("{}[]").strip()
+    return text
+
+
+def split_prompt(prompt: str) -> dict[str, str]:
+    """
+    プロンプトを、キャラシートの項目に分ける: appearance(容姿: 人数・髪・目・体)、outfit(服装: 服・小物)、
+    style(画風: 品質・画風のタグ)、other(それ以外: 表情・ポーズ・場所など。場面ごとに変わるので、キャラシート
+    には入れない)。タグの文字はそのまま残す(強調の記号や重みも)。語の一覧に無いタグは other になるので、
+    画面で確かめて直してもらう前提。
+    """
+    from .image_tagger import BODY_WORDS, CLOTHES_WORDS, STYLE_TAGS
+
+    parts: dict[str, list[str]] = {"appearance": [], "outfit": [], "style": [], "other": []}
+    for tag in split_tags(prompt.replace("\n", ",")):
+        plain = _plain(tag)
+        words = set(plain.replace("(", " ").replace(")", " ").split())
+        if not plain:
+            continue
+        if plain in _STYLE_PHRASES or plain in STYLE_TAGS or _STYLE_RE.search(plain):
+            key = "style"
+        elif _COUNT_RE.match(plain) or plain in _PERSON_NOUNS:
+            key = "appearance"
+        elif words & CLOTHES_WORDS:
+            # 「hair ribbon」「hair bow」のように髪の語が入っていても、身に着けるものは服装
+            key = "outfit"
+        elif words & BODY_WORDS:
+            key = "appearance"
+        else:
+            key = "other"
+        parts[key].append(tag)
+    return {key: join_tags(", ".join(tags)) for key, tags in parts.items()}
+
+
 def character_prompt_tags(character: dict[str, Any]) -> str:
     """挿絵/コマ生成で characterPrompts に渡すタグ。容姿+普段の服装(画風は混ぜない)。"""
     return join_tags(character.get("appearance_tags"), character.get("outfit_tags"))

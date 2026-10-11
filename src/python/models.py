@@ -728,6 +728,26 @@ class CharacterSheetRequest(BaseModel):
     is_adult: Optional[bool] = Field(None, description="成人キャラ。未成年を示すタグがあると付けられない")
 
 
+class CharacterSplitRequest(BaseModel):
+    prompt: str = Field("", max_length=8000)
+
+
+class CharacterSplitResponse(BaseModel):
+    """プロンプトをキャラシートの項目に分けたもの。other はキャラシートに入れないタグ(表情・ポーズ・場所など)。"""
+
+    appearance: str
+    outfit: str
+    style: str
+    other: str
+
+
+class CharacterNewRequest(CharacterSheetRequest):
+    """キャラを新しく作る(同じ名前があれば作らない)。キャラシートの項目も一緒に入れる。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    notes: Optional[str] = None
+
+
 class CharacterSaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     appearance_tags: str = ""
