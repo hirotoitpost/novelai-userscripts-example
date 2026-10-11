@@ -8,6 +8,9 @@ import {
   formatDate,
   getJson,
   API_ORIGIN,
+  askPublicationTitle,
+  publish,
+  Publication,
   Rating,
   readErrorDetail,
   RATINGS,
@@ -143,6 +146,11 @@ export default function Bookshelf() {
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // 出版する本を選ぶ(選んだ本の漫画のページから生成情報を取り除いて、出版物として別に保存する)
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [publishing, setPublishing] = useState(false)
+  const [published, setPublished] = useState<Publication | null>(null)
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300)
@@ -232,6 +240,38 @@ export default function Bookshelf() {
     }
   }
 
+  function toggleSelected(id: number) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function exitSelecting() {
+    setSelecting(false)
+    setSelected(new Set())
+  }
+
+  async function publishSelected() {
+    // 本棚に並んでいる順で出版物に入れる
+    const chosen = books.filter(b => selected.has(b.id))
+    const title = askPublicationTitle(chosen.length === 1 ? chosen[0].title : `本 ${chosen.length}冊`)
+    if (!title) return
+    setPublishing(true)
+    setError(null)
+    setPublished(null)
+    try {
+      setPublished(await publish(title, [], chosen.map(b => b.id)))
+      exitSelecting()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   function openBook(id: number) {
     // URL に残すので、ブラウザの「戻る」(スマホの戻る操作)で本棚に戻れる
     setSearchParams({ book: String(id) }, { state: { fromShelf: true } })
@@ -261,8 +301,12 @@ export default function Bookshelf() {
     // 成人向けだけを表示しているときは、自分で選んで見ているのでぼかさない
     const blurred = book.adult && blurAdult && rating !== 'adult'
     return (
-      <div key={book.id} className={`rack-slot${blurred ? ' is-blurred' : ''}`}>
-        <button type="button" className="rack-cover" onClick={() => openBook(book.id)} aria-label={`${book.title}を読む`}>
+      <div key={book.id} className={`rack-slot${blurred ? ' is-blurred' : ''}${selecting && selected.has(book.id) ? ' is-selected' : ''}`}>
+        <button type="button" className="rack-cover"
+          onClick={() => (selecting ? toggleSelected(book.id) : openBook(book.id))}
+          aria-label={selecting ? `${book.title}を選ぶ` : `${book.title}を読む`}
+          aria-pressed={selecting ? selected.has(book.id) : undefined}>
+          {selecting && <span className="rack-check" aria-hidden>{selected.has(book.id) ? '✓' : ''}</span>}
           {book.cover_path ? (
             <img src={thumbUrl(book.cover_path, 480)} loading="lazy" alt="" />
           ) : (
@@ -301,6 +345,11 @@ export default function Bookshelf() {
         <button type="button" className="shelf-back" onClick={() => navigate('/')}>← ホーム</button>
         <h1>本棚</h1>
         <span className="shelf-count">{books.length} 冊</span>
+        <button type="button" className={`shelf-back shelf-select-toggle${selecting ? ' is-active' : ''}`}
+          onClick={() => (selecting ? exitSelecting() : setSelecting(true))}>
+          {selecting ? '完了' : '選択'}
+        </button>
+        <button type="button" className="shelf-back" onClick={() => navigate('/publications')}>出版物</button>
       </header>
 
       <div className="shelf-toolbar">
@@ -365,6 +414,27 @@ export default function Bookshelf() {
       </div>
 
       {error && <div className="shelf-error">{error}</div>}
+      {published && (
+        <div className="shelf-published" role="status">
+          <span>出版物「{published.title}」を作りました({published.file_count}ファイル。生成情報は取り除いてあります)。</span>
+          <button type="button" onClick={() => void downloadFile(`/api/publications/${published.id}/download`, `${published.title}.zip`)
+            .catch(e => setError(e instanceof Error ? e.message : String(e)))}>ZIP をダウンロード</button>
+          <button type="button" onClick={() => navigate('/publications')}>出版物の一覧へ</button>
+          <button type="button" onClick={() => setPublished(null)} aria-label="閉じる">×</button>
+        </div>
+      )}
+      {selecting && (
+        <div className="shelf-selectbar">
+          <span>{selected.size} 冊選択</span>
+          <button type="button" onClick={() => setSelected(new Set(books.map(b => b.id)))}>表示中をすべて選択</button>
+          <button type="button" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>解除</button>
+          <button type="button" className="shelf-selectbar-primary" onClick={() => void publishSelected()}
+            disabled={selected.size === 0 || publishing}
+            title="選んだ本の漫画のページから NovelAI の生成情報(メタデータ)を取り除き、出版物として別に保存して ZIP にまとめます">
+            {publishing ? '出版中…' : '出版する'}
+          </button>
+        </div>
+      )}
       {!loading && books.length === 0 && !error && (
         <p className="shelf-empty">{filtered ? '条件に合う本がありません。' : '本がまだありません。'}</p>
       )}

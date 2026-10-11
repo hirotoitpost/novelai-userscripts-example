@@ -7,6 +7,9 @@ import {
   fileUrl,
   formatDate,
   getJson,
+  askPublicationTitle,
+  publish,
+  Publication,
   Rating,
   RATINGS,
   setAdult,
@@ -100,6 +103,9 @@ export default function Gallery() {
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [downloading, setDownloading] = useState(false)
+  // 出版(選んだ画像から生成情報を取り除いて、出版物として別に保存する)
+  const [publishing, setPublishing] = useState(false)
+  const [published, setPublished] = useState<Publication | null>(null)
   const [copied, setCopied] = useState(false)
   // ぼかしを外して見た画像(このページを開いている間だけ)
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
@@ -324,6 +330,24 @@ export default function Gallery() {
     }
   }
 
+  async function publishSelected() {
+    // 表示している並びの順で出版物に入れる
+    const keys = items.filter(i => selected.has(i.key)).map(i => i.key)
+    const title = askPublicationTitle(`画像 ${keys.length}枚`)
+    if (!title) return
+    setPublishing(true)
+    setError(null)
+    setPublished(null)
+    try {
+      setPublished(await publish(title, keys, []))
+      exitSelecting()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   async function downloadOne(item: GalleryImage) {
     try {
       await downloadFile(
@@ -437,6 +461,15 @@ export default function Gallery() {
       </div>
 
       {error && <div className="gallery-error">{error}</div>}
+      {published && (
+        <div className="gallery-published" role="status">
+          <span>出版物「{published.title}」を作りました({published.file_count}ファイル。生成情報は取り除いてあります)。</span>
+          <button type="button" onClick={() => void downloadFile(`/api/publications/${published.id}/download`, `${published.title}.zip`)
+            .catch(e => setError(e instanceof Error ? e.message : String(e)))}>ZIP をダウンロード</button>
+          <button type="button" onClick={() => navigate('/publications')}>出版物の一覧へ</button>
+          <button type="button" onClick={() => setPublished(null)} aria-label="閉じる">×</button>
+        </div>
+      )}
 
       {!loading && items.length === 0 && !error && (
         <p className="gallery-empty">{filtered ? '条件に合う画像がありません。' : '画像がまだありません。'}</p>
@@ -494,6 +527,15 @@ export default function Gallery() {
             disabled={selected.size === 0 || downloading}
           >
             {downloading ? '作成中…' : 'zipでダウンロード'}
+          </button>
+          <button
+            type="button"
+            className="gallery-primary"
+            onClick={() => void publishSelected()}
+            disabled={selected.size === 0 || publishing}
+            title="NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として別に保存して ZIP にまとめます"
+          >
+            {publishing ? '出版中…' : '出版する'}
           </button>
         </div>
       )}

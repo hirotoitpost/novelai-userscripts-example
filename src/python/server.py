@@ -24,6 +24,7 @@ from .routes.library import router as library_router
 from .routes.lora_dataset import router as lora_dataset_router
 from .routes.metadata import router as metadata_router
 from .routes.ocr import router as ocr_router
+from .routes.publish import router as publish_router
 from .routes.push import router as push_router
 from .routes.series import router as series_router
 from .routes.story import router as story_router
@@ -74,6 +75,7 @@ app.include_router(library_router)
 app.include_router(lora_dataset_router)
 app.include_router(metadata_router)
 app.include_router(ocr_router)
+app.include_router(publish_router)
 app.include_router(push_router)
 app.include_router(series_router)
 app.include_router(works_router)

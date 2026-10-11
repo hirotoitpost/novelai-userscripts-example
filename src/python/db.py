@@ -225,6 +225,22 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 出版物(publish.py): 選んだ画像・本から NovelAI の生成情報を取り除いて別に保存し、ZIP にまとめたもの。
+    # dir / zip_path はリポジトリのルートからのパス。items は入れたもの(JSON)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS publications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            dir TEXT,
+            zip_path TEXT,
+            bytes INTEGER NOT NULL DEFAULT 0,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            items TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     # アプリの既定値のうち、開発管理者のページで変えたもの(app_settings.py。値は JSON)
     conn.execute(
         """
@@ -2323,4 +2339,56 @@ def update_manga_import(
 
 def delete_manga_import(conn: sqlite3.Connection, import_id: int) -> None:
     conn.execute("DELETE FROM manga_imports WHERE id = ?", (import_id,))
+    conn.commit()
+
+
+# ---- 出版物 ----
+
+
+def _publication(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    item = dict(row)
+    item["items"] = json.loads(item["items"] or "[]")
+    return item
+
+
+def create_publication(conn: sqlite3.Connection, title: str) -> dict[str, Any]:
+    """出版物の記録を作る(中身はまだ無い。作り終えたら update_publication で埋める)。"""
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute("INSERT INTO publications (title, created_at) VALUES (?, ?)", (title, now))
+    conn.commit()
+    return get_publication(conn, int(cur.lastrowid or 0)) or {}
+
+
+def get_publication(conn: sqlite3.Connection, publication_id: int) -> dict[str, Any] | None:
+    return _publication(conn.execute("SELECT * FROM publications WHERE id = ?", (publication_id,)).fetchone())
+
+
+def list_publications(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """作り終えた出版物(新しい順)。"""
+    rows = conn.execute("SELECT * FROM publications WHERE zip_path IS NOT NULL ORDER BY id DESC").fetchall()
+    return [item for row in rows if (item := _publication(row)) is not None]
+
+
+def update_publication(
+    conn: sqlite3.Connection,
+    publication_id: int,
+    *,
+    dir: str,  # noqa: A002
+    zip_path: str,
+    bytes: int,  # noqa: A002
+    file_count: int,
+    items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    conn.execute(
+        "UPDATE publications SET dir = ?, zip_path = ?, bytes = ?, file_count = ?, items = ? WHERE id = ?",
+        (dir, zip_path, bytes, file_count, json.dumps(items, ensure_ascii=False), publication_id),
+    )
+    conn.commit()
+    return get_publication(conn, publication_id)
+
+
+def delete_publication(conn: sqlite3.Connection, publication_id: int) -> None:
+    conn.execute("DELETE FROM publications WHERE id = ?", (publication_id,))
     conn.commit()

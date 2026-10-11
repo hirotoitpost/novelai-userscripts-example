@@ -556,3 +556,30 @@
 }
 
 .gallery-viewer-full:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.gallery-published {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.6rem 1rem;
+  padding: 0.6rem 0.8rem;
+  background: #143a2a;
+  border: 1px solid #1f6a4a;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.gallery-published span {
+  margin-right: auto;
+}
+
+.gallery-published button {
+  background: transparent;
+  border: 1px solid #2f8a62;
+  border-radius: 6px;
+  color: #d8ffe8;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
