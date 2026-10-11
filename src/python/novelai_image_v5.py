@@ -4,9 +4,10 @@ NovelAI Diffusion V5 (nai-diffusion-5-full) で「1回の生成でコマ割り�
 
 V5のコマ割り機能に専用APIパラメータは無く、通常の /ai/generate-image に対して
 自然言語でコマ割りを記述するだけでよい(NovelAI公式journal記事で確認済み)。
-ただし現在の novelai-sdk (0.8.1) は "nai-diffusion-5-full" を model の Literal 型に
-含んでおらず、GenerateImageParams に渡すとpydanticバリデーションで弾かれるため、
-ここでは novelai-sdk を経由せず直接 httpx でリクエストを組み立てる
+このモジュールを書いたときの novelai-sdk (0.8.1) は "nai-diffusion-5-full" を model の Literal 型に
+含んでおらず、GenerateImageParams に渡すとpydanticバリデーションで弾かれたため、
+ここでは novelai-sdk を経由せず直接 httpx でリクエストを組み立てている。novelai-sdk 0.11 以降は V5 に
+対応していて(画像生成ページは SDK 経由で V5 を使う)、こちらは漫画のページ用のプロンプト組み立てと合わせて残している
 (chunks.py の /promptmacros と同じ「生httpx + Bearer」パターン)。
 
 リクエストボディの形は、実際にSDK経由で送られる正常なV4.5リクエストを一度キャプチャして

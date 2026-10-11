@@ -59,8 +59,8 @@ export interface GenerateRequest {
   cfg_rescale?: number
   variety_boost?: boolean
   i2i?: I2iRequest
-  /** キャラごとのプロンプト(V4 以降)。position は画像に対する割合 (x, y) */
-  characters?: { prompt: string; negative_prompt?: string; position: [number, number]; enabled?: boolean }[]
+  /** キャラごとのプロンプト(V4 以降)。position は画像に対する割合 (x, y)。省くと位置は AI まかせ */
+  characters?: { prompt: string; negative_prompt?: string; position?: [number, number]; enabled?: boolean }[]
 }
 
 /** 画像生成ページのキャラごとのプロンプト(localStorage の nai_gen_characters)。逆引きからも渡す */
@@ -148,6 +148,8 @@ export interface MetadataGenerationSettings {
   prompt: string
   negative_prompt: string
   characters: { prompt: string; negative: string; x: number | null; y: number | null }[]
+  /** キャラの位置を指定して生成した画像か */
+  use_coords: boolean
   model: string | null
   width: number | null
   height: number | null
