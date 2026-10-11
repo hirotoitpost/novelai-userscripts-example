@@ -140,6 +140,32 @@ export interface MetadataExtractResponse {
   metadata: Record<string, unknown>
 }
 
+/**
+ * POST /api/metadata/generation: 画像に埋め込まれた NovelAI の設定を、画像生成ページの設定にしたもの。
+ * null の項目は読めなかった・このページで選べないもの(今の設定のままにする)。
+ */
+export interface MetadataGenerationSettings {
+  prompt: string
+  negative_prompt: string
+  characters: { prompt: string; negative: string; x: number | null; y: number | null }[]
+  model: string | null
+  width: number | null
+  height: number | null
+  size_preset: string | null
+  steps: number | null
+  scale: number | null
+  sampler: string | null
+  noise_schedule: string | null
+  cfg_rescale: number | null
+  variety_boost: boolean
+  seed: number | null
+  source: string
+  notes: string[]
+}
+
+/** メタデータ管理ページから画像生成ページへ、読み取った設定を渡すときの sessionStorage のキー */
+export const GENERATE_FROM_IMAGE_KEY = 'nai_gen_from_image'
+
 export interface MetadataEraseRequest {
   image: string
   target: 'alpha' | 'png_info' | 'both'

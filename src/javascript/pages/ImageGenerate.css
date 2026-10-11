@@ -830,3 +830,30 @@
   font-size: 0.75rem;
   color: var(--nai-muted);
 }
+
+.ig-from-image {
+  padding: 0.9rem 0.8rem;
+  border: 1px dashed #3a3a6a;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  text-align: center;
+  color: #b8b8dc;
+  cursor: pointer;
+}
+
+.ig-from-image:hover,
+.ig-from-image--over {
+  border-color: #7b5cf6;
+  background: rgba(123, 92, 246, 0.1);
+  color: #fff;
+}
+
+.ig-from-image-msg {
+  color: #5fd39a;
+}
+
+.ig-from-image-msg ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  color: #e8c46a;
+}

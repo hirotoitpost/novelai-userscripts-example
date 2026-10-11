@@ -10,11 +10,13 @@ from PIL import Image
 
 from novelai._utils.nai_meta import extract_image_metadata
 
+from ..nai_metadata import generation_settings
 from ..models import (
     MetadataEraseRequest,
     MetadataEraseResponse,
     MetadataExtractRequest,
     MetadataExtractResponse,
+    MetadataGenerationResponse,
 )
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
@@ -64,6 +66,25 @@ async def extract_image_metadata_endpoint(
         return MetadataExtractResponse(metadata=metadata)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/generation", response_model=MetadataGenerationResponse)
+async def extract_generation_settings(req: MetadataExtractRequest) -> dict[str, Any]:
+    """
+    NovelAI で生成した画像から、画像生成ページにそのまま入れられる設定(プロンプト・キャラごとのプロンプト・
+    モデル・サイズ・ステップ数・サンプラー・シード値など)を取り出す。NovelAI の埋め込みが無ければ 422。
+    """
+    try:
+        image_bytes = _decode_b64(req.image)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"画像を読み取れませんでした: {exc}")
+    settings = generation_settings(image_bytes)
+    if settings is None:
+        raise HTTPException(
+            status_code=422,
+            detail="この画像には NovelAI の生成設定が入っていません(NovelAI で生成した PNG / WebP をそのまま渡してください)。",
+        )
+    return settings
 
 
 @router.post("/erase", response_model=MetadataEraseResponse)

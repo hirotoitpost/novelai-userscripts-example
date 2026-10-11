@@ -5,6 +5,8 @@ import {
   apiFetch,
   MetadataExtractResponse,
   MetadataEraseResponse,
+  MetadataGenerationSettings,
+  GENERATE_FROM_IMAGE_KEY,
 } from '../api'
 import './Metadata.css'
 
@@ -34,6 +36,7 @@ export default function Metadata() {
   const [cleanedB64, setCleanedB64] = useState<string | null>(null)
   const [error,      setError]      = useState<string | null>(null)
   const [dragOver,   setDragOver]   = useState(false)
+  const [sending,    setSending]    = useState(false)
 
   const processFile = useCallback(async (file: File) => {
     if (!file.type.match(/^image\//)) {
@@ -82,6 +85,22 @@ export default function Metadata() {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setErasing(false)
+    }
+  }
+
+  /** 画像に埋め込まれた設定を画像生成ページに入れて、そのページへ移る(生成は、そこで「生成」を押してから)。 */
+  const handleGenerate = async () => {
+    if (!imageB64) return
+    setSending(true)
+    setError(null)
+    try {
+      const settings = await apiFetch<MetadataGenerationSettings>(token!, '/api/metadata/generation', { image: imageB64 })
+      sessionStorage.setItem(GENERATE_FROM_IMAGE_KEY, JSON.stringify({ settings, name: fileName }))
+      navigate('/generate')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSending(false)
     }
   }
 
@@ -186,6 +205,17 @@ export default function Metadata() {
                 ) : (
                   <p className="meta-no-meta">メタデータが見つかりませんでした</p>
                 )}
+              </section>
+
+              <section className="meta-section">
+                <span className="meta-label">この設定で画像を生成</span>
+                <p className="meta-no-meta">
+                  埋め込まれたプロンプト・モデル・サイズ・ステップ数・サンプラー・シード値などを画像生成ページに入れます。
+                  画像生成ページで「生成」を押すと、同じ設定で生成します。
+                </p>
+                <button type="button" className="meta-download-btn" onClick={handleGenerate} disabled={sending || !hasMetadata}>
+                  {sending ? '読み込み中…' : '🎨 この設定で画像生成ページへ'}
+                </button>
               </section>
 
               <section className="meta-section meta-erase-section">
