@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import PublishDialog, { publishedMessage, PublishTarget } from '../components/PublishDialog'
 import {
   deleteImages,
   downloadFile,
   fileUrl,
   formatDate,
   getJson,
+  Publication,
   Rating,
   RATINGS,
   setAdult,
@@ -100,6 +102,10 @@ export default function Gallery() {
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [downloading, setDownloading] = useState(false)
+  // 出版(選んだ画像から生成情報を取り除いて、出版物として別に保存する)
+  // 出版のダイアログに渡すもの(fromSelection: 選択バーから開いた = 出版できたら選択を終える)
+  const [publishTarget, setPublishTarget] = useState<(PublishTarget & { fromSelection: boolean }) | null>(null)
+  const [published, setPublished] = useState<{ publication: Publication; downloaded: boolean } | null>(null)
   const [copied, setCopied] = useState(false)
   // ぼかしを外して見た画像(このページを開いている間だけ)
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
@@ -324,6 +330,35 @@ export default function Gallery() {
     }
   }
 
+  /** 選んだ画像を出版する(ダイアログを開く)。表示している並びの順で出版物に入れる。 */
+  function publishSelected() {
+    const keys = items.filter(i => selected.has(i.key)).map(i => i.key)
+    if (keys.length === 0) return
+    setPublishTarget({
+      imageKeys: keys, bookIds: [], suggestion: `画像 ${keys.length}枚`, summary: `画像 ${keys.length}枚`, fromSelection: true,
+    })
+  }
+
+  /** 見ている画像を、そのまま出版する(ダイアログを開く)。 */
+  function publishOne(item: GalleryImage) {
+    const name = describe(item) || SOURCE_LABELS[item.source]
+    setPublishTarget({
+      imageKeys: [item.key], bookIds: [], suggestion: name.slice(0, 40), summary: `この画像 1枚(${SOURCE_LABELS[item.source]})`,
+      fromSelection: false,
+    })
+  }
+
+  /** 見ている画像を、出版する選択に入れる・外す(選択モードに入る。閉じると選択バーから出版できる)。 */
+  function toggleSelectedFromViewer(item: GalleryImage) {
+    setSelecting(true)
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(item.key)) next.delete(item.key)
+      else next.add(item.key)
+      return next
+    })
+  }
+
   async function downloadOne(item: GalleryImage) {
     try {
       await downloadFile(
@@ -437,6 +472,17 @@ export default function Gallery() {
       </div>
 
       {error && <div className="gallery-error">{error}</div>}
+      {published && (
+        <div className="gallery-published" role="status">
+          <span>{publishedMessage(published.publication, published.downloaded)}</span>
+          {!published.downloaded && (
+            <button type="button" onClick={() => void downloadFile(`/api/publications/${published.publication.id}/download`, `${published.publication.title}.zip`)
+              .catch(e => setError(e instanceof Error ? e.message : String(e)))}>ZIP をダウンロード</button>
+          )}
+          <button type="button" onClick={() => navigate('/publications')}>出版物の一覧へ</button>
+          <button type="button" onClick={() => setPublished(null)} aria-label="閉じる">×</button>
+        </div>
+      )}
 
       {!loading && items.length === 0 && !error && (
         <p className="gallery-empty">{filtered ? '条件に合う画像がありません。' : '画像がまだありません。'}</p>
@@ -494,6 +540,15 @@ export default function Gallery() {
             disabled={selected.size === 0 || downloading}
           >
             {downloading ? '作成中…' : 'zipでダウンロード'}
+          </button>
+          <button
+            type="button"
+            className="gallery-primary"
+            onClick={publishSelected}
+            disabled={selected.size === 0}
+            title="NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として別に保存して ZIP にまとめます"
+          >
+            出版する
           </button>
         </div>
       )}
@@ -557,6 +612,9 @@ export default function Gallery() {
               disabled={viewing >= items.length - 1 && !hasMore} aria-label="次の画像">›</button>
           </div>
           <div className="gallery-info">
+            {published && (
+              <p className="gallery-published-inline" role="status">{publishedMessage(published.publication, published.downloaded)}</p>
+            )}
             <div className="gallery-info-actions">
               <button
                 type="button"
@@ -567,6 +625,14 @@ export default function Gallery() {
                 {current.bookmarked ? '★ ブックマーク済み' : '☆ ブックマーク'}
               </button>
               <button type="button" onClick={() => void downloadOne(current)}>ダウンロード</button>
+              <button type="button" onClick={() => publishOne(current)}
+                title="この画像から NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として保存します">
+                出版する
+              </button>
+              <button type="button" onClick={() => toggleSelectedFromViewer(current)} aria-pressed={selected.has(current.key)}
+                title="ほかの画像とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
+                {selected.has(current.key) ? `出版の選択から外す(${selected.size}枚選択中)` : `出版に選ぶ${selected.size > 0 ? `(${selected.size}枚選択中)` : ''}`}
+              </button>
               {current.story_id !== null && (
                 <button type="button" onClick={() => navigate(`/bookshelf?book=${current.story_id}`)}>
                   本棚で読む
@@ -640,6 +706,17 @@ export default function Gallery() {
             </div>
           </div>
         </div>
+      )}
+      {publishTarget && (
+        <PublishDialog
+          target={publishTarget}
+          onClose={() => setPublishTarget(null)}
+          onDone={(publication, downloaded) => {
+            setPublished({ publication, downloaded })
+            if (publishTarget.fromSelection) exitSelecting()
+            setPublishTarget(null)
+          }}
+        />
       )}
     </div>
   )

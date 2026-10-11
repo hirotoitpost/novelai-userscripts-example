@@ -1,0 +1,131 @@
+.pub-root {
+  min-height: 100vh;
+  background: #0b0b14;
+  color: #e8e8ff;
+}
+
+.pub-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  padding: 0.8rem 1.2rem;
+  border-bottom: 1px solid #1f1f3a;
+}
+
+.pub-header h1 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.pub-count {
+  margin-right: auto;
+  font-size: 0.85rem;
+  color: #9a9ac0;
+}
+
+.pub-link,
+.pub-actions button {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.pub-link:hover,
+.pub-actions button:hover:not(:disabled) {
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.pub-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pub-actions button.pub-primary {
+  background: #5b3fd6;
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.pub-actions button.pub-danger {
+  border-color: #7a2a3a;
+  color: #ff9aa8;
+}
+
+.pub-main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1rem 1.2rem 3rem;
+  box-sizing: border-box;
+}
+
+.pub-hint {
+  margin: 0.4rem 0 1rem;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: #9a9ac0;
+}
+
+.pub-error {
+  color: #ff8a9a;
+  font-size: 0.88rem;
+}
+
+.pub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pub-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8rem 1rem;
+  padding: 0.8rem 1rem;
+  background: #11111f;
+  border: 1px solid #1f1f3a;
+  border-radius: 10px;
+}
+
+.pub-cover {
+  width: 64px;
+  height: 90px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #1a1a2e;
+}
+
+.pub-body {
+  display: flex;
+  flex: 1 1 16rem;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.pub-meta {
+  font-size: 0.78rem;
+  color: #9a9ac0;
+  word-break: break-all;
+}
+
+.pub-meta code {
+  font-size: 0.95em;
+  color: #c8b8ff;
+}
+
+.pub-actions {
+  display: flex;
+  gap: 0.5rem;
+}

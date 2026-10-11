@@ -98,6 +98,33 @@ export async function deleteBook(id: number): Promise<void> {
   if (!res.ok) throw new Error(await readErrorDetail(res))
 }
 
+/** 出版物: 選んだ画像・本から NovelAI の生成情報を取り除いて別に保存し、ZIP にまとめたもの */
+export interface Publication {
+  id: number
+  title: string
+  zip_path: string
+  bytes: number
+  file_count: number
+  items: { kind: 'images' | 'book'; title: string; story_id: number | null; files: number }[]
+  created_at: string
+}
+
+/** 選んだ画像(ギャラリーのキー)・本(物語のID)を出版する。生成情報を取り除いたものが別に保存される。 */
+export async function publish(title: string, imageKeys: string[], bookIds: number[]): Promise<Publication> {
+  const res = await fetch(`${API_ORIGIN}/api/publications`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, image_keys: imageKeys, book_ids: bookIds }),
+  })
+  if (!res.ok) throw new Error(await readErrorDetail(res))
+  return res.json()
+}
+
+export async function deletePublication(id: number): Promise<void> {
+  const res = await fetch(`${API_ORIGIN}/api/publications/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(await readErrorDetail(res))
+}
+
 export type Rating = 'all' | 'general' | 'adult'
 
 export const RATINGS: { id: Rating; label: string }[] = [
