@@ -12,6 +12,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import Any
 
 from PIL import Image
 
@@ -299,6 +300,41 @@ async def name_people(api_key: str, people: list[Person], genre: str, setting: l
             if len(named) == len(people):
                 return named
     raise RuntimeError("登場人物の名前を作れませんでした。もう一度試してください。")
+
+
+def apply_import_panels(script: list[dict[str, Any]], imported: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    台本の1話分に、取り込んだページのコマの場面・所作を写す(文章モデルが入れ忘れても再現されるように)。
+    - 場面のタグ(舞台・小物・構図)を prompt_tags の先頭に足す
+    - 所作のタグが台本のどの人物にも付いていなければ、描く人物が1人のコマではその人に付ける
+    - セリフの無かったコマは、セリフを空にする
+    場面・所作を読んでいない取り込み(detailed でないコマ)には何もしない。
+    """
+    from .manga_draft import _clean_tags
+
+    for panel, source in zip(script, imported):
+        if not source.get("detailed"):
+            continue
+        scene = [t for t in source.get("scene_tags") or [] if _is_safe(t)]
+        if scene:
+            panel["prompt_tags"] = _clean_tags(", ".join([*scene, panel.get("prompt_tags") or ""]))
+        action = [t for t in source.get("action_tags") or [] if _is_safe(t)]
+        drawn = panel.get("characters") or []
+        used = {t.lower() for tags in (panel.get("actions") or {}).values() for t in tags.split(", ")}
+        missing = [t for t in action if t.lower() not in used]
+        if missing and len(drawn) == 1:
+            actions = dict(panel.get("actions") or {})
+            actions[drawn[0]] = _clean_tags(", ".join([actions.get(drawn[0], ""), *missing]))
+            panel["actions"] = actions
+        if not source.get("lines"):
+            panel["lines"] = []
+    return script
+
+
+def wordless(pages: list[list[dict[str, Any]]]) -> bool:
+    """セリフを読んだうえで、どのコマにもセリフが無かったか(セリフのない漫画)。"""
+    panels = [p for page in pages for p in page]
+    return bool(panels) and all(p.get("detailed") for p in panels) and not any(p.get("lines") for p in panels)
 
 
 def theme_of(features: ImportFeatures) -> str:

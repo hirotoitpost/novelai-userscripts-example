@@ -1,15 +1,21 @@
 """
-漫画の取り込み: PDF や画像のページからコマを見つけ、コマごとの「構成」だけを読み取る。
+漫画の取り込み: PDF や画像のページからコマを見つけ、コマごとの「構成」を読み取る。
 
-読み取るのは、人数・構図(寄り/引き)・セリフの量・コマの役割(導入/ボケ/オチ…)・感情。
-セリフの文字や、何が起きているか(筋書き)は読まない。市販の作品を取り込んでも、新しく作る漫画は
-コマ運びとテンポを参考にするだけで、セリフ・設定・絵は写さないため。
+いつも読み取るのは、人数・構図(寄り/引き)・セリフの量・コマの役割(導入/ボケ/オチ…)・感情。
 
 - コマ: 枠線(長い水平・垂直の線)に囲まれた領域。吹き出しが枠をまたいでも、曲線なので枠と見なさない。
   絵の中の直線で1コマが割れたときは、すき間が狭いので継ぎ直す。枠が見つからなければページ全体を1コマとする。
 - 人数・構図: 頭の検出(manga_v2/detect.py)。頭の大きさがコマの高さに占める割合で寄り/引きを決める。
-- セリフの量: RapidOCR の文字領域の検出だけを使う(文字は読まない)。
+- セリフの量: 文字の領域の数(文字は読まない)。
 - 役割・感情: ローカルの画像モデル(Ollama の qwen3-vl:2b。1コマ十数秒)。使えなければ空のままにする。
+
+取り込みの使い方(purpose)を選んだときは、さらに読み取る(manga_reading.py):
+
+- similar(似た漫画を作る): コマごとの場面(舞台・小物・構図)と所作(表情・動作)のタグ、セリフの型(数・長さ・
+  文末の型・口調)。セリフの文面は残さない。市販の作品を取り込んでも、新しく作る漫画に写すのは場面・所作・
+  コマ運びとセリフの型までで、セリフ・設定・キャラそのものは写さない。
+- rebuild(自分の作品を作り直す): 上に加えて、セリフの文面も残す。自分の作品(権利のある作品)を、セリフごと
+  台本に起こして描き直すためのもの。
 """
 
 from __future__ import annotations
@@ -20,9 +26,8 @@ import json
 import logging
 import os
 import re
-import threading
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +37,7 @@ import numpy as np
 from PIL import Image
 
 from .manga_elements import detect_elements
+from .manga_reading import describe_panel, line_features, ocr_engine, ocr_lock, order_in_panel, read_speech
 from .manga_v2.detect import detect_heads
 
 logger = logging.getLogger(__name__)
@@ -79,6 +85,15 @@ class PanelInfo:
     text_blocks: int
     role: str = ""
     emotion: str = ""
+    # purpose が similar / rebuild のときだけ読む(manga_reading.py)。lines はセリフ: similar では型
+    # (chars / ending / polite)だけ、rebuild では文面(text)とページ上の位置(box)も持つ
+    scene_tags: list[str] = field(default_factory=list)
+    action_tags: list[str] = field(default_factory=list)
+    # 写っている人(1girl, 1boy など)
+    cast_tags: list[str] = field(default_factory=list)
+    lines: list[dict[str, Any]] = field(default_factory=list)
+    # セリフ・場面を読んだか(読んでいなければ、セリフの量は text_blocks だけが手がかり)
+    detailed: bool = False
 
 
 # ---- ページの読み込み ----
@@ -393,20 +408,11 @@ _FACE_LONG = 0.008
 # 顔が見えず体だけのとき: 体の高さがコマの高さに占める割合がこれ未満なら引き
 _BODY_LONG = 0.6
 
-_ocr_engine = None
-_ocr_lock = threading.Lock()
-
-
 def _count_text_blocks(crop: Image.Image) -> int:
     """文字の塊(縦書きの1列や描き文字)の数。文字そのものは読まない。"""
-    global _ocr_engine
-    with _ocr_lock:
-        if _ocr_engine is None:
-            from rapidocr import RapidOCR  # 読み込みが重いので使うときだけ
-
-            _ocr_engine = RapidOCR()
+    with ocr_lock():
         bgr = np.ascontiguousarray(np.asarray(crop.convert("RGB"))[:, :, ::-1])
-        result = _ocr_engine(bgr, use_det=True, use_cls=False, use_rec=False)
+        result = ocr_engine()(bgr, use_det=True, use_cls=False, use_rec=False)
     boxes = getattr(result, "boxes", None)
     return 0 if boxes is None else len(boxes)
 
@@ -439,34 +445,71 @@ def _head_shot(heads: list, rect: Rect) -> str:
     return _shot(heads, [], rect) if heads else "no humans"
 
 
-def analyze_page(page_path: Path) -> tuple[list[PanelInfo], int]:
+PURPOSES = ("structure", "similar", "rebuild")
+
+
+def _add_details(image: Image.Image, panels: list[PanelInfo], text_boxes: list | None, keep_text: bool) -> None:
+    """コマごとの場面・所作のタグとセリフを足す(purpose が similar / rebuild のとき)。"""
+    speeches = read_speech(image, text_boxes)
+    by_panel: dict[int, list] = {}
+    for speech in speeches:
+        centre = ((speech.box[0] + speech.box[2]) / 2, (speech.box[1] + speech.box[3]) / 2)
+        # 吹き出しの中心が入っているコマ。どのコマにも入っていなければ、いちばん近いコマ
+        index = next((i for i, p in enumerate(panels) if _inside(speech.box, p.box)), None)
+        if index is None and panels:
+            index = min(
+                range(len(panels)),
+                key=lambda i: (
+                    max(panels[i].box[0] - centre[0], 0, centre[0] - panels[i].box[0] - panels[i].box[2]) ** 2
+                    + max(panels[i].box[1] - centre[1], 0, centre[1] - panels[i].box[1] - panels[i].box[3]) ** 2
+                ),
+            )
+        if index is not None:
+            by_panel.setdefault(index, []).append(speech)
+    for index, panel in enumerate(panels):
+        x, y, w, h = panel.box
+        panel.scene_tags, panel.action_tags, panel.cast_tags = describe_panel(image.crop((x, y, x + w, y + h)))
+        panel.lines = []
+        for speech in order_in_panel(by_panel.get(index, []), panel.box):
+            line = line_features(speech.text)
+            if keep_text:
+                line["text"] = speech.text
+                line["box"] = [round(v) for v in speech.box]
+            panel.lines.append(line)
+        panel.detailed = True
+
+
+def analyze_page(page_path: Path, purpose: str = "structure") -> tuple[list[PanelInfo], int]:
     """
     ページのコマと、コマごとの人数・構図・文字の塊の数(役割・感情は classify_panel で別に読む)。
     2つ目はコマにまたがって描かれた絵の数。学習済みモデルが使えなければ、枠線・頭の検出・文字検出で代える。
+    purpose が similar / rebuild なら、場面・所作のタグとセリフも読む(rebuild だけセリフの文面を残す)。
     """
     with Image.open(page_path) as src:
         image = src.convert("RGB")
     elements = detect_elements(image)
+    panels: list[PanelInfo] = []
+    overlays = 0
     if elements is not None and elements["frame"]:
-        rects, overlays = split_overlays([_to_rect(b) for b in elements["frame"]])
+        rects, overlay_rects = split_overlays([_to_rect(b) for b in elements["frame"]])
         if rects:
-            panels: list[PanelInfo] = []
             for rect in reading_order(rects):
                 faces = [b for b in elements["face"] if _inside(b, rect)]
                 bodies = [b for b in elements["body"] if _inside(b, rect)]
                 texts = [b for b in elements["text"] if _inside(b, rect)]
                 people = max(len(faces), len(bodies))
                 panels.append(PanelInfo(rect, people, _shot(faces, bodies, rect), len(texts)))
-            return panels, len(overlays)
-
-    heads = detect_heads(page_path)
-    panels = []
-    for rect in detect_panels_by_lines(image):
-        x, y, w, h = rect
-        inside = [hd for hd in heads if _inside(hd, rect)]
-        crop = image.crop((x, y, x + w, y + h))
-        panels.append(PanelInfo(rect, len(inside), _head_shot(inside, rect), _count_text_blocks(crop)))
-    return panels, 0
+            overlays = len(overlay_rects)
+    if not panels:
+        heads = detect_heads(page_path)
+        for rect in detect_panels_by_lines(image):
+            x, y, w, h = rect
+            inside = [hd for hd in heads if _inside(hd, rect)]
+            crop = image.crop((x, y, x + w, y + h))
+            panels.append(PanelInfo(rect, len(inside), _head_shot(inside, rect), _count_text_blocks(crop)))
+    if purpose in ("similar", "rebuild"):
+        _add_details(image, panels, elements["text"] if elements is not None else None, purpose == "rebuild")
+    return panels, overlays
 
 
 _CLASSIFY_PROMPT = (
@@ -558,14 +601,36 @@ def text_amount(blocks: int) -> str:
     return "セリフ少なめ" if blocks <= 2 else "セリフ多め"
 
 
+def _speech_summary(panel: dict) -> str:
+    """セリフの量。セリフを読んであれば、数と1つずつの型(長さ・文末・口調)。文面は入れない。"""
+    if not panel.get("detailed"):
+        return text_amount(panel["text_blocks"])
+    lines = panel.get("lines") or []
+    if not lines:
+        return "セリフなし"
+    kinds = []
+    for line in lines:
+        parts = [f"{line['chars']}字"]
+        if line.get("ending") and line["ending"] != "ふつう":
+            parts.append(line["ending"])
+        if line.get("polite"):
+            parts.append("丁寧")
+        kinds.append("・".join(parts))
+    return f"セリフ{len(lines)}個(" + " / ".join(kinds) + ")"
+
+
 def structure_lines(panels: list[dict]) -> list[str]:
-    """コマの構成を、台本AIに渡す1行ずつの説明にする(筋書きは含まない)。"""
+    """コマの構成を、台本AIに渡す1行ずつの説明にする(筋書きとセリフの文面は含まない)。"""
     lines = []
     for panel in panels:
         parts: list[str] = [_SHOT_LABELS.get(panel["shot"]) or str(panel["shot"])]
         if panel["people"]:
             parts.append(f"{panel['people']}人")
-        parts.append(text_amount(panel["text_blocks"]))
+        parts.append(_speech_summary(panel))
+        if panel.get("scene_tags"):
+            parts.append("場面: " + ", ".join(panel["scene_tags"]))
+        if panel.get("action_tags"):
+            parts.append("所作: " + ", ".join(panel["action_tags"]))
         if panel.get("role"):
             parts.append(f"役割: {panel['role']}")
         if panel.get("emotion"):

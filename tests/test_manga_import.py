@@ -220,6 +220,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(import_routes, "_IMPORT_DIR", tmp_path / "imports")
     # 学習済みモデルはダウンロードせず、枠線から探す方法で読み取る
     monkeypatch.setattr(manga_import, "detect_elements", lambda image: None)
+    # 場面・所作の判定モデルと文字の読み取りも使わない(読み取りそのものは test_manga_reading.py で確かめる)
+    monkeypatch.setattr(manga_import, "describe_panel", lambda crop: ([], [], []))
+    monkeypatch.setattr(manga_import, "read_speech", lambda image, boxes: [])
     app = FastAPI()
     app.include_router(import_routes.router)
     with TestClient(app) as test_client:
@@ -253,7 +256,9 @@ def test_import_api(client: TestClient, tmp_path: Path) -> None:
     assert item["status"] == "analyzed"
     assert item["panel_count"] == 4
     panel = item["analysis"]["pages"][0]["panels"][0]
-    assert set(panel) == {"box", "people", "shot", "text_blocks", "role", "emotion"}
+    assert {"box", "people", "shot", "text_blocks", "role", "emotion", "scene_tags", "action_tags", "lines"} <= set(panel)
+    # 使い方を選ばなければ「似た漫画を作る」: 場面・所作・セリフの型まで読む(セリフの文面は残さない)
+    assert item["purpose"] == "similar" and panel["detailed"] is True
     assert item["analysis"]["pages"][0]["overlays"] == 0
     assert panel["shot"] == "no humans" and panel["role"] == ""
     assert [i["id"] for i in client.get("/api/manga-import").json()] == [import_id]

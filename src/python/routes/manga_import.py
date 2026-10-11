@@ -1,7 +1,14 @@
 """
-漫画の取り込み(構成の参考): PDF や画像を受け取ってページを保存し、コマごとの構成を読み取る。
+漫画の取り込み: PDF や画像を受け取ってページを保存し、コマごとの構成を読み取る。
 読み取りは画像モデルで1コマ十数秒かかるので、バックグラウンドで進めて GET /{id}/job で進み具合を返す。
-読み取った構成は漫画ドラフト(/api/manga-draft の import_id)で、コマ運びの参考として使う。
+
+取り込むときに使い方(purpose)を選ぶ:
+- similar(似た漫画を作る): コマ運び・場面・所作・セリフの型を読み、新しい話の漫画にする(make_similar)。
+  セリフの文面は残さない。
+- rebuild(自分の作品を作り直す): セリフの文面も読み、セリフごと台本に起こして描き直す(make_rebuild)。
+  自分の作品(権利のある作品)のためのもの。
+
+読み取った構成は、漫画ドラフト(/api/manga-draft の import_id)でもコマ運びの参考として使える。
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ from ..db import (
 )
 from ..manga_import import analyze_page, classify_panel, load_pages, panel_dict
 from ..client import get_client
-from ..models import MangaImportAutoRequest, MangaImportRequest
+from ..models import MangaImportAutoRequest, MangaImportLinesRequest, MangaImportRequest
 
 router = APIRouter(prefix="/api/manga-import", tags=["manga-import"])
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
@@ -81,18 +88,20 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
         "title": item["title"],
         "page_count": item["page_count"],
         "status": item["status"],
+        "purpose": item.get("purpose") or "structure",
         "panel_count": sum(len(p["panels"]) for p in pages),
         "created_at": item["created_at"],
     }
 
 
-async def _analyze(import_id: int, page_count: int, use_vision: bool, job: _ImportJob) -> None:
+async def _analyze(import_id: int, page_count: int, use_vision: bool, job: _ImportJob, purpose: str) -> None:
     """ページごとにコマと構成を読み取り、1ページ終わるごとに保存する(途中でも結果を見られる)。"""
     pages: list[dict[str, Any]] = []
     try:
         for index in range(page_count):
-            job.message = f"{index + 1}ページ目のコマを探しています"
-            panels, overlays = await asyncio.to_thread(analyze_page, _page_path(import_id, index))
+            what = "コマ・場面・セリフ" if purpose in ("similar", "rebuild") else "コマ"
+            job.message = f"{index + 1}ページ目の{what}を読み取っています"
+            panels, overlays = await asyncio.to_thread(analyze_page, _page_path(import_id, index), purpose)
             if use_vision:
                 with Image.open(_page_path(import_id, index)) as src:
                     image = src.convert("RGB")
@@ -126,6 +135,7 @@ def _start(
     import_id: int,
     page_count: int,
     use_vision: bool,
+    purpose: str,
     auto: MangaImportAutoRequest | None = None,
     api_key: str | None = None,
 ) -> _ImportJob:
@@ -136,49 +146,55 @@ def _start(
     _jobs[import_id] = job
     conn = get_connection()
     try:
-        update_manga_import(conn, import_id, status="analyzing")
+        update_manga_import(conn, import_id, status="analyzing", purpose=purpose)
     finally:
         conn.close()
 
     async def run() -> None:
-        await _analyze(import_id, page_count, use_vision, job)
+        await _analyze(import_id, page_count, use_vision, job, purpose)
         if auto is not None and api_key and job.status == "done":
-            # 読み取りが終わったら、同じジョブのまま似た漫画を作る(画面には1つの処理として見せる)
+            # 読み取りが終わったら、同じジョブのまま漫画を作る(画面には1つの処理として見せる)
             job.status = "running"
-            await _similar(import_id, auto, api_key, job)
+            await _make(import_id, auto, api_key, job, rebuild=purpose == "rebuild")
 
     job.task = asyncio.create_task(run())
     return job
 
 
-async def _similar(import_id: int, req: MangaImportAutoRequest, api_key: str, job: _ImportJob) -> None:
-    """似た漫画を作る(下の make_similar)。失敗も状態として返す。"""
+async def _make(import_id: int, req: MangaImportAutoRequest, api_key: str, job: _ImportJob, *, rebuild: bool) -> None:
+    """似た漫画を作る(make_similar)か、作り直す(make_rebuild)。失敗も状態として返す。"""
     try:
-        job.story_id = await make_similar(import_id, req, api_key, job)
+        maker = make_rebuild if rebuild else make_similar
+        job.story_id = await maker(import_id, req, api_key, job)
         job.status = "done"
     except Exception as exc:  # noqa: BLE001 失敗も状態として返す
         job.status = "error"
         job.detail = str(exc)
 
 
-async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str, job: Any) -> int:
+def _used_pages(import_id: int, max_pages: int) -> tuple[list[int], list[list[dict[str, Any]]]]:
+    """漫画にするページ(コマのあるページを冒頭から max_pages まで)の番号と、そのコマ。"""
+    from .manga_draft import _MAX_EPISODES, _MAX_PANELS_PER_EPISODE
+
+    pages = (_require(import_id).get("analysis") or {}).get("pages") or []
+    used = [i for i, page in enumerate(pages) if page["panels"]][: min(max_pages, _MAX_EPISODES)]
+    if not used:
+        raise RuntimeError("取り込んだ作品にコマが見つかりません。")
+    return used, [pages[i]["panels"][:_MAX_PANELS_PER_EPISODE] for i in used]
+
+
+async def _prepare_cast(
+    import_id: int, used: list[int], req: MangaImportAutoRequest, api_key: str, job: Any
+) -> tuple[list[dict[str, Any]], Any]:
     """
-    取り込んだ漫画に似た漫画を作り、物語のIDを返す: ページの絵から舞台と人物の見た目を読み取る →
-    キャラ(選んだもの、無ければ見た目から作る)と参照画像 → 大枠と1ページ=1話の台本(NovelAI の文章モデル)
-    → 取り込んだ作品のコマ割りで物語を作る → コマの生成(キャラ参照)と合成。
+    使うキャラ(選んだもの。無ければ、ページの人物の見た目から作る)と、その参照画像を用意する。
+    戻り値は(キャラ, ページの絵から読み取った舞台・見た目)。
     """
     from ..cast import auto_reference
     from ..db import get_character, save_character
-    from ..manga_draft import draft_characters, generate_episode, generate_outlines
-    from ..manga_similar import name_people, read_pages, theme_of
-    from ..models import MangaDraftCreateRequest, MangaDraftPanel, MangaV2ComposeRequest, MangaV2PanelsRequest
-    from .manga_draft import _import_structure, post_create
-    from .manga_v2 import _run_panels, compose
+    from ..manga_similar import name_people, read_pages
 
-    structure = _import_structure(import_id)[: req.max_pages]
-    item = _require(import_id)
-    pages = (item.get("analysis") or {}).get("pages") or []
-    used = [i for i, page in enumerate(pages) if page["panels"]][: len(structure)]
+    pages = (_require(import_id).get("analysis") or {}).get("pages") or []
     job.progress, job.total = 0, len(used)
     job.message = "取り込んだページの舞台と人物の見た目を読み取っています"
     images = []
@@ -188,7 +204,6 @@ async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str
     boxes = [[tuple(p["box"]) for p in pages[index]["panels"]] for index in used]
     features = await asyncio.to_thread(read_pages, images, boxes)
 
-    # キャラ: 選んだもの。無ければ、ページの人物の見た目から作る
     conn = get_connection()
     try:
         characters = [c for c in (get_character(conn, i) for i in req.character_ids) if c]
@@ -214,34 +229,33 @@ async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str
         finally:
             conn.close()
 
-    if req.references:
+    if req.references and req.make_images:
         missing = [c for c in characters if not c.get("reference_image_path") and (c.get("appearance_tags") or "").strip()]
         for index, character in enumerate(missing, start=1):
             job.message = f"参照画像を作っています {index}/{len(missing)}: {character['name']}(候補4枚から選びます)"
             await auto_reference(api_key, character)
+    return characters, features
 
-    cast = draft_characters(characters)
-    job.message = "大枠シナリオを考えています"
-    outlines = await generate_outlines(
-        api_key, theme_of(features), req.genre, cast, len(structure), structure=structure
-    )
-    outline = outlines[0]
-    episodes: list[list[dict[str, Any]]] = []
-    for index in range(len(structure)):
-        job.message = f"台本を書いています {index + 1}/{len(structure)}話"
-        episodes.append(
-            await generate_episode(
-                api_key,
-                outline,
-                index,
-                cast,
-                previous_panels=episodes[-1] if episodes else None,
-                structure=structure[index],
-            )
-        )
+
+async def _finish(
+    import_id: int,
+    title: str,
+    cast: list[Any],
+    episodes: list[list[dict[str, Any]]],
+    req: MangaImportAutoRequest,
+    monochrome: bool,
+    api_key: str,
+    job: Any,
+) -> int:
+    """台本から物語を作り(取り込んだ作品のコマ割りで)、コマの絵を生成してページに合成する。物語のIDを返す。"""
+    from ..db import list_story_scenes
+    from ..models import MangaDraftCreateRequest, MangaDraftPanel, MangaV2ComposeRequest, MangaV2PanelsRequest
+    from .manga_draft import post_create
+    from .manga_v2 import _run_panels, compose
+
     story = await post_create(
         MangaDraftCreateRequest(
-            title=outline["title"],
+            title=title[:200],
             character_ids=[c.id for c in cast],
             episodes=[[MangaDraftPanel.model_validate(p) for p in episode] for episode in episodes],
             import_id=import_id,
@@ -249,21 +263,90 @@ async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str
         )
     )
     job.story_id = story.id
+    count = sum(len(e) for e in episodes)
+    if not req.make_images:
+        job.message = f"台本ができました: {title}({len(episodes)}ページ・{count}コマ。コマの絵はまだ生成していません)"
+        return story.id
 
-    color = (not features.monochrome) if req.color is None else req.color
+    color = (not monochrome) if req.color is None else req.color
     panels = MangaV2PanelsRequest(template="grid4", color=color, use_character_reference=True, vary_seed=True)
     conn = get_connection()
     try:
-        from ..db import list_story_scenes
-
         targets = list_story_scenes(conn, story.id)
     finally:
         conn.close()
     await _run_panels(job, story.id, panels, api_key, targets)
     job.message = "ページに合成しています"
     result = await asyncio.to_thread(compose, story.id, MangaV2ComposeRequest(template="grid4"))
-    job.message = f"漫画ができました: {outline['title']}({len(result['pages'])}ページ・{len(targets)}コマ)"
+    job.message = f"漫画ができました: {title}({len(result['pages'])}ページ・{len(targets)}コマ)"
     return story.id
+
+
+async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str, job: Any) -> int:
+    """
+    取り込んだ漫画に似た漫画を作り、物語のIDを返す: ページの絵から舞台と人物の見た目を読み取る →
+    キャラ(選んだもの、無ければ見た目から作る)と参照画像 → 大枠と1ページ=1話の台本(NovelAI の文章モデル)
+    → 取り込んだ作品のコマ割りで物語を作る → コマの生成(キャラ参照)と合成。
+
+    場面・所作を読んである取り込みでは、コマごとの場面(舞台・小物・構図)と所作(表情・動作)を再現する。
+    セリフは、数・長さ・調子だけを合わせて新しく作る(セリフの無いコマは、セリフ無しのまま)。
+    """
+    from ..manga_draft import draft_characters, generate_episode, generate_outlines
+    from ..manga_import import structure_lines
+    from ..manga_similar import apply_import_panels, theme_of, wordless
+
+    used, page_panels = _used_pages(import_id, req.max_pages)
+    structure = [structure_lines(panels) for panels in page_panels]
+    characters, features = await _prepare_cast(import_id, used, req, api_key, job)
+
+    cast = draft_characters(characters)
+    job.message = "大枠シナリオを考えています"
+    theme = theme_of(features)
+    notes = "セリフのない漫画。セリフや説明に頼らず、絵(表情・動作・場面)だけで伝わる話にする。" if wordless(page_panels) else ""
+    outlines = await generate_outlines(
+        api_key, theme, req.genre, cast, len(structure), notes=notes, structure=structure
+    )
+    outline = outlines[0]
+    episodes: list[list[dict[str, Any]]] = []
+    for index in range(len(structure)):
+        job.message = f"台本を書いています {index + 1}/{len(structure)}話"
+        episode = await generate_episode(
+            api_key,
+            outline,
+            index,
+            cast,
+            notes=notes,
+            previous_panels=episodes[-1] if episodes else None,
+            structure=structure[index],
+        )
+        episodes.append(apply_import_panels(episode, page_panels[index]))
+    return await _finish(import_id, outline["title"], cast, episodes, req, features.monochrome, api_key, job)
+
+
+async def make_rebuild(import_id: int, req: MangaImportAutoRequest, api_key: str, job: Any) -> int:
+    """
+    取り込んだ漫画を、セリフごと台本に起こして描き直し、物語のIDを返す(自分の作品のためのもの):
+    キャラ(選んだもの、無ければ見た目から作る)と参照画像 → ページごとに、セリフの話し手・描く人物・所作の
+    割り振りを文章モデルに決めさせる(セリフの文面は読み取ったまま) → 取り込んだ作品のコマ割りで物語を作る
+    → コマの生成と合成。
+    """
+    from ..manga_draft import draft_characters
+    from ..manga_rebuild import assign_page, script_panels
+
+    item = _require(import_id)
+    if (item.get("purpose") or "structure") != "rebuild":
+        raise RuntimeError("この取り込みはセリフを読み取っていません。「自分の作品を作り直す」で読み取り直してください。")
+    used, page_panels = _used_pages(import_id, req.max_pages)
+    characters, features = await _prepare_cast(import_id, used, req, api_key, job)
+
+    cast = draft_characters(characters)
+    by_id = {c["id"]: c for c in characters}
+    looks = {c.name: (by_id[c.id].get("appearance_tags") or "") for c in cast}
+    episodes: list[list[dict[str, Any]]] = []
+    for index, panels in enumerate(page_panels):
+        job.message = f"セリフの話し手を決めています {index + 1}/{len(page_panels)}ページ"
+        episodes.append(script_panels(panels, await assign_page(api_key, panels, cast, looks)))
+    return await _finish(import_id, item["title"], cast, episodes, req, features.monochrome, api_key, job)
 
 
 def get_character_by_name(conn: Any, name: str) -> bool:
@@ -287,7 +370,7 @@ def _optional_api_key(authorization: str | None = Header(None)) -> str | None:
 async def post_import(
     req: MangaImportRequest, api_key: Annotated[str | None, Depends(_optional_api_key)]
 ) -> dict[str, Any]:
-    """PDF・画像を取り込み、構成の読み取りを始める。ファイルは渡した順にページになる。"""
+    """PDF・画像を取り込み、読み取りを始める。ファイルは渡した順にページになる。使い方は purpose で選ぶ。"""
     try:
         pages = await asyncio.to_thread(load_pages, [(f.name, _decode(f.data)) for f in req.files])
     except (UnidentifiedImageError, OSError, ValueError, zipfile.BadZipFile) as exc:
@@ -295,16 +378,16 @@ async def post_import(
     if not pages:
         raise HTTPException(status_code=400, detail="ページがありません。")
     if req.auto_manga is not None and not api_key:
-        raise HTTPException(status_code=401, detail="似た漫画を作るには NovelAI へのログインが必要です。")
+        raise HTTPException(status_code=401, detail="続けて漫画を作るには NovelAI へのログインが必要です。")
     conn = get_connection()
     try:
-        item = create_manga_import(conn, req.title.strip(), len(pages))
+        item = create_manga_import(conn, req.title.strip(), len(pages), req.purpose)
     finally:
         conn.close()
     _page_dir(item["id"]).mkdir(parents=True, exist_ok=True)
     for index, page in enumerate(pages):
         page.save(_page_path(item["id"], index), "PNG")
-    job = _start(item["id"], len(pages), req.use_vision, req.auto_manga, api_key)
+    job = _start(item["id"], len(pages), req.use_vision, req.purpose, req.auto_manga, api_key)
     return {**_summary(item), "job": _job_response(job)}
 
 
@@ -341,25 +424,86 @@ async def get_import_job(import_id: int) -> dict[str, Any] | None:
 
 
 @router.post("/{import_id}/analyze")
-async def reanalyze(import_id: int, use_vision: bool = True) -> dict[str, Any] | None:
-    """構成を読み取り直す(読み取りに失敗したときや、画像モデルを後から使うとき)。"""
+async def reanalyze(import_id: int, use_vision: bool = True, purpose: str | None = None) -> dict[str, Any] | None:
+    """
+    読み取り直す(読み取りに失敗したときや、画像モデルを後から使うとき)。purpose を渡すと使い方を変える
+    (similar / rebuild)。渡さなければ、取り込んだときの使い方のまま。読み取り直すと、手直ししたセリフは消える。
+    """
     item = _require(import_id)
-    return _job_response(_start(import_id, item["page_count"], use_vision))
+    if purpose is not None and purpose not in ("similar", "rebuild"):
+        raise HTTPException(status_code=422, detail="purpose は similar か rebuild です。")
+    return _job_response(
+        _start(import_id, item["page_count"], use_vision, purpose or item.get("purpose") or "structure")
+    )
 
 
-@router.post("/{import_id}/similar")
-async def post_similar(import_id: int, req: MangaImportAutoRequest, client: ClientDep) -> dict[str, Any] | None:
-    """読み取り済みの取り込みから、似た漫画を作る(ジョブ。進み具合は GET /{import_id}/job)。"""
+def _start_make(import_id: int, req: MangaImportAutoRequest, api_key: str, *, rebuild: bool) -> dict[str, Any] | None:
     item = _require(import_id)
     if item["status"] != "analyzed":
-        raise HTTPException(status_code=409, detail="取り込んだ作品の構成をまだ読み取っていません。")
+        raise HTTPException(status_code=409, detail="取り込んだ作品をまだ読み取っていません。")
+    if rebuild and (item.get("purpose") or "structure") != "rebuild":
+        raise HTTPException(
+            status_code=409,
+            detail="この取り込みはセリフを読み取っていません。「自分の作品を作り直す」で読み取り直してください。",
+        )
     running = _jobs.get(import_id)
     if running is not None and running.status == "running":
         raise HTTPException(status_code=409, detail="この取り込みは処理中です。")
     job = _ImportJob()
     _jobs[import_id] = job
-    job.task = asyncio.create_task(_similar(import_id, req, client.api_key, job))
+    job.task = asyncio.create_task(_make(import_id, req, api_key, job, rebuild=rebuild))
     return _job_response(job)
+
+
+@router.post("/{import_id}/similar")
+async def post_similar(import_id: int, req: MangaImportAutoRequest, client: ClientDep) -> dict[str, Any] | None:
+    """読み取り済みの取り込みから、似た漫画を作る(ジョブ。進み具合は GET /{import_id}/job)。"""
+    return _start_make(import_id, req, client.api_key, rebuild=False)
+
+
+@router.post("/{import_id}/rebuild")
+async def post_rebuild(import_id: int, req: MangaImportAutoRequest, client: ClientDep) -> dict[str, Any] | None:
+    """
+    セリフを読み取った取り込み(purpose が rebuild)を、セリフごと台本に起こして描き直す(ジョブ)。
+    make_images を False にすると台本(物語)を作るところまでで、コマの絵は生成しない。
+    """
+    return _start_make(import_id, req, client.api_key, rebuild=True)
+
+
+@router.put("/{import_id}/pages/{page_index}/panels/{panel_index}/lines")
+async def put_panel_lines(
+    import_id: int, page_index: int, panel_index: int, req: MangaImportLinesRequest
+) -> dict[str, Any]:
+    """読み取ったセリフを手直しする(purpose が rebuild のとき)。そのコマのセリフを、渡した並びに置き換える。"""
+    from ..manga_reading import MAX_LINE_CHARS, line_features
+
+    item = _require(import_id)
+    if (item.get("purpose") or "structure") != "rebuild":
+        raise HTTPException(status_code=409, detail="この取り込みはセリフの文面を持っていません。")
+    analysis = item.get("analysis") or {}
+    pages = analysis.get("pages") or []
+    if not (0 <= page_index < len(pages)) or not (0 <= panel_index < len(pages[page_index]["panels"])):
+        raise HTTPException(status_code=404, detail="panel not found")
+    panel = pages[page_index]["panels"][panel_index]
+    old = panel.get("lines") or []
+    lines = []
+    for index, raw in enumerate(req.lines):
+        text = raw.strip()[:MAX_LINE_CHARS]
+        if not text:
+            continue
+        line = {**line_features(text), "text": text}
+        # 位置は、同じ並びにあった元のセリフのものを引き継ぐ
+        if index < len(old) and old[index].get("box"):
+            line["box"] = old[index]["box"]
+        lines.append(line)
+    panel["lines"] = lines
+    panel["detailed"] = True
+    conn = get_connection()
+    try:
+        update_manga_import(conn, import_id, analysis=analysis)
+    finally:
+        conn.close()
+    return {**_summary(item), "analysis": analysis}
 
 
 @router.get("/{import_id}/pages/{page_index}")

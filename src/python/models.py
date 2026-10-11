@@ -432,16 +432,27 @@ class MangaImportAutoRequest(BaseModel):
     color: Optional[bool] = None
     # 参照画像の無いキャラに、キャラシートから自動で参照画像を作る
     references: bool = True
+    # False なら台本(物語)を作るところまで。コマの絵は生成しない(セリフや割り振りを直してから生成できる)
+    make_images: bool = True
+
+
+class MangaImportLinesRequest(BaseModel):
+    """読み取ったセリフの手直し(取り込みの使い方が rebuild のとき)。コマのセリフを、渡した並びに置き換える。"""
+
+    lines: list[str] = Field(default_factory=list, max_length=8)
 
 
 class MangaImportRequest(BaseModel):
-    """漫画の取り込み(構成の参考)。files は渡した順にページになる(PDF は全ページ、zip は中の画像と PDF)。"""
+    """漫画の取り込み。files は渡した順にページになる(PDF は全ページ、zip は中の画像と PDF)。"""
 
     title: str = Field(min_length=1, max_length=200)
     files: list[MangaImportFile] = Field(min_length=1, max_length=100)
     # コマの役割・感情をローカルの画像モデルで読む(1コマ十数秒)。False なら人数・構図・セリフ量だけ
     use_vision: bool = True
-    # 読み取りが終わったら、続けて似た漫画を作る
+    # 取り込みの使い方。similar: 似た漫画を作る(場面・所作・セリフの型を読む。セリフの文面は残さない)。
+    # rebuild: 自分の作品を作り直す(セリフの文面も読んで残す)
+    purpose: Literal["similar", "rebuild"] = "similar"
+    # 読み取りが終わったら、続けて漫画を作る(similar なら似た漫画、rebuild なら作り直し)
     auto_manga: Optional[MangaImportAutoRequest] = None
 
 
@@ -465,7 +476,7 @@ class MangaDraftPanel(BaseModel):
     characters: list[str] = Field(default_factory=list)
     # 呼び名 → そのコマでのそのキャラの表情・動作(英語タグ)
     actions: dict[str, str] = Field(default_factory=dict)
-    lines: list[MangaDraftLine] = Field(default_factory=list, max_length=4)
+    lines: list[MangaDraftLine] = Field(default_factory=list, max_length=8)
     narration: str = Field("", max_length=80)
     sfx: list[str] = Field(default_factory=list, max_length=8)
     prompt_tags: str = ""

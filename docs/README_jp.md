@@ -164,7 +164,8 @@ uv run pytest
 ├── docs/
 │   ├── README_jp.md             # 日本語 README（このファイル）
 │   ├── architecture.md          # システムアーキテクチャ & API リファレンス
-│   └── content_guard_jp.md      # コンテンツガード(効く範囲、DB の項目、編集用の API)
+│   ├── content_guard_jp.md      # コンテンツガード(効く範囲、DB の項目、編集用の API)
+│   └── manga_import_jp.md       # 作品の取り込み(似た漫画を作る / 自分の作品を作り直す)
 ├── index.html                   # Vite エントリーポイント
 ├── vite.config.ts               # Vite 設定（/api/ を :8000 へプロキシ）
 ├── pyproject.toml               # Python 依存関係 & ツール設定
@@ -200,7 +201,7 @@ MIT — 詳細は [LICENSE](../LICENSE) を参照してください。
 初回に使うときに `data/models/` へダウンロードします(このリポジトリには含みません)。
 
 - [deepghs/anime_head_detection](https://huggingface.co/deepghs/anime_head_detection)(MIT)— 吹き出しを置くための頭の位置。
-- [deepghs/manga109_yolo](https://huggingface.co/deepghs/manga109_yolo) — 作品の取り込み(構成の参考)で、コマ・顔・体・文字の位置。
+- [deepghs/manga109_yolo](https://huggingface.co/deepghs/manga109_yolo) — 作品の取り込みで、コマ・顔・体・文字の位置。
   学習データは [Manga109-s](https://huggingface.co/datasets/hal-utokyo/Manga109-s)
   (Aizawa et al., "Building a Manga Dataset 'Manga109' with Annotations for Multimedia Applications", IEEE MultiMedia, 2020)で、
   機械学習の結果の利用は認められていますが、データセットの再配布は禁止されています。
