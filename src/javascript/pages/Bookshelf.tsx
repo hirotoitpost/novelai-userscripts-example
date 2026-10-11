@@ -1,6 +1,7 @@
 import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import PublishDialog, { publishedMessage, PublishTarget } from '../components/PublishDialog'
 import {
   deleteBook,
   downloadFile,
@@ -8,8 +9,6 @@ import {
   formatDate,
   getJson,
   API_ORIGIN,
-  askPublicationTitle,
-  publish,
   Publication,
   Rating,
   readErrorDetail,
@@ -149,8 +148,9 @@ export default function Bookshelf() {
   // 出版する本を選ぶ(選んだ本の漫画のページから生成情報を取り除いて、出版物として別に保存する)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [publishing, setPublishing] = useState(false)
-  const [published, setPublished] = useState<Publication | null>(null)
+  // 出版のダイアログに渡すもの(fromSelection: 選択バーから開いた = 出版できたら選択を終える)
+  const [publishTarget, setPublishTarget] = useState<(PublishTarget & { fromSelection: boolean }) | null>(null)
+  const [published, setPublished] = useState<{ publication: Publication; downloaded: boolean } | null>(null)
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300)
@@ -254,22 +254,30 @@ export default function Bookshelf() {
     setSelected(new Set())
   }
 
-  async function publishSelected() {
-    // 本棚に並んでいる順で出版物に入れる
+  /** 選んだ本を出版する(ダイアログを開く)。本棚に並んでいる順で出版物に入れる。 */
+  function publishSelected() {
     const chosen = books.filter(b => selected.has(b.id))
-    const title = askPublicationTitle(chosen.length === 1 ? chosen[0].title : `本 ${chosen.length}冊`)
-    if (!title) return
-    setPublishing(true)
-    setError(null)
-    setPublished(null)
-    try {
-      setPublished(await publish(title, [], chosen.map(b => b.id)))
-      exitSelecting()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setPublishing(false)
-    }
+    if (chosen.length === 0) return
+    setPublishTarget({
+      imageKeys: [],
+      bookIds: chosen.map(b => b.id),
+      suggestion: chosen.length === 1 ? chosen[0].title : `本 ${chosen.length}冊`,
+      summary: chosen.length === 1 ? `「${chosen[0].title}」` : `本 ${chosen.length}冊`,
+      fromSelection: true,
+    })
+  }
+
+  /** 開いている本を、そのまま出版する(ダイアログを開く)。 */
+  function publishOne(book: Pick<Book, 'id' | 'title'>) {
+    setPublishTarget({
+      imageKeys: [], bookIds: [book.id], suggestion: book.title, summary: `「${book.title}」`, fromSelection: false,
+    })
+  }
+
+  /** 開いている本を、出版する選択に入れる・外す(選択モードに入る。閉じると選択バーから出版できる)。 */
+  function toggleSelectedFromReader(id: number) {
+    setSelecting(true)
+    toggleSelected(id)
   }
 
   function openBook(id: number) {
@@ -416,9 +424,11 @@ export default function Bookshelf() {
       {error && <div className="shelf-error">{error}</div>}
       {published && (
         <div className="shelf-published" role="status">
-          <span>出版物「{published.title}」を作りました({published.file_count}ファイル。生成情報は取り除いてあります)。</span>
-          <button type="button" onClick={() => void downloadFile(`/api/publications/${published.id}/download`, `${published.title}.zip`)
-            .catch(e => setError(e instanceof Error ? e.message : String(e)))}>ZIP をダウンロード</button>
+          <span>{publishedMessage(published.publication, published.downloaded)}</span>
+          {!published.downloaded && (
+            <button type="button" onClick={() => void downloadFile(`/api/publications/${published.publication.id}/download`, `${published.publication.title}.zip`)
+              .catch(e => setError(e instanceof Error ? e.message : String(e)))}>ZIP をダウンロード</button>
+          )}
           <button type="button" onClick={() => navigate('/publications')}>出版物の一覧へ</button>
           <button type="button" onClick={() => setPublished(null)} aria-label="閉じる">×</button>
         </div>
@@ -428,10 +438,10 @@ export default function Bookshelf() {
           <span>{selected.size} 冊選択</span>
           <button type="button" onClick={() => setSelected(new Set(books.map(b => b.id)))}>表示中をすべて選択</button>
           <button type="button" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>解除</button>
-          <button type="button" className="shelf-selectbar-primary" onClick={() => void publishSelected()}
-            disabled={selected.size === 0 || publishing}
+          <button type="button" className="shelf-selectbar-primary" onClick={publishSelected}
+            disabled={selected.size === 0}
             title="選んだ本の漫画のページから NovelAI の生成情報(メタデータ)を取り除き、出版物として別に保存して ZIP にまとめます">
-            {publishing ? '出版中…' : '出版する'}
+            出版する
           </button>
         </div>
       )}
@@ -498,6 +508,22 @@ export default function Bookshelf() {
           blurAdult={blurAdult}
           rating={rating}
           onEdit={() => navigate(`/story?story=${openId}`)}
+          onPublish={publishOne}
+          selectedForPublish={selected.has(openId)}
+          selectedCount={selected.size}
+          onToggleSelect={toggleSelectedFromReader}
+          publishedNotice={published ? publishedMessage(published.publication, published.downloaded) : null}
+        />
+      )}
+      {publishTarget && (
+        <PublishDialog
+          target={publishTarget}
+          onClose={() => setPublishTarget(null)}
+          onDone={(publication, downloaded) => {
+            setPublished({ publication, downloaded })
+            if (publishTarget.fromSelection) exitSelecting()
+            setPublishTarget(null)
+          }}
         />
       )}
     </div>
@@ -521,10 +547,19 @@ interface ReaderProps {
   blurAdult: boolean
   rating: Rating
   onEdit: () => void
+  /** この本をそのまま出版する(ダイアログを開く) */
+  onPublish: (book: Pick<Book, 'id' | 'title'>) => void
+  /** 出版する選択に入っているか、いま何冊選んでいるか */
+  selectedForPublish: boolean
+  selectedCount: number
+  onToggleSelect: (id: number) => void
+  /** 出版できたあとの知らせ(無ければ null) */
+  publishedNotice: string | null
 }
 
 function Reader({
   bookId, initialPage, onPage, onClose, onToggleBookmark, onToggleAdult, onDelete, onOpenBook, onShelfChanged, blurAdult, rating, onEdit,
+  onPublish, selectedForPublish, selectedCount, onToggleSelect, publishedNotice,
 }: ReaderProps) {
   const navigate = useNavigate()
   const [book, setBook] = useState<BookDetail | null>(null)
@@ -727,6 +762,7 @@ function Reader({
                 </button>
               </div>
             )}
+            {publishedNotice && <p className="reader-published" role="status">{publishedNotice}</p>}
             <div className="reader-actions">
               {book.pages.length > 0 && (
                 <>
@@ -743,6 +779,14 @@ function Reader({
                   テキスト
                 </button>
               )}
+              <button type="button" onClick={() => onPublish(book)}
+                title="この本の漫画のページから NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として保存します">
+                出版する
+              </button>
+              <button type="button" onClick={() => onToggleSelect(book.id)} aria-pressed={selectedForPublish}
+                title="ほかの本とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
+                {selectedForPublish ? `出版の選択から外す(${selectedCount}冊選択中)` : `出版に選ぶ${selectedCount > 0 ? `(${selectedCount}冊選択中)` : ''}`}
+              </button>
               <button type="button" onClick={onEdit}>編集</button>
               <button type="button" onClick={() => void toggleAdult()}>
                 {book.adult ? '成人向けから外す' : '成人向けにする'}

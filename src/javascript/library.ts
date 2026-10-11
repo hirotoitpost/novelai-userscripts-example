@@ -125,15 +125,6 @@ export async function deletePublication(id: number): Promise<void> {
   if (!res.ok) throw new Error(await readErrorDetail(res))
 }
 
-/** 出版物の名前を聞く(ZIP の名前になる)。やめたら null。 */
-export function askPublicationTitle(suggestion: string): string | null {
-  const title = window.prompt(
-    '出版物の名前(ZIP の名前になります)。\n選んだものから NovelAI の生成情報(メタデータ)を取り除き、出版物として別に保存します。',
-    suggestion,
-  )
-  return title?.trim() ? title.trim().slice(0, 120) : null
-}
-
 export type Rating = 'all' | 'general' | 'adult'
 
 export const RATINGS: { id: Rating; label: string }[] = [

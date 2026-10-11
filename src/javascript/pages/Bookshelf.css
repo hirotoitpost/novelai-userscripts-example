@@ -1022,3 +1022,14 @@
   border-color: #2f8a62;
   color: #d8ffe8;
 }
+
+.reader-published {
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: #143a2a;
+  border: 1px solid #1f6a4a;
+  border-radius: 8px;
+  color: #d8ffe8;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}

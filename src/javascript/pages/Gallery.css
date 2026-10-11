@@ -583,3 +583,13 @@
   padding: 0.3rem 0.7rem;
   cursor: pointer;
 }
+
+.gallery-published-inline {
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: #143a2a;
+  border: 1px solid #1f6a4a;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
