@@ -72,11 +72,15 @@ from ..character_sheet import (
     characters_negative,
     characters_seed,
     join_tags,
+    split_prompt,
 )
 from ..models import (
+    CharacterNewRequest,
     CharacterResponse,
     CharacterSaveRequest,
     CharacterSheetRequest,
+    CharacterSplitRequest,
+    CharacterSplitResponse,
     CharacterDuplicateRequest,
     CharacterUsageResponse,
     ReplaceStoryCharacterRequest,
@@ -1936,6 +1940,38 @@ async def create_character(req: CharacterSaveRequest) -> dict[str, Any]:
     conn = get_connection()
     try:
         return save_character(conn, req.name, req.appearance_tags, req.notes)
+    finally:
+        conn.close()
+
+
+@router.post("/characters/split-prompt", response_model=CharacterSplitResponse)
+async def split_character_prompt(req: CharacterSplitRequest) -> dict[str, str]:
+    """
+    プロンプトをキャラシートの項目(容姿・服装・画風)に分ける。画像生成ページやメタデータ管理ページの入力を
+    キャラシートに反映するときの下書き。語の一覧で見分けるので、画面で確かめて直してから保存する。
+    """
+    return split_prompt(req.prompt)
+
+
+@router.post("/characters/new", response_model=CharacterResponse)
+async def create_new_character(req: CharacterNewRequest) -> dict[str, Any]:
+    """
+    キャラを新しく作り、キャラシートの項目も入れる。POST /characters と違い、同じ名前のキャラがあれば作らない
+    (409。黙って上書きしない)。
+    """
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="名前を入れてください。")
+    conn = get_connection()
+    try:
+        if any(c["name"] == name for c in list_characters(conn)):
+            raise HTTPException(
+                status_code=409, detail=f"「{name}」という名前のキャラは既にあります(上書きするなら、そのキャラを選んでください)。"
+            )
+        fields = req.model_dump(exclude_unset=True, exclude={"name", "notes"})
+        sheet = _checked_sheet({"name": name}, fields)
+        created = save_character(conn, name, str(sheet.pop("appearance_tags", "") or ""), req.notes)
+        return update_character_sheet(conn, created["id"], sheet) or created
     finally:
         conn.close()
 

@@ -1,0 +1,160 @@
+.sfp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(4, 4, 10, 0.72);
+}
+
+.sfp-dialog {
+  width: min(40rem, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 1.2rem 1.4rem;
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-top: 4px solid #7b5cf6;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  color: #e8e8ff;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.sfp-dialog h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.05rem;
+}
+
+.sfp-hint {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: #9a9ac0;
+}
+
+p.sfp-hint {
+  margin: 0.2rem 0 0.8rem;
+}
+
+.sfp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.8rem;
+  font-size: 0.82rem;
+}
+
+.sfp-dialog select,
+.sfp-dialog input[type='text'],
+.sfp-dialog input:not([type]),
+.sfp-dialog textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  background: #0b0b14;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.sfp-dialog textarea {
+  resize: vertical;
+}
+
+.sfp-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.sfp-fields[aria-busy='true'] {
+  opacity: 0.55;
+}
+
+.sfp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.sfp-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.sfp-current {
+  margin: 0;
+  font-size: 0.76rem;
+  color: #e8c46a;
+  word-break: break-word;
+}
+
+.sfp-other {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  background: #11111f;
+  border: 1px dashed #2a2a50;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: #b8b8dc;
+  word-break: break-word;
+}
+
+.sfp-target {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid #1f1f3a;
+}
+
+.sfp-name {
+  margin: 0 0 0.3rem 1.6rem;
+  width: calc(100% - 1.6rem) !important;
+}
+
+.sfp-error {
+  margin: 0.5rem 0 0;
+  color: #ff8a9a;
+  font-size: 0.84rem;
+}
+
+.sfp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.sfp-actions button {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+
+.sfp-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sfp-actions button.sfp-primary {
+  background: #5b3fd6;
+  border-color: #7b5cf6;
+  color: #fff;
+}

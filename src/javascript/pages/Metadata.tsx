@@ -8,6 +8,7 @@ import {
   MetadataGenerationSettings,
   GENERATE_FROM_IMAGE_KEY,
 } from '../api'
+import SheetFromPromptDialog, { SheetSource } from '../components/SheetFromPromptDialog'
 import './Metadata.css'
 
 function expandMetadata(meta: Record<string, unknown>): Record<string, unknown> {
@@ -37,6 +38,9 @@ export default function Metadata() {
   const [error,      setError]      = useState<string | null>(null)
   const [dragOver,   setDragOver]   = useState(false)
   const [sending,    setSending]    = useState(false)
+  // 画像に埋め込まれていた設定をキャラシートに反映するダイアログ
+  const [sheetSource, setSheetSource] = useState<SheetSource | null>(null)
+  const [sheetMsg,    setSheetMsg]    = useState<string | null>(null)
 
   const processFile = useCallback(async (file: File) => {
     if (!file.type.match(/^image\//)) {
@@ -97,6 +101,27 @@ export default function Metadata() {
       const settings = await apiFetch<MetadataGenerationSettings>(token!, '/api/metadata/generation', { image: imageB64 })
       sessionStorage.setItem(GENERATE_FROM_IMAGE_KEY, JSON.stringify({ settings, name: fileName }))
       navigate('/generate')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  /** 画像に埋め込まれた設定(プロンプト・キャラごとのプロンプト・ネガティブ・シード値)を、キャラシートに反映する。 */
+  const handleSheet = async () => {
+    if (!imageB64) return
+    setSending(true)
+    setError(null)
+    setSheetMsg(null)
+    try {
+      const settings = await apiFetch<MetadataGenerationSettings>(token!, '/api/metadata/generation', { image: imageB64 })
+      setSheetSource({
+        prompt: settings.prompt,
+        negative: settings.negative_prompt,
+        seed: settings.seed,
+        characters: settings.characters.map(c => ({ prompt: c.prompt, negative: c.negative })),
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -208,7 +233,7 @@ export default function Metadata() {
               </section>
 
               <section className="meta-section">
-                <span className="meta-label">この設定で画像を生成</span>
+                <span className="meta-label">この設定を使う</span>
                 <p className="meta-no-meta">
                   埋め込まれたプロンプト・モデル・サイズ・ステップ数・サンプラー・シード値などを画像生成ページに入れます。
                   画像生成ページで「生成」を押すと、同じ設定で生成します。
@@ -216,6 +241,11 @@ export default function Metadata() {
                 <button type="button" className="meta-download-btn" onClick={handleGenerate} disabled={sending || !hasMetadata}>
                   {sending ? '読み込み中…' : '🎨 この設定で画像生成ページへ'}
                 </button>
+                <button type="button" className="meta-download-btn" onClick={handleSheet} disabled={sending || !hasMetadata}
+                  title="埋め込まれたプロンプト・ネガティブプロンプト・シード値を、キャラシートに反映する(新しく追加、または既存のキャラに上書き)">
+                  👤 キャラシートに反映
+                </button>
+                {sheetMsg && <p className="meta-no-meta" role="status">{sheetMsg}</p>}
               </section>
 
               <section className="meta-section meta-erase-section">
@@ -263,6 +293,19 @@ export default function Metadata() {
           {error && <p className="meta-error" role="alert">{error}</p>}
         </main>
       </div>
+      {sheetSource && token && (
+        <SheetFromPromptDialog
+          source={sheetSource}
+          token={token}
+          onClose={() => setSheetSource(null)}
+          onSaved={(character, created) => {
+            setSheetSource(null)
+            setSheetMsg(created
+              ? `「${character.name}」をキャラシートに追加しました。`
+              : `「${character.name}」のキャラシートに上書きしました。`)
+          }}
+        />
+      )}
     </div>
   )
 }

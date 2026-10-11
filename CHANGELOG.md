@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **入力値をキャラシートに反映** — 画像生成ページの入力(プロンプト・キャラごとのプロンプト・ネガティブ・シード値)や、
+  メタデータ管理ページで読んだ画像の設定を、キャラシートに反映できる。プロンプトを容姿・服装・画風に分けた下書きを
+  確かめて、新しいキャラとして追加するか、既存のキャラに上書きする(反映するのはチェックした項目だけ)
+
 ### Planned
 
 - Inpainting UI
