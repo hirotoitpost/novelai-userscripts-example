@@ -8,6 +8,9 @@
 - rebuild(自分の作品を作り直す): セリフの文面も読み、セリフごと台本に起こして描き直す(make_rebuild)。
   自分の作品(権利のある作品)のためのもの。
 
+描き文字(手描きの効果音)は、場所の候補だけを見つける(読みは分からない)。画面で、候補を外す・読みを入れる・
+見落としを足す(PUT …/sfx)。読みを入れたものに形の似た候補には、読みの候補を出す(GET …/sfx-suggestions)。
+
 読み取った構成は、漫画ドラフト(/api/manga-draft の import_id)でもコマ運びの参考として使える。
 """
 
@@ -17,6 +20,7 @@ import asyncio
 import os
 import base64
 import binascii
+import io
 import shutil
 import zipfile
 from dataclasses import dataclass, field
@@ -27,7 +31,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from novelai import AsyncNovelAI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
 
 from ..db import (
@@ -40,7 +44,7 @@ from ..db import (
 )
 from ..manga_import import analyze_page, classify_panel, load_pages, panel_dict
 from ..client import get_client
-from ..models import MangaImportAutoRequest, MangaImportLinesRequest, MangaImportRequest
+from ..models import MangaImportAutoRequest, MangaImportLinesRequest, MangaImportRequest, MangaImportSfxRequest
 
 router = APIRouter(prefix="/api/manga-import", tags=["manga-import"])
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
@@ -99,7 +103,7 @@ async def _analyze(import_id: int, page_count: int, use_vision: bool, job: _Impo
     pages: list[dict[str, Any]] = []
     try:
         for index in range(page_count):
-            what = "コマ・場面・セリフ" if purpose in ("similar", "rebuild") else "コマ"
+            what = "コマ・場面・セリフ・描き文字" if purpose in ("similar", "rebuild") else "コマ"
             job.message = f"{index + 1}ページ目の{what}を読み取っています"
             panels, overlays = await asyncio.to_thread(analyze_page, _page_path(import_id, index), purpose)
             if use_vision:
@@ -144,6 +148,7 @@ def _start(
         raise HTTPException(status_code=409, detail="この取り込みは読み取り中です。")
     job = _ImportJob(total=page_count)
     _jobs[import_id] = job
+    _forget_sfx_features(import_id)
     conn = get_connection()
     try:
         update_manga_import(conn, import_id, status="analyzing", purpose=purpose)
@@ -427,7 +432,8 @@ async def get_import_job(import_id: int) -> dict[str, Any] | None:
 async def reanalyze(import_id: int, use_vision: bool = True, purpose: str | None = None) -> dict[str, Any] | None:
     """
     読み取り直す(読み取りに失敗したときや、画像モデルを後から使うとき)。purpose を渡すと使い方を変える
-    (similar / rebuild)。渡さなければ、取り込んだときの使い方のまま。読み取り直すと、手直ししたセリフは消える。
+    (similar / rebuild)。渡さなければ、取り込んだときの使い方のまま。読み取り直すと、手直ししたセリフと
+    描き文字は消える。
     """
     item = _require(import_id)
     if purpose is not None and purpose not in ("similar", "rebuild"):
@@ -480,11 +486,7 @@ async def put_panel_lines(
     item = _require(import_id)
     if (item.get("purpose") or "structure") != "rebuild":
         raise HTTPException(status_code=409, detail="この取り込みはセリフの文面を持っていません。")
-    analysis = item.get("analysis") or {}
-    pages = analysis.get("pages") or []
-    if not (0 <= page_index < len(pages)) or not (0 <= panel_index < len(pages[page_index]["panels"])):
-        raise HTTPException(status_code=404, detail="panel not found")
-    panel = pages[page_index]["panels"][panel_index]
+    analysis, panel = _panel(item, page_index, panel_index)
     old = panel.get("lines") or []
     lines = []
     for index, raw in enumerate(req.lines):
@@ -504,6 +506,127 @@ async def put_panel_lines(
     finally:
         conn.close()
     return {**_summary(item), "analysis": analysis}
+
+
+def _panel(item: dict[str, Any], page_index: int, panel_index: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(analysis, そのコマ)。無ければ 404。"""
+    analysis = item.get("analysis") or {}
+    pages = analysis.get("pages") or []
+    if not (0 <= page_index < len(pages)) or not (0 <= panel_index < len(pages[page_index]["panels"])):
+        raise HTTPException(status_code=404, detail="panel not found")
+    return analysis, pages[page_index]["panels"][panel_index]
+
+
+@router.put("/{import_id}/pages/{page_index}/panels/{panel_index}/sfx")
+async def put_panel_sfx(
+    import_id: int, page_index: int, panel_index: int, req: MangaImportSfxRequest
+) -> dict[str, Any]:
+    """
+    コマの描き文字を手直しする。渡した並びに置き換える: 描き文字でない候補は並びから外し、見落とされたものは
+    box なしで足す。読み(reading)を残すのは purpose が rebuild のときだけ(similar では読みを捨てる)。
+    """
+    from ..manga_import import sfx_size
+
+    item = _require(import_id)
+    purpose = item.get("purpose") or "structure"
+    if purpose not in ("similar", "rebuild"):
+        raise HTTPException(status_code=409, detail="この取り込みは描き文字を読み取っていません。読み取り直してください。")
+    analysis, panel = _panel(item, page_index, panel_index)
+    with Image.open(_page_path(import_id, page_index)) as src:
+        width, height = src.size
+    sfx = []
+    for raw in req.sfx:
+        reading = raw.reading.strip() if purpose == "rebuild" else ""
+        if raw.box is None:
+            # 手で足したもの: 読みが無ければ意味が無いので捨てる
+            if reading:
+                sfx.append({"box": None, "size": "中", "reading": reading})
+            continue
+        x0, y0, x1, y1 = (round(v) for v in raw.box)
+        x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, width), min(y1, height)
+        if x1 <= x0 or y1 <= y0:
+            raise HTTPException(status_code=422, detail="描き文字の位置がページの外です。")
+        box = [x0, y0, x1, y1]
+        sfx.append({"box": box, "size": sfx_size(tuple(box), tuple(panel["box"])), "reading": reading})
+    panel["sfx"] = sfx
+    conn = get_connection()
+    try:
+        update_manga_import(conn, import_id, analysis=analysis)
+    finally:
+        conn.close()
+    return {**_summary(item), "analysis": analysis}
+
+
+# 描き文字の特徴(形の似かたを比べるためのベクトル)。キーは(取り込み, ページ, 位置)
+_sfx_features: dict[tuple[int, int, tuple[int, ...]], Any] = {}
+# 切り抜きのまわりに足す余白(ピクセル)
+_CROP_MARGIN = 6
+
+
+def _crop(import_id: int, page_index: int, box: list[int] | tuple[int, ...], margin: int = _CROP_MARGIN) -> Image.Image:
+    with Image.open(_page_path(import_id, page_index)) as src:
+        image = src.convert("RGB")
+    x0, y0, x1, y1 = box
+    return image.crop((max(x0 - margin, 0), max(y0 - margin, 0), min(x1 + margin, image.width), min(y1 + margin, image.height)))
+
+
+def _suggest(import_id: int, pages: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """読みの無い描き文字ごとの、読みの候補(同じ取り込みの、読みを入れた描き文字のうち形の似ているもの)。"""
+    from ..sfx_similarity import features, rank_readings
+
+    entries = [
+        (page_index, panel_index, index, sfx)
+        for page_index, page in enumerate(pages)
+        for panel_index, panel in enumerate(page["panels"])
+        for index, sfx in enumerate(panel.get("sfx") or [])
+        if sfx.get("box")
+    ]
+    known = [e for e in entries if str(e[3].get("reading") or "").strip()]
+    unknown = [e for e in entries if not str(e[3].get("reading") or "").strip()]
+    if not known or not unknown:
+        return {}
+    keys = {(import_id, e[0], tuple(e[3]["box"])) for e in known + unknown}
+    missing = [k for k in keys if k not in _sfx_features]
+    for key, vector in zip(missing, features([_crop(import_id, k[1], k[2], 0) for k in missing])):
+        _sfx_features[key] = vector
+    import numpy as np
+
+    matrix = np.stack([_sfx_features[(import_id, e[0], tuple(e[3]["box"]))] for e in known])
+    readings = [str(e[3]["reading"]).strip() for e in known]
+    return {
+        f"{e[0]}-{e[1]}-{e[2]}": rank_readings(_sfx_features[(import_id, e[0], tuple(e[3]["box"]))], matrix, readings)
+        for e in unknown
+    }
+
+
+@router.get("/{import_id}/sfx-suggestions")
+async def get_sfx_suggestions(import_id: int) -> dict[str, Any]:
+    """
+    読みの無い描き文字の、読みの候補。キーは「ページ-コマ-描き文字の番号」(0始まり)、値は似ている順の読み。
+    同じ取り込みの中で読みを入れた描き文字と、形を比べて出す(同じ描き手なら、上位5つに正解が入るのは半分ほど。
+    自動では決めない)。モデルを用意できなければ available が False。
+    """
+    item = _require(import_id)
+    pages = (item.get("analysis") or {}).get("pages") or []
+    try:
+        return {"available": True, "suggestions": await asyncio.to_thread(_suggest, import_id, pages)}
+    except Exception as exc:  # noqa: BLE001 候補が出せなくても、読みは手で入れられる
+        return {"available": False, "suggestions": {}, "detail": str(exc)}
+
+
+@router.get("/{import_id}/pages/{page_index}/crop")
+async def get_page_crop(import_id: int, page_index: int, x0: int, y0: int, x1: int, y1: int) -> Response:
+    """ページの一部(描き文字の候補を見せるための切り抜き)。"""
+    if not _page_path(import_id, page_index).is_file():
+        raise HTTPException(status_code=404, detail="page not found")
+    if x1 <= x0 or y1 <= y0:
+        raise HTTPException(status_code=422, detail="切り抜く範囲が正しくありません。")
+    crop = await asyncio.to_thread(_crop, import_id, page_index, (x0, y0, x1, y1))
+    if crop.width < 1 or crop.height < 1:
+        raise HTTPException(status_code=422, detail="切り抜く範囲がページの外です。")
+    buf = io.BytesIO()
+    crop.save(buf, "PNG")
+    return Response(buf.getvalue(), media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/{import_id}/pages/{page_index}")
@@ -527,3 +650,9 @@ async def delete_import(import_id: int) -> None:
     finally:
         conn.close()
     shutil.rmtree(_page_dir(import_id), ignore_errors=True)
+    _forget_sfx_features(import_id)
+
+
+def _forget_sfx_features(import_id: int) -> None:
+    for key in [k for k in _sfx_features if k[0] == import_id]:
+        del _sfx_features[key]

@@ -16,6 +16,9 @@
   コマ運びとセリフの型までで、セリフ・設定・キャラそのものは写さない。
 - rebuild(自分の作品を作り直す): 上に加えて、セリフの文面も残す。自分の作品(権利のある作品)を、セリフごと
   台本に起こして描き直すためのもの。
+
+どちらの使い方でも、描き文字(手描きの効果音)の場所の候補をコマごとに残す(sfx)。読みは分からないので、
+rebuild では画面で読みを入れてもらう。similar では読みは使わず、描き文字の有無と大きさだけを台本作りに渡す。
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ import numpy as np
 from PIL import Image
 
 from .manga_elements import detect_elements
-from .manga_reading import describe_panel, line_features, ocr_engine, ocr_lock, order_in_panel, read_speech
+from .manga_reading import describe_panel, line_features, ocr_engine, ocr_lock, order_in_panel, read_page
 from .manga_v2.detect import detect_heads
 
 logger = logging.getLogger(__name__)
@@ -92,6 +95,9 @@ class PanelInfo:
     # 写っている人(1girl, 1boy など)
     cast_tags: list[str] = field(default_factory=list)
     lines: list[dict[str, Any]] = field(default_factory=list)
+    # 描き文字(手描きの効果音)の候補。box はページ上の位置(x0, y0, x1, y1。手で足したものは None)、size は
+    # コマに対する大きさ(大 / 中 / 小)、reading は読み(画面で入れる。rebuild のときだけ)
+    sfx: list[dict[str, Any]] = field(default_factory=list)
     # セリフ・場面を読んだか(読んでいなければ、セリフの量は text_blocks だけが手がかり)
     detailed: bool = False
 
@@ -448,24 +454,52 @@ def _head_shot(heads: list, rect: Rect) -> str:
 PURPOSES = ("structure", "similar", "rebuild")
 
 
-def _add_details(image: Image.Image, panels: list[PanelInfo], text_boxes: list | None, keep_text: bool) -> None:
-    """コマごとの場面・所作のタグとセリフを足す(purpose が similar / rebuild のとき)。"""
-    speeches = read_speech(image, text_boxes)
+# 描き文字の大きさ: コマの面積に占める割合(これ以上で大、これ未満で小)
+_SFX_LARGE = 0.08
+_SFX_SMALL = 0.02
+
+
+def sfx_size(box: tuple[float, float, float, float], rect: Rect) -> str:
+    """描き文字の大きさ(大 / 中 / 小)。コマの面積に占める割合で決める。"""
+    share = _area(box) / max(rect[2] * rect[3], 1)
+    if share >= _SFX_LARGE:
+        return "大"
+    return "小" if share < _SFX_SMALL else "中"
+
+
+def _panel_of(box: tuple[float, float, float, float], panels: list[PanelInfo]) -> int | None:
+    """中心が入っているコマ。どのコマにも入っていなければ、いちばん近いコマ(コマが無ければ None)。"""
+    index = next((i for i, p in enumerate(panels) if _inside(box, p.box)), None)
+    if index is None and panels:
+        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        index = min(
+            range(len(panels)),
+            key=lambda i: (
+                max(panels[i].box[0] - cx, 0, cx - panels[i].box[0] - panels[i].box[2]) ** 2
+                + max(panels[i].box[1] - cy, 0, cy - panels[i].box[1] - panels[i].box[3]) ** 2
+            ),
+        )
+    return index
+
+
+def _add_details(
+    image: Image.Image, panels: list[PanelInfo], text_boxes: list | None, keep_text: bool, face_boxes: list | None = None
+) -> None:
+    """コマごとの場面・所作のタグ、セリフ、描き文字の候補を足す(purpose が similar / rebuild のとき)。"""
+    reading = read_page(image, text_boxes, face_boxes)
     by_panel: dict[int, list] = {}
-    for speech in speeches:
-        centre = ((speech.box[0] + speech.box[2]) / 2, (speech.box[1] + speech.box[3]) / 2)
-        # 吹き出しの中心が入っているコマ。どのコマにも入っていなければ、いちばん近いコマ
-        index = next((i for i, p in enumerate(panels) if _inside(speech.box, p.box)), None)
-        if index is None and panels:
-            index = min(
-                range(len(panels)),
-                key=lambda i: (
-                    max(panels[i].box[0] - centre[0], 0, centre[0] - panels[i].box[0] - panels[i].box[2]) ** 2
-                    + max(panels[i].box[1] - centre[1], 0, centre[1] - panels[i].box[1] - panels[i].box[3]) ** 2
-                ),
-            )
+    for speech in reading.speeches:
+        index = _panel_of(speech.box, panels)
         if index is not None:
             by_panel.setdefault(index, []).append(speech)
+    for panel in panels:
+        panel.sfx = []
+    for box in reading.sfx_boxes:
+        index = _panel_of(box, panels)
+        if index is not None:
+            panels[index].sfx.append(
+                {"box": [round(v) for v in box], "size": sfx_size(box, panels[index].box), "reading": ""}
+            )
     for index, panel in enumerate(panels):
         x, y, w, h = panel.box
         panel.scene_tags, panel.action_tags, panel.cast_tags = describe_panel(image.crop((x, y, x + w, y + h)))
@@ -508,7 +542,13 @@ def analyze_page(page_path: Path, purpose: str = "structure") -> tuple[list[Pane
             crop = image.crop((x, y, x + w, y + h))
             panels.append(PanelInfo(rect, len(inside), _head_shot(inside, rect), _count_text_blocks(crop)))
     if purpose in ("similar", "rebuild"):
-        _add_details(image, panels, elements["text"] if elements is not None else None, purpose == "rebuild")
+        _add_details(
+            image,
+            panels,
+            elements["text"] if elements is not None else None,
+            purpose == "rebuild",
+            elements["face"] if elements is not None else None,
+        )
     return panels, overlays
 
 
@@ -619,14 +659,23 @@ def _speech_summary(panel: dict) -> str:
     return f"セリフ{len(lines)}個(" + " / ".join(kinds) + ")"
 
 
+def _sfx_summary(panel: dict) -> str:
+    """描き文字の有無と大きさ(例: 描き文字: 大1・小2)。読みは入れない。無ければ空。"""
+    sizes = [str(s.get("size") or "中") for s in panel.get("sfx") or []]
+    counted = [f"{size}{sizes.count(size)}" for size in ("大", "中", "小") if size in sizes]
+    return "描き文字: " + "・".join(counted) if counted else ""
+
+
 def structure_lines(panels: list[dict]) -> list[str]:
-    """コマの構成を、台本AIに渡す1行ずつの説明にする(筋書きとセリフの文面は含まない)。"""
+    """コマの構成を、台本AIに渡す1行ずつの説明にする(筋書きとセリフ・描き文字の文面は含まない)。"""
     lines = []
     for panel in panels:
         parts: list[str] = [_SHOT_LABELS.get(panel["shot"]) or str(panel["shot"])]
         if panel["people"]:
             parts.append(f"{panel['people']}人")
         parts.append(_speech_summary(panel))
+        if _sfx_summary(panel):
+            parts.append(_sfx_summary(panel))
         if panel.get("scene_tags"):
             parts.append("場面: " + ", ".join(panel["scene_tags"]))
         if panel.get("action_tags"):

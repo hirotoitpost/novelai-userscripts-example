@@ -24,8 +24,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from python import db, manga_import, manga_reading  # noqa: E402
 from python.manga_draft import DraftCharacter, episode_prompts  # noqa: E402
 from python.manga_import import structure_lines  # noqa: E402
-from python.manga_reading import Speech, TextColumn, group_columns, line_features, order_in_panel, read_speech  # noqa: E402
-from python.manga_rebuild import assign_prompts, parse_assignment, script_panels  # noqa: E402
+from python.manga_reading import (  # noqa: E402
+    PageReading,
+    Speech,
+    TextColumn,
+    group_columns,
+    line_features,
+    order_in_panel,
+    read_speech,
+)
+from python.manga_rebuild import assign_prompts, panel_sfx, parse_assignment, script_panels  # noqa: E402
 from python.manga_similar import apply_import_panels, wordless  # noqa: E402
 from python.routes import manga_import as import_routes  # noqa: E402
 
@@ -235,11 +243,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(manga_import, "describe_panel", lambda crop: (["hallway"], ["smile"], ["1girl"]))
     monkeypatch.setattr(
         manga_import,
-        "read_speech",
-        lambda image, boxes: [
-            Speech((500, 100, 560, 260), "いっしょに帰りませんか？"),
-            Speech((100, 700, 160, 800), "うわっ"),
-        ],
+        "read_page",
+        lambda image, boxes, faces=None: PageReading(
+            [Speech((500, 100, 560, 260), "いっしょに帰りませんか？"), Speech((100, 700, 160, 800), "うわっ")],
+            # 描き文字の候補: 上のコマに大きいもの、下のコマに小さいもの
+            [(100.2, 100.0, 300.0, 300.4), (600.0, 900.0, 660.0, 960.0)],
+        ),
     )
     app = FastAPI()
     app.include_router(import_routes.router)
@@ -274,6 +283,9 @@ def test_similar_import_keeps_only_the_shape_of_lines(client: TestClient) -> Non
     assert first["scene_tags"] == ["hallway"] and first["action_tags"] == ["smile"] and first["cast_tags"] == ["1girl"]
     assert first["lines"] == [{"chars": 12, "ending": "問いかけ", "polite": True}]
     assert second["lines"] == [{"chars": 3, "ending": "ふつう", "polite": False}]
+    # 描き文字は場所と大きさだけ(読みは無い)
+    assert first["sfx"] == [{"box": [100, 100, 300, 300], "size": "大", "reading": ""}]
+    assert second["sfx"] == [{"box": [600, 900, 660, 960], "size": "小", "reading": ""}]
     assert "帰りませんか" not in str(item)
     # セリフの文面が無いので、手直しも作り直しもできない
     res = client.put(f"/api/manga-import/{item['id']}/pages/0/panels/0/lines", json={"lines": ["x"]})
@@ -316,3 +328,157 @@ def test_old_imports_stay_structure_only(client: TestClient) -> None:
         conn.close()
     assert old["purpose"] == "structure"
     assert client.get(f"/api/manga-import/{old['id']}").json()["purpose"] == "structure"
+
+
+# ---- 描き文字 ----
+
+
+def test_plain_reading_always_asks_for_recognition(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    RapidOCR は直前の呼び出しの指定を覚えている。場所だけを探したあとでも文字を読めるように、
+    読むときは検出・向き・認識をいつも指定する。
+    """
+    calls: list[dict] = []
+
+    class Engine:
+        sticky = {"use_rec": True}
+
+        def __call__(self, image, **flags):
+            self.sticky.update(flags)
+            calls.append(dict(flags))
+
+            class Result:
+                boxes = [[(0, 0), (40, 0), (40, 200), (0, 200)]]
+                # 認識を切ったままだと、文字は返らない
+                txts = ("こんにちは",) if Engine.sticky["use_rec"] else None
+                scores = (0.99,) if Engine.sticky["use_rec"] else None
+
+            return Result()
+
+    monkeypatch.setattr(manga_reading, "ocr_engine", lambda: Engine())
+    image = Image.new("RGB", (400, 400), "white")
+    assert manga_reading._detect_text_boxes(image, 0.5) == [(0.0, 0.0, 80.0, 400.0)]
+    assert calls[-1] == {"use_det": True, "use_cls": False, "use_rec": False}
+    columns = manga_reading._ocr_columns(image)
+    assert [c.text for c in columns] == ["こんにちは"]
+    assert calls[-1] == {"use_det": True, "use_cls": True, "use_rec": True}
+
+
+def test_sfx_candidates_skip_speech_faces_and_end_marks(monkeypatch: pytest.MonkeyPatch) -> None:
+    image = Image.new("RGB", (1000, 1000), "white")
+    speech = [(700.0, 100.0, 760.0, 300.0)]
+    face = [(400.0, 400.0, 600.0, 600.0)]
+    found = {
+        1.0: [
+            (705.0, 110.0, 755.0, 290.0),  # セリフ
+            (470.0, 470.0, 520.0, 510.0),  # 顔の中の小さなもの(目)
+            (100.0, 100.0, 180.0, 220.0),  # 描き文字の一部
+            (10.0, 10.0, 20.0, 20.0),  # 小さすぎる
+            (40.0, 900.0, 160.0, 950.0),  # 終わりの印
+        ],
+        0.5: [(90.0, 90.0, 260.0, 330.0)],  # 同じ描き文字の全体
+        0.33: [(0.0, 0.0, 1000.0, 1000.0)],  # 大きすぎる
+    }
+    monkeypatch.setattr(manga_reading, "_detect_text_boxes", lambda source, scale: found[scale])
+    boxes = manga_reading.detect_sfx(image, speech, face, exclude_boxes=[(42.0, 902.0, 158.0, 948.0)])
+    # 一部と全体は1つにまとめ、標準的な大きさ(中央値の2倍まで)でいちばん大きい枠を選ぶ
+    assert boxes == [(90.0, 90.0, 260.0, 330.0)]
+
+
+def test_end_marks_are_found_from_the_page_reading() -> None:
+    columns = [column(40, 900, 120, 50, "おわり"), column(700, 100, 50, 200, "いっしょに帰りませんか？")]
+    assert manga_reading.end_mark_boxes(columns) == [(40, 900, 160, 950)]
+
+
+def test_sfx_reach_the_scripts_as_presence_or_as_entered_readings() -> None:
+    panel = {
+        "shot": "medium",
+        "people": 1,
+        "text_blocks": 0,
+        "detailed": True,
+        "lines": [],
+        "sfx": [
+            {"box": [0, 0, 10, 10], "size": "小", "reading": "ぽつ"},
+            {"box": [0, 0, 90, 90], "size": "大", "reading": "どーん"},
+            {"box": [0, 0, 20, 20], "size": "小", "reading": ""},
+            {"box": None, "size": "中", "reading": "ざわ"},
+        ],
+    }
+    # 似た漫画: 有無と大きさだけ(読みは渡さない)
+    line = structure_lines([panel])[0]
+    assert line == "中くらい・1人・セリフなし・描き文字: 大1・中1・小2" and "どーん" not in line
+    _, user = episode_prompts({"title": "題", "logline": "", "episodes": ["一話"]}, 0, CAST, structure=[line])
+    assert "「描き文字」のあるコマは、sfx に効果音を1つ入れる" in user
+    # 作り直し: 読みを入れたものを、大きいものから2つまで
+    assert panel_sfx(panel) == ["どーん", "ざわ"]
+    assigned = [{"characters": ["あかり"], "actions": {}, "speakers": [], "kinds": []}]
+    assert script_panels([panel], assigned)[0]["sfx"] == ["どーん", "ざわ"]
+    assert panel_sfx({"lines": []}) == []
+
+
+def test_sfx_can_be_removed_named_and_added(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    item = _import(client, "rebuild")
+    url = f"/api/manga-import/{item['id']}/pages/0/panels/0/sfx"
+    res = client.put(
+        url,
+        json={
+            "sfx": [
+                {"box": [100, 100, 300, 300], "reading": " どーん "},
+                {"box": None, "reading": "ざわ"},
+                {"box": None, "reading": "  "},
+            ]
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["analysis"]["pages"][0]["panels"][0]["sfx"] == [
+        {"box": [100, 100, 300, 300], "size": "大", "reading": "どーん"},
+        {"box": None, "size": "中", "reading": "ざわ"},
+    ]
+    assert client.put(url, json={"sfx": [{"box": [900, 100, 950, 200], "reading": ""}]}).status_code == 422
+    assert client.put(url.replace("panels/0", "panels/9"), json={"sfx": []}).status_code == 404
+    # 切り抜き(まわりに余白を足す)
+    crop = client.get(f"/api/manga-import/{item['id']}/pages/0/crop?x0=100&y0=100&x1=300&y1=300")
+    assert crop.status_code == 200 and Image.open(io.BytesIO(crop.content)).size == (212, 212)
+    assert client.get(f"/api/manga-import/{item['id']}/pages/0/crop?x0=300&y0=100&x1=100&y1=300").status_code == 422
+    assert client.get(f"/api/manga-import/{item['id']}/pages/5/crop?x0=0&y0=0&x1=9&y1=9").status_code == 404
+
+    # 読みの候補: 読みを入れた描き文字(上のコマ)から、読みの無いもの(下のコマ)へ
+    import numpy as np
+
+    from python import sfx_similarity
+
+    monkeypatch.setattr(sfx_similarity, "features", lambda images: np.eye(len(images), 4, dtype=np.float32))
+    res = client.get(f"/api/manga-import/{item['id']}/sfx-suggestions").json()
+    assert res == {"available": True, "suggestions": {"0-1-0": ["どーん"]}}
+
+    def broken(images):
+        raise RuntimeError("モデルを取得できません")
+
+    import_routes._sfx_features.clear()
+    monkeypatch.setattr(sfx_similarity, "features", broken)
+    res = client.get(f"/api/manga-import/{item['id']}/sfx-suggestions").json()
+    assert res["available"] is False and res["suggestions"] == {}
+    # 外す
+    assert client.put(url, json={"sfx": []}).json()["analysis"]["pages"][0]["panels"][0]["sfx"] == []
+
+
+def test_similar_imports_never_keep_sfx_readings(client: TestClient) -> None:
+    item = _import(client, "similar")
+    url = f"/api/manga-import/{item['id']}/pages/0/panels/0/sfx"
+    res = client.put(url, json={"sfx": [{"box": [100, 100, 300, 300], "reading": "どーん"}, {"box": None, "reading": "ざわ"}]})
+    assert res.status_code == 200, res.text
+    assert res.json()["analysis"]["pages"][0]["panels"][0]["sfx"] == [
+        {"box": [100, 100, 300, 300], "size": "大", "reading": ""}
+    ]
+    assert "どーん" not in str(client.get(f"/api/manga-import/{item['id']}").json())
+
+
+def test_rank_readings_lists_each_reading_once() -> None:
+    import numpy as np
+
+    from python.sfx_similarity import _prepare, rank_readings
+
+    known = np.array([[1, 0], [0.9, 0.1], [0, 1]], np.float32)
+    assert rank_readings(np.array([1, 0], np.float32), known, ["どーん", "どーん", "ざわ"]) == ["どーん", "ざわ"]
+    assert rank_readings(np.array([1, 0], np.float32), known[:0], []) == []
+    assert _prepare(Image.new("RGB", (300, 80), "white")).shape == (3, 224, 224)

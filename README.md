@@ -273,6 +273,9 @@ These models are downloaded to `data/models/` on first use and are not part of t
   Without it, panels are found from their border lines instead.
 - [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) (Apache-2.0) — danbooru tags for the reverse prompt
   (image → NovelAI prompt) when the image has no embedded NovelAI metadata. About 1.3 GB.
+- [onnx-community/dinov2-small](https://huggingface.co/onnx-community/dinov2-small) (Apache-2.0; ONNX export of
+  [facebook/dinov2-small](https://huggingface.co/facebook/dinov2-small)) — compares the shapes of hand-drawn sound effects
+  to suggest readings when importing manga. About 88 MB.
 
 ## Related Projects
 

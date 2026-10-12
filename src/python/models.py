@@ -506,6 +506,19 @@ class MangaImportLinesRequest(BaseModel):
     lines: list[str] = Field(default_factory=list, max_length=8)
 
 
+class MangaImportSfxItem(BaseModel):
+    """描き文字1つ。box はページ上の位置(x0, y0, x1, y1)。見落とされたものを手で足すときは box なし。"""
+
+    box: Optional[list[float]] = Field(None, min_length=4, max_length=4)
+    reading: str = Field("", max_length=20)
+
+
+class MangaImportSfxRequest(BaseModel):
+    """コマの描き文字の手直し。渡した並びに置き換える(候補を外す・読みを入れる・手で足す)。"""
+
+    sfx: list[MangaImportSfxItem] = Field(default_factory=list, max_length=20)
+
+
 class MangaImportRequest(BaseModel):
     """漫画の取り込み。files は渡した順にページになる(PDF は全ページ、zip は中の画像と PDF)。"""
 

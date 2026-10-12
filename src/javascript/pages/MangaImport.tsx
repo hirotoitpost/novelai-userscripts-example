@@ -12,6 +12,7 @@ import './MangaImport.css'
  * 取り込むときに使い方を選ぶ:
  *  - similar(似た漫画を作る): コマ運び・場面・所作・セリフの型まで読み、新しい話の漫画にする。セリフの文面は残さない
  *  - rebuild(自分の作品を作り直す): セリフの文面も読み、セリフごと台本に起こして描き直す
+ * 描き文字(手描きの効果音)は場所の候補だけが見つかる(読みは分からない)。違うものは外し、rebuild では読みを入れる。
  */
 
 type Purpose = 'similar' | 'rebuild'
@@ -39,6 +40,14 @@ interface PanelInfo {
   scene_tags?: string[]
   action_tags?: string[]
   lines?: { chars: number; ending: string; polite: boolean; text?: string }[]
+  sfx?: Sfx[]
+}
+
+/** 描き文字の候補。box はページ上の位置(x0, y0, x1, y1。手で足したものは null)。reading は rebuild のときだけ */
+interface Sfx {
+  box: [number, number, number, number] | null
+  size: string
+  reading: string
 }
 
 interface ImportDetail extends ImportSummary {
@@ -96,6 +105,9 @@ export default function MangaImport() {
   const [scriptOnly, setScriptOnly] = useLocalStorage('nai_import_script_only', false)
   // 手直し中のセリフ(キーは ページ-コマ)
   const [lineDrafts, setLineDrafts] = useState<Record<string, string>>({})
+  // 入力中の描き文字の読み(キーは ページ-コマ-番号。足すときは ページ-コマ-new)と、読みの候補
+  const [sfxDrafts, setSfxDrafts] = useState<Record<string, string>>({})
+  const [sfxSuggestions, setSfxSuggestions] = useState<Record<string, string[]>>({})
   const [autoPages, setAutoPages] = useLocalStorage('nai_import_auto_pages', 4)
   const [autoCast, setAutoCast] = useState<number[]>([])
   const [characters, setCharacters] = useState<Character[]>([])
@@ -217,7 +229,7 @@ export default function MangaImport() {
     const note = next === 'rebuild'
       ? 'セリフの文面も読み取ります(自分の作品を作り直すため)。'
       : 'セリフの文面は残さず、場面・所作・セリフの型だけを読み取ります。'
-    if (!window.confirm(`「${selected.title}」を読み取り直します。${note}手直ししたセリフは消えます。よろしいですか?`)) return
+    if (!window.confirm(`「${selected.title}」を読み取り直します。${note}手直ししたセリフと描き文字は消えます。よろしいですか?`)) return
     setError(null)
     try {
       const res = await fetch(`/api/manga-import/${selected.id}/analyze?use_vision=${useVision}&purpose=${next}`, {
@@ -225,6 +237,7 @@ export default function MangaImport() {
       })
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
       setLineDrafts({})
+      setSfxDrafts({})
       await loadList()
       await open(selected.id)
     } catch (e) {
@@ -254,6 +267,43 @@ export default function MangaImport() {
   }
 
   const pages = selected?.analysis?.pages ?? []
+
+  // 読みの候補: 読みを入れた描き文字に形の似たものへ、その読みを出す(同じ取り込みの中だけ)
+  const selectedId = selected?.id
+  const sfxKey = selected?.purpose === 'rebuild'
+    ? pages.map(pg => pg.panels.map(p => (p.sfx ?? []).map(s => `${s.box?.join(',')}=${s.reading}`).join(';')).join('|')).join('/')
+    : ''
+  useEffect(() => {
+    if (!token || !selectedId || !sfxKey.match(/=[^;|/]/)) {
+      setSfxSuggestions({})
+      return
+    }
+    let stale = false
+    apiFetch<{ suggestions: Record<string, string[]> }>(token, `/api/manga-import/${selectedId}/sfx-suggestions`)
+      .then(res => { if (!stale) setSfxSuggestions(res.suggestions) })
+      .catch(() => {})
+    return () => { stale = true }
+  }, [token, selectedId, sfxKey])
+
+  /** コマの描き文字を置き換える(外す・読みを入れる・足す)。 */
+  const saveSfx = async (pageIndex: number, panelIndex: number, next: { box: Sfx['box']; reading: string }[]) => {
+    if (!token || !selected) return
+    setError(null)
+    try {
+      const res = await fetch(`/api/manga-import/${selected.id}/pages/${pageIndex}/panels/${panelIndex}/sfx`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ sfx: next.map(s => ({ box: s.box, reading: s.reading.trim().slice(0, 20) })) }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      setSelected(await res.json())
+      // 番号がずれるので、そのコマの入力中の読みは捨てる
+      const prefix = `${pageIndex}-${panelIndex}-`
+      setSfxDrafts(drafts => Object.fromEntries(Object.entries(drafts).filter(([k]) => !k.startsWith(prefix))))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   return (
     <div className="mi-root">
@@ -395,6 +445,8 @@ export default function MangaImport() {
               {selected.purpose === 'rebuild' && 'セリフの文面を読み取ってあります。間違いはコマごとの欄で直せます(1行に1つのセリフ)。'}
               {selected.purpose === 'similar' && 'セリフは数・長さ・調子だけを読み取ってあります(文面は保存していません)。'}
               {selected.purpose === 'structure' && '構成だけを読み取ってあります(場面・所作・セリフは読んでいません)。'}
+              {selected.purpose === 'rebuild' && ' 描き文字(効果音)は場所の候補だけを見つけてあります(青い点線)。読みは分からないので、コマごとの欄で入れてください。違うものは外せます。見落としもあります(足せます)。'}
+              {selected.purpose === 'similar' && ' 描き文字(効果音)は場所の候補だけを見つけてあります(青い点線。読みは使いません)。違うものは外せます。'}
               {' '}
               <button type="button" className="mi-item-action" disabled={selected.status === 'analyzing'} onClick={() => void reread('similar')}>似た漫画用に読み取り直す</button>
               <button type="button" className="mi-item-action" disabled={selected.status === 'analyzing'} onClick={() => void reread('rebuild')}>作り直し用に読み取り直す(セリフも読む)</button>
@@ -419,6 +471,14 @@ export default function MangaImport() {
                           height: `calc(${p.box[3]} / var(--h, 1) * 100%)`,
                         }}>{k + 1}</span>
                       ))}
+                      {panels?.flatMap((p, k) => (p.sfx ?? []).map((s, i) => s.box && (
+                        <span key={`${k}-${i}`} className="mi-sfx-box" style={{
+                          left: `calc(${s.box[0]} / var(--w, 1) * 100%)`,
+                          top: `calc(${s.box[1]} / var(--h, 1) * 100%)`,
+                          width: `calc(${s.box[2] - s.box[0]} / var(--w, 1) * 100%)`,
+                          height: `calc(${s.box[3] - s.box[1]} / var(--h, 1) * 100%)`,
+                        }} />
+                      )))}
                     </div>
                     <figcaption>
                       <strong>{index + 1}ページ</strong>
@@ -451,6 +511,68 @@ export default function MangaImport() {
                                     )}
                                   </div>
                                 )}
+                                {p.detailed && selected.purpose !== 'structure' && ((p.sfx?.length ?? 0) > 0 || selected.purpose === 'rebuild') && (() => {
+                                  const sfx = p.sfx ?? []
+                                  const rebuild = selected.purpose === 'rebuild'
+                                  const plain = sfx.map(s => ({ box: s.box, reading: s.reading }))
+                                  const setReading = (i: number, reading: string) =>
+                                    void saveSfx(index, k, plain.map((s, j) => (j === i ? { ...s, reading } : s)))
+                                  const newKey = `${key}-new`
+                                  const adding = (sfxDrafts[newKey] ?? '').trim()
+                                  return (
+                                    <div className="mi-sfx">
+                                      <span className="mi-tags">描き文字{sfx.length > 0 ? `の候補 ${sfx.length}個` : ''}</span>
+                                      {sfx.map((s, i) => {
+                                        const sKey = `${key}-${i}`
+                                        const typed = sfxDrafts[sKey]
+                                        const hints = s.reading ? [] : (sfxSuggestions[sKey] ?? [])
+                                        return (
+                                          <div className="mi-sfx-item" key={sKey}>
+                                            {s.box
+                                              ? <img className="mi-sfx-crop" alt={`描き文字の候補 ${i + 1}`} loading="lazy"
+                                                  src={`/api/manga-import/${selected.id}/pages/${index}/crop?x0=${s.box[0]}&y0=${s.box[1]}&x1=${s.box[2]}&y1=${s.box[3]}`} />
+                                              : <span className="mi-sfx-crop mi-sfx-crop--none">手で追加</span>}
+                                            <div className="mi-sfx-body">
+                                              <span className="mi-tags">大きさ: {s.size}</span>
+                                              {rebuild && (
+                                                <input value={typed ?? s.reading} placeholder="読み(例: どーん)" maxLength={20}
+                                                  aria-label={`${index + 1}ページ ${k + 1}コマ目 描き文字${i + 1}の読み`}
+                                                  onChange={e => setSfxDrafts({ ...sfxDrafts, [sKey]: e.target.value })}
+                                                  onKeyDown={e => { if (e.key === 'Enter' && typed !== undefined) setReading(i, typed) }} />
+                                              )}
+                                              {rebuild && hints.length > 0 && (
+                                                <div className="mi-chips" title="同じ作品で読みを入れた描き文字のうち、形の似ているもの(当たるのは半分ほど)">
+                                                  {hints.map(h => (
+                                                    <button type="button" key={h} className="mi-chip" onClick={() => setReading(i, h)}>{h}</button>
+                                                  ))}
+                                                </div>
+                                              )}
+                                              <div className="mi-sfx-actions">
+                                                {rebuild && typed !== undefined && typed.trim() !== s.reading && (
+                                                  <button type="button" className="mi-item-action" onClick={() => setReading(i, typed)}>読みを保存</button>
+                                                )}
+                                                <button type="button" className="mi-item-action"
+                                                  onClick={() => void saveSfx(index, k, plain.filter((_, j) => j !== i))}>
+                                                  {s.box ? '描き文字ではない(外す)' : '外す'}
+                                                </button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )
+                                      })}
+                                      {rebuild && sfx.length < 20 && (
+                                        <div className="mi-sfx-add">
+                                          <input value={sfxDrafts[newKey] ?? ''} placeholder="見落とされた描き文字の読みを足す" maxLength={20}
+                                            aria-label={`${index + 1}ページ ${k + 1}コマ目に描き文字を足す`}
+                                            onChange={e => setSfxDrafts({ ...sfxDrafts, [newKey]: e.target.value })}
+                                            onKeyDown={e => { if (e.key === 'Enter' && adding) void saveSfx(index, k, [...plain, { box: null, reading: adding }]) }} />
+                                          <button type="button" className="mi-item-action" disabled={!adding}
+                                            onClick={() => void saveSfx(index, k, [...plain, { box: null, reading: adding }])}>足す</button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })()}
                               </li>
                             )
                           })}
