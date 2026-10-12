@@ -410,6 +410,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 漫画のジャンル(漫画ドラフトのジャンル欄と、取り込みの割り当ての候補)。画面から足したり消したりできる。
+    # 初めて表を作るときだけ、既定のジャンルを入れる(消したものが、起動のたびに戻らないように)
+    first_genres = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manga_genres'").fetchone() is None
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manga_genres (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    if first_genres:
+        for name in DEFAULT_MANGA_GENRES:
+            add_manga_genre(conn, name)
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -2281,7 +2296,8 @@ def list_panel_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 # 取り込みの使い方。structure: 構成だけ(この列ができる前の取り込み)、similar: 似た漫画を作る、
 # rebuild: 自分の作品を作り直す(セリフの文面も持つ)
-_MANGA_IMPORTS_EXTRA_COLUMNS = {"purpose": "TEXT NOT NULL DEFAULT 'structure'"}
+# genre: 漫画ドラフトのジャンル(日常コメディ など)への割り当て。空は割り当てなし
+_MANGA_IMPORTS_EXTRA_COLUMNS = {"purpose": "TEXT NOT NULL DEFAULT 'structure'", "genre": "TEXT NOT NULL DEFAULT ''"}
 
 
 def _migrate_manga_imports(conn: sqlite3.Connection) -> None:
@@ -2293,12 +2309,12 @@ def _migrate_manga_imports(conn: sqlite3.Connection) -> None:
 
 
 def create_manga_import(
-    conn: sqlite3.Connection, title: str, page_count: int, purpose: str = "structure"
+    conn: sqlite3.Connection, title: str, page_count: int, purpose: str = "structure", genre: str = ""
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
-        "INSERT INTO manga_imports (title, page_count, purpose, created_at) VALUES (?, ?, ?, ?)",
-        (title, page_count, purpose, now),
+        "INSERT INTO manga_imports (title, page_count, purpose, genre, created_at) VALUES (?, ?, ?, ?, ?)",
+        (title, page_count, purpose, genre, now),
     )
     conn.commit()
     return get_manga_import(conn, int(cur.lastrowid or 0)) or {}
@@ -2325,7 +2341,10 @@ def update_manga_import(
     status: str | None = None,
     analysis: Any = None,
     purpose: str | None = None,
+    genre: str | None = None,
 ) -> None:
+    if genre is not None:
+        conn.execute("UPDATE manga_imports SET genre = ? WHERE id = ?", (genre, import_id))
     if purpose is not None:
         conn.execute("UPDATE manga_imports SET purpose = ? WHERE id = ?", (purpose, import_id))
     if status is not None:
@@ -2340,6 +2359,34 @@ def update_manga_import(
 def delete_manga_import(conn: sqlite3.Connection, import_id: int) -> None:
     conn.execute("DELETE FROM manga_imports WHERE id = ?", (import_id,))
     conn.commit()
+
+
+# ---- 漫画のジャンル ----
+
+# 初めて表を作るときに入れるジャンル(そのあとは、画面や API で足したり消したりする)
+DEFAULT_MANGA_GENRES = ("日常コメディ", "夫婦の日常コメディ", "学園コメディ", "ラブコメ", "ほのぼの", "ちょっといい話", "ドタバタギャグ")
+
+
+def list_manga_genres(conn: sqlite3.Connection) -> list[str]:
+    """ジャンルの名前(足した順)。"""
+    return [row["name"] for row in conn.execute("SELECT name FROM manga_genres ORDER BY id")]
+
+
+def add_manga_genre(conn: sqlite3.Connection, name: str) -> bool:
+    """ジャンルを足す。すでにあれば何もしない。足したら True。"""
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO manga_genres (name, created_at) VALUES (?, ?)",
+        (name, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_manga_genre(conn: sqlite3.Connection, name: str) -> bool:
+    """ジャンルを候補から消す(取り込みへの割り当てはそのまま残る)。消したら True。"""
+    cur = conn.execute("DELETE FROM manga_genres WHERE name = ?", (name,))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # ---- 出版物 ----

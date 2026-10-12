@@ -489,7 +489,8 @@ class MangaImportAutoRequest(BaseModel):
 
     # 使う登録済みのキャラ。空なら、取り込んだページの人物の見た目から新しいキャラを作る(最大2人)
     character_ids: list[int] = Field(default_factory=list, max_length=4)
-    genre: str = Field("日常コメディ", max_length=100)
+    # None なら、取り込みに割り当てたジャンル(無ければ 日常コメディ)
+    genre: Optional[str] = Field(None, max_length=100)
     # 冒頭のこのページ数だけ漫画にする(生成の数を抑えるため)
     max_pages: int = Field(4, ge=1, le=10)
     # None なら取り込んだ作品に合わせる(白黒なら白黒)
@@ -498,6 +499,18 @@ class MangaImportAutoRequest(BaseModel):
     references: bool = True
     # False なら台本(物語)を作るところまで。コマの絵は生成しない(セリフや割り振りを直してから生成できる)
     make_images: bool = True
+
+
+class MangaGenreRequest(BaseModel):
+    """漫画のジャンルを足す。"""
+
+    name: str = Field(min_length=1, max_length=100)
+
+
+class MangaImportUpdateRequest(BaseModel):
+    """取り込みの手直し。genre は漫画ドラフトのジャンルへの割り当て(空文字で外す)。"""
+
+    genre: Optional[str] = Field(None, max_length=100)
 
 
 class MangaImportLinesRequest(BaseModel):
@@ -529,6 +542,9 @@ class MangaImportRequest(BaseModel):
     # 取り込みの使い方。similar: 似た漫画を作る(場面・所作・セリフの型を読む。セリフの文面は残さない)。
     # rebuild: 自分の作品を作り直す(セリフの文面も読んで残す)
     purpose: Literal["similar", "rebuild"] = "similar"
+    # 漫画ドラフトのジャンルへの割り当て(日常コメディ など。空なら割り当てない)。漫画ドラフトで同じジャンルを
+    # 選ぶと構成の参考の先頭に出て、似た漫画を作るときのジャンルにもなる
+    genre: str = Field("", max_length=100)
     # 読み取りが終わったら、続けて漫画を作る(similar なら似た漫画、rebuild なら作り直し)
     auto_manga: Optional[MangaImportAutoRequest] = None
 

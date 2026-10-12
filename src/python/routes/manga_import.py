@@ -11,6 +11,10 @@
 描き文字(手描きの効果音)は、場所の候補だけを見つける(読みは分からない)。画面で、候補を外す・読みを入れる・
 見落としを足す(PUT …/sfx)。読みを入れたものに形の似た候補には、読みの候補を出す(GET …/sfx-suggestions)。
 
+取り込みには、漫画ドラフトのジャンルを割り当てられる(genre。取り込むときか、あとから PATCH で。候補に無い
+ジャンルを割り当てると、候補(/api/manga-draft/genres)にも足す)。似た漫画を作るときの
+ジャンルになり、漫画ドラフトでは同じジャンルの取り込みが構成の参考の先頭に出る。
+
 読み取った構成は、漫画ドラフト(/api/manga-draft の import_id)でもコマ運びの参考として使える。
 """
 
@@ -35,6 +39,7 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
 
 from ..db import (
+    add_manga_genre,
     create_manga_import,
     delete_manga_import,
     get_connection,
@@ -44,7 +49,13 @@ from ..db import (
 )
 from ..manga_import import analyze_page, classify_panel, load_pages, panel_dict
 from ..client import get_client
-from ..models import MangaImportAutoRequest, MangaImportLinesRequest, MangaImportRequest, MangaImportSfxRequest
+from ..models import (
+    MangaImportAutoRequest,
+    MangaImportLinesRequest,
+    MangaImportRequest,
+    MangaImportSfxRequest,
+    MangaImportUpdateRequest,
+)
 
 router = APIRouter(prefix="/api/manga-import", tags=["manga-import"])
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
@@ -93,6 +104,7 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
         "page_count": item["page_count"],
         "status": item["status"],
         "purpose": item.get("purpose") or "structure",
+        "genre": item.get("genre") or "",
         "panel_count": sum(len(p["panels"]) for p in pages),
         "created_at": item["created_at"],
     }
@@ -177,6 +189,15 @@ async def _make(import_id: int, req: MangaImportAutoRequest, api_key: str, job: 
         job.detail = str(exc)
 
 
+# ジャンルを割り当てていない取り込みから似た漫画を作るときのジャンル
+DEFAULT_GENRE = "日常コメディ"
+
+
+def _genre(import_id: int, req: MangaImportAutoRequest) -> str:
+    """作る漫画のジャンル: 指定があればそれ、無ければ取り込みに割り当てたジャンル、それも無ければ既定。"""
+    return (req.genre or "").strip() or (_require(import_id).get("genre") or "").strip() or DEFAULT_GENRE
+
+
 def _used_pages(import_id: int, max_pages: int) -> tuple[list[int], list[list[dict[str, Any]]]]:
     """漫画にするページ(コマのあるページを冒頭から max_pages まで)の番号と、そのコマ。"""
     from .manga_draft import _MAX_EPISODES, _MAX_PANELS_PER_EPISODE
@@ -218,7 +239,7 @@ async def _prepare_cast(
         if not features.people:
             raise RuntimeError("取り込んだページから人物を見つけられませんでした。使うキャラを選んでください。")
         job.message = "登場人物の名前と人物像を考えています"
-        named = await name_people(api_key, features.people, req.genre, features.setting)
+        named = await name_people(api_key, features.people, _genre(import_id, req), features.setting)
         conn = get_connection()
         try:
             for person, info in zip(features.people, named):
@@ -309,7 +330,7 @@ async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str
     theme = theme_of(features)
     notes = "セリフのない漫画。セリフや説明に頼らず、絵(表情・動作・場面)だけで伝わる話にする。" if wordless(page_panels) else ""
     outlines = await generate_outlines(
-        api_key, theme, req.genre, cast, len(structure), notes=notes, structure=structure
+        api_key, theme, _genre(import_id, req), cast, len(structure), notes=notes, structure=structure
     )
     outline = outlines[0]
     episodes: list[list[dict[str, Any]]] = []
@@ -386,7 +407,10 @@ async def post_import(
         raise HTTPException(status_code=401, detail="続けて漫画を作るには NovelAI へのログインが必要です。")
     conn = get_connection()
     try:
-        item = create_manga_import(conn, req.title.strip(), len(pages), req.purpose)
+        item = create_manga_import(conn, req.title.strip(), len(pages), req.purpose, req.genre.strip())
+        # 候補に無いジャンルを割り当てたら、候補にも足す
+        if req.genre.strip():
+            add_manga_genre(conn, req.genre.strip())
     finally:
         conn.close()
     _page_dir(item["id"]).mkdir(parents=True, exist_ok=True)
@@ -421,6 +445,21 @@ async def get_import(import_id: int) -> dict[str, Any]:
     """取り込みの中身。analysis.pages[].panels[] にコマの位置(box)と構成がある。"""
     item = _require(import_id)
     return {**_summary(item), "analysis": item.get("analysis")}
+
+
+@router.patch("/{import_id}")
+async def patch_import(import_id: int, req: MangaImportUpdateRequest) -> dict[str, Any]:
+    """取り込みを手直しする。genre: 漫画ドラフトのジャンルへの割り当て(空文字で外す)。"""
+    _require(import_id)
+    if req.genre is not None:
+        conn = get_connection()
+        try:
+            update_manga_import(conn, import_id, genre=req.genre.strip())
+            if req.genre.strip():
+                add_manga_genre(conn, req.genre.strip())
+        finally:
+            conn.close()
+    return _summary(_require(import_id))
 
 
 @router.get("/{import_id}/job")

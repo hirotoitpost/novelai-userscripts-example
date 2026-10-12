@@ -12,6 +12,17 @@
 
 `structure` は、使い方を選べるようになる前に取り込んだものです。新しく取り込むときは選べません。「読み取り直す」で `similar` か `rebuild` に変えられます。
 
+### ジャンルの割り当て
+
+取り込みには、漫画ドラフトのジャンル(日常コメディ など)を1つ割り当てられます。取り込むときに選ぶか、取り込んだ作品を
+開いて、あとから変えられます(空にすると外れます)。
+
+- **漫画ドラフト**(`/manga-draft`)でそのジャンルを選ぶと、「構成の参考」の先頭に、そのジャンルに割り当てた取り込みが
+  まとまって出ます。
+- **似た漫画を作る**ときのジャンルになります(割り当てが無ければ「日常コメディ」)。
+- ジャンルの候補は DB にあり、どちらのページの「ジャンルの管理」からも足したり消したりできます。候補に無いジャンルを
+  取り込みに割り当てると、候補にも入ります。候補から消しても、取り込みへの割り当ては残ります。
+
 ## 1. 読み取り
 
 1ページずつ、次の順で読みます([src/python/manga_import.py](../src/python/manga_import.py)、[src/python/manga_reading.py](../src/python/manga_reading.py))。
@@ -117,8 +128,12 @@
 
 | メソッド・パス | 内容 |
 |---|---|
-| `POST /api/manga-import` | 取り込む。`{title, files, use_vision, purpose, auto_manga}`。`purpose` は `similar`(既定)か `rebuild`。`auto_manga` を付けると、読み取りに続けて漫画を作る(`similar` なら似た漫画、`rebuild` なら作り直し) |
+| `POST /api/manga-import` | 取り込む。`{title, files, use_vision, purpose, genre, auto_manga}`。`purpose` は `similar`(既定)か `rebuild`。`auto_manga` を付けると、読み取りに続けて漫画を作る(`similar` なら似た漫画、`rebuild` なら作り直し) |
 | `GET /api/manga-import`、`GET /api/manga-import/{id}` | 一覧、中身(`analysis.pages[].panels[]`) |
+| `PATCH /api/manga-import/{id}` | 取り込みを手直しする。`{genre}` でジャンルを割り当てる(空文字で外す) |
+| `GET /api/manga-draft/genres` | ジャンルの候補(足した順の名前の配列) |
+| `POST /api/manga-draft/genres` | ジャンルを足す。`{name}`。候補の一覧を返す |
+| `DELETE /api/manga-draft/genres?name=` | ジャンルを候補から消す。候補の一覧を返す |
 | `GET /api/manga-import/{id}/job` | 読み取り・生成の進み具合 |
 | `POST /api/manga-import/{id}/analyze?use_vision=&purpose=` | 読み取り直す。`purpose` を付けると使い方を変える。手直ししたセリフと描き文字は消える |
 | `PUT /api/manga-import/{id}/pages/{page}/panels/{panel}/lines` | セリフを手直しする(`rebuild` のみ)。`{lines: ["…", "…"]}` で、そのコマのセリフを置き換える |
@@ -129,7 +144,7 @@
 | `POST /api/manga-import/{id}/rebuild` | 作り直す(`rebuild` のみ) |
 | `DELETE /api/manga-import/{id}` | 取り込みとページ画像を消す |
 
-`similar` / `rebuild` / `auto_manga` の本文: `{character_ids, genre, max_pages, color, references, make_images}`。
+`similar` / `rebuild` / `auto_manga` の本文: `{character_ids, genre, max_pages, color, references, make_images}`。`genre` を省くと、取り込みに割り当てたジャンルを使います。
 
 コマ(`panels[]`)の形:
 
