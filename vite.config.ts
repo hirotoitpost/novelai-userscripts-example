@@ -10,12 +10,23 @@ const https = process.env.NAI_HTTPS === '1' && existsSync(`${certDir}/server.crt
   ? { cert: readFileSync(`${certDir}/server.crt`), key: readFileSync(`${certDir}/server.key`) }
   : undefined
 
+// 開発サーバーの自動更新(HMR: コードを書き換えると、開いているページがその場で更新される仕組み)。既定はオフ。
+// オンだと、ページと開発サーバーの接続(WebSocket)が切れて戻ったときに、Vite がページを読み込み直す。スマホでは
+// ファイル選択の画面を開く・別のアプリに切り替えるだけで接続が切れ、戻った瞬間に再読み込みされて、選んだファイルや
+// 書きかけの入力が消える(実機の報告と、接続を閉じるテストで確認)。オフの間は、コードを変えたら手で読み込み直す。
+// フロントのコードを続けて書き換えるときは、環境変数 NAI_HMR=1 でオンにできる。
+const hmr = process.env.NAI_HMR === '1'
+
 export default defineConfig({
   plugins: [react()],
   root: '.',
   server: {
     host: true,
     https,
+    hmr,
+    // HMR をオフにするだけでは、ページは開発サーバーへ接続し続け、切れて戻ると読み込み直す(Vite 6.4 で確認)。
+    // 接続の受け口(WebSocket)ごと止めると、ページは最初から接続できず、読み込み直しも起きない
+    ...(hmr ? {} : { ws: false as const }),
     // LAN 内の DNS(別リポジトリの lan-dns)で付けた名前(novelai.lan など)でも開けるようにする。
     // 先頭のドットは「.lan で終わる名前すべて」
     allowedHosts: ['.lan'],
