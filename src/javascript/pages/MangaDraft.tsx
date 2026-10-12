@@ -7,6 +7,7 @@ import { apiFetch, ImagePreset } from '../api'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import GenreManager from '../components/GenreManager'
 import { DEFAULT_GENRE, genreOptions, useGenres } from '../genres'
+import { useLocalStorage } from '../hooks/useLocalStorage'
 import './MangaDraft.css'
 
 /**
@@ -139,6 +140,8 @@ export default function MangaDraft() {
   })
   const [imports, setImports] = useState<ImportSummary[]>([])
   const genres = useGenres(token)
+  // ジャンルを選んだら、そのジャンルに割り当てた取り込みを、構成の参考に自動で選ぶ
+  const [autoImport, setAutoImport] = useLocalStorage('nai_draft_auto_import', false)
   const [characters, setCharacters] = useState<Character[]>([])
   const [seriesList, setSeriesList] = useState<Series[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
@@ -154,6 +157,24 @@ export default function MangaDraft() {
     setTemplate(t => (draft.importId != null ? IMPORT_LAYOUT : t === IMPORT_LAYOUT ? 'vertical4' : t))
   }, [draft.importId])
   const useImportLayout = template === IMPORT_LAYOUT && draft.importId != null
+  /**
+   * ジャンルを変える。「参考を自動で選ぶ」がオンなら、構成の参考も合わせる: そのジャンルに割り当てた取り込みが
+   * あれば、いちばん新しいものを選ぶ(いまの参考が同じジャンルならそのまま)。無ければ、別のジャンルに割り当てた
+   * 参考だけを外す(ジャンルを割り当てていない取り込みを手で選んであるときは、そのまま)。
+   */
+  const changeGenre = (value: string, auto = autoImport) => {
+    const next = value.trim()
+    const patch: Partial<DraftState> = { genre: value }
+    if (auto && next !== '') {
+      const usable = imports.filter(i => i.status === 'analyzed')
+      const current = usable.find(i => i.id === draft.importId)
+      const match = usable.find(i => (i.genre ?? '') === next)
+      if (match && (current?.genre ?? '') !== next) patch.importId = match.id
+      else if (!match && current?.genre) patch.importId = null
+    }
+    update(patch)
+  }
+
   // 構成の参考に選べる取り込みを、いまのジャンルに割り当てたものと、ほかに分ける
   const usableImports = imports.filter(i => i.status === 'analyzed' || i.id === draft.importId)
   const sameGenreImports = usableImports.filter(i => draft.genre.trim() !== '' && (i.genre ?? '') === draft.genre.trim())
@@ -447,7 +468,7 @@ export default function MangaDraft() {
           <div className="md-row">
             <label className="md-field">
               <span>ジャンル</span>
-              <input list="md-genres" value={draft.genre} onChange={e => update({ genre: e.target.value })} />
+              <input list="md-genres" value={draft.genre} onChange={e => changeGenre(e.target.value)} />
               <datalist id="md-genres">{genreOptions(genres.genres, imports.map(i => i.genre)).map(g => <option key={g} value={g} />)}</datalist>
             </label>
             <label className="md-field md-field--narrow">
@@ -479,6 +500,15 @@ export default function MangaDraft() {
           {selectedSeries && (
             <p className="md-hint">シリーズの人物設定と既刊のあらすじを前提に、続編として作ります。</p>
           )}
+          <label className="md-check">
+            <input type="checkbox" checked={autoImport}
+              onChange={e => {
+                setAutoImport(e.target.checked)
+                // オンにしたら、いまのジャンルにもすぐ合わせる
+                if (e.target.checked) changeGenre(draft.genre, true)
+              }} />
+            ジャンルを選んだら、そのジャンルに割り当てた取り込みを構成の参考に自動で選ぶ
+          </label>
           <label className="md-field">
             <span>構成の参考(取り込んだ作品)</span>
             <select value={draft.importId ?? ''} onChange={e => update({ importId: e.target.value ? Number(e.target.value) : null })}>
