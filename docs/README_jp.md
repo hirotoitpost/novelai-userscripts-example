@@ -165,6 +165,7 @@ uv run pytest
 │   ├── README_jp.md             # 日本語 README（このファイル）
 │   ├── architecture.md          # システムアーキテクチャ & API リファレンス
 │   ├── content_guard_jp.md      # コンテンツガード(効く範囲、DB の項目、編集用の API)
+│   ├── gallery_manga_jp.md      # ギャラリーの画像から漫画を作る(ジャンルに合うセリフ・描き文字を付ける)
 │   ├── manga_import_jp.md       # 作品の取り込み(似た漫画を作る / 自分の作品を作り直す)
 │   └── publish_jp.md            # 出版(生成情報を取り除いた画像・本を ZIP にまとめる)
 ├── index.html                   # Vite エントリーポイント

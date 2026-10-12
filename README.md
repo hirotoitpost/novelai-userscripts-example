@@ -228,6 +228,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 │   ├── README_jp.md             # Japanese README
 │   ├── architecture.md          # System architecture & API reference
 │   ├── content_guard_jp.md      # Content guards: coverage, DB-backed rules and the edit API (Japanese)
+│   ├── gallery_manga_jp.md      # Manga from selected gallery images: script and SFX for a chosen genre (Japanese)
 │   ├── manga_import_jp.md       # Manga import: similar-manga and rebuild modes, what is read and kept (Japanese)
 │   └── publish_jp.md            # Publishing: metadata-free copies of selected images/books as a ZIP (Japanese)
 ├── index.html                   # Vite entry point
