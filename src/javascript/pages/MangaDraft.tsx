@@ -159,7 +159,7 @@ export default function MangaDraft() {
   const useImportLayout = template === IMPORT_LAYOUT && draft.importId != null
   /**
    * ジャンルを変える。「参考を自動で選ぶ」がオンなら、構成の参考も合わせる: そのジャンルに割り当てた取り込みが
-   * あれば、いちばん新しいものを選ぶ(いまの参考が同じジャンルならそのまま)。無ければ、別のジャンルに割り当てた
+   * あれば、その中からランダムに選ぶ(いまの参考が同じジャンルならそのまま)。無ければ、別のジャンルに割り当てた
    * 参考だけを外す(ジャンルを割り当てていない取り込みを手で選んであるときは、そのまま)。
    */
   const changeGenre = (value: string, auto = autoImport) => {
@@ -168,9 +168,12 @@ export default function MangaDraft() {
     if (auto && next !== '') {
       const usable = imports.filter(i => i.status === 'analyzed')
       const current = usable.find(i => i.id === draft.importId)
-      const match = usable.find(i => (i.genre ?? '') === next)
-      if (match && (current?.genre ?? '') !== next) patch.importId = match.id
-      else if (!match && current?.genre) patch.importId = null
+      const matches = usable.filter(i => (i.genre ?? '') === next)
+      if (matches.length > 0 && (current?.genre ?? '') !== next) {
+        patch.importId = matches[Math.floor(Math.random() * matches.length)].id
+      } else if (matches.length === 0 && current?.genre) {
+        patch.importId = null
+      }
     }
     update(patch)
   }
@@ -507,7 +510,7 @@ export default function MangaDraft() {
                 // オンにしたら、いまのジャンルにもすぐ合わせる
                 if (e.target.checked) changeGenre(draft.genre, true)
               }} />
-            ジャンルを選んだら、そのジャンルに割り当てた取り込みを構成の参考に自動で選ぶ
+            ジャンルを選んだら、そのジャンルに割り当てた取り込みから、構成の参考をランダムに選ぶ
           </label>
           <label className="md-field">
             <span>構成の参考(取り込んだ作品)</span>
@@ -531,6 +534,18 @@ export default function MangaDraft() {
               ))}
             </select>
           </label>
+          {sameGenreImports.length > 1 && sameGenreImports.some(i => i.id === draft.importId) && (
+            <p className="md-hint">
+              このジャンルに割り当てた取り込みは {sameGenreImports.length} 件あります。
+              <button type="button" className="md-link"
+                onClick={() => {
+                  const others = sameGenreImports.filter(i => i.id !== draft.importId)
+                  update({ importId: others[Math.floor(Math.random() * others.length)].id })
+                }}>
+                別の作品をランダムに選ぶ
+              </button>
+            </p>
+          )}
           {sameGenreImports.length > 0 && draft.importId == null && (
             <p className="md-hint">
               このジャンルに割り当てた取り込みが {sameGenreImports.length} 件あります。
