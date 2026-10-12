@@ -12,7 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from novelai import AsyncNovelAI
 
 from ..client import get_client
-from ..db import get_character, get_connection, get_manga_import, get_series, list_series_volumes
+from ..db import (
+    add_manga_genre,
+    delete_manga_genre,
+    get_character,
+    get_connection,
+    get_manga_import,
+    get_series,
+    list_manga_genres,
+    list_series_volumes,
+)
 from ..manga_draft import (
     DraftCharacter,
     draft_characters,
@@ -22,6 +31,7 @@ from ..manga_draft import (
 )
 from ..manga_import import structure_lines
 from ..models import (
+    MangaGenreRequest,
     MangaDraftCreateRequest,
     MangaDraftEpisodeRequest,
     MangaDraftOutlineRequest,
@@ -35,6 +45,49 @@ from .story import create_scripted_story
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
 router = APIRouter(prefix="/api/manga-draft", tags=["manga-draft"])
+
+
+def _genres() -> list[str]:
+    conn = get_connection()
+    try:
+        return list_manga_genres(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/genres")
+async def get_genres() -> list[str]:
+    """漫画のジャンルの候補(漫画ドラフトのジャンル欄と、作品の取り込みの割り当てで使う)。足した順。"""
+    return _genres()
+
+
+@router.post("/genres")
+async def post_genre(req: MangaGenreRequest) -> list[str]:
+    """ジャンルを足して、候補の一覧を返す。すでにあれば何もしない。"""
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="ジャンルの名前を入れてください。")
+    conn = get_connection()
+    try:
+        add_manga_genre(conn, name)
+    finally:
+        conn.close()
+    return _genres()
+
+
+@router.delete("/genres")
+async def remove_genre(name: str) -> list[str]:
+    """
+    ジャンルを候補から消して、候補の一覧を返す。取り込みに割り当ててあるものは、割り当てたまま残る
+    (候補に出なくなるだけ)。
+    """
+    conn = get_connection()
+    try:
+        if not delete_manga_genre(conn, name.strip()):
+            raise HTTPException(status_code=404, detail="genre not found")
+    finally:
+        conn.close()
+    return _genres()
 
 
 def _characters(character_ids: list[int], profiles: dict[int, str]) -> list[DraftCharacter]:

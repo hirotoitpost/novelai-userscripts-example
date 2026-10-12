@@ -5,6 +5,8 @@ import { apiFetch } from '../api'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import type { Character } from '../components/StoryCharacters'
+import GenreManager from '../components/GenreManager'
+import { genreOptions, useGenres } from '../genres'
 import './MangaImport.css'
 
 /**
@@ -24,6 +26,8 @@ interface ImportSummary {
   status: string
   // structure は、使い方を選べるようになる前の取り込み(構成だけ)
   purpose: Purpose | 'structure'
+  // 漫画ドラフトのジャンルへの割り当て(無ければ空)
+  genre: string
   panel_count: number
   created_at: string
 }
@@ -95,6 +99,10 @@ export default function MangaImport() {
   const [title, setTitle] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [useVision, setUseVision] = useState(true)
+  // 取り込むときに割り当てるジャンルと、開いている取り込みの割り当ての書きかけ
+  const [genre, setGenre] = useState('')
+  const [genreDraft, setGenreDraft] = useState<string | null>(null)
+  const genreStore = useGenres(token)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 似た漫画を作る(取り込んだページの舞台・見た目と、コマ割りを使って新しい話を漫画にする)
@@ -125,6 +133,7 @@ export default function MangaImport() {
 
   const open = useCallback(async (id: number) => {
     if (!token) return
+    setGenreDraft(null)
     setSelected(await apiFetch<ImportDetail>(token, `/api/manga-import/${id}`))
     setJob(await apiFetch<Job | null>(token, `/api/manga-import/${id}/job`))
   }, [token])
@@ -196,12 +205,13 @@ export default function MangaImport() {
     try {
       const payload = await Promise.all(files.map(async f => ({ name: f.name, data: await readAsDataUrl(f) })))
       const created = await apiFetch<ImportSummary>(token, '/api/manga-import', {
-        title: title.trim(), files: payload, use_vision: useVision, purpose,
+        title: title.trim(), files: payload, use_vision: useVision, purpose, genre: genre.trim(),
         auto_manga: autoManga ? makeOptions(purpose === 'rebuild') : null,
       })
       setTitle('')
       setFiles([])
       await loadList()
+      void genreStore.reload()
       await open(created.id)
       // 読み取りが終わると、同じ処理のまま漫画を作る
       if (autoManga) void followSimilar(created.id, purpose === 'rebuild')
@@ -266,6 +276,28 @@ export default function MangaImport() {
     }
   }
 
+  /** 開いている取り込みのジャンルの割り当てを保存する(空にすると外す)。 */
+  const saveGenre = async () => {
+    if (!token || !selected || genreDraft === null) return
+    setError(null)
+    try {
+      const res = await fetch(`/api/manga-import/${selected.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ genre: genreDraft.trim() }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      const saved = await res.json() as ImportSummary
+      setSelected({ ...selected, genre: saved.genre })
+      setGenreDraft(null)
+      await loadList()
+      await genreStore.reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const genres = genreOptions(genreStore.genres, imports.map(i => i.genre))
   const pages = selected?.analysis?.pages ?? []
 
   // 読みの候補: 読みを入れた描き文字に形の似たものへ、その読みを出す(同じ取り込みの中だけ)
@@ -339,6 +371,13 @@ export default function MangaImport() {
             <input value={title} onChange={e => setTitle(e.target.value)} placeholder="例: 参考にする4コマ集" />
           </label>
           <label className="mi-field">
+            <span>ジャンル(漫画ドラフトのジャンルに割り当てる。あとからでも変えられます)</span>
+            <input list="mi-genres" value={genre} onChange={e => setGenre(e.target.value)} maxLength={100}
+              placeholder="割り当てない" />
+            <datalist id="mi-genres">{genres.map(g => <option key={g} value={g} />)}</datalist>
+          </label>
+          <GenreManager genres={genreStore} onError={setError} />
+          <label className="mi-field">
             <span>ファイル</span>
             <input type="file" multiple accept="application/pdf,image/*,.zip,.cbz,application/zip"
               onChange={e => setFiles(Array.from(e.target.files ?? []))} />
@@ -410,7 +449,7 @@ export default function MangaImport() {
               <li key={item.id} className={selected?.id === item.id ? 'mi-item mi-item--on' : 'mi-item'}>
                 <button type="button" className="mi-item-open" onClick={() => open(item.id)}>
                   <strong>{item.title}</strong>
-                  <span>{item.page_count}ページ・{item.panel_count}コマ・{PURPOSE_LABELS[item.purpose] ?? item.purpose}・{STATUS_LABELS[item.status] ?? item.status}</span>
+                  <span>{item.page_count}ページ・{item.panel_count}コマ・{PURPOSE_LABELS[item.purpose] ?? item.purpose}・{STATUS_LABELS[item.status] ?? item.status}{item.genre && `・ジャンル: ${item.genre}`}</span>
                 </button>
                 <button type="button" className="mi-item-action" disabled={item.status !== 'analyzed'}
                   onClick={() => navigate(`/manga-draft?import=${item.id}`)}>
@@ -441,6 +480,19 @@ export default function MangaImport() {
               <p className="mi-hint"><span className="mi-spinner" /> {job.message}({job.progress}/{job.total}ページ)</p>
             )}
             {job && job.status === 'error' && <p className="mi-error">読み取りに失敗しました: {job.detail}</p>}
+            <div className="mi-field mi-field--inline mi-genre">
+              <label htmlFor="mi-genre-edit">ジャンル</label>
+              <input id="mi-genre-edit" list="mi-genres" value={genreDraft ?? selected.genre} maxLength={100}
+                placeholder="割り当てなし"
+                onChange={e => setGenreDraft(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') void saveGenre() }} />
+              {genreDraft !== null && genreDraft.trim() !== selected.genre && (
+                <button type="button" className="mi-item-action" onClick={() => void saveGenre()}>
+                  {genreDraft.trim() ? 'ジャンルを保存' : '割り当てを外す'}
+                </button>
+              )}
+              <span className="mi-hint">漫画ドラフトでこのジャンルを選ぶと、構成の参考の先頭に出ます。似た漫画を作るときのジャンルにもなります。</span>
+            </div>
             <p className="mi-hint">
               {selected.purpose === 'rebuild' && 'セリフの文面を読み取ってあります。間違いはコマごとの欄で直せます(1行に1つのセリフ)。'}
               {selected.purpose === 'similar' && 'セリフは数・長さ・調子だけを読み取ってあります(文面は保存していません)。'}

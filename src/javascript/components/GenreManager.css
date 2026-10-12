@@ -1,0 +1,81 @@
+.genre-manager {
+  font-size: 0.8rem;
+  color: #c8c8ec;
+  border: 1px dashed #2a2a50;
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+}
+
+.genre-manager summary {
+  cursor: pointer;
+  color: #b8a4ff;
+}
+
+.genre-manager-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.genre-manager-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid #2a2a50;
+  border-radius: 999px;
+  padding: 0.15rem 0.3rem 0.15rem 0.7rem;
+}
+
+.genre-manager-list li.genre-manager-empty {
+  border: none;
+  padding: 0;
+  color: #9a9ac0;
+}
+
+.genre-manager-list button {
+  background: none;
+  border: none;
+  color: #9a9ac0;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.genre-manager-list button:hover:not(:disabled) {
+  color: #ff8a9a;
+}
+
+.genre-manager-add {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.genre-manager-add input {
+  flex: 1 1 10rem;
+  min-width: 0;
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.genre-manager-add button {
+  background: #1a1a33;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.genre-manager-add button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

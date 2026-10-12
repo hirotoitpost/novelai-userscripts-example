@@ -5,6 +5,9 @@ import type { Character } from '../components/StoryCharacters'
 import ReferenceCandidates from '../components/ReferenceCandidates'
 import { apiFetch, ImagePreset } from '../api'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
+import GenreManager from '../components/GenreManager'
+import { DEFAULT_GENRE, genreOptions, useGenres } from '../genres'
+import { useLocalStorage } from '../hooks/useLocalStorage'
 import './MangaDraft.css'
 
 /**
@@ -48,6 +51,8 @@ interface ImportSummary {
   title: string
   status: string
   panel_count: number
+  // 割り当てたジャンル(無ければ空)
+  genre?: string
 }
 
 interface Template {
@@ -83,12 +88,11 @@ interface Job {
 }
 
 const STORAGE_KEY = 'nai_manga_draft'
-const GENRES = ['日常コメディ', '夫婦の日常コメディ', '学園コメディ', 'ラブコメ', 'ほのぼの', 'ちょっといい話', 'ドタバタギャグ']
 const PRESET_KEYS = ['model', 'steps', 'scale', 'sampler', 'noise_schedule', 'cfg_rescale', 'complexity'] as const
 
 const EMPTY: DraftState = {
   theme: '',
-  genre: GENRES[0],
+  genre: DEFAULT_GENRE,
   characterIds: [],
   profiles: {},
   episodes: 3,
@@ -135,6 +139,9 @@ export default function MangaDraft() {
     return fromImport ? { ...loaded, importId: fromImport } : loaded
   })
   const [imports, setImports] = useState<ImportSummary[]>([])
+  const genres = useGenres(token)
+  // ジャンルを選んだら、そのジャンルに割り当てた取り込みを、構成の参考に自動で選ぶ
+  const [autoImport, setAutoImport] = useLocalStorage('nai_draft_auto_import', false)
   const [characters, setCharacters] = useState<Character[]>([])
   const [seriesList, setSeriesList] = useState<Series[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
@@ -150,6 +157,31 @@ export default function MangaDraft() {
     setTemplate(t => (draft.importId != null ? IMPORT_LAYOUT : t === IMPORT_LAYOUT ? 'vertical4' : t))
   }, [draft.importId])
   const useImportLayout = template === IMPORT_LAYOUT && draft.importId != null
+  /**
+   * ジャンルを変える。「参考を自動で選ぶ」がオンなら、構成の参考も合わせる: そのジャンルに割り当てた取り込みが
+   * あれば、その中からランダムに選ぶ(いまの参考が同じジャンルならそのまま)。無ければ、別のジャンルに割り当てた
+   * 参考だけを外す(ジャンルを割り当てていない取り込みを手で選んであるときは、そのまま)。
+   */
+  const changeGenre = (value: string, auto = autoImport) => {
+    const next = value.trim()
+    const patch: Partial<DraftState> = { genre: value }
+    if (auto && next !== '') {
+      const usable = imports.filter(i => i.status === 'analyzed')
+      const current = usable.find(i => i.id === draft.importId)
+      const matches = usable.filter(i => (i.genre ?? '') === next)
+      if (matches.length > 0 && (current?.genre ?? '') !== next) {
+        patch.importId = matches[Math.floor(Math.random() * matches.length)].id
+      } else if (matches.length === 0 && current?.genre) {
+        patch.importId = null
+      }
+    }
+    update(patch)
+  }
+
+  // 構成の参考に選べる取り込みを、いまのジャンルに割り当てたものと、ほかに分ける
+  const usableImports = imports.filter(i => i.status === 'analyzed' || i.id === draft.importId)
+  const sameGenreImports = usableImports.filter(i => draft.genre.trim() !== '' && (i.genre ?? '') === draft.genre.trim())
+  const otherImports = usableImports.filter(i => !sameGenreImports.includes(i))
   // 写したコマ割りを使い切った後のコマや、合成のテンプレートの指定に使う
   const baseTemplate = useImportLayout ? 'grid4' : template
   const [color, setColor] = useState(false)
@@ -439,8 +471,8 @@ export default function MangaDraft() {
           <div className="md-row">
             <label className="md-field">
               <span>ジャンル</span>
-              <input list="md-genres" value={draft.genre} onChange={e => update({ genre: e.target.value })} />
-              <datalist id="md-genres">{GENRES.map(g => <option key={g} value={g} />)}</datalist>
+              <input list="md-genres" value={draft.genre} onChange={e => changeGenre(e.target.value)} />
+              <datalist id="md-genres">{genreOptions(genres.genres, imports.map(i => i.genre)).map(g => <option key={g} value={g} />)}</datalist>
             </label>
             <label className="md-field md-field--narrow">
               <span>話数(1話=4コマ)</span>
@@ -458,18 +490,70 @@ export default function MangaDraft() {
               </select>
             </label>
           </div>
+          {draft.genre.trim() !== '' && genres.genres.length > 0 && !genres.genres.includes(draft.genre.trim()) && (
+            <p className="md-hint">
+              「{draft.genre.trim()}」はジャンルの候補にありません(このままでも使えます)。
+              <button type="button" className="md-link"
+                onClick={() => { genres.add(draft.genre.trim()).catch(e => setError(e instanceof Error ? e.message : String(e))) }}>
+                候補に追加する
+              </button>
+            </p>
+          )}
+          <GenreManager genres={genres} onError={setError} />
           {selectedSeries && (
             <p className="md-hint">シリーズの人物設定と既刊のあらすじを前提に、続編として作ります。</p>
           )}
+          <label className="md-check">
+            <input type="checkbox" checked={autoImport}
+              onChange={e => {
+                setAutoImport(e.target.checked)
+                // オンにしたら、いまのジャンルにもすぐ合わせる
+                if (e.target.checked) changeGenre(draft.genre, true)
+              }} />
+            ジャンルを選んだら、そのジャンルに割り当てた取り込みから、構成の参考をランダムに選ぶ
+          </label>
           <label className="md-field">
             <span>構成の参考(取り込んだ作品)</span>
             <select value={draft.importId ?? ''} onChange={e => update({ importId: e.target.value ? Number(e.target.value) : null })}>
               <option value="">使わない</option>
-              {imports.filter(i => i.status === 'analyzed' || i.id === draft.importId).map(i => (
-                <option key={i.id} value={i.id}>{i.title}({i.panel_count}コマ)</option>
+              {sameGenreImports.length > 0 && (
+                <optgroup label={`「${draft.genre.trim()}」に割り当てた作品`}>
+                  {sameGenreImports.map(i => (
+                    <option key={i.id} value={i.id}>{i.title}({i.panel_count}コマ)</option>
+                  ))}
+                </optgroup>
+              )}
+              {sameGenreImports.length > 0 && otherImports.length > 0 ? (
+                <optgroup label="ほかの作品">
+                  {otherImports.map(i => (
+                    <option key={i.id} value={i.id}>{i.title}({i.panel_count}コマ{i.genre ? `・${i.genre}` : ''})</option>
+                  ))}
+                </optgroup>
+              ) : otherImports.map(i => (
+                <option key={i.id} value={i.id}>{i.title}({i.panel_count}コマ{i.genre ? `・${i.genre}` : ''})</option>
               ))}
             </select>
           </label>
+          {sameGenreImports.length > 1 && sameGenreImports.some(i => i.id === draft.importId) && (
+            <p className="md-hint">
+              このジャンルに割り当てた取り込みは {sameGenreImports.length} 件あります。
+              <button type="button" className="md-link"
+                onClick={() => {
+                  const others = sameGenreImports.filter(i => i.id !== draft.importId)
+                  update({ importId: others[Math.floor(Math.random() * others.length)].id })
+                }}>
+                別の作品をランダムに選ぶ
+              </button>
+            </p>
+          )}
+          {sameGenreImports.length > 0 && draft.importId == null && (
+            <p className="md-hint">
+              このジャンルに割り当てた取り込みが {sameGenreImports.length} 件あります。
+              {sameGenreImports.slice(0, 3).map(i => (
+                <button type="button" key={i.id} className="md-link" onClick={() => update({ importId: i.id })}>「{i.title}」を使う</button>
+              ))}
+            </p>
+          )}
           {draft.importId != null && (
             <p className="md-hint">
               取り込んだ作品のコマ運び(構図・人数・セリフの量・役割)だけを参考にします。話の内容・セリフは新しく作ります。

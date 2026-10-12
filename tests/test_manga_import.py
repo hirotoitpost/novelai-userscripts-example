@@ -263,6 +263,14 @@ def test_import_api(client: TestClient, tmp_path: Path) -> None:
     assert item["analysis"]["pages"][0]["overlays"] == 0
     assert panel["shot"] == "no humans" and panel["role"] == ""
     assert [i["id"] for i in client.get("/api/manga-import").json()] == [import_id]
+    # ジャンルは、割り当てなければ空。あとから割り当てたり外したりできる
+    assert item["genre"] == ""
+    res = client.patch(f"/api/manga-import/{import_id}", json={"genre": " 学園コメディ "})
+    assert res.status_code == 200 and res.json()["genre"] == "学園コメディ"
+    assert client.get("/api/manga-import").json()[0]["genre"] == "学園コメディ"
+    assert client.patch(f"/api/manga-import/{import_id}", json={}).json()["genre"] == "学園コメディ"
+    assert client.patch(f"/api/manga-import/{import_id}", json={"genre": ""}).json()["genre"] == ""
+    assert client.patch("/api/manga-import/999", json={"genre": "x"}).status_code == 404
     assert client.get(f"/api/manga-import/{import_id}/pages/0").headers["content-type"] == "image/png"
 
     assert client.delete(f"/api/manga-import/{import_id}").status_code == 204
@@ -291,3 +299,56 @@ def test_rejects_unreadable_files(client: TestClient) -> None:
         "/api/manga-import", json={"title": "x", "files": [{"name": "a.png", "data": "bm90IGFuIGltYWdl"}]}
     )
     assert res.status_code == 400
+
+
+def test_import_keeps_its_genre_and_uses_it_for_similar_manga(client: TestClient) -> None:
+    from python.models import MangaImportAutoRequest
+
+    data = base64.b64encode(_png(_page(_grid()))).decode()
+    res = client.post(
+        "/api/manga-import",
+        json={"title": "ジャンルつき", "files": [{"name": "p1.png", "data": data}], "use_vision": False, "genre": "ラブコメ"},
+    )
+    assert res.status_code == 200, res.text
+    import_id = res.json()["id"]
+    assert res.json()["genre"] == "ラブコメ"
+    assert _wait(client, import_id)["status"] == "done"
+    # 読み取っても割り当ては残る
+    assert client.get(f"/api/manga-import/{import_id}").json()["genre"] == "ラブコメ"
+    # 似た漫画のジャンル: 指定 > 取り込みの割り当て > 既定
+    assert import_routes._genre(import_id, MangaImportAutoRequest()) == "ラブコメ"
+    assert import_routes._genre(import_id, MangaImportAutoRequest(genre="ほのぼの")) == "ほのぼの"
+    client.patch(f"/api/manga-import/{import_id}", json={"genre": ""})
+    assert import_routes._genre(import_id, MangaImportAutoRequest()) == "日常コメディ"
+
+
+def test_genres_can_be_added_and_removed(client: TestClient, tmp_path: Path) -> None:
+    from python.routes import manga_draft as draft_routes
+
+    client.app.include_router(draft_routes.router)
+    # 初めは既定のジャンル
+    genres = client.get("/api/manga-draft/genres").json()
+    assert genres == list(db.DEFAULT_MANGA_GENRES)
+    # 足す(前後の空白は除く。同じ名前は増えない)
+    assert client.post("/api/manga-draft/genres", json={"name": " バトル "}).json()[-1] == "バトル"
+    assert client.post("/api/manga-draft/genres", json={"name": "バトル"}).json().count("バトル") == 1
+    assert client.post("/api/manga-draft/genres", json={"name": "   "}).status_code == 422
+    assert client.post("/api/manga-draft/genres", json={"name": ""}).status_code == 422
+    # 取り込みに、候補に無いジャンルを割り当てると、候補にも入る
+    data = base64.b64encode(_png(_page(_grid()))).decode()
+    res = client.post(
+        "/api/manga-import",
+        json={"title": "新ジャンル", "files": [{"name": "p1.png", "data": data}], "use_vision": False, "genre": "ホラー"},
+    )
+    import_id = res.json()["id"]
+    assert _wait(client, import_id)["status"] == "done"
+    client.patch(f"/api/manga-import/{import_id}", json={"genre": "ミステリー"})
+    assert client.get("/api/manga-draft/genres").json()[-3:] == ["バトル", "ホラー", "ミステリー"]
+    # 消す: 候補から消えるだけで、取り込みの割り当ては残る
+    assert "ミステリー" not in client.delete("/api/manga-draft/genres", params={"name": "ミステリー"}).json()
+    assert client.get(f"/api/manga-import/{import_id}").json()["genre"] == "ミステリー"
+    assert client.delete("/api/manga-draft/genres", params={"name": "ミステリー"}).status_code == 404
+    # 既定のジャンルも消せて、開き直しても戻らない
+    client.delete("/api/manga-draft/genres", params={"name": "ほのぼの"})
+    db.get_connection().close()
+    assert "ほのぼの" not in client.get("/api/manga-draft/genres").json()

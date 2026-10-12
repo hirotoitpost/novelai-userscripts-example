@@ -402,3 +402,13 @@
   gap: 0.35rem;
   flex-wrap: wrap;
 }
+
+/* ジャンルの割り当て(開いている取り込み) */
+.mi-genre {
+  flex-wrap: wrap;
+}
+
+.mi-field--inline.mi-genre input {
+  width: 12rem;
+  max-width: 100%;
+}
