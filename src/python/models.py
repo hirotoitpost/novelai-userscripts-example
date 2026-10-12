@@ -501,6 +501,21 @@ class MangaImportAutoRequest(BaseModel):
     make_images: bool = True
 
 
+class GalleryMangaRequest(BaseModel):
+    """ギャラリーで選んだ画像から漫画を作る(1枚=1コマ。選んだ順)。"""
+
+    image_keys: list[str] = Field(min_length=1, max_length=100)
+    # 漫画ドラフトのジャンル(空なら 日常コメディ)。話・セリフ・描き文字と、絵の手直しをこれに合わせる
+    genre: str = Field("", max_length=100)
+    # 話の方向や補足(任意)
+    theme: str = Field("", max_length=500)
+    # 空なら、文章モデルが付けたタイトル
+    title: str = Field("", max_length=200)
+    color: bool = True
+    # False なら台本(物語)を作るところまでで、コマの絵は生成しない
+    make_images: bool = True
+
+
 class MangaGenreRequest(BaseModel):
     """漫画のジャンルを足す。"""
 

@@ -19,6 +19,9 @@ import FullscreenViewer from '../components/FullscreenViewer'
 import { apiFetch, GENERATE_FROM_IMAGE_KEY } from '../api'
 import type { MetadataGenerationSettings } from '../api'
 import { useAuth } from '../context/AuthContext'
+import GalleryMangaDialog, { GALLERY_MANGA_MAX } from '../components/GalleryMangaDialog'
+import type { GalleryMangaJob } from '../components/GalleryMangaDialog'
+import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './Gallery.css'
 
 type Source = 'generate' | 'panel' | 'illustration' | 'dataset'
@@ -113,6 +116,10 @@ export default function Gallery() {
   const [publishTarget, setPublishTarget] = useState<(PublishTarget & { fromSelection: boolean }) | null>(null)
   const [published, setPublished] = useState<{ publication: Publication; downloaded: boolean } | null>(null)
   const [copied, setCopied] = useState(false)
+  // 選んだ画像から漫画を作る(ダイアログに渡すキー、できた物語)
+  const [mangaKeys, setMangaKeys] = useState<string[] | null>(null)
+  const [madeManga, setMadeManga] = useState<{ storyId: number; message: string } | null>(null)
+  const task = useTaskStatus()
   // ぼかしを外して見た画像(このページを開いている間だけ)
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
   const [deleting, setDeleting] = useState(false)
@@ -391,6 +398,29 @@ export default function Gallery() {
     })
   }
 
+  /**
+   * 漫画を作る処理の進み具合を、処理状況のダイアログに出す。ページを離れても読み続ける(画面の後片付けで止めない)。
+   */
+  async function followManga(job: GalleryMangaJob) {
+    if (!token) return
+    task.start('選んだ画像から漫画を作る')
+    setMadeManga(null)
+    while (true) {
+      await new Promise(r => setTimeout(r, 3000))
+      const current = await apiFetch<GalleryMangaJob>(token, `/api/gallery-manga/jobs/${job.id}`).catch(() => undefined)
+      if (current === undefined) continue
+      task.update(current.message, current.progress, current.total)
+      if (current.status === 'running') continue
+      if (current.status === 'done' && current.story_id) {
+        task.finish('done', current.message)
+        setMadeManga({ storyId: current.story_id, message: current.message })
+      } else {
+        task.finish('error', current.detail ?? current.message)
+      }
+      return
+    }
+  }
+
   /** 見ている画像を、そのまま出版する(ダイアログを開く)。 */
   function publishOne(item: GalleryImage) {
     const name = describe(item) || SOURCE_LABELS[item.source]
@@ -527,6 +557,14 @@ export default function Gallery() {
       </div>
 
       {error && <div className="gallery-error">{error}</div>}
+      {madeManga && (
+        <div className="gallery-published" role="status">
+          <span>{madeManga.message}</span>
+          <Link className="gallery-link-button" to={`/bookshelf?book=${madeManga.storyId}`}>本棚で読む</Link>
+          <Link className="gallery-link-button" to={`/story?story=${madeManga.storyId}`}>物語のページで手直しする</Link>
+          <button type="button" onClick={() => setMadeManga(null)} aria-label="知らせを閉じる">✕</button>
+        </div>
+      )}
       {published && (
         <div className="gallery-published" role="status">
           <span>{publishedMessage(published.publication, published.downloaded)}</span>
@@ -604,6 +642,16 @@ export default function Gallery() {
             title="NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として別に保存して ZIP にまとめます"
           >
             出版する
+          </button>
+          <button
+            type="button"
+            className="gallery-primary"
+            // 選んだ順にコマにする(Set は入れた順を保つ)
+            onClick={() => setMangaKeys([...selected])}
+            disabled={selected.size === 0 || task.busy}
+            title={`選んだ画像のプロンプトから似た絵を生成し直し、ジャンルに合うセリフ・描き文字を付けて漫画にします(選んだ順に1枚=1コマ。${GALLERY_MANGA_MAX}枚まで)`}
+          >
+            漫画を作る
           </button>
         </div>
       )}
@@ -773,6 +821,19 @@ export default function Gallery() {
           </div>
         </div>
       )}
+      {mangaKeys && token && (
+        <GalleryMangaDialog
+          token={token}
+          imageKeys={mangaKeys}
+          onClose={() => setMangaKeys(null)}
+          onStarted={job => {
+            setMangaKeys(null)
+            exitSelecting()
+            void followManga(job)
+          }}
+        />
+      )}
+      <TaskStatusDialog status={task.status} minimized={task.minimized} onMinimize={task.setMinimized} onClose={task.dismiss} />
       {publishTarget && (
         <PublishDialog
           target={publishTarget}
