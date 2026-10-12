@@ -20,7 +20,7 @@ const hmr = process.env.NAI_HMR === '1'
 // 接続の受け口(WebSocket)を止めている間、WebSocket の接続要求を受けたらすぐ閉じる。Vite は受け口を止めても
 // 接続要求を受け取ったまま何もしないので、その接続が相手から切られる(RST)と、だれも拾わないエラーになって
 // 開発サーバーごと落ちる(実機で、開発サーバーが何度も止まった。接続要求を送って切るテストで再現)。
-// 接続要求を送ってくるのは、自動更新がオンのときに開いたままのページなど。
+// 接続要求は、ページを開くたびに Vite のクライアントが送ってくる(受け口が無くても一度は試す)。
 const closeUpgrades: Plugin = {
   name: 'nai-close-upgrades',
   configureServer(server) {
