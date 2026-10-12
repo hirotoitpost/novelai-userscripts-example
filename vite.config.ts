@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // 開発中の既定は http。環境変数 NAI_HTTPS=1(dev-ctl.ps1 -Https が付ける)なら、LAN 用の証明書
@@ -17,8 +17,22 @@ const https = process.env.NAI_HTTPS === '1' && existsSync(`${certDir}/server.crt
 // フロントのコードを続けて書き換えるときは、環境変数 NAI_HMR=1 でオンにできる。
 const hmr = process.env.NAI_HMR === '1'
 
+// 接続の受け口(WebSocket)を止めている間、WebSocket の接続要求を受けたらすぐ閉じる。Vite は受け口を止めても
+// 接続要求を受け取ったまま何もしないので、その接続が相手から切られる(RST)と、だれも拾わないエラーになって
+// 開発サーバーごと落ちる(実機で、開発サーバーが何度も止まった。接続要求を送って切るテストで再現)。
+// 接続要求を送ってくるのは、自動更新がオンのときに開いたままのページなど。
+const closeUpgrades: Plugin = {
+  name: 'nai-close-upgrades',
+  configureServer(server) {
+    server.httpServer?.on('upgrade', (_req, socket) => {
+      socket.on('error', () => {})
+      socket.destroy()
+    })
+  },
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ...(hmr ? [] : [closeUpgrades])],
   root: '.',
   server: {
     host: true,
