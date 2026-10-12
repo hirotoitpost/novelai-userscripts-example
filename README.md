@@ -117,6 +117,10 @@ If the PC's IP changes, run `make_lan_cert.py` again (the CA stays the same, so 
 
 The dev servers run over plain HTTP by default. Steps 4–5 need HTTPS: start with `scripts/dev-ctl.ps1 restart -Https`
 (or set `NAI_HTTPS=1` before starting Vite and uvicorn yourself). Switch the frontend and the backend together.
+
+Hot module replacement is off by default: with it on, Vite reloads the page whenever its connection to the dev
+server drops and comes back, which on a phone happens just by opening the file picker and loses whatever was
+entered. Reload the browser after changing frontend code, or start Vite with `NAI_HMR=1` to turn it back on.
 The MCP tools follow the scheme dev-ctl last started the backend with (`data/run/backend.scheme`); the userscripts call
 `http://127.0.0.1:8000`, so change their `API_BASE` while on HTTPS.
 
