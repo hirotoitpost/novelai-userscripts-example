@@ -2,7 +2,8 @@
 取り込んだ漫画を、セリフごと台本に起こす(取り込みの使い方 rebuild)。自分の作品(権利のある作品)を、
 このアプリで描き直すためのもの。
 
-セリフの文面は読み取ったもの(画面で直したもの)をそのまま使う。文章モデル(NovelAI の GLM)に決めさせるのは、
+セリフの文面は読み取ったもの(画面で直したもの)をそのまま使う。描き文字(効果音)は、画面で読みを入れたものを
+台本の効果音にする(読みの無い候補は入れない)。文章モデル(NovelAI の GLM)に決めさせるのは、
 各セリフの話し手・声か心の声か・コマに描く人物・所作のタグを誰に付けるか、だけ。セリフの文面は返させない
 (書き換えさせない)。
 """
@@ -16,6 +17,8 @@ from .manga_draft import DraftCharacter, _ask_json, _clean_tags
 _MAX_ATTEMPTS = 3
 # 台本の1コマに入れられるセリフの数(models.MangaDraftPanel.lines の上限)
 MAX_LINES = 8
+# 台本の1コマに入れる効果音の数(manga_draft.parse_episode と同じ)
+MAX_SFX = 2
 # 構図のタグが読めなかったコマに、寄り/引きから入れるタグ
 _SHOT_TAGS = {"close-up": "close-up", "medium": "upper body", "long": "full body"}
 
@@ -120,6 +123,14 @@ async def assign_page(
     return _fallback(panels, characters)
 
 
+def panel_sfx(panel: dict[str, Any]) -> list[str]:
+    """コマの効果音: 読みの入っている描き文字を、大きいものから MAX_SFX 個まで。"""
+    order = {"大": 0, "中": 1, "小": 2}
+    named = [s for s in panel.get("sfx") or [] if str(s.get("reading") or "").strip()]
+    named.sort(key=lambda s: order.get(str(s.get("size")), 1))
+    return list(dict.fromkeys(str(s["reading"]).strip() for s in named))[:MAX_SFX]
+
+
 def script_panels(panels: list[dict[str, Any]], assignment: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """読み取ったコマと割り振りから、台本の1ページ分(models.MangaDraftPanel の形)を作る。セリフは読み取った文面のまま。"""
     result = []
@@ -141,7 +152,7 @@ def script_panels(panels: list[dict[str, Any]], assignment: list[dict[str, Any]]
                 "actions": assigned["actions"],
                 "lines": lines,
                 "narration": "",
-                "sfx": [],
+                "sfx": panel_sfx(panel),
                 "prompt_tags": ", ".join(dict.fromkeys(tags)),
                 "fixes": [],
             }

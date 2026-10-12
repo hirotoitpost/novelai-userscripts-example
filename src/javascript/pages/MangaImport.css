@@ -331,3 +331,74 @@
   border-radius: 6px;
   resize: vertical;
 }
+
+/* 描き文字の候補 */
+.mi-sfx-box {
+  position: absolute;
+  border: 2px dashed #4aa8ff;
+  box-sizing: border-box;
+  background: rgba(74, 168, 255, 0.1);
+  pointer-events: none;
+}
+
+.mi-sfx {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.3rem 0 0.5rem;
+  padding: 0.4rem;
+  border: 1px dashed #2a4a70;
+  border-radius: 6px;
+}
+
+.mi-sfx-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.mi-sfx-crop {
+  flex: 0 0 72px;
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #2a2a50;
+  border-radius: 4px;
+}
+
+.mi-sfx-crop--none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #14142a;
+  color: #9a9ac0;
+  font-size: 0.7rem;
+}
+
+.mi-sfx-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.mi-sfx-body input,
+.mi-sfx-add input {
+  flex: 1;
+  min-width: 0;
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.45rem;
+}
+
+.mi-sfx-actions,
+.mi-sfx-add {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}

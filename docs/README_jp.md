@@ -208,6 +208,9 @@ MIT — 詳細は [LICENSE](../LICENSE) を参照してください。
   機械学習の結果の利用は認められていますが、データセットの再配布は禁止されています。
   モデル自体にはライセンスの表記がないため、このアプリを配布・商用提供するときは作者に確認するか、別のモデルに替えてください。
   モデルが使えないときは、枠線からコマを探します。
+- [onnx-community/dinov2-small](https://huggingface.co/onnx-community/dinov2-small)(Apache-2.0。
+  [facebook/dinov2-small](https://huggingface.co/facebook/dinov2-small) の ONNX 版)— 作品の取り込みで、描き文字の形を比べて
+  読みの候補を出す。約 88MB。
 
 ## 関連プロジェクト
 

@@ -35,6 +35,7 @@ from python.manga_import import (  # noqa: E402
     split_overlays,
     structure_lines,
 )
+from python.manga_reading import PageReading  # noqa: E402
 from python.routes import manga_import as import_routes  # noqa: E402
 
 W, H = 1200, 1700
@@ -222,7 +223,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(manga_import, "detect_elements", lambda image: None)
     # 場面・所作の判定モデルと文字の読み取りも使わない(読み取りそのものは test_manga_reading.py で確かめる)
     monkeypatch.setattr(manga_import, "describe_panel", lambda crop: ([], [], []))
-    monkeypatch.setattr(manga_import, "read_speech", lambda image, boxes: [])
+    monkeypatch.setattr(manga_import, "read_page", lambda image, boxes, faces=None: PageReading([], []))
     app = FastAPI()
     app.include_router(import_routes.router)
     with TestClient(app) as test_client:
