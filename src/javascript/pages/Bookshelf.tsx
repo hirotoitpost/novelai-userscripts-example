@@ -787,7 +787,7 @@ function Reader({
                 title="ほかの本とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
                 {selectedForPublish ? `出版の選択から外す(${selectedCount}冊選択中)` : `出版に選ぶ${selectedCount > 0 ? `(${selectedCount}冊選択中)` : ''}`}
               </button>
-              <button type="button" onClick={onEdit}>編集</button>
+              <button type="button" onClick={onEdit} title="この作品の物語を、物語のページで開きます(シーンの手直し・描き直しができます)">物語のページを開く</button>
               <button type="button" onClick={() => void toggleAdult()}>
                 {book.adult ? '成人向けから外す' : '成人向けにする'}
               </button>

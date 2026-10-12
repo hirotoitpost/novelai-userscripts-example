@@ -443,7 +443,7 @@ export default function Gallery() {
             ))}
           </select>
           {storyId !== null && (
-            <Link className="gallery-link-button" to={`/story?story=${storyId}`}>この物語を開く</Link>
+            <Link className="gallery-link-button" to={`/bookshelf?book=${storyId}`}>本棚の作品を開く</Link>
           )}
           <select value={rating} onChange={e => setRating(e.target.value as Rating)} aria-label="成人向けで絞り込む">
             {RATINGS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
@@ -637,14 +637,9 @@ export default function Gallery() {
                 {selected.has(current.key) ? `出版の選択から外す(${selected.size}枚選択中)` : `出版に選ぶ${selected.size > 0 ? `(${selected.size}枚選択中)` : ''}`}
               </button>
               {current.story_id !== null && (
-                <button type="button" onClick={() => navigate(`/bookshelf?book=${current.story_id}`)}>
-                  本棚で読む
-                </button>
-              )}
-              {current.story_id !== null && (
-                <Link className="gallery-link-button" to={`/story?story=${current.story_id}`}
-                  title="この画像の物語を、物語のページで開きます(シーンの手直し・描き直しができます)">
-                  物語を開く
+                <Link className="gallery-link-button" to={`/bookshelf?book=${current.story_id}`}
+                  title="この画像の作品を、本棚で開きます">
+                  本棚の作品を開く
                 </Link>
               )}
               <button type="button" onClick={() => void toggleAdult(current)}>
@@ -665,7 +660,7 @@ export default function Gallery() {
               {current.story_id !== null && (
                 <>
                   <dt>物語</dt>
-                  <dd><Link to={`/story?story=${current.story_id}`}>{current.story_title ?? `物語${current.story_id}`}</Link></dd>
+                  <dd><Link to={`/bookshelf?book=${current.story_id}`}>{current.story_title ?? `物語${current.story_id}`}</Link></dd>
                 </>
               )}
               <dt>日時</dt>

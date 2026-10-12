@@ -594,7 +594,7 @@
   line-height: 1.6;
 }
 
-/* 物語を直接開くリンク(ボタンと同じ見た目) */
+/* 本棚の作品を直接開くリンク(ボタンと同じ見た目) */
 .gallery-link-button {
   display: inline-flex;
   align-items: center;
