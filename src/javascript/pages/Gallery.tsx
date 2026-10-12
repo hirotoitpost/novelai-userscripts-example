@@ -16,6 +16,9 @@ import {
   thumbUrl,
 } from '../library'
 import FullscreenViewer from '../components/FullscreenViewer'
+import { apiFetch, GENERATE_FROM_IMAGE_KEY } from '../api'
+import type { MetadataGenerationSettings } from '../api'
+import { useAuth } from '../context/AuthContext'
 import './Gallery.css'
 
 type Source = 'generate' | 'panel' | 'illustration' | 'dataset'
@@ -95,6 +98,9 @@ export default function Gallery() {
   const [stories, setStories] = useState<GalleryResponse['stories']>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { token } = useAuth()
+  // 画像生成ページへ送っている最中か
+  const [sending, setSending] = useState(false)
 
   const [viewing, setViewing] = useState<number | null>(null)
   // 見ている画像を全画面で出しているか
@@ -246,6 +252,56 @@ export default function Gallery() {
     } catch (e) {
       setItems(prev => prev.map(i => (i.key === item.key ? { ...i, bookmarked: !next } : i)))
       setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /**
+   * 似た画像を作るために、この画像の設定を画像生成ページへ送る(生成は、そこで「生成」を押してから)。
+   * 画像に埋め込まれた NovelAI の設定を読む。埋め込みが無い画像は、ギャラリーの記録にあるプロンプトだけを送る。
+   * シード値は送らない(同じシード値だと同じ画像になるため。元の値は画像生成ページの注意書きに出す)。
+   */
+  async function sendToGenerate(item: GalleryImage) {
+    if (!token) return
+    setSending(true)
+    setError(null)
+    const name = describe(item) || SOURCE_LABELS[item.source]
+    try {
+      let settings: MetadataGenerationSettings
+      try {
+        // 表示用に読み込み済みの画像(別オリジンの <img>)はキャッシュから使えないので、読み直す
+        const res = await fetch(fileUrl(item.path), { cache: 'no-store' })
+        if (!res.ok) throw new Error(`画像を読み込めませんでした(HTTP ${res.status})`)
+        const blob = await res.blob()
+        const image = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(blob)
+        })
+        const read = await apiFetch<MetadataGenerationSettings>(token, '/api/metadata/generation', { image })
+        const seedNote = read.seed != null
+          ? `似た画像にするため、シード値は入れていません(元の画像のシード値: ${read.seed}。同じ画像を作り直すときは、この値を入れてください)`
+          : ''
+        settings = { ...read, seed: null, notes: [...read.notes, seedNote].filter(Boolean) }
+      } catch (e) {
+        if (!item.prompt.trim()) throw e
+        settings = {
+          prompt: item.prompt, negative_prompt: '', characters: [], use_coords: false,
+          model: item.model, width: item.width, height: item.height, size_preset: null,
+          steps: null, scale: null, sampler: null, noise_schedule: null, cfg_rescale: null,
+          variety_boost: false, seed: null, source: 'ギャラリーの記録',
+          notes: [
+            'この画像には生成設定が埋め込まれていなかったので、ギャラリーの記録にあるプロンプト・モデル・サイズだけを入れました',
+            'ネガティブプロンプトは空です。ステップ数などは今の設定のままです',
+          ],
+        }
+      }
+      sessionStorage.setItem(GENERATE_FROM_IMAGE_KEY, JSON.stringify({ settings, name }))
+      navigate('/generate')
+    } catch (e) {
+      setError(`画像生成ページへ送れませんでした: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSending(false)
     }
   }
 
@@ -618,6 +674,7 @@ export default function Gallery() {
             {published && (
               <p className="gallery-published-inline" role="status">{publishedMessage(published.publication, published.downloaded)}</p>
             )}
+            {error && <p className="gallery-error" role="alert">{error}</p>}
             <div className="gallery-info-actions">
               <button
                 type="button"
@@ -635,6 +692,10 @@ export default function Gallery() {
               <button type="button" onClick={() => toggleSelectedFromViewer(current)} aria-pressed={selected.has(current.key)}
                 title="ほかの画像とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
                 {selected.has(current.key) ? `出版の選択から外す(${selected.size}枚選択中)` : `出版に選ぶ${selected.size > 0 ? `(${selected.size}枚選択中)` : ''}`}
+              </button>
+              <button type="button" onClick={() => void sendToGenerate(current)} disabled={sending}
+                title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値は入れません)">
+                {sending ? '読み取り中…' : '似た画像を生成(画像生成ページへ)'}
               </button>
               {current.story_id !== null && (
                 <Link className="gallery-link-button" to={`/bookshelf?book=${current.story_id}`}
