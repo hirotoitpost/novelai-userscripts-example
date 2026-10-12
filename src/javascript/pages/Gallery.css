@@ -593,3 +593,24 @@
   font-size: 0.82rem;
   line-height: 1.6;
 }
+
+/* 本棚の作品を直接開くリンク(ボタンと同じ見た目) */
+.gallery-link-button {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  text-decoration: none;
+}
+
+.gallery-link-button:hover {
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.gallery-meta a {
+  color: #b8a4ff;
+}
