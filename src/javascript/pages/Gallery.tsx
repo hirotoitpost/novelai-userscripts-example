@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import PublishDialog, { publishedMessage, PublishTarget } from '../components/PublishDialog'
 import {
@@ -442,6 +442,9 @@ export default function Gallery() {
               <option key={s.id} value={s.id}>{s.title ?? `物語${s.id}`}</option>
             ))}
           </select>
+          {storyId !== null && (
+            <Link className="gallery-link-button" to={`/story?story=${storyId}`}>この物語を開く</Link>
+          )}
           <select value={rating} onChange={e => setRating(e.target.value as Rating)} aria-label="成人向けで絞り込む">
             {RATINGS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>
@@ -638,6 +641,12 @@ export default function Gallery() {
                   本棚で読む
                 </button>
               )}
+              {current.story_id !== null && (
+                <Link className="gallery-link-button" to={`/story?story=${current.story_id}`}
+                  title="この画像の物語を、物語のページで開きます(シーンの手直し・描き直しができます)">
+                  物語を開く
+                </Link>
+              )}
               <button type="button" onClick={() => void toggleAdult(current)}>
                 {current.adult ? '成人向けから外す' : '成人向けにする'}
               </button>
@@ -653,7 +662,12 @@ export default function Gallery() {
             <dl className="gallery-meta">
               <dt>種類</dt>
               <dd>{SOURCE_LABELS[current.source]}{describe(current) && ` ・ ${describe(current)}`}</dd>
-              {current.story_title && (<><dt>物語</dt><dd>{current.story_title}</dd></>)}
+              {current.story_id !== null && (
+                <>
+                  <dt>物語</dt>
+                  <dd><Link to={`/story?story=${current.story_id}`}>{current.story_title ?? `物語${current.story_id}`}</Link></dd>
+                </>
+              )}
               <dt>日時</dt>
               <dd>{formatDate(current.created_at)}</dd>
               {current.width && current.height && (<><dt>サイズ</dt><dd>{current.width}×{current.height}</dd></>)}
