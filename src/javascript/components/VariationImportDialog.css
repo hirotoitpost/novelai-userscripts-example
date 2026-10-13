@@ -1,0 +1,102 @@
+/* プロンプトからキーワードを読み込むダイアログ(見た目の土台は PublishDialog.css) */
+.vi-dialog {
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.vi-text,
+.vi-sources select {
+  width: 100%;
+  box-sizing: border-box;
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.5rem;
+}
+
+.vi-text {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.vi-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.vi-sources .publish-field {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.vi-sources input[type='file'] {
+  max-width: 100%;
+  font-size: 0.8rem;
+}
+
+.vi-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.vi-result h3 {
+  font-size: 0.82rem;
+  margin: 0 0 0.3rem;
+  color: #b8a4ff;
+}
+
+.vi-result ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.vi-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  padding: 0.2rem 0.3rem 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  color: #9a9ac0;
+}
+
+.vi-row--on {
+  border-color: #7b5cf6;
+  background: rgba(123, 92, 246, 0.15);
+  color: #e8e8ff;
+}
+
+.vi-row select {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.2rem;
+}
+
+.vi-known {
+  font-size: 0.72rem;
+  color: #7a7aa0;
+  padding-right: 0.3rem;
+}
+
+.vi-skipped {
+  font-size: 0.78rem;
+  color: #9a9ac0;
+}
+
+.vi-skipped p {
+  margin: 0.3rem 0 0;
+  word-break: break-word;
+}

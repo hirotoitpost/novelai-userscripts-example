@@ -94,3 +94,7 @@
   background: none;
   cursor: zoom-in;
 }
+
+.chards-variation-tools { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+.chards-chip--tidy { border-style: dashed; border-color: #ff8a9a; color: #ffb0c8; }

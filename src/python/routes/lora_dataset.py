@@ -7,7 +7,7 @@ import io
 import json
 import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,11 +16,6 @@ from novelai.types import CharacterReference
 from PIL import Image, UnidentifiedImageError
 
 from ..character_sheet import (
-    EXPRESSIONS,
-    FRAMINGS,
-    LOCATIONS,
-    OUTFITS,
-    POSES,
     blocked_tags,
     build_variation_shots,
     caption_for,
@@ -32,11 +27,16 @@ from ..character_sheet import (
     sheet_prompt,
 )
 from ..client import get_client
+from ..dataset_variations import clean_value
+from ..dataset_variations import extract as extract_variation_tags
 from ..db import (
+    add_dataset_variations,
+    delete_dataset_variation,
     delete_guard_profile,
     get_character,
     get_connection,
     get_guard_profile,
+    list_dataset_variations,
     list_guard_profiles,
     save_guard_profile,
 )
@@ -52,6 +52,8 @@ from ..lora_dataset import (
 )
 from ..models import (
     CharacterDatasetRequest,
+    DatasetVariationsAddRequest,
+    DatasetVariationsExtractRequest,
     CharacterSheetPromptResponse,
     DatasetImportRequest,
     GuardCoreResponse,
@@ -240,10 +242,54 @@ async def delete_guard_profile_endpoint(profile_id: int) -> None:
         conn.close()
 
 
+def _variations() -> dict[str, list[str]]:
+    conn = get_connection()
+    try:
+        return list_dataset_variations(conn)
+    finally:
+        conn.close()
+
+
 @router.get("/variations")
 async def get_variations() -> dict[str, list[str]]:
-    """キャラ別データセットのバリエーション既定リスト(全年齢向け)。"""
-    return {"framings": FRAMINGS, "poses": POSES, "outfits": OUTFITS, "expressions": EXPRESSIONS, "locations": LOCATIONS}
+    """キャラ別データセットのバリエーションの候補(軸ごと。足した順)。画面や API で足したり消したりできる。"""
+    return _variations()
+
+
+@router.post("/variations")
+async def post_variations(req: DatasetVariationsAddRequest) -> dict[str, list[str]]:
+    """候補を足して、候補の一覧を返す。すでにあるものは増えない。"""
+    values = list(dict.fromkeys(v for v in (clean_value(v) for v in req.values) if v))
+    if not values:
+        raise HTTPException(status_code=422, detail="足すキーワードを入れてください。")
+    conn = get_connection()
+    try:
+        add_dataset_variations(conn, req.axis, values)
+    finally:
+        conn.close()
+    return _variations()
+
+
+@router.delete("/variations")
+async def remove_variation(axis: str, value: str) -> dict[str, list[str]]:
+    """候補を消して、候補の一覧を返す。"""
+    conn = get_connection()
+    try:
+        if not delete_dataset_variation(conn, axis, value):
+            raise HTTPException(status_code=404, detail="variation not found")
+    finally:
+        conn.close()
+    return _variations()
+
+
+@router.post("/variations/extract")
+async def extract_variations(req: DatasetVariationsExtractRequest) -> dict[str, Any]:
+    """
+    プロンプトから、バリエーションの候補にできるキーワードを取り出して、軸ごとに分ける(足しはしない)。
+    axes: 軸ごとのタグ、other: どの軸か分からないタグ、adult: 性的なタグ、skipped: 取り出さなかったタグ
+    (品質・画風・人数・容姿)。分け方は dataset_variations.py。
+    """
+    return extract_variation_tags(req.prompts)
 
 
 @router.get("/character/{character_id}/sheet-prompt", response_model=CharacterSheetPromptResponse)

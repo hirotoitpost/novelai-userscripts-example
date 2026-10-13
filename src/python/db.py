@@ -425,6 +425,29 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     if first_genres:
         for name in DEFAULT_MANGA_GENRES:
             add_manga_genre(conn, name)
+    # キャラ別データセットのバリエーション(構図・ポーズ・服装・表情・場所)の候補。画面から足したり消したりできる。
+    # 初めて表を作るときだけ、既定の候補を入れる(消したものが、起動のたびに戻らないように)
+    first_variations = (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dataset_variations'").fetchone() is None
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dataset_variations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            axis TEXT NOT NULL,
+            value TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (axis, value)
+        )
+        """
+    )
+    if first_variations:
+        from .character_sheet import EXPRESSIONS, FRAMINGS, LOCATIONS, OUTFITS, POSES
+
+        for axis, values in (
+            ("framings", FRAMINGS), ("poses", POSES), ("outfits", OUTFITS), ("expressions", EXPRESSIONS), ("locations", LOCATIONS)
+        ):
+            add_dataset_variations(conn, axis, values)
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -2359,6 +2382,36 @@ def update_manga_import(
 def delete_manga_import(conn: sqlite3.Connection, import_id: int) -> None:
     conn.execute("DELETE FROM manga_imports WHERE id = ?", (import_id,))
     conn.commit()
+
+
+# ---- キャラ別データセットのバリエーション ----
+
+
+def list_dataset_variations(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """軸(framings / poses / outfits / expressions / locations)ごとの候補(足した順)。"""
+    result: dict[str, list[str]] = {axis: [] for axis in ("framings", "poses", "outfits", "expressions", "locations")}
+    for row in conn.execute("SELECT axis, value FROM dataset_variations ORDER BY id"):
+        result.setdefault(row["axis"], []).append(row["value"])
+    return result
+
+
+def add_dataset_variations(conn: sqlite3.Connection, axis: str, values: list[str]) -> int:
+    """候補を足す(すでにあるものは飛ばす)。足した数を返す。"""
+    now = datetime.now(timezone.utc).isoformat()
+    added = 0
+    for value in values:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO dataset_variations (axis, value, created_at) VALUES (?, ?, ?)", (axis, value, now)
+        )
+        added += cur.rowcount
+    conn.commit()
+    return added
+
+
+def delete_dataset_variation(conn: sqlite3.Connection, axis: str, value: str) -> bool:
+    cur = conn.execute("DELETE FROM dataset_variations WHERE axis = ? AND value = ?", (axis, value))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # ---- 漫画のジャンル ----
