@@ -3,8 +3,9 @@
 取り出して足すための仕分け。
 
 プロンプト(画像生成で使ったもの、リバースプロンプトの結果、貼り付けたもの)のタグを、5つの軸に分ける。
-- 容姿(髪・目・体)と人数は取り出さない。キャラシートが持つもので、バリエーションにすると別人になる。
-- 品質・画風のタグも取り出さない(生成のときに別に付く)。
+- 容姿(髪・目・体)と、品質・画風のタグは、バリエーションにはしない(キャラシートが持つもので、バリエーションに
+  すると別人になる)。sheet として分けて返すので、画面でキャラシートに足せる。
+- 人数のタグは取り出さない。
 - 性的なタグは、軸には入れずに adult として分けて返す(バリエーションの候補は全年齢向けが既定。R18 の
   データセットで使うときは、画面で軸を選んで足す。生成のときの検査は routes/lora_dataset.py がする)。
 - どの軸か分からないタグは other として返す(画面で軸を選んで足せる)。
@@ -21,6 +22,8 @@ from . import content_guard
 from .character_sheet import _COUNT_RE, _PERSON_NOUNS, _STYLE_PHRASES, _STYLE_RE, _plain, split_tags
 
 AXES = ("framings", "poses", "outfits", "expressions", "locations")
+# キャラシートの項目のうち、キーワードから足せるもの(容姿・普段の服装・画風)
+SHEET_FIELDS = ("appearance", "outfit", "style")
 MAX_VALUE_CHARS = 100
 
 # 強調の書き方: マイナスの重み(-1::tag::)は「出さない」指定なので、タグごと除く。ほかは記号だけ外す
@@ -92,8 +95,8 @@ def prompt_tags(prompt: str) -> list[str]:
 
 def axis_of(tag: str) -> str:
     """
-    タグの軸: framings / poses / outfits / expressions / locations。取り出さないものは skip
-    (品質・画風・人数・容姿)、性的なものは adult、どれか分からないものは other。
+    タグの軸: framings / poses / outfits / expressions / locations。キャラシートの側のものは appearance(容姿)と
+    style(品質・画風)、取り出さないものは skip(人数)、性的なものは adult、どれか分からないものは other。
     """
     from .image_tagger import BODY_WORDS, CLOTHES_WORDS, POSE_WORDS, STYLE_TAGS
 
@@ -102,7 +105,7 @@ def axis_of(tag: str) -> str:
     if not plain or plain == "solo":
         return "skip"
     if plain in _STYLE_PHRASES or plain in STYLE_TAGS or _STYLE_RE.search(plain):
-        return "skip"
+        return "style"
     if _COUNT_RE.match(plain) or plain in _PERSON_NOUNS or re.match(r"^(multiple|\d\+?) ?(girls?|boys?|others?)$", plain):
         return "skip"
     if content_guard.is_sexual(tag):
@@ -118,12 +121,14 @@ def axis_of(tag: str) -> str:
     if words & (POSE_WORDS | _POSE_EXTRA) or re.match(r"^[a-z]+ing\b", plain):
         return "poses"
     if words & BODY_WORDS:
-        return "skip"
+        return "appearance"
     return "other"
 
 
 # チャンクの分類の名前から、軸の見当を付ける語
 _HINT_WORDS = (
+    ("style", ("絵柄", "画風", "アーティスト", "作家", "artist", "style")),
+    ("appearance", ("髪", "体型", "体格", "容姿", "瞳", "肌", "hair", "body", "appearance")),
     ("expressions", ("表情", "顔", "expression", "face")),
     ("outfits", ("服", "衣装", "衣服", "アクセ", "コスチューム", "outfit", "cloth", "costume")),
     ("framings", ("カメラ", "構図", "視点", "アングル", "camera", "framing", "angle")),
@@ -133,21 +138,28 @@ _HINT_WORDS = (
 
 
 def hint_axis(label: str) -> str | None:
-    """分類の名前(チャンクの分類など)から見当を付けた軸。分からなければ None。"""
+    """分類の名前(チャンクの分類など)から見当を付けた軸。キャラシートの項目なら appearance / style。分からなければ None。"""
     text = str(label or "").lower()
     return next((axis for axis, words in _HINT_WORDS if any(w in text for w in words)), None)
 
 
 def extract(prompts: list[str], hints: list[str | None] | None = None) -> dict[str, Any]:
     """
-    プロンプトからバリエーションの候補を取り出す。axes は軸ごとのタグ、other はどの軸か分からないタグ、
-    adult は性的なタグ、skipped は取り出さなかったタグ(品質・画風・人数・容姿)。どれも出てきた順で、重なりは除く。
+    プロンプトからバリエーションの候補を取り出す。axes は軸ごとのタグ、sheet はキャラシートの側のタグ
+    (appearance: 容姿、style: 品質・画風。バリエーションにはせず、キャラシートに足すときに使う)、other はどの軸か
+    分からないタグ、adult は性的なタグ、skipped は取り出さなかったタグ(人数)。どれも出てきた順で、重なりは除く。
 
     hints は、プロンプトごとの軸の見当(チャンクの分類から付けたもの。無ければ None)。語の一覧で軸が分からなかった
     タグ(other / adult)に、そのプロンプトの見当を suggested として返す(画面で、その軸に置いて見せる)。
+    見当は、軸のほかに appearance / style(キャラシートの項目)のこともある。
     """
     result: dict[str, Any] = {
-        "axes": {axis: [] for axis in AXES}, "other": [], "adult": [], "skipped": [], "suggested": {},
+        "axes": {axis: [] for axis in AXES},
+        "sheet": {"appearance": [], "style": []},
+        "other": [],
+        "adult": [],
+        "skipped": [],
+        "suggested": {},
     }
     seen: set[str] = set()
     for index, prompt in enumerate(prompts):
@@ -160,8 +172,11 @@ def extract(prompts: list[str], hints: list[str | None] | None = None) -> dict[s
             if axis in AXES:
                 result["axes"][axis].append(tag)
                 continue
+            if axis in result["sheet"]:
+                result["sheet"][axis].append(tag)
+                continue
             result[{"skip": "skipped", "adult": "adult"}.get(axis, "other")].append(tag)
-            if axis != "skip" and hint in AXES:
+            if axis != "skip" and (hint in AXES or hint in result["sheet"]):
                 result["suggested"][tag] = hint
     return result
 

@@ -48,13 +48,14 @@ def test_prompt_is_split_into_plain_tags() -> None:
         ("simple background", "locations"),
         ("depth of field", "other"),
         ("cat", "other"),
-        # 容姿・人数・品質・画風は取り出さない
-        ("brown hair", "skip"),
-        ("blue eyes", "skip"),
+        # 容姿と、品質・画風は、キャラシートの側
+        ("brown hair", "appearance"),
+        ("blue eyes", "appearance"),
+        ("masterpiece", "style"),
+        ("artist:someone", "style"),
+        # 人数は取り出さない
         ("1girl", "skip"),
         ("solo", "skip"),
-        ("masterpiece", "skip"),
-        ("artist:someone", "skip"),
         # 性的なタグは軸に入れない
         ("nude", "adult"),
     ],
@@ -78,19 +79,25 @@ def test_extract_groups_keywords_and_keeps_first_seen_order() -> None:
         "locations": ["classroom", "park"],
     }
     assert result["other"] == ["cat"] and result["adult"] == ["nude"] and result["suggested"] == {}
-    assert result["skipped"] == ["1girl", "brown hair", "masterpiece", "1boy"]
+    assert result["sheet"] == {"appearance": ["brown hair"], "style": ["masterpiece"]}
+    assert result["skipped"] == ["1girl", "1boy"]
     assert clean_value("  school  uniform ,blazer ,, ") == "school uniform, blazer"
 
 
 def test_category_names_hint_the_axis_of_unknown_keywords() -> None:
     assert hint_axis("表情") == "expressions" and hint_axis("服") == "outfits" and hint_axis("カメラ視点") == "framings"
     assert hint_axis("風景") == "locations" and hint_axis("ポーズ集") == "poses"
+    assert hint_axis("髪型") == "appearance" and hint_axis("体型") == "appearance"
+    assert hint_axis("絵柄") == "style" and hint_axis("アーティストタグ") == "style"
     assert hint_axis("キャラクター") is None and hint_axis("") is None
     # 語の一覧で分かるものはそのまま。分からないもの(と成人向け)にだけ、見当を付ける。取り出さないものには付けない
     result = extract(["tsurime, smile, brown hair, nude", "umbrella", "lantern"], ["expressions", None, "bogus"])
     assert result["axes"]["expressions"] == ["smile"]
-    assert result["other"] == ["tsurime", "umbrella", "lantern"] and result["skipped"] == ["brown hair"]
+    assert result["other"] == ["tsurime", "umbrella", "lantern"] and result["sheet"]["appearance"] == ["brown hair"]
     assert result["suggested"] == {"tsurime": "expressions", "nude": "expressions"}
+    # キャラシートの項目の見当も付く
+    sheet = extract(["streaked something", "flat tone"], ["appearance", "style"])
+    assert sheet["suggested"] == {"streaked something": "appearance", "flat tone": "style"}
 
 
 @pytest.fixture()

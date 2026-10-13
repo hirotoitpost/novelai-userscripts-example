@@ -286,8 +286,9 @@ async def remove_variation(axis: str, value: str) -> dict[str, list[str]]:
 async def extract_variations(req: DatasetVariationsExtractRequest) -> dict[str, Any]:
     """
     プロンプトから、バリエーションの候補にできるキーワードを取り出して、軸ごとに分ける(足しはしない)。
-    axes: 軸ごとのタグ、other: どの軸か分からないタグ、adult: 性的なタグ、skipped: 取り出さなかったタグ
-    (品質・画風・人数・容姿)、suggested: 軸が分からなかったタグの、hints から付けた軸の見当。
+    axes: 軸ごとのタグ、sheet: キャラシートの側のタグ(appearance: 容姿、style: 品質・画風)、other: どの軸か
+    分からないタグ、adult: 性的なタグ、skipped: 取り出さなかったタグ(人数)、suggested: 軸が分からなかったタグの、
+    hints から付けた見当(軸か、appearance / style)。
     分け方は dataset_variations.py。
     """
     return extract_variation_tags(req.prompts, req.hints)
