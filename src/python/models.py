@@ -190,6 +190,19 @@ class LoraDatasetRequest(BaseModel):
     vibe_transfer: Optional[ControlNetRequest] = Field(None, description="Vibe Transfer（雰囲気転送）")
 
 
+class DatasetVariationsAddRequest(BaseModel):
+    """キャラ別データセットのバリエーションの候補を足す。axis は framings / poses / outfits / expressions / locations。"""
+
+    axis: Literal["framings", "poses", "outfits", "expressions", "locations"]
+    values: list[str] = Field(min_length=1, max_length=100)
+
+
+class DatasetVariationsExtractRequest(BaseModel):
+    """プロンプト(画像生成で使ったもの・リバースプロンプトの結果など)から、バリエーションの候補を取り出す。"""
+
+    prompts: list[str] = Field(min_length=1, max_length=50)
+
+
 class CharacterDatasetRequest(BaseModel):
     """キャラシートを元に、ポーズ/服装/表情/場所を差し替えたデータセットを作る。"""
 

@@ -14,19 +14,11 @@ import CharacterSheetEditor, { type SheetEditorClasses } from '../components/Cha
 import GuardProfiles from '../components/GuardProfiles'
 import ImagePreview from '../components/ImagePreview'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
+import VariationImportDialog, { AXES } from '../components/VariationImportDialog'
+import type { Axis, Variations } from '../components/VariationImportDialog'
 import './LoraDataset.css'
 import './CharacterDataset.css'
 
-type Axis = 'framings' | 'poses' | 'outfits' | 'expressions' | 'locations'
-type Variations = Record<Axis, string[]>
-
-const AXES: { key: Axis; label: string }[] = [
-  { key: 'framings', label: '構図' },
-  { key: 'poses', label: 'ポーズ' },
-  { key: 'outfits', label: '服装' },
-  { key: 'expressions', label: '表情' },
-  { key: 'locations', label: '場所' },
-]
 
 type Phase = 'idle' | 'running' | 'complete' | 'error' | 'cancelled'
 
@@ -78,6 +70,10 @@ export default function CharacterDataset() {
     framings: [], poses: [], outfits: [], expressions: [], locations: [],
   })
   const [custom, setCustom] = useState<Record<Axis, string>>({ framings: '', poses: '', outfits: '', expressions: '', locations: '' })
+  // バリエーションの候補(DB にある。プロンプトから読み込む・1つずつ足す・整理で消す)
+  const [importing, setImporting] = useState(false)
+  const [tidying, setTidying] = useState(false)
+  const [variationNote, setVariationNote] = useState<string | null>(null)
 
   const [rootName, setRootName] = useLocalStorage('nai_chards_root', 'training_data')
   const [count, setCount] = useLocalStorage('nai_chards_count', 10)
@@ -145,7 +141,7 @@ export default function CharacterDataset() {
 
   useEffect(() => {
     loadCharacters()
-    fetch('/api/lora-dataset/variations').then(r => (r.ok ? r.json() : null)).then(v => v && setDefaults(v)).catch(() => {})
+    fetch('/api/lora-dataset/variations').then(r => (r.ok ? r.json() : null)).then(v => v && applyVariations(v)).catch(() => {})
   }, [])
 
   const character = characters.find(c => c.id === characterId) ?? null
@@ -165,12 +161,49 @@ export default function CharacterDataset() {
     setSelected({ ...selected, [axis]: list.includes(value) ? list.filter(v => v !== value) : [...list, value] })
   }
 
-  function addCustom(axis: Axis) {
+  /** 候補の一覧を画面に入れる。候補から消えたものは、選択からも外す(見えないまま生成に使われないように)。 */
+  function applyVariations(next: Variations, alsoSelect?: { axis: Axis; value: string }) {
+    setDefaults(next)
+    const kept = Object.fromEntries(
+      AXES.map(a => [a.key, (selected[a.key] ?? []).filter(v => next[a.key].includes(v))]),
+    ) as Variations
+    if (alsoSelect && next[alsoSelect.axis].includes(alsoSelect.value) && !kept[alsoSelect.axis].includes(alsoSelect.value)) {
+      kept[alsoSelect.axis] = [...kept[alsoSelect.axis], alsoSelect.value]
+    }
+    setSelected(kept)
+  }
+
+  /** 「追加…」に入れたキーワードを候補に足して(DB に残る)、選ぶ。 */
+  async function addCustom(axis: Axis) {
     const value = custom[axis].trim()
     if (!value) return
-    if (!defaults[axis].includes(value)) setDefaults({ ...defaults, [axis]: [...defaults[axis], value] })
-    if (!selected[axis].includes(value)) setSelected({ ...selected, [axis]: [...selected[axis], value] })
-    setCustom({ ...custom, [axis]: '' })
+    setVariationNote(null)
+    try {
+      const res = await fetch('/api/lora-dataset/variations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ axis, values: [value] }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      const next = await res.json() as Variations
+      // 保存される形(空白をそろえたもの)で選ぶ
+      const saved = next[axis].find(v => v.toLowerCase() === value.replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').toLowerCase()) ?? value
+      applyVariations(next, { axis, value: saved })
+      setCustom({ ...custom, [axis]: '' })
+    } catch (e) {
+      setVariationNote(`足せませんでした: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /** 候補から消す(整理のとき)。 */
+  async function removeVariation(axis: Axis, value: string) {
+    if (!window.confirm(`「${value}」を${AXES.find(a => a.key === axis)?.label}の候補から消します。よろしいですか?`)) return
+    setVariationNote(null)
+    try {
+      const res = await fetch(`/api/lora-dataset/variations?axis=${axis}&value=${encodeURIComponent(value)}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      applyVariations(await res.json())
+    } catch (e) {
+      setVariationNote(`消せませんでした: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   async function handleGenerate() {
@@ -500,6 +533,19 @@ export default function CharacterDataset() {
         <main className="lora-main">
           <section className="lora-section">
             <span className="lora-section-label">バリエーション(全年齢向け)</span>
+            <div className="chards-variation-tools">
+              <button type="button" className="lora-btn" onClick={() => setImporting(true)} disabled={isRunning || !token}
+                title="画像生成で使ったプロンプトや、リバースプロンプトの結果から、キーワードを取り出して候補に足します">
+                プロンプトから読み込む
+              </button>
+              <button type="button" className={`lora-btn${tidying ? ' lora-btn--primary' : ''}`} aria-pressed={tidying}
+                onClick={() => setTidying(!tidying)} disabled={isRunning}
+                title="要らない候補を消します(押すと消すモードになり、候補を押すと消えます)">
+                {tidying ? '整理を終える' : '候補を整理(消す)'}
+              </button>
+            </div>
+            {tidying && <p className="lora-hint">消したい候補を押してください(確認のあと消えます)。</p>}
+            {variationNote && <p className="lora-hint" role="status">{variationNote}</p>}
             {AXES.map(axis => (
               <div key={axis.key} className="chards-axis">
                 <span className="chards-axis-label">
@@ -511,11 +557,12 @@ export default function CharacterDataset() {
                     <button
                       key={value}
                       type="button"
-                      className={`chards-chip${selected[axis.key].includes(value) ? ' chards-chip--on' : ''}`}
-                      onClick={() => toggle(axis.key, value)}
+                      className={`chards-chip${selected[axis.key].includes(value) ? ' chards-chip--on' : ''}${tidying ? ' chards-chip--tidy' : ''}`}
+                      onClick={() => (tidying ? void removeVariation(axis.key, value) : toggle(axis.key, value))}
                       disabled={isRunning}
+                      aria-label={tidying ? `${axis.label}の候補「${value}」を消す` : undefined}
                     >
-                      {value}
+                      {value}{tidying && ' ✕'}
                     </button>
                   ))}
                   <input
@@ -523,7 +570,7 @@ export default function CharacterDataset() {
                     placeholder="追加…"
                     value={custom[axis.key]}
                     onChange={e => setCustom({ ...custom, [axis.key]: e.target.value })}
-                    onKeyDown={e => e.key === 'Enter' && addCustom(axis.key)}
+                    onKeyDown={e => { if (e.key === 'Enter') void addCustom(axis.key) }}
                     disabled={isRunning}
                   />
                 </div>
@@ -620,6 +667,18 @@ export default function CharacterDataset() {
         </main>
       </div>
 
+      {importing && token && (
+        <VariationImportDialog
+          token={token}
+          existing={defaults}
+          onClose={() => setImporting(false)}
+          onAdded={(next, added) => {
+            applyVariations(next)
+            setVariationNote(`${added}個のキーワードを候補に足しました(使うものを選んでください)。`)
+            setImporting(false)
+          }}
+        />
+      )}
       <TaskStatusDialog
         status={task.status}
         minimized={task.minimized}
