@@ -200,7 +200,9 @@ class DatasetVariationsAddRequest(BaseModel):
 class DatasetVariationsExtractRequest(BaseModel):
     """プロンプト(画像生成で使ったもの・リバースプロンプトの結果など)から、バリエーションの候補を取り出す。"""
 
-    prompts: list[str] = Field(min_length=1, max_length=50)
+    prompts: list[str] = Field(min_length=1, max_length=400)
+    # プロンプトごとの軸の見当(チャンクの分類から付けたもの。無ければ null)。軸が分からなかったタグに使う
+    hints: Optional[list[Optional[str]]] = Field(None, max_length=400)
 
 
 class CharacterDatasetRequest(BaseModel):

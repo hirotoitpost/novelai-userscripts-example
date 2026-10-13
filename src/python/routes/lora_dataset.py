@@ -287,9 +287,10 @@ async def extract_variations(req: DatasetVariationsExtractRequest) -> dict[str, 
     """
     プロンプトから、バリエーションの候補にできるキーワードを取り出して、軸ごとに分ける(足しはしない)。
     axes: 軸ごとのタグ、other: どの軸か分からないタグ、adult: 性的なタグ、skipped: 取り出さなかったタグ
-    (品質・画風・人数・容姿)。分け方は dataset_variations.py。
+    (品質・画風・人数・容姿)、suggested: 軸が分からなかったタグの、hints から付けた軸の見当。
+    分け方は dataset_variations.py。
     """
-    return extract_variation_tags(req.prompts)
+    return extract_variation_tags(req.prompts, req.hints)
 
 
 @router.get("/character/{character_id}/sheet-prompt", response_model=CharacterSheetPromptResponse)

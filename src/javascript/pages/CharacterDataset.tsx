@@ -535,8 +535,8 @@ export default function CharacterDataset() {
             <span className="lora-section-label">バリエーション(全年齢向け)</span>
             <div className="chards-variation-tools">
               <button type="button" className="lora-btn" onClick={() => setImporting(true)} disabled={isRunning || !token}
-                title="画像生成で使ったプロンプトや、リバースプロンプトの結果から、キーワードを取り出して候補に足します">
-                プロンプトから読み込む
+                title="プロンプト(貼り付け・画像生成の履歴・画像)やプロンプトチャンクから、キーワードを取り出して候補に足します">
+                キーワードを読み込む(プロンプト・チャンク)
               </button>
               <button type="button" className={`lora-btn${tidying ? ' lora-btn--primary' : ''}`} aria-pressed={tidying}
                 onClick={() => setTidying(!tidying)} disabled={isRunning}
