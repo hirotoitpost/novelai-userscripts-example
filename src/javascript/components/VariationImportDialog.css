@@ -258,3 +258,34 @@
   background: #14142a;
   padding: 0.5rem 0 0.2rem;
 }
+
+/* 枠のまとまりの見出し(バリエーションの候補 / キャラシート) */
+.vi-result h3.vi-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  color: #e8e8ff;
+}
+
+.vi-zone--sheet {
+  border-color: #2a5a70;
+}
+
+.vi-sheet-mode {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.vi-removed {
+  margin: 0 0 0.3rem;
+  font-size: 0.75rem;
+  color: #ff8a9a;
+  word-break: break-word;
+}

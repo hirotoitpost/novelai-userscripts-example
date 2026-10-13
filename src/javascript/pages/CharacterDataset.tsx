@@ -671,10 +671,15 @@ export default function CharacterDataset() {
         <VariationImportDialog
           token={token}
           existing={defaults}
+          character={character}
           onClose={() => setImporting(false)}
-          onAdded={(next, added) => {
+          onAdded={(next, added, sheetAdded) => {
             applyVariations(next)
-            setVariationNote(`${added}個のキーワードを候補に足しました(使うものを選んでください)。`)
+            if (sheetAdded > 0) loadCharacters()
+            setVariationNote([
+              added > 0 ? `${added}個のキーワードを候補に足しました(使うものを選んでください)。` : '',
+              sheetAdded > 0 && character ? `「${character.name}」のキャラシートに${sheetAdded}個のキーワードを入れました。` : '',
+            ].filter(Boolean).join(' '))
             setImporting(false)
           }}
         />
