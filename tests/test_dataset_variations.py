@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from python import character_sheet, db  # noqa: E402
-from python.dataset_variations import axis_of, clean_value, extract, prompt_tags  # noqa: E402
+from python.dataset_variations import axis_of, clean_value, extract, hint_axis, prompt_tags  # noqa: E402
 from python.routes import lora_dataset as routes  # noqa: E402
 
 
@@ -77,9 +77,20 @@ def test_extract_groups_keywords_and_keeps_first_seen_order() -> None:
         "expressions": ["smile"],
         "locations": ["classroom", "park"],
     }
-    assert result["other"] == ["cat"] and result["adult"] == ["nude"]
+    assert result["other"] == ["cat"] and result["adult"] == ["nude"] and result["suggested"] == {}
     assert result["skipped"] == ["1girl", "brown hair", "masterpiece", "1boy"]
     assert clean_value("  school  uniform ,blazer ,, ") == "school uniform, blazer"
+
+
+def test_category_names_hint_the_axis_of_unknown_keywords() -> None:
+    assert hint_axis("表情") == "expressions" and hint_axis("服") == "outfits" and hint_axis("カメラ視点") == "framings"
+    assert hint_axis("風景") == "locations" and hint_axis("ポーズ集") == "poses"
+    assert hint_axis("キャラクター") is None and hint_axis("") is None
+    # 語の一覧で分かるものはそのまま。分からないもの(と成人向け)にだけ、見当を付ける。取り出さないものには付けない
+    result = extract(["tsurime, smile, brown hair, nude", "umbrella", "lantern"], ["expressions", None, "bogus"])
+    assert result["axes"]["expressions"] == ["smile"]
+    assert result["other"] == ["tsurime", "umbrella", "lantern"] and result["skipped"] == ["brown hair"]
+    assert result["suggested"] == {"tsurime": "expressions", "nude": "expressions"}
 
 
 @pytest.fixture()
@@ -127,6 +138,10 @@ def test_extract_endpoint_only_reports(client: TestClient) -> None:
         "expressions": ["grin"],
         "locations": ["beach"],
     }
+    hinted = client.post(
+        "/api/lora-dataset/variations/extract", json={"prompts": ["lantern", "umbrella"], "hints": ["locations", None]}
+    ).json()
+    assert hinted["other"] == ["lantern", "umbrella"] and hinted["suggested"] == {"lantern": "locations"}
     # 取り出すだけで、候補には足さない
     assert client.get("/api/lora-dataset/variations").json() == before
     assert client.post("/api/lora-dataset/variations/extract", json={"prompts": []}).status_code == 422

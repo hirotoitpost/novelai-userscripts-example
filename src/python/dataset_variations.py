@@ -122,14 +122,36 @@ def axis_of(tag: str) -> str:
     return "other"
 
 
-def extract(prompts: list[str]) -> dict[str, Any]:
+# チャンクの分類の名前から、軸の見当を付ける語
+_HINT_WORDS = (
+    ("expressions", ("表情", "顔", "expression", "face")),
+    ("outfits", ("服", "衣装", "衣服", "アクセ", "コスチューム", "outfit", "cloth", "costume")),
+    ("framings", ("カメラ", "構図", "視点", "アングル", "camera", "framing", "angle")),
+    ("locations", ("風景", "場所", "背景", "ロケ", "location", "scene", "background")),
+    ("poses", ("ポーズ", "姿勢", "動作", "仕草", "pose", "action")),
+)
+
+
+def hint_axis(label: str) -> str | None:
+    """分類の名前(チャンクの分類など)から見当を付けた軸。分からなければ None。"""
+    text = str(label or "").lower()
+    return next((axis for axis, words in _HINT_WORDS if any(w in text for w in words)), None)
+
+
+def extract(prompts: list[str], hints: list[str | None] | None = None) -> dict[str, Any]:
     """
     プロンプトからバリエーションの候補を取り出す。axes は軸ごとのタグ、other はどの軸か分からないタグ、
     adult は性的なタグ、skipped は取り出さなかったタグ(品質・画風・人数・容姿)。どれも出てきた順で、重なりは除く。
+
+    hints は、プロンプトごとの軸の見当(チャンクの分類から付けたもの。無ければ None)。語の一覧で軸が分からなかった
+    タグ(other / adult)に、そのプロンプトの見当を suggested として返す(画面で、その軸に置いて見せる)。
     """
-    result: dict[str, Any] = {"axes": {axis: [] for axis in AXES}, "other": [], "adult": [], "skipped": []}
+    result: dict[str, Any] = {
+        "axes": {axis: [] for axis in AXES}, "other": [], "adult": [], "skipped": [], "suggested": {},
+    }
     seen: set[str] = set()
-    for prompt in prompts:
+    for index, prompt in enumerate(prompts):
+        hint = hints[index] if hints and index < len(hints) else None
         for tag in prompt_tags(prompt):
             if tag.lower() in seen:
                 continue
@@ -137,8 +159,10 @@ def extract(prompts: list[str]) -> dict[str, Any]:
             axis = axis_of(tag)
             if axis in AXES:
                 result["axes"][axis].append(tag)
-            else:
-                result[{"skip": "skipped", "adult": "adult"}.get(axis, "other")].append(tag)
+                continue
+            result[{"skip": "skipped", "adult": "adult"}.get(axis, "other")].append(tag)
+            if axis != "skip" and hint in AXES:
+                result["suggested"][tag] = hint
     return result
 
 
