@@ -29,6 +29,15 @@
       ]
     },
     {
+      "key": "dataset.adult_only_tags",
+      "group": "キャラ別データセット",
+      "label": "成人キャラだけに使うタグ",
+      "description": "キャラ別データセットで、これに当たるタグ(状態・シチュエーション・バリエーションの中)は、成人キャラ(キャラシートの成人フラグ)にだけ使える。使うときは、未成年を示すタグ(未成年ガード)と一緒には使えない。全年齢・R18 のどちらでも効く。",
+      "kind": "patterns",
+      "match": "word",
+      "value": ["pregnan(t|cy)", "maternity", "lactation", "breast ?feeding"]
+    },
+    {
       "key": "general.safe_negative",
       "group": "キャラ別データセット",
       "label": "全年齢のネガティブ",

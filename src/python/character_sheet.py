@@ -230,6 +230,9 @@ class VariationShot:
     prompt: str
     # 基準シードからのずらし幅。同じ組み合わせを2周目以降に使うときに、同じ絵にならないようにする
     seed_offset: int = 0
+    # この1枚のシチュエーション・状態の名前(使っていなければ空)
+    situation: str = ""
+    state: str = ""
 
 
 # 周回ごとのシードのずらし幅。引き直し(シード+試行回数、最大5回)と重ならないように間を空ける
@@ -289,33 +292,82 @@ def build_variation_shots(
     framings: list[str] | None = None,
     rng: random.Random | None = None,
     r18: bool = False,
+    situations: list[dict[str, Any]] | None = None,
+    states: list[dict[str, Any] | None] | None = None,
 ) -> list[VariationShot]:
     """
     キャラシートの容姿を固定し、構図/ポーズ/服装/表情/場所の組み合わせを count 枚分作る。
     組み合わせは各軸が均等に出るように選ぶ(balanced_combos)。
     服装を1つも選ばなければキャラシートの普段の服装を使う。
 
+    situations(シチュエーション)を渡すと、1枚ごとにどれか1つを使い、そのシチュエーションが決めている軸
+    (例: ジムなら場所・服装・ポーズ)は、その中からだけ選ぶ(軸どうしがばらばらに組み合わさらない)。決めていない軸は、
+    ふつうのバリエーションから選ぶ。extra_tags は、そのシチュエーションの1枚にいつも足す。
+    states(状態)を渡すと、1枚ごとにどれか1つを使い、キャラシートの容姿から remove_tags を外して add_tags を足す
+    (例: 食べ過ぎでお腹が出る)。並びに None を入れると、状態なし(ふだんの体)の枚も作る。
+    シチュエーションと状態は、すべての組み合わせ(単位)が均等に出るように枚数を割り振る。
+
     count が組み合わせの数より多いときは、組み合わせを一巡するごとにシードをずらして繰り返す
     (同じプロンプト・同じシードだと同じ絵になるため)。
     """
     rng = rng or random.Random()
-    outfit_choices = outfits or [character.get("outfit_tags") or ""]
-    axes = [framings or [""], poses or [""], outfit_choices, expressions or [""], locations or [""]]
-
-    head = join_tags(character.get("trigger_word"), character.get("appearance_tags"), r18_positive() if r18 else "")
-    total = 1
-    for axis in axes:
-        total *= len(axis)
+    base_axes = {
+        "framings": framings or [""],
+        "poses": poses or [""],
+        "outfits": outfits or [character.get("outfit_tags") or ""],
+        "expressions": expressions or [""],
+        "locations": locations or [""],
+    }
+    units = [(situation, state) for situation in (situations or [None]) for state in (states or [None])]
+    rng.shuffle(units)
     shots: list[VariationShot] = []
-    round_no = 0
-    while len(shots) < count:
-        for framing, pose, outfit, expression, location in balanced_combos(axes, count - len(shots), rng):
-            prompt = join_tags(head, framing, outfit, pose, expression, location, character.get("style_tags"))
-            shots.append(VariationShot(
-                stem=f"{len(shots) + 1:04d}", prompt=prompt, seed_offset=round_no * SEED_STEP_PER_ROUND,
-            ))
-        round_no += 1
+    for index, (situation, state) in enumerate(units):
+        # 単位ごとの枚数(端数は先頭の単位から1枚ずつ)
+        share = count // len(units) + (1 if index < count % len(units) else 0)
+        if share == 0:
+            continue
+        axes = [
+            [v for v in (situation or {}).get(axis) or [] if v] or base_axes[axis]
+            for axis in ("framings", "poses", "outfits", "expressions", "locations")
+        ]
+        head = join_tags(
+            character.get("trigger_word"),
+            body_tags(character.get("appearance_tags"), state),
+            r18_positive() if r18 else "",
+        )
+        extra = (situation or {}).get("extra_tags") or ""
+        made = 0
+        round_no = 0
+        while made < share:
+            for framing, pose, outfit, expression, location in balanced_combos(axes, share - made, rng):
+                prompt = join_tags(head, framing, outfit, pose, expression, location, extra, character.get("style_tags"))
+                shots.append(VariationShot(
+                    stem=f"{len(shots) + 1:04d}",
+                    prompt=prompt,
+                    seed_offset=round_no * SEED_STEP_PER_ROUND,
+                    situation=(situation or {}).get("name") or "",
+                    state=(state or {}).get("name") or "",
+                ))
+                made += 1
+            round_no += 1
     return shots
+
+
+def body_tags(appearance: str | None, state: dict[str, Any] | None) -> str:
+    """
+    状態に合わせた容姿: キャラシートの容姿から remove_tags に当たるタグを外し(強調の記号は見ずに比べる)、
+    add_tags を足す。状態が無ければ容姿のまま。
+    """
+    if not state:
+        return appearance or ""
+    removed = {_plain(t) for t in split_tags(state.get("remove_tags"))}
+    kept = [t for t in split_tags(appearance) if _plain(t) not in removed]
+    return join_tags(", ".join(kept), state.get("add_tags"))
+
+
+def adult_only_tags(tags: str) -> list[str]:
+    """成人キャラだけに使うタグ(コンテンツガードの dataset.adult_only_tags。妊娠など)。"""
+    return content_guard.find("dataset.adult_only_tags", tags)
 
 
 def caption_for(character: dict[str, Any], extra: str | None = None) -> str:
