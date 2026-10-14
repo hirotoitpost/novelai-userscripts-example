@@ -1438,7 +1438,7 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
     from novelai.types import GenerateImageParams, InpaintParams
 
     from ..manga_v2.detect import detect_heads
-    from ..panel_states import find_targets, redraw_scene_tags, target_mask
+    from ..panel_states import find_targets, matched_state, redraw_scene_tags, target_mask
 
     conn = get_connection()
     try:
@@ -1457,7 +1457,8 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
         for scene in scenes:
             panel = panels.get(scene["id"])
             members = cast.get(scene["id"], [])
-            if panel is None or not members:
+            # 状態の人物がいないコマは、頭の検出もしない
+            if panel is None or not any(matched_state(m.get("action_tags") or "", states) for m in members):
                 continue
             path = _PROJECT_ROOT / panel["image_path"]
             heads = await asyncio.to_thread(detect_heads, path)
