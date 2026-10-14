@@ -486,6 +486,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             save_dataset_situation(conn, None, item["name"], item["axes"], item.get("extra_tags", ""))
         for item in DEFAULT_DATASET_STATES:
             save_dataset_state(conn, None, item["name"], item["add_tags"], item["remove_tags"], item.get("part", "none"))
+    # キャストのセット(よく使うキャラの組み合わせ)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cast_presets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            character_ids TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -2624,6 +2635,36 @@ def save_dataset_state(
 
 def delete_dataset_state(conn: sqlite3.Connection, state_id: int) -> bool:
     cur = conn.execute("DELETE FROM dataset_states WHERE id = ?", (state_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+# ---- キャストのセット ----
+
+
+def _cast_preset(row: sqlite3.Row) -> dict[str, Any]:
+    return {"id": row["id"], "name": row["name"], "character_ids": [int(i) for i in json.loads(row["character_ids"] or "[]")]}
+
+
+def list_cast_presets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [_cast_preset(row) for row in conn.execute("SELECT * FROM cast_presets ORDER BY name")]
+
+
+def save_cast_preset(conn: sqlite3.Connection, name: str, character_ids: list[int]) -> dict[str, Any]:
+    """キャストのセットを保存する(同じ名前なら上書き)。"""
+    conn.execute(
+        """
+        INSERT INTO cast_presets (name, character_ids, created_at) VALUES (?, ?, ?)
+        ON CONFLICT (name) DO UPDATE SET character_ids = excluded.character_ids
+        """,
+        (name, json.dumps(character_ids), datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return _cast_preset(conn.execute("SELECT * FROM cast_presets WHERE name = ?", (name,)).fetchone())
+
+
+def delete_cast_preset(conn: sqlite3.Connection, preset_id: int) -> bool:
+    cur = conn.execute("DELETE FROM cast_presets WHERE id = ?", (preset_id,))
     conn.commit()
     return cur.rowcount > 0
 

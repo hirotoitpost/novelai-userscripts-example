@@ -553,6 +553,13 @@ class MangaImportAutoRequest(BaseModel):
     make_images: bool = True
 
 
+class CastPresetRequest(BaseModel):
+    """キャストのセット(よく使うキャラの組み合わせ)。同じ名前なら上書き。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    character_ids: list[int] = Field(min_length=1, max_length=8)
+
+
 class QuickMangaRequest(BaseModel):
     """おまかせ漫画: テーマから、登場人物(選ばなければ新しく考える)→ 大枠 → 台本 → 漫画まで一気に作る。"""
 
@@ -573,6 +580,10 @@ class QuickMangaRequest(BaseModel):
     use_character_reference: bool = False
     # 台本(物語)を作るところまでにする(コマの絵は、物語のページで確かめてから生成)
     stop_after_script: bool = False
+    # 台本を見直して、セリフと筋に要る物・状態を作画タグに足す(生成の前)
+    review_script: bool = True
+    # コマの絵を確かめて、外れたコマを描き直す(生成の後)
+    check_panels: bool = True
 
 
 class GalleryMangaRequest(BaseModel):
@@ -787,7 +798,7 @@ class StoryJobResponse(BaseModel):
 
     story_id: int
     kind: Literal[
-        "split", "illustrate", "characters", "cast", "panels", "sfx", "narration", "sfx_fonts", "manga", "auto_manga"
+        "split", "illustrate", "characters", "cast", "panels", "sfx", "narration", "sfx_fonts", "manga", "auto_manga", "check_panels"
     ]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
@@ -1161,6 +1172,19 @@ class MangaV2PageLayoutsRequest(BaseModel):
     import_id: Optional[int] = None
 
 
+class MangaV2CheckRequest(BaseModel):
+    """
+    コマの絵を確かめて、外れたコマを描き直す(panel_check.py)。作画タグのうち判定モデルで見分けられるものと、描く人数を
+    確かめ、外れたコマは、描かれなかったタグを強めて(NovelAI の 1.5::タグ::)シードを変えて描き直す。描き直しの方が
+    よくなったときだけ置き換える。終わったらページに合成し直す。
+    """
+
+    panels: MangaV2PanelsRequest = Field(default_factory=lambda: MangaV2PanelsRequest())
+    compose: MangaV2ComposeRequest = Field(default_factory=lambda: MangaV2ComposeRequest())
+    # 1コマを描き直す回数の上限
+    max_redraws: int = Field(2, ge=1, le=3)
+
+
 class MangaV2MakeRequest(BaseModel):
     """
     まだ絵の無いコマを生成してから、ページに合成するまでを1つのジョブで行う(漫画ドラフトの「漫画にする」)。
@@ -1169,6 +1193,9 @@ class MangaV2MakeRequest(BaseModel):
 
     panels: MangaV2PanelsRequest = MangaV2PanelsRequest()
     compose: MangaV2ComposeRequest = MangaV2ComposeRequest()
+    # コマを生成したあとに絵を確かめて、外れたコマを描き直す(MangaV2CheckRequest と同じ)
+    check_panels: bool = False
+    max_redraws: int = Field(2, ge=1, le=3)
 
 
 class StoryAutoMangaRequest(BaseModel):

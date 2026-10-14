@@ -136,3 +136,25 @@ def test_auto_manga_can_skip_character_reference(conn: Any, monkeypatch: pytest.
     job = story_routes._Job(story_id=story["id"], kind="auto_manga")
     asyncio.run(story_routes._run_auto_manga(job, story["id"], req, "t", story_routes.TagOptions()))
     assert seen["reference"] is expected
+
+
+def test_cast_presets(conn: Any) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(story_routes.router)
+    client = TestClient(app)
+    a = db.save_character(conn, "ひなた", "1girl", None)
+    b = db.save_character(conn, "蓮", "1boy", None)
+    url = "/api/story/cast-presets"
+    saved = client.post(url, json={"name": " カフェ組 ", "character_ids": [a["id"], b["id"], a["id"]]}).json()
+    assert saved["name"] == "カフェ組" and saved["character_ids"] == [a["id"], b["id"]]
+    # 同じ名前は上書き
+    assert client.post(url, json={"name": "カフェ組", "character_ids": [b["id"]]}).json()["id"] == saved["id"]
+    assert client.get(url).json() == [{"id": saved["id"], "name": "カフェ組", "character_ids": [b["id"]]}]
+    assert client.post(url, json={"name": "x", "character_ids": [999]}).status_code == 422
+    assert client.post(url, json={"name": "x", "character_ids": []}).status_code == 422
+    assert client.delete(f"{url}/{saved['id']}").status_code == 204
+    assert client.delete(f"{url}/{saved['id']}").status_code == 404
+    assert client.get(url).json() == []
