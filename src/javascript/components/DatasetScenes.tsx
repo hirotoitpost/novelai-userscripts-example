@@ -31,7 +31,14 @@ export interface DatasetState {
   name: string
   add_tags: string
   remove_tags: string
+  /** ふだんの体の絵から描き直す部位(none はプロンプトだけで作る) */
+  part: string
   adult_only: string[]
+}
+
+interface BodyPart {
+  key: string
+  label: string
 }
 
 interface Chunk {
@@ -60,6 +67,11 @@ interface Props {
   onStateIds: (ids: number[]) => void
   includePlain: boolean
   onIncludePlain: (value: boolean) => void
+  /** 状態の作り方と、描き直しの強さ */
+  stateMethod: 'prompt' | 'inpaint'
+  onStateMethod: (value: 'prompt' | 'inpaint') => void
+  inpaintStrength: number
+  onInpaintStrength: (value: number) => void
   /** 一覧を読んだとき(ページで、選んだものの名前や数を出すため) */
   onLoaded?: (situations: Situation[], states: DatasetState[]) => void
 }
@@ -82,6 +94,12 @@ export default function DatasetScenes(props: Props) {
   const [states, setStates] = useState<DatasetState[]>([])
   const [editing, setEditing] = useState<Editing | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [parts, setParts] = useState<BodyPart[]>([])
+
+  useEffect(() => {
+    apiFetch<BodyPart[]>(token, '/api/lora-dataset/body-parts').then(setParts).catch(() => {})
+  }, [token])
+  const partLabel = (key: string) => parts.find(p => p.key === key)?.label
 
   const load = useCallback(async () => {
     try {
@@ -156,15 +174,50 @@ export default function DatasetScenes(props: Props) {
         {states.map(s => chip(
           s, stateIds.includes(s.id), () => toggle(stateIds, s.id, props.onStateIds),
           () => setEditing({ kind: 'state', item: s }),
-          [s.remove_tags && `外す: ${s.remove_tags}`, s.add_tags && `足す: ${s.add_tags}`].filter(Boolean).join('\n'),
+          [
+            s.remove_tags && `外す: ${s.remove_tags}`,
+            s.add_tags && `足す: ${s.add_tags}`,
+            partLabel(s.part) ? `描き直す部位: ${partLabel(s.part)}` : '',
+          ].filter(Boolean).join('\n'),
         ))}
         <button type="button" className="ds-add" onClick={() => setEditing({ kind: 'state', item: null })} disabled={disabled}>＋ 追加</button>
       </div>
       {selectedStates.length > 0 && (
-        <label className="lora-checkbox-label">
-          <input type="checkbox" checked={props.includePlain} onChange={e => props.onIncludePlain(e.target.checked)} disabled={disabled} />
-          状態なし(ふだんの体)の枚も作る
-        </label>
+        <div className="ds-method">
+          <span className="lora-label">状態の作り方</span>
+          <label className="lora-checkbox-label">
+            <input type="radio" name="ds-method" checked={props.stateMethod === 'prompt'} disabled={disabled}
+              onChange={() => props.onStateMethod('prompt')} />
+            状態のタグで生成する
+          </label>
+          <label className="lora-checkbox-label">
+            <input type="radio" name="ds-method" checked={props.stateMethod === 'inpaint'} disabled={disabled}
+              onChange={() => props.onStateMethod('inpaint')} />
+            ふだんの体の絵から、部位だけを描き直す(インペイント)
+          </label>
+          {props.stateMethod === 'inpaint' ? (
+            <>
+              <p className="lora-hint">
+                ふだんの体で1枚生成し、状態の部位(お腹など)だけを描き直した絵を足します。顔・服・背景が同じで体だけが違う組になります。
+                生成枚数は「ふだんの体の絵」の枚数で、1枚ごとに状態の数だけ増えます。頭が見つからない絵(寝ている絵など)は、状態のタグで生成し直します。
+                部位の無い状態は、タグで生成します。
+              </p>
+              <label className="lora-label">
+                描き直しの強さ {props.inpaintStrength.toFixed(2)}
+                <input type="range" min={0.3} max={1} step={0.05} value={props.inpaintStrength} disabled={disabled}
+                  onChange={e => props.onInpaintStrength(Number(e.target.value))} />
+              </label>
+              {selectedStates.some(s => !partLabel(s.part)) && (
+                <p className="lora-hint">部位の無い状態: {selectedStates.filter(s => !partLabel(s.part)).map(s => s.name).join('、')}(タグで生成します)</p>
+              )}
+            </>
+          ) : (
+            <label className="lora-checkbox-label">
+              <input type="checkbox" checked={props.includePlain} onChange={e => props.onIncludePlain(e.target.checked)} disabled={disabled} />
+              状態なし(ふだんの体)の枚も作る
+            </label>
+          )}
+        </div>
       )}
       {selectedStates.some(s => s.adult_only.length > 0) && !isAdult && (
         <p className="lora-warn">成人キャラにだけ使える状態が選ばれています。このキャラでは生成できません(外してください)。</p>
@@ -175,6 +228,7 @@ export default function DatasetScenes(props: Props) {
         <SceneEditor
           token={token}
           editing={editing}
+          parts={parts}
           onClose={() => setEditing(null)}
           onSaved={async removedId => {
             setEditing(null)
@@ -195,9 +249,10 @@ const lines = (values: string[]) => values.join('\n')
 const fromLines = (text: string) => text.split('\n').map(l => l.trim()).filter(Boolean)
 
 /** シチュエーション・状態の編集ダイアログ(新しく作る / 直す / 消す / プロンプトチャンクから読み込む) */
-function SceneEditor({ token, editing, onClose, onSaved }: {
+function SceneEditor({ token, editing, parts, onClose, onSaved }: {
   token: string
   editing: Editing
+  parts: BodyPart[]
   onClose: () => void
   /** 保存・削除のあと。消したときは消したID */
   onSaved: (removedId?: number) => void | Promise<void>
@@ -215,6 +270,7 @@ function SceneEditor({ token, editing, onClose, onSaved }: {
   const [extra, setExtra] = useState(situation?.extra_tags ?? '')
   const [addTags, setAddTags] = useState(state?.add_tags ?? '')
   const [removeTags, setRemoveTags] = useState(state?.remove_tags ?? '')
+  const [part, setPart] = useState(state?.part ?? 'none')
   const [chunks, setChunks] = useState<Chunk[]>([])
   const [chunkQuery, setChunkQuery] = useState('')
   const [busy, setBusy] = useState(false)
@@ -281,7 +337,7 @@ function SceneEditor({ token, editing, onClose, onSaved }: {
       const body = { name: name.trim(), ...Object.fromEntries(AXES.map(a => [a.key, fromLines(axes[a.key])])), extra_tags: extra }
       await send(token, situation ? 'PUT' : 'POST', `/api/lora-dataset/situations${situation ? `/${situation.id}` : ''}`, body)
     } else {
-      const body = { name: name.trim(), add_tags: addTags, remove_tags: removeTags }
+      const body = { name: name.trim(), add_tags: addTags, remove_tags: removeTags, part }
       await send(token, state ? 'PUT' : 'POST', `/api/lora-dataset/states${state ? `/${state.id}` : ''}`, body)
     }
     await onSaved()
@@ -349,7 +405,15 @@ function SceneEditor({ token, editing, onClose, onSaved }: {
               <span>足すタグ(カンマ区切り)</span>
               <input value={addTags} maxLength={500} onChange={e => setAddTags(e.target.value)} placeholder="例: plump, round belly" />
             </label>
+            <label className="publish-field">
+              <span>描き直す部位(「部位だけを描き直す」で作るとき)</span>
+              <select value={part} onChange={e => setPart(e.target.value)}>
+                <option value="none">なし(タグで生成する)</option>
+                {parts.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+            </label>
             <p className="publish-hint">
+              キャラシートに「標準の体型」があれば、足すタグはそれを置き換えます(外すタグは容姿の側から外します)。
               妊娠などのタグは、成人キャラにだけ使えます(コンテンツガードの「成人キャラだけに使うタグ」)。
             </p>
           </>

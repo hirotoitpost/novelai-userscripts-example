@@ -226,6 +226,8 @@ class DatasetStateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     add_tags: str = Field("", max_length=500)
     remove_tags: str = Field("", max_length=500)
+    # ふだんの絵から描き直す部位(インペイントで作るとき)。none はプロンプトだけで作る
+    part: Literal["none", "belly", "chest", "torso", "legs"] = "none"
 
 
 class CharacterDatasetRequest(BaseModel):
@@ -242,6 +244,13 @@ class CharacterDatasetRequest(BaseModel):
     state_ids: list[int] = Field(default_factory=list, max_length=20)
     # 状態を選んだとき、状態なし(ふだんの体)の枚も作るか
     include_plain_state: bool = True
+    # 状態の作り方。prompt: 状態のタグで生成する / inpaint: ふだんの体で生成した絵から、状態の部位だけを描き直す
+    # (顔・服・背景が同じで体だけが違う組ができる。部位の無い状態はプロンプトで作る)。inpaint のときの count は、
+    # ふだんの体の絵の枚数(1枚ごとに、選んだ状態の数だけ描き直しの絵が増える)
+    state_method: Literal["prompt", "inpaint"] = "prompt"
+    inpaint_strength: float = Field(1.0, ge=0.3, le=1.0)
+    # 顔の切り抜きも保存する(頭の検出で切り、faces/ に置く。小さすぎる顔は飛ばす)
+    save_face_crops: bool = False
     count: int = Field(10, ge=1, le=200, description="生成枚数。組み合わせから重複なしで選ぶ")
     model: ImageModelLiteral = "nai-diffusion-4-5-full"
     width: int = Field(832, ge=64, le=1600)

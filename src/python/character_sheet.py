@@ -235,6 +235,8 @@ class VariationShot:
     # この1枚のシチュエーション・状態の名前(使っていなければ空)
     situation: str = ""
     state: str = ""
+    # プロンプトの中の見た目(容姿+体型。状態で描き直すときに、ここを状態の見た目に差し替える)
+    look: str = ""
 
 
 # 周回ごとのシードのずらし幅。引き直し(シード+試行回数、最大5回)と重ならないように間を空ける
@@ -332,11 +334,8 @@ def build_variation_shots(
             [v for v in (situation or {}).get(axis) or [] if v] or base_axes[axis]
             for axis in ("framings", "poses", "outfits", "expressions", "locations")
         ]
-        head = join_tags(
-            character.get("trigger_word"),
-            look_tags(character, state),
-            r18_positive() if r18 else "",
-        )
+        look = look_tags(character, state)
+        head = join_tags(character.get("trigger_word"), look, r18_positive() if r18 else "")
         extra = (situation or {}).get("extra_tags") or ""
         made = 0
         round_no = 0
@@ -349,6 +348,7 @@ def build_variation_shots(
                     seed_offset=round_no * SEED_STEP_PER_ROUND,
                     situation=(situation or {}).get("name") or "",
                     state=(state or {}).get("name") or "",
+                    look=look,
                 ))
                 made += 1
             round_no += 1

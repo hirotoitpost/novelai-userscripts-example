@@ -475,11 +475,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 状態で描き直す部位(body_parts.PARTS のキー。none はプロンプトだけで作る)
+    if "part" not in {row["name"] for row in conn.execute("PRAGMA table_info(dataset_states)")}:
+        conn.execute("ALTER TABLE dataset_states ADD COLUMN part TEXT NOT NULL DEFAULT 'none'")
+        # 例として入れた状態には、描き直す部位を入れる
+        for item in DEFAULT_DATASET_STATES:
+            conn.execute("UPDATE dataset_states SET part = ? WHERE name = ?", (item.get("part", "none"), item["name"]))
     if first_scenes:
         for item in DEFAULT_DATASET_SITUATIONS:
             save_dataset_situation(conn, None, item["name"], item["axes"], item.get("extra_tags", ""))
         for item in DEFAULT_DATASET_STATES:
-            save_dataset_state(conn, None, item["name"], item["add_tags"], item["remove_tags"])
+            save_dataset_state(conn, None, item["name"], item["add_tags"], item["remove_tags"], item.get("part", "none"))
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -2496,11 +2502,13 @@ DEFAULT_DATASET_STATES: list[dict[str, Any]] = [
         "name": "食べ過ぎでお腹が出る",
         "add_tags": "plump, round belly, belly, stomach bulge",
         "remove_tags": "slim, slender, thin, skinny, flat stomach, narrow waist, toned, abs",
+        "part": "belly",
     },
     {
         "name": "妊娠してお腹が大きい",
         "add_tags": "pregnant, big belly, hand on own stomach",
         "remove_tags": "slim, slender, thin, skinny, flat stomach, narrow waist, toned, abs",
+        "part": "belly",
     },
 ]
 
@@ -2553,7 +2561,13 @@ def delete_dataset_situation(conn: sqlite3.Connection, situation_id: int) -> boo
 
 
 def _state(row: sqlite3.Row) -> dict[str, Any]:
-    return {"id": row["id"], "name": row["name"], "add_tags": row["add_tags"] or "", "remove_tags": row["remove_tags"] or ""}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "add_tags": row["add_tags"] or "",
+        "remove_tags": row["remove_tags"] or "",
+        "part": row["part"] if "part" in row.keys() else "none",
+    }
 
 
 def list_dataset_states(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -2566,19 +2580,22 @@ def get_dataset_state(conn: sqlite3.Connection, state_id: int) -> dict[str, Any]
 
 
 def save_dataset_state(
-    conn: sqlite3.Connection, state_id: int | None, name: str, add_tags: str, remove_tags: str
+    conn: sqlite3.Connection, state_id: int | None, name: str, add_tags: str, remove_tags: str, part: str = "none"
 ) -> dict[str, Any]:
-    """状態を作る(state_id が None)か、書き換える。同じ名前がほかにあれば sqlite3.IntegrityError。"""
+    """
+    状態を作る(state_id が None)か、書き換える。part は、ふだんの絵から描き直す部位(none ならプロンプトだけで作る)。
+    同じ名前がほかにあれば sqlite3.IntegrityError。
+    """
     if state_id is None:
         cur = conn.execute(
-            "INSERT INTO dataset_states (name, add_tags, remove_tags, created_at) VALUES (?, ?, ?, ?)",
-            (name, add_tags, remove_tags, datetime.now(timezone.utc).isoformat()),
+            "INSERT INTO dataset_states (name, add_tags, remove_tags, part, created_at) VALUES (?, ?, ?, ?, ?)",
+            (name, add_tags, remove_tags, part, datetime.now(timezone.utc).isoformat()),
         )
         state_id = int(cur.lastrowid or 0)
     else:
         conn.execute(
-            "UPDATE dataset_states SET name = ?, add_tags = ?, remove_tags = ? WHERE id = ?",
-            (name, add_tags, remove_tags, state_id),
+            "UPDATE dataset_states SET name = ?, add_tags = ?, remove_tags = ?, part = ? WHERE id = ?",
+            (name, add_tags, remove_tags, part, state_id),
         )
     conn.commit()
     return get_dataset_state(conn, state_id) or {}

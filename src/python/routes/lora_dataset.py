@@ -13,9 +13,10 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from novelai import AsyncNovelAI
-from novelai.types import CharacterReference
+from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
+from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
     blocked_tags,
@@ -23,6 +24,8 @@ from ..character_sheet import (
     caption_for,
     character_minor_tags,
     core_blocked_tags,
+    join_tags,
+    look_tags,
     minor_tags,
     safe_negative,
     sheet_negative,
@@ -311,6 +314,24 @@ async def remove_variation(axis: str, value: str) -> dict[str, list[str]]:
 # ---- シチュエーション・状態 ----
 
 
+def _png(image: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _shot_states(states: list[dict[str, Any]], req: Any) -> list[dict[str, Any] | None] | None:
+    """
+    プロンプトで作る1枚ごとの状態の並び。インペイントで作るときは、部位のある状態はここに入れず(ふだんの体の絵から
+    描き直す)、ふだんの体の絵はいつも作る(描き直しの元になるため)。
+    """
+    if not states:
+        return None
+    if req.state_method == "inpaint" and any(s.get("part", "none") in PARTS for s in states):
+        return [None, *[s for s in states if s.get("part", "none") not in PARTS]]
+    return [*states, *([None] if req.include_plain_state else [])]
+
+
 def _load_scenes(req: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """生成で使うシチュエーションと状態(選んだ順)。無いIDは 404。"""
     conn = get_connection()
@@ -341,6 +362,12 @@ def _situation_response(situation: dict[str, Any]) -> dict[str, Any]:
 
 def _state_response(state: dict[str, Any]) -> dict[str, Any]:
     return {**state, "adult_only": adult_only_tags(state["add_tags"])}
+
+
+@router.get("/body-parts")
+async def get_body_parts() -> list[dict[str, str]]:
+    """状態で描き直せる部位(キーと画面での名前)。"""
+    return [{"key": key, "label": value[3]} for key, value in PARTS.items()]
 
 
 def _clean_list(values: list[str]) -> list[str]:
@@ -417,7 +444,7 @@ def _save_state(state_id: int | None, req: DatasetStateRequest) -> dict[str, Any
         if state_id is not None and get_dataset_state(conn, state_id) is None:
             raise HTTPException(status_code=404, detail="state not found")
         try:
-            return _state_response(save_dataset_state(conn, state_id, req.name.strip(), add, remove))
+            return _state_response(save_dataset_state(conn, state_id, req.name.strip(), add, remove, req.part))
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail=f"「{req.name.strip()}」という状態はもうあります。")
     finally:
@@ -539,8 +566,12 @@ async def generate_character_dataset(
         count=req.count,
         r18=r18,
         situations=situations or None,
-        states=[*states, *([None] if req.include_plain_state else [])] if states else None,
+        states=_shot_states(states, req),
     )
+    # インペイントで作る状態(部位のあるもの)。ふだんの体の1枚ごとに、その部位だけを描き直した絵を足す
+    inpaint_states = [s for s in states if s.get("part", "none") in PARTS] if req.state_method == "inpaint" else []
+    plain_shots = sum(1 for shot in shots if not shot.state)
+    total = len(shots) + plain_shots * len(inpaint_states)
     # R18 は全年齢のデータセットと混ざらないよう別フォルダにする
     suffix = "_r18" if r18 else ""
     out_dir = output_root / f"generated{suffix}"
@@ -551,15 +582,43 @@ async def generate_character_dataset(
 
         out_dir.mkdir(parents=True, exist_ok=True)
         rejected_dir = output_root / f"rejected{suffix}"
+        faces_dir = output_root / f"faces{suffix}"
         # 既存ファイルを上書きしないよう、連番は今ある枚数の続きから振る
-        start = len(list(out_dir.glob("*.png")))
+        number = len(list(out_dir.glob("*.png")))
+        current = 0
         succeeded = failed = 0
-        for i, shot in enumerate(shots, start=1):
-            stem = f"{start + i:04d}"
+        face_caption = join_tags(character.get("trigger_word"), character.get("appearance_tags"), "portrait, close-up")
+
+        def save(image: Image.Image, stem: str, prompt: str) -> dict:
+            """データセットに1枚保存する(キャプション・顔の切り抜きも)。画面に返す分を返す。"""
+            image.save(out_dir / f"{stem}.png", "PNG")
+            (out_dir / f"{stem}.txt").write_text(prompt, encoding="utf-8")
+            face = None
+            if req.save_face_crops:
+                face = face_crop(image)
+                if face is not None:
+                    faces_dir.mkdir(parents=True, exist_ok=True)
+                    face.save(faces_dir / f"{stem}.png", "PNG")
+                    (faces_dir / f"{stem}.txt").write_text(face_caption, encoding="utf-8")
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            return {
+                "status": "ok",
+                "prompt": prompt,
+                "image_b64": base64.b64encode(buf.getvalue()).decode(),
+                "face_crop": None if not req.save_face_crops else face is not None,
+            }
+
+        for shot in shots:
+            number += 1
+            current += 1
+            stem = f"{number:04d}"
             event: dict = {
-                "current": i, "total": len(shots), "category": out_dir.name, "file": f"{stem}.png",
+                "current": current, "total": total, "category": out_dir.name, "file": f"{stem}.png",
                 "situation": shot.situation, "state": shot.state,
             }
+            best = None
+            seed = None
             try:
                 candidates: list[tuple[float, Image.Image]] = []
                 for attempt in range(req.max_attempts):
@@ -581,25 +640,54 @@ async def generate_character_dataset(
                     if k != best_index:
                         rejected_dir.mkdir(parents=True, exist_ok=True)
                         image.save(rejected_dir / f"{stem}_try{k + 1}_{score:.2f}.png", "PNG")
-                best.save(out_dir / f"{stem}.png", "PNG")
-                (out_dir / f"{stem}.txt").write_text(shot.prompt, encoding="utf-8")
-                buf = io.BytesIO()
-                best.save(buf, format="PNG")
                 event |= {
-                    "status": "ok",
-                    "prompt": shot.prompt,
+                    **save(best, stem, shot.prompt),
                     "attempts": len(candidates),
                     "score": round(best_score, 3) if ref_image is not None else None,
-                    "image_b64": base64.b64encode(buf.getvalue()).decode(),
                 }
+                seed = None if cfg.seed is None else (cfg.seed + shot.seed_offset + best_index) % 4294967296
                 succeeded += 1
             except Exception as exc:
                 event |= {"status": "error", "message": str(exc)}
                 failed += 1
             yield _sse("progress", event)
             await asyncio.sleep(2)
+
+            # ふだんの体の絵から、状態の部位だけを描き直す(顔・服・背景が同じで、体だけが違う組)
+            base_file = f"{stem}.png"
+            for state in inpaint_states if not shot.state else []:
+                number += 1
+                current += 1
+                stem = f"{number:04d}"
+                prompt = shot.prompt.replace(shot.look, look_tags(character, state), 1)
+                event = {
+                    "current": current, "total": total, "category": out_dir.name, "file": f"{stem}.png",
+                    "situation": shot.situation, "state": state["name"], "base": base_file,
+                }
+                try:
+                    if best is None:
+                        raise RuntimeError("元のふだんの体の絵が作れなかったので、描き直せません")
+                    found = await asyncio.to_thread(part_mask, best, state["part"])
+                    if found is None:
+                        # 頭が見つからない(寝ている絵など)ときは、状態のタグで生成し直す
+                        image = await generate_one(client, prompt, (req.width, req.height), cfg, seed=seed)
+                        event["method"] = "prompt"
+                    else:
+                        mask, _ = found
+                        params = InpaintParams(
+                            image=_png(best), mask=_png(mask), strength=req.inpaint_strength, seed=(seed or 0) + 1,
+                        )
+                        image = await generate_one(client, prompt, (req.width, req.height), cfg, seed=seed, inpaint=params)
+                        event["method"] = "inpaint"
+                    event |= save(image, stem, prompt)
+                    succeeded += 1
+                except Exception as exc:
+                    event |= {"status": "error", "message": str(exc)}
+                    failed += 1
+                yield _sse("progress", event)
+                await asyncio.sleep(2)
         yield _sse("complete", {
-            "total": len(shots), "succeeded": succeeded, "failed": failed, "output_path": str(output_root),
+            "total": total, "succeeded": succeeded, "failed": failed, "output_path": str(output_root),
         })
 
     return StreamingResponse(

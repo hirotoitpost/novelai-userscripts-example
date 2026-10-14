@@ -213,3 +213,88 @@ def test_body_field_is_replaced_by_states() -> None:
     assert look_tags(YURA, FULL) == body_tags(YURA["appearance_tags"], FULL)
     shot = build_variation_shots(character, poses=[], outfits=[], expressions=[], locations=[], count=1)[0]
     assert shot.prompt == "yura, 1girl, brown hair, slim, flat stomach, medium breasts, hoodie, best quality"
+
+
+# ---- 部位(インペイントで作る状態)・顔の切り抜き ----
+
+
+def test_part_box_is_measured_in_head_units() -> None:
+    from python.body_parts import PARTS, part_box
+
+    head = (300.0, 100.0, 500.0, 300.0)  # 幅200・高さ200
+    top, bottom, half, _ = PARTS["belly"]
+    assert part_box(head, "belly", (832, 1216)) == (int(400 - half * 200), int(300 + top * 200), int(400 + half * 200), int(300 + bottom * 200))
+    # 画面の外に出る分は切る。範囲が無くなれば None。知らない部位も None
+    assert part_box((300.0, 1000.0, 500.0, 1200.0), "belly", (832, 1216)) is None
+    assert part_box(head, "tail", (832, 1216)) is None
+    assert part_box((0.0, 0.0, 400.0, 400.0), "belly", (832, 1216))[0] == 0
+
+
+def test_face_crop_skips_small_faces(monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image
+
+    from python import body_parts
+
+    image = Image.new("RGB", (832, 1216), "white")
+    monkeypatch.setattr(body_parts, "find_head", lambda image: (300.0, 100.0, 550.0, 350.0))
+    crop = body_parts.face_crop(image)
+    # 頭の枠(250px)に、まわり 12% ずつの余白
+    assert crop is not None and crop.size == (310, 310)
+    monkeypatch.setattr(body_parts, "find_head", lambda image: (300.0, 100.0, 380.0, 180.0))
+    assert body_parts.face_crop(image) is None
+    monkeypatch.setattr(body_parts, "find_head", lambda image: None)
+    assert body_parts.face_crop(image) is None
+
+
+def test_inpaint_method_redraws_the_part_of_each_plain_image(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PIL import Image
+
+    calls: list[tuple[str, bool]] = []
+
+    async def fake_generate(client, prompt, size, cfg, *, seed=None, inpaint=None):
+        calls.append((prompt, inpaint is not None))
+        return Image.new("RGB", (8, 8), "white")
+
+    async def no_wait(_seconds):
+        return None
+
+    heads = iter([True, False])
+    monkeypatch.setattr(routes, "generate_one", fake_generate)
+    monkeypatch.setattr(routes.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(routes, "_character_root", lambda root, character: tmp_path / "dataset")
+    # 1枚目は頭が見つかって描き直す。2枚目は見つからず、状態のタグで生成し直す
+    monkeypatch.setattr(
+        routes, "part_mask", lambda image, part: (Image.new("RGB", (8, 8), "white"), (0, 0, 4, 4)) if next(heads) else None
+    )
+    monkeypatch.setattr(routes, "face_crop", lambda image: Image.new("RGB", (300, 300), "white"))
+    states = {s["name"]: s for s in client.get("/api/lora-dataset/states").json()}
+    full = states["食べ過ぎでお腹が出る"]
+    assert full["part"] == "belly"
+    conn = db.get_connection()
+    try:
+        created = db.save_character(conn, "描き直しの確認", "1girl, brown hair", None)
+        db.update_character_sheet(conn, created["id"], {"body_tags": "slim, flat stomach"})
+    finally:
+        conn.close()
+    res = client.post(
+        f"/api/lora-dataset/character/{created['id']}/generate",
+        json={"count": 2, "state_ids": [full["id"]], "state_method": "inpaint", "include_plain_state": False, "save_face_crops": True},
+        headers={"Authorization": "Bearer t"},
+    )
+    assert res.status_code == 200, res.text
+    # ふだんの体2枚(描き直しの元なので、ふだんの体の枚を作らない設定でも作る)+ 状態2枚
+    assert [inpainted for _, inpainted in calls] == [False, True, False, False]
+    assert "slim" in calls[0][0] and "round belly" in calls[1][0] and "slim" not in calls[1][0]
+    assert '"method": "inpaint"' in res.text and '"method": "prompt"' in res.text and '"base": "0001.png"' in res.text
+    folder = tmp_path / "dataset"
+    assert sorted(p.name for p in (folder / "generated").glob("*.png")) == ["0001.png", "0002.png", "0003.png", "0004.png"]
+    assert "round belly" in (folder / "generated" / "0002.txt").read_text(encoding="utf-8")
+    assert sorted(p.name for p in (folder / "faces").glob("*.txt")) == ["0001.txt", "0002.txt", "0003.txt", "0004.txt"]
+    assert (folder / "faces" / "0001.txt").read_text(encoding="utf-8").endswith("portrait, close-up")
+    # 部位は API で変えられる
+    changed = client.put(f"/api/lora-dataset/states/{full['id']}", json={"name": full["name"], "add_tags": "plump", "part": "torso"}).json()
+    assert changed["part"] == "torso"
+    assert client.put(f"/api/lora-dataset/states/{full['id']}", json={"name": "x", "add_tags": "plump", "part": "tail"}).status_code == 422
+    assert [p["key"] for p in client.get("/api/lora-dataset/body-parts").json()] == ["belly", "chest", "torso", "legs"]
