@@ -373,4 +373,40 @@
   .md-line input {
     grid-column: 1 / -1;
   }
+}
+
+/* おまかせで作る */
+.md-quick {
+  border-color: #7b5cf6;
+}
+
+.md-quick-themes,
+.md-quick-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.md-quick-candidates {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.md-quick-candidates .md-chip {
+  text-align: left;
+  white-space: normal;
+}
+
+.md-quick-count {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.md-quick-count input {
+  width: 3.5rem;
 }
