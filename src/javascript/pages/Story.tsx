@@ -252,6 +252,8 @@ export default function Story() {
   const [autoManga, setAutoManga] = useLocalStorage('nai_story_auto_manga', false)
   const [autoMangaScenes, setAutoMangaScenes] = useLocalStorage('nai_story_auto_manga_scenes', 12)
   const [autoMangaColor, setAutoMangaColor] = useLocalStorage('nai_story_auto_manga_color', false)
+  // 続けて漫画にするとき、キャラ参照を使うか(1コマ +5 Anlas)
+  const [autoMangaReference, setAutoMangaReference] = useLocalStorage('nai_story_auto_manga_reference', true)
   const [mangaMode, setMangaMode] = useLocalStorage<'v1' | 'v2'>('nai_story_manga_mode', 'v2')
 
   const [error, setError] = useState<string | null>(null)
@@ -445,6 +447,7 @@ export default function Story() {
             volume_max_scenes: 0,
             adult: adultTags,
           },
+          use_character_reference: autoMangaReference,
           make: {
             panels: { template: 'grid4', color: autoMangaColor, vary_seed: true },
             compose: { template: 'grid4' },
@@ -961,9 +964,16 @@ export default function Story() {
                         onChange={e => setAutoMangaColor(e.target.checked)} />
                       カラー
                     </label>
+                    <label className="story-check" title="キャラの参照画像を使って見た目をそろえます。1コマごとに +5 Anlas かかり、V4.5 で生成します">
+                      <input type="checkbox" checked={autoMangaReference} disabled={busy}
+                        onChange={e => setAutoMangaReference(e.target.checked)} />
+                      キャラ参照を使う(1コマ +5 Anlas)
+                    </label>
                     <p className="story-muted">
                       シーン分割 → 登場人物をそろえる(参照画像の無いキャラは自動で作る) → コマの生成 → 合成まで続けて進めます。
                       NovelAI の画像生成を使います(1シーン1コマ、参照画像は1人4枚)。
+                      {!autoMangaReference && 'キャラ参照を使わないときは、キャラシートと基準シードで見た目をそろえます。'}
+                      別の物語に同じ名前のキャラがいるときは、そのキャラを書き換えないよう、この物語用のキャラを新しく作ります。
                     </p>
                   </>
                 )}

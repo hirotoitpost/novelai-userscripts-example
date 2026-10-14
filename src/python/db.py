@@ -1656,6 +1656,27 @@ def character_usage(conn: sqlite3.Connection, character_id: int) -> dict[str, An
     return {"stories": row["stories"], "scenes": row["scenes"], "story_titles": titles}
 
 
+def character_story_ids(conn: sqlite3.Connection, character_id: int) -> set[int]:
+    """そのキャラをシーンに割り当てている物語のID。"""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT s.story_id FROM scene_characters sc
+        JOIN story_scenes s ON s.id = sc.scene_id
+        WHERE sc.character_id = ?
+        """,
+        (character_id,),
+    )
+    return {int(row[0]) for row in rows}
+
+
+def related_story_ids(conn: sqlite3.Connection, story_id: int) -> set[int]:
+    """その物語と、同じシリーズのほかの巻のID(シリーズでなければ、その物語だけ)。"""
+    row = conn.execute("SELECT series_id FROM stories WHERE id = ?", (story_id,)).fetchone()
+    if row is None or row["series_id"] is None:
+        return {story_id}
+    return {int(r[0]) for r in conn.execute("SELECT id FROM stories WHERE series_id = ?", (row["series_id"],))} | {story_id}
+
+
 def story_characters(conn: sqlite3.Connection, story_id: int) -> list[dict[str, Any]]:
     """物語のシーンに割り当てられているキャラと、そのシーン数(付け替えの元を選ぶ用)。"""
     rows = conn.execute(

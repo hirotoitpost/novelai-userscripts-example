@@ -30,6 +30,8 @@ from ..client import get_client
 from ..content_guard import sanitize_scene_tags
 from ..db import (
     add_story_scenes,
+    character_story_ids,
+    related_story_ids,
     characters_by_scene,
     create_manga_page,
     create_story,
@@ -1756,11 +1758,24 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
     conn = get_connection()
     try:
         library = list_characters(conn)
+        # 使ってよい登録済みのキャラ: この物語か同じシリーズの巻で使っているもの、どの物語にも使っていないもの
+        related = related_story_ids(conn, story["id"])
+        label = _story_label(story)
         described = 0
         kept = 0
+        separated: list[str] = []
         for index, person in enumerate(people, start=1):
             # 同じ名前か、名前の一部(「栄子」→「矢野栄子」)で一人に絞れる登録済みのキャラを使う
+            source = person["name"]  # 本文での名前(分けて作るときに名前を変えても、描写を探すのはこの名前)
             current = match_existing(person["name"], person["aliases"], library)
+            if current is not None and character_story_ids(conn, current["id"]) - related:
+                # 別の物語で使っている、名前が同じだけかもしれないキャラ(「お母さん」「先生」など)。使うと、その物語の
+                # キャラの容姿や参照画像を書き換えてしまうので、この物語用のキャラを新しく作る(2026-10 実機: 別の物語の
+                # 「お母さん」に参照画像と基準シードが付いた)
+                # 同じ名前がもうあれば、それはこの物語用に前に作ったキャラ(呼び名が同じ)なので、そのまま使う
+                person["name"] = f"{person['name']}({label})"[:100]
+                separated.append(person["name"])
+                current = next((c for c in library if c["name"] == person["name"]), None)
             if current is not None:
                 person["matched"] = current["name"]
             if not overwrite_appearance and current and current["appearance_tags"].strip():
@@ -1770,9 +1785,9 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
                 continue
             job.message = f"容姿の描写を探しています {index}/{len(people)}: {person['name']}"
             passages = _appearance_passages(source_text, person["aliases"])
-            if person["name"] in defined:
-                passages = [defined[person["name"]]["description"], *passages][:_APPEARANCE_PASSAGE_LIMIT]
-            tags = await _describe_appearance(person["name"], passages) if passages else ""
+            if source in defined:
+                passages = [defined[source]["description"], *passages][:_APPEARANCE_PASSAGE_LIMIT]
+            tags = await _describe_appearance(source, passages) if passages else ""
             if tags:
                 described += 1
             if current is not None:
@@ -1781,7 +1796,9 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
                 if tags:
                     update_character_sheet(conn, current["id"], {"appearance_tags": tags})
                 continue
-            person["id"] = save_character(conn, person["name"], tags)["id"]
+            created = save_character(conn, person["name"], tags)
+            person["id"] = created["id"]
+            library.append(created)
 
         # 名前が本文に出るシーンへ割り当てる。既知の表記を探すだけなのでLLMは不要。
         assigned = 0
@@ -1803,7 +1820,16 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
         f"{len(people)}人を登録し(容姿の描写が見つかったのは{described}人"
         + (f"、登録済みの容姿をそのまま使ったのは{kept}人" if kept else "")
         + f")、{assigned}/{len(scenes)}シーンに割り当てました"
+        + (f"。別の物語に同じ名前のキャラがいたので、この物語用に分けて作りました: {'、'.join(separated)}" if separated else "")
     )
+
+
+def _story_label(story: dict[str, Any]) -> str:
+    """キャラの名前に添える、物語の短い呼び名(題名か見出し。無ければ 物語ID)。"""
+    text = str(story.get("title") or story.get("premise") or "").strip()
+    text = re.sub(r"^\[[^\]]*\]\s*", "", text).splitlines()[0] if text else ""
+    return text[:16].strip() or f"物語{story['id']}"
+
 
 @router.post("/{story_id}/cast", response_model=StoryJobResponse)
 async def cast_story(story_id: int, client: ClientDep, references: bool = True) -> dict[str, Any]:
@@ -1857,7 +1883,8 @@ async def _run_cast(job: _Job, story: dict[str, Any], api_key: str, references: 
 async def auto_manga(story_id: int, req: StoryAutoMangaRequest, client: ClientDep) -> dict[str, Any]:
     """
     取り込んだ物語を、続けて漫画にする(1つのジョブ): まだならシーン分割 → 登場人物をそろえる(参照画像の
-    無いキャラには自動で作る) → コマの生成(参照画像があればキャラ参照を使う) → ページの合成。
+    無いキャラには自動で作る) → コマの生成(参照画像があればキャラ参照を使う。use_character_reference が
+    False なら使わない) → ページの合成。
     画面を閉じてもサーバーで最後まで進む。進捗は GET /{story_id}/job。
     """
     conn = get_connection()
@@ -1913,10 +1940,9 @@ async def _run_auto_manga(
     finally:
         conn.close()
     targets = [s for s in scenes if s["id"] not in existing]
-    # 参照画像がそろったキャラがいれば、キャラ参照で見た目をそろえる
-    panels = req.make.panels.model_copy(
-        update={"use_character_reference": any(c and c.get("reference_image_path") for c in used)}
-    )
+    # 参照画像がそろったキャラがいれば、キャラ参照で見た目をそろえる(1コマ +5 Anlas)。使わないこともできる
+    use_reference = req.use_character_reference is not False and any(c and c.get("reference_image_path") for c in used)
+    panels = req.make.panels.model_copy(update={"use_character_reference": use_reference})
     if targets:
         job.progress = 0
         await _run_panels(job, story_id, panels, api_key, targets)
