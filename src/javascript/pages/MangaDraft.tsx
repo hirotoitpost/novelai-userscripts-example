@@ -8,6 +8,7 @@ import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import GenreManager from '../components/GenreManager'
 import QuickManga from '../components/QuickManga'
 import CastPresets from '../components/CastPresets'
+import RedrawStates from '../components/RedrawStates'
 import { DEFAULT_GENRE, genreOptions, useGenres } from '../genres'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import './MangaDraft.css'
@@ -189,6 +190,7 @@ export default function MangaDraft() {
   const [color, setColor] = useState(false)
   // コマを生成したあとに絵を確かめて、外れたコマを描き直す
   const [checkPanels, setCheckPanels] = useLocalStorage('nai_draft_check_panels', true)
+  const [redrawStates, setRedrawStates] = useLocalStorage('nai_draft_redraw_states', true)
   // キャラ参照: 自分で切り替えるまでは、登場人物の全員に参照画像があればオン
   const [referenceChoice, setUseReference] = useState<boolean | null>(null)
   const [presetId, setPresetId] = useState<number | null>(null)
@@ -425,6 +427,7 @@ export default function MangaDraft() {
         panels: { template: baseTemplate, color, use_character_reference: useReference, vary_seed: true, settings },
         compose: { template: baseTemplate },
         check_panels: checkPanels,
+        redraw_states: redrawStates,
       })
     } catch (e) {
       const message = errorText(e)
@@ -515,6 +518,7 @@ export default function MangaDraft() {
             </p>
           )}
           <GenreManager genres={genres} onError={setError} />
+          {token && <RedrawStates token={token} />}
           {selectedSeries && (
             <p className="md-hint">シリーズの人物設定と既刊のあらすじを前提に、続編として作ります。</p>
           )}
@@ -761,6 +765,10 @@ export default function MangaDraft() {
               <label className="md-check" title="判定モデルで、作画タグの物や人数が描かれているかを確かめ、外れたコマはタグを強めて描き直します(よくなったときだけ置き換えます)">
                 <input type="checkbox" checked={checkPanels} onChange={e => setCheckPanels(e.target.checked)} />
                 絵を確かめて、ずれたコマを描き直す
+              </label>
+              <label className="md-check" title="透明・幽霊など、描き直しで作る状態の人物がいるコマは、その人物の範囲だけを描き直します">
+                <input type="checkbox" checked={redrawStates} onChange={e => setRedrawStates(e.target.checked)} />
+                状態(透明 など)の人物を描き直す
               </label>
             </div>
             <div className="md-field">

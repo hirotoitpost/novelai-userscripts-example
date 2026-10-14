@@ -63,6 +63,10 @@ from ..db import (
     update_scene_sfx,
     update_story_final_image,
     upsert_manga_panel,
+    delete_redraw_state,
+    get_redraw_state,
+    list_redraw_states,
+    save_redraw_state,
 )
 from ..manga_v2.compose import (
     LetteringStyle,
@@ -112,6 +116,8 @@ from ..models import (
     MangaV2ReferenceCandidatesRequest,
     MangaV2CheckRequest,
     MangaV2ComposeRequest,
+    MangaV2RedrawStatesRequest,
+    PanelRedrawStateRequest,
     MangaV2MakeRequest,
     MangaV2PageLayoutsRequest,
     MangaV2ComposeResponse,
@@ -1351,12 +1357,16 @@ async def _check_and_redraw(
     from ..character_sheet import join_tags
     from ..panel_check import check_panel, checkable_tags, is_person, redraw_tags, tag_probabilities, tagger_vocabulary
 
+    from ..panel_states import state_match_tags
+
     vocabulary = await asyncio.to_thread(tagger_vocabulary)
     conn = get_connection()
     try:
         scenes = list_story_scenes(conn, story_id)
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
         cast = characters_by_scene(conn, story_id)
+        # 描き直しで作る状態(透明 など)のタグは、描いた時点では出ないので確かめない
+        state_tags = state_match_tags(list_redraw_states(conn))
     finally:
         conn.close()
 
@@ -1370,7 +1380,9 @@ async def _check_and_redraw(
     for index, scene in enumerate(targets, start=1):
         job.message = f"コマの絵を確かめています {index}/{len(targets)}"
         members = cast.get(scene["id"], [])
-        expected = checkable_tags(scene["draft_prompt_tags"] or "", [m.get("action_tags") or "" for m in members], vocabulary)
+        expected = checkable_tags(
+            scene["draft_prompt_tags"] or "", [m.get("action_tags") or "" for m in members], vocabulary, state_tags
+        )
         people = sum(1 for m in members if is_person(m.get("appearance_tags") or ""))
         best_panel = panels[scene["id"]]
         best = await check(best_panel["image_path"], expected, people)
@@ -1411,6 +1423,102 @@ async def _check_and_redraw(
     return summary
 
 
+def _png(image: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    image.save(buf, "PNG")
+    return buf.getvalue()
+
+
+async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api_key: str) -> dict[str, Any]:
+    """
+    状態(透明 など)の人物がいるコマを、その人物の範囲だけインペイントで描き直す。戻り値は {redrawn, skipped}。
+    skipped は描き直せなかったコマ(シーン番号と理由)。
+    """
+    from ..manga_v2.detect import detect_heads
+    from ..panel_states import find_targets, matched_state, redraw_scene_tags, target_mask
+
+    conn = get_connection()
+    try:
+        states = list_redraw_states(conn)
+        scenes = list_story_scenes(conn, story_id)
+        panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
+        cast = characters_by_scene(conn, story_id)
+    finally:
+        conn.close()
+    summary: dict[str, Any] = {"redrawn": [], "skipped": []}
+    if not states:
+        return summary
+    settings = req.settings
+    client = None
+    try:
+        for scene in scenes:
+            panel = panels.get(scene["id"])
+            members = cast.get(scene["id"], [])
+            # 状態の人物がいないコマは、頭の検出もしない
+            if panel is None or not any(matched_state(m.get("action_tags") or "", states) for m in members):
+                continue
+            path = _PROJECT_ROOT / panel["image_path"]
+            heads = await asyncio.to_thread(detect_heads, path)
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+            targets, reason = find_targets(members, heads, image.size, states)
+            if reason:
+                summary["skipped"].append({"scene": scene["scene_index"] + 1, "reason": reason})
+                continue
+            for target in targets:
+                if client is None:
+                    from novelai import AsyncNovelAI
+
+                    client = AsyncNovelAI(api_key=api_key)
+                from novelai.types import GenerateImageParams, InpaintParams
+
+                job.message = f"シーン{scene['scene_index'] + 1}の{target.character['name']}を「{target.state['name']}」に描き直しています"
+                tags = redraw_scene_tags(scene["draft_prompt_tags"] or "", target)
+                seed = ((panel.get("seed") or story_id * 1000 + scene["scene_index"]) + 101) % 4294967296
+                params = GenerateImageParams(
+                    prompt=build_panel_prompt(tags, color=req.color, complexity=settings.complexity),
+                    negative_prompt=build_panel_negative(settings.negative_prompt, color=req.color),
+                    model=settings.model,
+                    size=image.size,
+                    steps=settings.steps,
+                    scale=settings.scale,
+                    sampler=settings.sampler,
+                    noise_schedule=settings.noise_schedule,
+                    n_samples=1,
+                    seed=seed,
+                    inpaint=InpaintParams(image=_png(image), mask=_png(target_mask(image.size, target.box)), strength=1.0, seed=seed + 1),
+                )
+                image = (await client.image.generate(params))[0].convert("RGB")
+            if targets:
+                filename = f"story{story_id}_scene{scene['scene_index']}_{uuid4().hex[:8]}.png"
+                image.save(_PANEL_DIR / filename, "PNG")
+                conn = get_connection()
+                try:
+                    upsert_manga_panel(
+                        conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", panel.get("seed"),
+                        panel["width"], panel["height"],
+                    )
+                finally:
+                    conn.close()
+                summary["redrawn"].append(
+                    {"scene": scene["scene_index"] + 1, "who": [f"{t.character['name']}({t.state['name']})" for t in targets]}
+                )
+    finally:
+        if client is not None:
+            await client.close()
+    return summary
+
+
+def redraw_summary_text(summary: dict[str, Any]) -> str:
+    """状態の描き直しの結果を、画面に出す1文にする(何も無ければ空)。"""
+    parts = []
+    if summary["redrawn"]:
+        parts.append("状態を描き直しました: " + "、".join(f"シーン{r['scene']} {'・'.join(r['who'])}" for r in summary["redrawn"]))
+    if summary["skipped"]:
+        parts.append("描き直せなかったコマ: " + "、".join(f"シーン{s['scene']}({s['reason']})" for s in summary["skipped"]))
+    return "。".join(parts)
+
+
 def check_summary_text(summary: dict[str, Any]) -> str:
     """確かめと描き直しの結果を、画面に出す1文にする。"""
     if not summary["flagged"]:
@@ -1422,6 +1530,72 @@ def check_summary_text(summary: dict[str, Any]) -> str:
         )
         text += f"。そろわなかったコマ: {rest}(物語のページで描き直せます)"
     return text
+
+
+@router.get("/redraw-states")
+async def get_redraw_states() -> list[dict[str, Any]]:
+    """描き直しで作る人物の状態の一覧(透明・幽霊・石化 など)。"""
+    conn = get_connection()
+    try:
+        return list_redraw_states(conn)
+    finally:
+        conn.close()
+
+
+def _save_redraw_state(state_id: int | None, req: PanelRedrawStateRequest) -> dict[str, Any]:
+    import sqlite3
+
+    from ..dataset_variations import clean_value
+
+    match = ", ".join(dict.fromkeys(clean_value(t) for t in req.match_tags.split(",") if clean_value(t)))
+    redraw = ", ".join(dict.fromkeys(clean_value(t) for t in req.redraw_tags.split(",") if clean_value(t)))
+    if not match or not redraw:
+        raise HTTPException(status_code=422, detail="反応するタグと描き直しのタグを入れてください。")
+    conn = get_connection()
+    try:
+        if state_id is not None and get_redraw_state(conn, state_id) is None:
+            raise HTTPException(status_code=404, detail="state not found")
+        try:
+            return save_redraw_state(conn, state_id, req.name.strip(), match, redraw, req.look)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail=f"「{req.name.strip()}」という状態はもうあります。")
+    finally:
+        conn.close()
+
+
+@router.post("/redraw-states")
+async def post_redraw_state(req: PanelRedrawStateRequest) -> dict[str, Any]:
+    return _save_redraw_state(None, req)
+
+
+@router.put("/redraw-states/{state_id}")
+async def put_redraw_state(state_id: int, req: PanelRedrawStateRequest) -> dict[str, Any]:
+    return _save_redraw_state(state_id, req)
+
+
+@router.delete("/redraw-states/{state_id}", status_code=204)
+async def remove_redraw_state(state_id: int) -> None:
+    conn = get_connection()
+    try:
+        if not delete_redraw_state(conn, state_id):
+            raise HTTPException(status_code=404, detail="state not found")
+    finally:
+        conn.close()
+
+
+@router.post("/{story_id}/redraw-states", response_model=StoryJobResponse)
+async def redraw_states(story_id: int, req: MangaV2RedrawStatesRequest, client: ClientDep) -> dict[str, Any]:
+    """状態(透明 など)の人物がいるコマを、その人物の範囲だけ描き直して、ページに合成し直す(ジョブ)。"""
+    _require_template(req.compose.template)
+    api_key = client.api_key
+
+    async def runner(job: _Job) -> None:
+        summary = await _redraw_states(job, story_id, req.panels, api_key)
+        job.message = "ページに合成しています"
+        await asyncio.to_thread(compose, story_id, req.compose)
+        job.message = redraw_summary_text(summary) or "状態の人物のいるコマはありませんでした"
+
+    return _job_response(_start_job(story_id, "redraw_states", runner))
 
 
 @router.post("/{story_id}/check-panels", response_model=StoryJobResponse)
@@ -1468,6 +1642,9 @@ async def make_manga(story_id: int, req: MangaV2MakeRequest, client: ClientDep) 
         checked = ""
         if req.check_panels:
             checked = "。" + check_summary_text(await _check_and_redraw(job, story_id, req.panels, api_key, req.max_redraws))
+        if req.redraw_states:
+            redrawn = redraw_summary_text(await _redraw_states(job, story_id, req.panels, api_key))
+            checked += f"。{redrawn}" if redrawn else ""
         job.message = "ページに合成しています"
         result = await asyncio.to_thread(compose, story_id, req.compose)
         job.message = f"漫画ができました({len(result['pages'])}ページ){checked}"

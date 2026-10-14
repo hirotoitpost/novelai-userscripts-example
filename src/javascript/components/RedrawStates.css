@@ -1,0 +1,92 @@
+.redraw-states-hint {
+  margin: 0.4rem 0;
+  color: #9a9ac0;
+}
+
+.redraw-states-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.redraw-states-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  padding: 0.3rem 0.5rem;
+}
+
+.redraw-states-list li.redraw-states-editing {
+  border-color: #b8a4ff;
+}
+
+.redraw-states-tags {
+  color: #9a9ac0;
+  overflow-wrap: anywhere;
+}
+
+.redraw-states-actions {
+  margin-left: auto;
+}
+
+.redraw-states-actions button {
+  background: none;
+  border: none;
+  color: #9a9ac0;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.redraw-states-actions button:hover:not(:disabled) {
+  color: #ff8a9a;
+}
+
+.redraw-states-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.redraw-states-form input,
+.redraw-states-form select {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.redraw-states-form input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.redraw-states-form label {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.redraw-states-form button {
+  background: #1a1a33;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.redraw-states-form button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
