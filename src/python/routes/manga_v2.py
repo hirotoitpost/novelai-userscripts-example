@@ -110,6 +110,7 @@ from ..models import (
     MangaV2CharacterReferenceRequest,
     MangaV2ReferenceCandidate,
     MangaV2ReferenceCandidatesRequest,
+    MangaV2CheckRequest,
     MangaV2ComposeRequest,
     MangaV2MakeRequest,
     MangaV2PageLayoutsRequest,
@@ -1340,6 +1341,107 @@ def _attachment_header(story_id: int, title: str | None, extension: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(f'{name}.{extension}')}"
 
 
+async def _check_and_redraw(
+    job: Any, story_id: int, req: MangaV2PanelsRequest, api_key: str, max_redraws: int
+) -> dict[str, Any]:
+    """
+    コマの絵を確かめ、外れたコマを描き直す(よくなったときだけ置き換える)。戻り値は {checked, flagged, fixed, unresolved}。
+    unresolved は描き直してもそろわなかったコマ(シーン番号と、描かれなかったタグ)。
+    """
+    from ..character_sheet import join_tags
+    from ..panel_check import check_panel, checkable_tags, is_person, redraw_tags, tag_probabilities, tagger_vocabulary
+
+    vocabulary = await asyncio.to_thread(tagger_vocabulary)
+    conn = get_connection()
+    try:
+        scenes = list_story_scenes(conn, story_id)
+        panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
+        cast = characters_by_scene(conn, story_id)
+    finally:
+        conn.close()
+
+    async def check(path: str, expected: list[str], people: int):
+        with Image.open(_PROJECT_ROOT / path) as image:
+            probabilities = await asyncio.to_thread(tag_probabilities, image.convert("RGB"))
+        return check_panel(probabilities, expected, people)
+
+    targets = [s for s in scenes if s["id"] in panels]
+    summary: dict[str, Any] = {"checked": len(targets), "flagged": 0, "fixed": 0, "unresolved": []}
+    for index, scene in enumerate(targets, start=1):
+        job.message = f"コマの絵を確かめています {index}/{len(targets)}"
+        members = cast.get(scene["id"], [])
+        expected = checkable_tags(scene["draft_prompt_tags"] or "", [m.get("action_tags") or "" for m in members], vocabulary)
+        people = sum(1 for m in members if is_person(m.get("appearance_tags") or ""))
+        best_panel = panels[scene["id"]]
+        best = await check(best_panel["image_path"], expected, people)
+        if best.ok:
+            continue
+        summary["flagged"] += 1
+        for attempt in range(1, max_redraws + 1):
+            extra = redraw_tags(best, people, attempt)
+            job.message = f"シーン{scene['scene_index'] + 1}を描き直しています({attempt}回目。強める: {', '.join(extra) or '人数'})"
+            redraw = {**scene, "draft_prompt_tags": join_tags(scene["draft_prompt_tags"], ", ".join(extra))}
+            seed = ((best_panel.get("seed") or story_id * 1000 + scene["scene_index"]) + attempt * 7919) % 4294967296
+            redraw_req = req.model_copy(update={"settings": req.settings.model_copy(update={"seed": seed}), "vary_seed": False})
+            await _run_panels(job, story_id, redraw_req, api_key, [redraw])
+            conn = get_connection()
+            try:
+                drawn = next(p for p in list_manga_panels(conn, story_id) if p["scene_id"] == scene["id"])
+            finally:
+                conn.close()
+            result = await check(drawn["image_path"], expected, people)
+            if result.key() > best.key():
+                best, best_panel = result, drawn
+            else:
+                # 描き直しの方がよくなければ、前の絵に戻す
+                conn = get_connection()
+                try:
+                    upsert_manga_panel(
+                        conn, story_id, scene["id"], best_panel["image_path"], best_panel.get("seed"),
+                        best_panel["width"], best_panel["height"],
+                    )
+                finally:
+                    conn.close()
+            if best.ok:
+                break
+        if best.ok:
+            summary["fixed"] += 1
+        else:
+            summary["unresolved"].append({"scene": scene["scene_index"] + 1, "missing": best.missing, "people_ok": best.people_ok})
+    return summary
+
+
+def check_summary_text(summary: dict[str, Any]) -> str:
+    """確かめと描き直しの結果を、画面に出す1文にする。"""
+    if not summary["flagged"]:
+        return f"絵を確かめました({summary['checked']}コマ。ずれは見つかりませんでした)"
+    text = f"絵を確かめ、ずれていた{summary['flagged']}コマのうち{summary['fixed']}コマを描き直しでそろえました"
+    if summary["unresolved"]:
+        rest = "、".join(
+            f"シーン{u['scene']}({', '.join(u['missing']) or '人数'})" for u in summary["unresolved"]
+        )
+        text += f"。そろわなかったコマ: {rest}(物語のページで描き直せます)"
+    return text
+
+
+@router.post("/{story_id}/check-panels", response_model=StoryJobResponse)
+async def check_panels(story_id: int, req: MangaV2CheckRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    コマの絵を確かめて、外れたコマを描き直し、ページに合成し直す(ジョブ)。判定モデルで見分けられないもの(透明 など)は
+    確かめられない。描き直しは NovelAI の画像生成を使う。
+    """
+    _require_template(req.compose.template)
+    api_key = client.api_key
+
+    async def runner(job: _Job) -> None:
+        summary = await _check_and_redraw(job, story_id, req.panels, api_key, req.max_redraws)
+        job.message = "ページに合成しています"
+        await asyncio.to_thread(compose, story_id, req.compose)
+        job.message = check_summary_text(summary)
+
+    return _job_response(_start_job(story_id, "check_panels", runner))
+
+
 @router.post("/{story_id}/make", response_model=StoryJobResponse)
 async def make_manga(story_id: int, req: MangaV2MakeRequest, client: ClientDep) -> dict[str, Any]:
     """
@@ -1363,9 +1465,12 @@ async def make_manga(story_id: int, req: MangaV2MakeRequest, client: ClientDep) 
     async def runner(job: _Job) -> None:
         if targets:
             await _run_panels(job, story_id, req.panels, api_key, targets)
+        checked = ""
+        if req.check_panels:
+            checked = "。" + check_summary_text(await _check_and_redraw(job, story_id, req.panels, api_key, req.max_redraws))
         job.message = "ページに合成しています"
         result = await asyncio.to_thread(compose, story_id, req.compose)
-        job.message = f"漫画ができました({len(result['pages'])}ページ)"
+        job.message = f"漫画ができました({len(result['pages'])}ページ){checked}"
 
     return _job_response(_start_job(story_id, "manga", runner))
 
