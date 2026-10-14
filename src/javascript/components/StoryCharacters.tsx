@@ -6,6 +6,8 @@ export interface Character {
   id: number
   name: string
   appearance_tags: string
+  /** 標準の体型(キャラ別データセットの状態は、ここを置き換える) */
+  body_tags?: string | null
   notes: string | null
   created_at: string
   reference_image_path?: string | null

@@ -78,6 +78,9 @@ export default function CharacterDataset() {
   const [situationIds, setSituationIds] = useLocalStorage<number[]>('nai_chards_situations', [])
   const [stateIds, setStateIds] = useLocalStorage<number[]>('nai_chards_states', [])
   const [includePlain, setIncludePlain] = useLocalStorage('nai_chards_include_plain', true)
+  const [stateMethod, setStateMethod] = useLocalStorage<'prompt' | 'inpaint'>('nai_chards_state_method', 'prompt')
+  const [inpaintStrength, setInpaintStrength] = useLocalStorage('nai_chards_inpaint_strength', 1.0)
+  const [saveFaces, setSaveFaces] = useLocalStorage('nai_chards_face_crops', false)
   const [sceneLists, setSceneLists] = useState<{ situations: Situation[]; states: DatasetState[] }>({ situations: [], states: [] })
   const [tidying, setTidying] = useState(false)
   const [variationNote, setVariationNote] = useState<string | null>(null)
@@ -161,7 +164,14 @@ export default function CharacterDataset() {
   // シチュエーション×状態の単位(1枚ごとにどれか1つ。単位ごとに均等に割り振る)
   const pickedSituations = sceneLists.situations.filter(s => situationIds.includes(s.id))
   const pickedStates = sceneLists.states.filter(s => stateIds.includes(s.id))
-  const sceneUnits = Math.max(1, pickedSituations.length) * (pickedStates.length > 0 ? pickedStates.length + (includePlain ? 1 : 0) : 1)
+  // インペイントで作る状態(部位のあるもの)は、ふだんの体の1枚ごとに増える
+  const inpaintStates = stateMethod === 'inpaint' ? pickedStates.filter(s => s.part && s.part !== 'none') : []
+  const promptStates = pickedStates.filter(s => !inpaintStates.includes(s))
+  const sceneUnits = Math.max(1, pickedSituations.length) * (
+    inpaintStates.length > 0 ? 1 + promptStates.length
+      : pickedStates.length > 0 ? pickedStates.length + (includePlain ? 1 : 0) : 1)
+  const plainShots = inpaintStates.length > 0 ? Math.ceil(count / (1 + promptStates.length)) : 0
+  const totalImages = count + plainShots * inpaintStates.length
   // 組み合わせより多い枚数も出せる(一巡するごとにシードをずらして繰り返す)
   const planned = count
   const rounds = Math.ceil(planned / combos)
@@ -237,6 +247,9 @@ export default function CharacterDataset() {
       situation_ids: pickedSituations.map(s => s.id),
       state_ids: pickedStates.map(s => s.id),
       include_plain_state: includePlain,
+      state_method: stateMethod,
+      inpaint_strength: inpaintStrength,
+      save_face_crops: saveFaces,
       count,
       model: 'nai-diffusion-4-5-full',
       width,
@@ -439,6 +452,7 @@ export default function CharacterDataset() {
                 ? `シチュエーション${pickedSituations.length || 'なし'}・状態${pickedStates.length ? pickedStates.length + (includePlain ? '+ふだん' : '') : 'なし'}の${sceneUnits}通りに、${planned}枚を均等に割り振ります(1通りあたり約${Math.ceil(planned / sceneUnits)}枚)。`
                 : `組み合わせ ${combos} 通りから ${planned} 枚。`}
               {sceneUnits === 1 && pickedSituations.length === 0 && rounds > 1 && ` 組み合わせが足りない分は、シードをずらして繰り返します(${rounds}周)。`}
+              {inpaintStates.length > 0 && ` 描き直しの絵が約${totalImages - count}枚増え、全部で約${totalImages}枚になります。`}
               {' '}内部で1枚ずつ順番にリクエストします。
             </p>
 
@@ -521,6 +535,18 @@ export default function CharacterDataset() {
               )}
             </fieldset>
 
+            <fieldset className="lora-fieldset">
+              <legend>顔の切り抜き</legend>
+              <label className="lora-checkbox-label">
+                <input type="checkbox" checked={saveFaces} onChange={e => setSaveFaces(e.target.checked)} disabled={isRunning} />
+                顔の切り抜きも保存する(faces/ に置きます)
+              </label>
+              <p className="lora-hint">
+                生成した絵から頭を見つけて、顔のアップを正方形で切り抜きます(256px より小さい顔は飛ばします)。
+                キャプションは、トリガーワード+容姿(顔・髪・目)+ portrait, close-up です。学習で顔を覚えさせやすくします。
+              </p>
+            </fieldset>
+
             <GuardProfiles selectedId={guardId} onSelect={setGuardId} disabled={isRunning} />
 
             <div className="lora-actions">
@@ -559,6 +585,10 @@ export default function CharacterDataset() {
               includePlain={includePlain}
               onIncludePlain={setIncludePlain}
               onLoaded={(situations, states) => setSceneLists({ situations, states })}
+              stateMethod={stateMethod}
+              onStateMethod={setStateMethod}
+              inpaintStrength={inpaintStrength}
+              onInpaintStrength={setInpaintStrength}
             />
           )}
 
@@ -632,6 +662,9 @@ export default function CharacterDataset() {
                       {e.file}
                       {e.situation && ` · ${e.situation}`}
                       {e.state && ` · ${e.state}`}
+                      {e.method === 'inpaint' && e.base && ` · ${e.base}を描き直し`}
+                      {e.method === 'prompt' && e.base && ' · 頭が見つからずタグで生成'}
+                      {e.face_crop && ' · 顔も保存'}
                       {e.score != null && ` · 類似度 ${e.score.toFixed(2)}`}
                       {e.attempts != null && e.attempts > 1 && ` · ${e.attempts}回目`}
                     </span>

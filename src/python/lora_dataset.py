@@ -20,7 +20,7 @@ import io
 import random
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from novelai import AsyncNovelAI, RateLimitError, ServerError
 from novelai.types import CharacterReference, ControlNet, ControlNetImage, GenerateImageParams
@@ -214,7 +214,12 @@ async def generate_one(
     size: tuple[int, int],
     cfg: GenConfig,
     seed: int | None = None,
+    inpaint: Any = None,
 ) -> Image:
+    """
+    1枚生成する。inpaint(novelai.types.InpaintParams)を渡すと、その絵のマスクの部分だけを描き直す(モデルは
+    SDK がインペイント用に切り替える)。描き直すときは、キャラ参照を使わない(参照画像の体型に引き戻されないように)。
+    """
     kwargs: dict = dict(
         prompt=prompt,
         model=cfg.model,
@@ -231,10 +236,12 @@ async def generate_one(
     )
     if seed is not None:
         kwargs["seed"] = seed
-    if cfg.character_references:
+    if cfg.character_references and inpaint is None:
         kwargs["character_references"] = cfg.character_references
-    if cfg.controlnet:
+    if cfg.controlnet and inpaint is None:
         kwargs["controlnet"] = cfg.controlnet
+    if inpaint is not None:
+        kwargs["inpaint"] = inpaint
     params = GenerateImageParams(**kwargs)
     for attempt in range(5):
         try:

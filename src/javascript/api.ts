@@ -410,6 +410,11 @@ export interface LoraDatasetProgressEvent {
   /** この1枚のシチュエーション・状態の名前(使っていなければ空) */
   situation?: string
   state?: string
+  /** 状態の絵の作り方(inpaint: 描き直し / prompt: 状態のタグで生成)と、描き直しの元の絵 */
+  method?: 'inpaint' | 'prompt'
+  base?: string
+  /** 顔の切り抜きを保存したか(保存しない設定なら null) */
+  face_crop?: boolean | null
 }
 
 export interface LoraDatasetRetryEvent {
@@ -432,6 +437,11 @@ export interface CharacterDatasetRequest {
   state_ids?: number[]
   /** 状態を選んだとき、状態なし(ふだんの体)の枚も作るか */
   include_plain_state?: boolean
+  /** 状態の作り方: 状態のタグで生成 / ふだんの体の絵から部位だけを描き直す */
+  state_method?: 'prompt' | 'inpaint'
+  inpaint_strength?: number
+  /** 顔の切り抜きも保存する(faces/) */
+  save_face_crops?: boolean
   count: number
   model: string
   width: number

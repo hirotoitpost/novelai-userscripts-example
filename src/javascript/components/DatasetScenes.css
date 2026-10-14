@@ -117,3 +117,26 @@
   color: #ff8a9a !important;
   border-color: #6a2a3a !important;
 }
+
+.ds-method {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px dashed var(--nai-border, #2a2a50);
+  border-radius: 8px;
+}
+
+.ds-method input[type='range'] {
+  width: 100%;
+}
+
+.ds-dialog select {
+  width: 100%;
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+}

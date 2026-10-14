@@ -22,8 +22,12 @@ from . import content_guard
 from .character_sheet import _COUNT_RE, _PERSON_NOUNS, _STYLE_PHRASES, _STYLE_RE, _plain, split_tags
 
 AXES = ("framings", "poses", "outfits", "expressions", "locations")
-# キャラシートの項目のうち、キーワードから足せるもの(容姿・普段の服装・画風)
-SHEET_FIELDS = ("appearance", "outfit", "style")
+# キャラシートの項目のうち、キーワードから足せるもの(容姿・標準の体型・普段の服装・画風)
+SHEET_FIELDS = ("appearance", "body", "outfit", "style")
+# 体型とみなす語(大きさだけの語 large / small などは、それだけでは体型にしない)
+_BODY_CORE = {"breasts", "breast", "chest", "slim", "slender", "thin", "skinny", "petite", "curvy", "voluptuous",
+              "plump", "chubby", "fat", "muscular", "toned", "abs", "stomach", "belly", "waist", "hips", "hip",
+              "thighs", "thigh", "tall", "figure", "stature", "athletic", "busty", "pregnant"}
 MAX_VALUE_CHARS = 100
 
 # 強調の書き方: マイナスの重み(-1::tag::)は「出さない」指定なので、タグごと除く。ほかは記号だけ外す
@@ -95,8 +99,8 @@ def prompt_tags(prompt: str) -> list[str]:
 
 def axis_of(tag: str) -> str:
     """
-    タグの軸: framings / poses / outfits / expressions / locations。キャラシートの側のものは appearance(容姿)と
-    style(品質・画風)、取り出さないものは skip(人数)、性的なものは adult、どれか分からないものは other。
+    タグの軸: framings / poses / outfits / expressions / locations。キャラシートの側のものは appearance(容姿: 顔・髪・目)、
+    body(体型)、style(品質・画風)、取り出さないものは skip(人数)、性的なものは adult、どれか分からないものは other。
     """
     from .image_tagger import BODY_WORDS, CLOTHES_WORDS, POSE_WORDS, STYLE_TAGS
 
@@ -120,6 +124,8 @@ def axis_of(tag: str) -> str:
         return "locations"
     if words & (POSE_WORDS | _POSE_EXTRA) or re.match(r"^[a-z]+ing\b", plain):
         return "poses"
+    if words & _BODY_CORE and not words & {"hair", "eyes", "eye", "face", "skin"}:
+        return "body"
     if words & BODY_WORDS:
         return "appearance"
     return "other"
@@ -128,7 +134,8 @@ def axis_of(tag: str) -> str:
 # チャンクの分類の名前から、軸の見当を付ける語
 _HINT_WORDS = (
     ("style", ("絵柄", "画風", "アーティスト", "作家", "artist", "style")),
-    ("appearance", ("髪", "体型", "体格", "容姿", "瞳", "肌", "hair", "body", "appearance")),
+    ("body", ("体型", "体格", "スタイル", "body", "figure")),
+    ("appearance", ("髪", "容姿", "瞳", "肌", "顔立ち", "hair", "appearance")),
     ("expressions", ("表情", "顔", "expression", "face")),
     ("outfits", ("服", "衣装", "衣服", "アクセ", "コスチューム", "outfit", "cloth", "costume")),
     ("framings", ("カメラ", "構図", "視点", "アングル", "camera", "framing", "angle")),
@@ -155,7 +162,7 @@ def extract(prompts: list[str], hints: list[str | None] | None = None) -> dict[s
     """
     result: dict[str, Any] = {
         "axes": {axis: [] for axis in AXES},
-        "sheet": {"appearance": [], "style": []},
+        "sheet": {"appearance": [], "body": [], "style": []},
         "other": [],
         "adult": [],
         "skipped": [],

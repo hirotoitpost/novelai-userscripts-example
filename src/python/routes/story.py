@@ -72,6 +72,7 @@ from ..character_sheet import (
     characters_negative,
     characters_seed,
     join_tags,
+    split_body,
     split_prompt,
 )
 from ..models import (
@@ -1953,6 +1954,13 @@ async def split_character_prompt(req: CharacterSplitRequest) -> dict[str, str]:
     return split_prompt(req.prompt)
 
 
+@router.post("/characters/split-body")
+async def split_character_body(req: CharacterSplitRequest) -> dict[str, str]:
+    """容姿のタグを、顔(髪・目・肌など)と体型(体つき・胸・腰など)に分ける(保存はしない)。"""
+    face, body = split_body(req.prompt)
+    return {"face": face, "body": body}
+
+
 @router.post("/characters/new", response_model=CharacterResponse)
 async def create_new_character(req: CharacterNewRequest) -> dict[str, Any]:
     """
@@ -2026,7 +2034,9 @@ async def duplicate_character(character_id: int, req: CharacterDuplicateRequest)
 
         copied = {
             key: source.get(key)
-            for key in ("appearance_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult")
+            for key in (
+                "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
+            )
         }
         overrides = req.sheet.model_dump(exclude_unset=True) if req.sheet else {}
         sheet = _checked_sheet(source, {**copied, "is_adult": bool(copied["is_adult"]), **overrides})
