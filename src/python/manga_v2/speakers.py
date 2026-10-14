@@ -16,6 +16,8 @@ from dataclasses import dataclass, replace
 import numpy as np
 from PIL import Image
 
+from ..script_lines import speaker_before
+
 Box = tuple[float, float, float, float]
 
 
@@ -117,6 +119,7 @@ def attribute_speakers(text: str, spans: list[tuple[int, int, str]], cast: list[
     セリフ(本文中の開始・終了位置と中身)ごとに話し手のキャラIDを返す。分からなければ None。
 
     手がかりの優先順:
+    0. 台本の書き方の「名前：「…」」(script_lines.py)
     1. 同じ行の地の文の主語(みおは微笑んで、「…」と言った)
     2. 直後の行の地の文の主語(「結構、降ってるね」/みおが呟いた)
     3. 呼びかけ(「ゆら、…」は二人の場面ならゆら以外が話している)
@@ -128,6 +131,11 @@ def attribute_speakers(text: str, spans: list[tuple[int, int, str]], cast: list[
     result: list[int | None] = []
     for index, (start, end, line) in enumerate(spans):
         line_start, line_end = _line_bounds(text, start, end)
+        named = speaker_before(text, start)
+        speaker = next((m.id for m in cast if named and named in m.names), None)
+        if speaker is not None:
+            result.append(speaker)
+            continue
         same_line = text[line_start:start] + text[end:line_end]
         speaker = _subject_in(re.sub(r"「[^」]*」", "", same_line), cast)
 

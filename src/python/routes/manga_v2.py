@@ -141,6 +141,7 @@ from ..character_sheet import (
     characters_seed,
     join_tags,
 )
+from ..script_lines import script_sfx
 from ..novelai_image_v5 import DIALOGUE_RE, CharacterReferenceInput, generate_image_v5, reference_image_b64
 from .llm import stream_llm_text, strip_think_tags
 from .story import _MANGA_DIR, _PROJECT_ROOT, _Job, _job_response, _start_job
@@ -182,8 +183,8 @@ def _is_katakana_sfx(line: str) -> bool:
 
 
 # 地の文の中の「」(店名・書名・強調。例: 古書店「時雨堂」の店主)はセリフではない。
-# セリフの「」は行頭か、文の切れ目の直後から始まる。
-_SPOKEN_PREFIX = set("\n。！？!?」』　 ")
+# セリフの「」は行頭か、文の切れ目の直後から始まる。台本の書き方(みお：「…」)のコロンの直後も。
+_SPOKEN_PREFIX = set("\n。！？!?」』　 ：:")
 
 
 def _is_spoken(text: str, start: int, end: int) -> bool:
@@ -207,6 +208,8 @@ def _scene_text(scene: dict[str, Any]) -> str:
 def _spoken_spans(text: str) -> tuple[list[tuple[int, int, str]], list[str]]:
     """本文から (吹き出しにするセリフの (開始, 終了, 中身) の並び, 本文中の効果音) を取り出す。"""
     sfx: list[str] = [m.group(1).strip() for m in _SFX_MARK_RE.finditer(text) if m.group(1).strip()]
+    # 台本の書き方の「名前：（効果音、…）」
+    sfx += [w for w in script_sfx(text) if w not in sfx]
     spoken: list[tuple[int, int, str]] = []
     for match in DIALOGUE_RE.finditer(text):
         line = match.group(1).strip()
