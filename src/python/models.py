@@ -1159,6 +1159,9 @@ class StoryAutoMangaRequest(BaseModel):
     make: MangaV2MakeRequest = MangaV2MakeRequest()
     # 参照画像の無いキャラに、キャラシートから自動で参照画像を作る
     references: bool = True
+    # コマの生成でキャラ参照を使うか(1コマ +5 Anlas。V4.5 で生成する)。None / True なら参照画像のあるキャラが
+    # いるとき使う、False なら使わない(見た目はキャラシートと基準シードでそろえる)
+    use_character_reference: Optional[bool] = None
 
 
 class MangaV2DownloadRequest(MangaV2ComposeRequest):
