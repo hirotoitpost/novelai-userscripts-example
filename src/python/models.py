@@ -553,6 +553,28 @@ class MangaImportAutoRequest(BaseModel):
     make_images: bool = True
 
 
+class QuickMangaRequest(BaseModel):
+    """おまかせ漫画: テーマから、登場人物(選ばなければ新しく考える)→ 大枠 → 台本 → 漫画まで一気に作る。"""
+
+    theme: str = Field(min_length=1, max_length=500)
+    genre: str = Field("日常コメディ", max_length=100)
+    # 話数(1話=4コマ。1ページ=4コマ)
+    episodes: int = Field(2, ge=1, le=4)
+    notes: str = Field("", max_length=1000)
+    # 使うキャラ。空なら、テーマに合う登場人物を cast_count 人考えて、キャラシートを作る
+    character_ids: list[int] = Field(default_factory=list, max_length=4)
+    cast_count: int = Field(2, ge=1, le=4)
+    # 参照画像の無いキャラに参照画像を作る(候補を reference_candidates 枚生成して、一番キャラシートに近いもの)
+    references: bool = True
+    reference_candidates: int = Field(2, ge=1, le=4)
+    template: str = "vertical4"
+    color: bool = True
+    # コマの生成でキャラ参照を使う(1コマ +5 Anlas。V4.5 で生成)
+    use_character_reference: bool = False
+    # 台本(物語)を作るところまでにする(コマの絵は、物語のページで確かめてから生成)
+    stop_after_script: bool = False
+
+
 class GalleryMangaRequest(BaseModel):
     """ギャラリーで選んだ画像から漫画を作る(1枚=1コマ。選んだ順)。"""
 

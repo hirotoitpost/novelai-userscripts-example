@@ -6,6 +6,7 @@ import ReferenceCandidates from '../components/ReferenceCandidates'
 import { apiFetch, ImagePreset } from '../api'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import GenreManager from '../components/GenreManager'
+import QuickManga from '../components/QuickManga'
 import { DEFAULT_GENRE, genreOptions, useGenres } from '../genres'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import './MangaDraft.css'
@@ -460,6 +461,16 @@ export default function MangaDraft() {
       </header>
 
       <main className="md-main">
+        {token && (
+          <QuickManga
+            token={token}
+            characters={characters}
+            genres={genreOptions(genres.genres, imports.map(i => i.genre))}
+            task={task}
+            onCharactersChanged={reloadCharacters}
+          />
+        )}
+
         {/* 1. 設定 */}
         <section className="md-section">
           <h2>1. テーマと登場人物</h2>
