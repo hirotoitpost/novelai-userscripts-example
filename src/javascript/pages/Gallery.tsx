@@ -16,6 +16,7 @@ import {
   thumbUrl,
 } from '../library'
 import FullscreenViewer from '../components/FullscreenViewer'
+import RegionRedrawTool from '../components/RegionRedrawTool'
 import { apiFetch, GENERATE_FROM_IMAGE_KEY } from '../api'
 import type { MetadataGenerationSettings } from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -45,6 +46,8 @@ interface GalleryImage {
   adult: boolean
   adult_auto: boolean
   adult_manual: boolean | null
+  /** ギャラリーの別の画像から作った画像なら、その画像のキー(範囲を高解像度にした画像など) */
+  source_key: string | null
 }
 
 interface SimilarImage {
@@ -210,6 +213,15 @@ export default function Gallery() {
       setViewing(viewing + 1)
     }
     setCopied(false)
+  }
+  /** キーで画像を開く(範囲を高解像度にした画像や、その元の画像)。一覧に無ければ、今の画像の次に差し込む。 */
+  async function openKey(key: string) {
+    if (!token) return
+    try {
+      openSimilar(await apiFetch<GalleryImage>(token, `/api/library/images/item?key=${encodeURIComponent(key)}`))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
   // 成人向けだけを表示しているときは、自分で選んで見ているのでぼかさない
   const blurs = (item: GalleryImage) => item.adult && blurAdult && rating !== 'adult'
@@ -664,6 +676,10 @@ export default function Gallery() {
           onPrev={viewing > 0 ? () => step(-1) : undefined}
           onNext={viewing < items.length - 1 || hasMore ? () => step(1) : undefined}
           onClose={() => setFullscreen(false)}
+          tool={token ? (region, zoomed) => (
+            <RegionRedrawTool key={current.key} token={token} imageKey={current.key} region={region} zoomed={zoomed}
+              onOpen={key => void openKey(key)} />
+          ) : undefined}
         />
       )}
 
@@ -741,6 +757,12 @@ export default function Gallery() {
                 title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値も入れます)">
                 {sending ? '読み取り中…' : '似た画像を生成(画像生成ページへ)'}
               </button>
+              {current.source_key && (
+                <button type="button" onClick={() => void openKey(current.source_key!)}
+                  title="この画像は、ギャラリーの別の画像の一部を高解像度にしたものです。その元の画像を開きます">
+                  元の画像を開く
+                </button>
+              )}
               {current.story_id !== null && (
                 <Link className="gallery-link-button" to={`/bookshelf?book=${current.story_id}`}
                   title="この画像の作品を、本棚で開きます">
