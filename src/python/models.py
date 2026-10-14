@@ -553,6 +553,13 @@ class MangaImportAutoRequest(BaseModel):
     make_images: bool = True
 
 
+class CastPresetRequest(BaseModel):
+    """キャストのセット(よく使うキャラの組み合わせ)。同じ名前なら上書き。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    character_ids: list[int] = Field(min_length=1, max_length=8)
+
+
 class QuickMangaRequest(BaseModel):
     """おまかせ漫画: テーマから、登場人物(選ばなければ新しく考える)→ 大枠 → 台本 → 漫画まで一気に作る。"""
 

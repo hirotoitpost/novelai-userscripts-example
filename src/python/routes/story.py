@@ -30,6 +30,9 @@ from ..client import get_client
 from ..content_guard import sanitize_scene_tags
 from ..db import (
     add_story_scenes,
+    delete_cast_preset,
+    list_cast_presets,
+    save_cast_preset,
     character_story_ids,
     related_story_ids,
     characters_by_scene,
@@ -78,6 +81,7 @@ from ..character_sheet import (
     split_prompt,
 )
 from ..models import (
+    CastPresetRequest,
     CharacterNewRequest,
     CharacterResponse,
     CharacterSaveRequest,
@@ -1949,6 +1953,44 @@ async def _run_auto_manga(
     job.message = "ページに合成しています"
     result = await asyncio.to_thread(compose, story_id, req.make.compose)
     job.message = f"漫画ができました({len(result['pages'])}ページ・{len(scenes)}コマ)"
+
+
+@router.get("/cast-presets")
+async def get_cast_presets() -> list[dict[str, Any]]:
+    """キャストのセット(よく使うキャラの組み合わせ)の一覧(名前順)。"""
+    conn = get_connection()
+    try:
+        return list_cast_presets(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/cast-presets")
+async def post_cast_preset(req: CastPresetRequest) -> dict[str, Any]:
+    """キャストのセットを保存する(同じ名前なら上書き)。無いキャラのIDは 422。"""
+    conn = get_connection()
+    try:
+        ids = list(dict.fromkeys(req.character_ids))
+        missing = [i for i in ids if get_character(conn, i) is None]
+        if missing:
+            raise HTTPException(status_code=422, detail=f"存在しないキャラIDがあります: {missing}")
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="名前を入れてください。")
+        return save_cast_preset(conn, name, ids)
+    finally:
+        conn.close()
+
+
+@router.delete("/cast-presets/{preset_id}", status_code=204)
+async def remove_cast_preset(preset_id: int) -> None:
+    """キャストのセットを消す(キャラは消えない)。"""
+    conn = get_connection()
+    try:
+        if not delete_cast_preset(conn, preset_id):
+            raise HTTPException(status_code=404, detail="preset not found")
+    finally:
+        conn.close()
 
 
 @router.get("/characters", response_model=list[CharacterResponse])

@@ -4,6 +4,7 @@ import { apiFetch } from '../api'
 import { DEFAULT_GENRE } from '../genres'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import type { Character } from './StoryCharacters'
+import CastPresets from './CastPresets'
 
 /**
  * おまかせ漫画: テーマ1行(とジャンル)から、登場人物 → 大枠シナリオ → 台本 → 漫画まで一気に作る(/api/quick-manga)。
@@ -55,6 +56,8 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
   const [scriptOnly, setScriptOnly] = useLocalStorage('nai_quick_script_only', false)
   const [useReference, setUseReference] = useLocalStorage('nai_quick_reference', false)
   const [useTrends, setUseTrends] = useLocalStorage('nai_quick_trends', true)
+  const [review, setReview] = useLocalStorage('nai_quick_review', true)
+  const [checkPanels, setCheckPanels] = useLocalStorage('nai_quick_check_panels', true)
   const [themes, setThemes] = useState<ThemeResult | null>(null)
   const [thinking, setThinking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -104,6 +107,7 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
       const job = await apiFetch<QuickJob>(token, '/api/quick-manga', {
         theme: theme.trim(), genre: genre.trim() || DEFAULT_GENRE, episodes, character_ids: castIds, cast_count: castCount,
         color, stop_after_script: scriptOnly, use_character_reference: useReference,
+        review_script: review, check_panels: checkPanels,
       })
       void follow(job)
     } catch (e) {
@@ -154,6 +158,8 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
       )}
       <div className="md-field">
         <span>登場人物(選ばなければ、テーマに合う人物を {castCount} 人考えてキャラシートを作ります)</span>
+        <CastPresets token={token} selected={castIds} existing={characters.map(c => c.id)} className="md-chips"
+          onSelect={ids => setCastIds(ids.slice(0, 4))} />
         <div className="md-chips">
           {characters.map(c => (
             <button type="button" key={c.id} className={castIds.includes(c.id) ? 'md-chip md-chip--on' : 'md-chip'}
@@ -174,6 +180,12 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
         <label className="md-check"><input type="checkbox" checked={scriptOnly} onChange={e => setScriptOnly(e.target.checked)} />台本(物語)を作るところまでにする</label>
         <label className="md-check" title="キャラの参照画像で見た目をそろえます。1コマごとに +5 Anlas、V4.5 で生成します">
           <input type="checkbox" checked={useReference} onChange={e => setUseReference(e.target.checked)} />キャラ参照を使う(1コマ +5 Anlas)
+        </label>
+        <label className="md-check" title="セリフと筋から、絵に要る物・状態(食べ物・小物・透明など)を作画タグに足します">
+          <input type="checkbox" checked={review} onChange={e => setReview(e.target.checked)} />台本を見直す(絵に要る物・状態を足す)
+        </label>
+        <label className="md-check" title="判定モデルで物や人数が描かれているかを確かめ、外れたコマはタグを強めて描き直します">
+          <input type="checkbox" checked={checkPanels} onChange={e => setCheckPanels(e.target.checked)} disabled={scriptOnly} />絵を確かめて、ずれたコマを描き直す
         </label>
       </div>
       <button type="button" className="md-primary" onClick={() => void start()} disabled={!theme.trim() || task.busy}>おまかせで作る</button>

@@ -7,6 +7,7 @@ import { apiFetch, ImagePreset } from '../api'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import GenreManager from '../components/GenreManager'
 import QuickManga from '../components/QuickManga'
+import CastPresets from '../components/CastPresets'
 import { DEFAULT_GENRE, genreOptions, useGenres } from '../genres'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import './MangaDraft.css'
@@ -186,6 +187,8 @@ export default function MangaDraft() {
   // 写したコマ割りを使い切った後のコマや、合成のテンプレートの指定に使う
   const baseTemplate = useImportLayout ? 'grid4' : template
   const [color, setColor] = useState(false)
+  // コマを生成したあとに絵を確かめて、外れたコマを描き直す
+  const [checkPanels, setCheckPanels] = useLocalStorage('nai_draft_check_panels', true)
   // キャラ参照: 自分で切り替えるまでは、登場人物の全員に参照画像があればオン
   const [referenceChoice, setUseReference] = useState<boolean | null>(null)
   const [presetId, setPresetId] = useState<number | null>(null)
@@ -421,6 +424,7 @@ export default function MangaDraft() {
       await apiFetch(token, `/api/manga-v2/${storyId}/make`, {
         panels: { template: baseTemplate, color, use_character_reference: useReference, vary_seed: true, settings },
         compose: { template: baseTemplate },
+        check_panels: checkPanels,
       })
     } catch (e) {
       const message = errorText(e)
@@ -574,6 +578,10 @@ export default function MangaDraft() {
 
           <div className="md-field">
             <span>登場人物(最大4人)</span>
+            {token && (
+              <CastPresets token={token} selected={draft.characterIds} existing={characters.map(c => c.id)} className="md-chips"
+                onSelect={ids => update({ characterIds: ids.slice(0, 4) })} />
+            )}
             <div className="md-chips">
               {characters.map(c => (
                 <button type="button" key={c.id}
@@ -749,6 +757,10 @@ export default function MangaDraft() {
               <label className="md-check">
                 <input type="checkbox" checked={useReference} onChange={e => setUseReference(e.target.checked)} />
                 キャラ参照を使う(V4.5、1人あたり Anlas 追加)
+              </label>
+              <label className="md-check" title="判定モデルで、作画タグの物や人数が描かれているかを確かめ、外れたコマはタグを強めて描き直します(よくなったときだけ置き換えます)">
+                <input type="checkbox" checked={checkPanels} onChange={e => setCheckPanels(e.target.checked)} />
+                絵を確かめて、ずれたコマを描き直す
               </label>
             </div>
             <div className="md-field">

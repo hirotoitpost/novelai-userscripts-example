@@ -251,6 +251,8 @@ export default function Story() {
   // 取り込んだら続けて漫画にする(シーン分割 → 登場人物・参照画像 → コマ生成・合成を1つのジョブで)
   const [autoManga, setAutoManga] = useLocalStorage('nai_story_auto_manga', false)
   const [autoMangaScenes, setAutoMangaScenes] = useLocalStorage('nai_story_auto_manga_scenes', 12)
+  // 冒頭だけでなく、最後まで漫画にする(長い物語は時間がかかる)
+  const [autoMangaAll, setAutoMangaAll] = useLocalStorage('nai_story_auto_manga_all', false)
   const [autoMangaColor, setAutoMangaColor] = useLocalStorage('nai_story_auto_manga_color', false)
   // 続けて漫画にするとき、キャラ参照を使うか(1コマ +5 Anlas)
   const [autoMangaReference, setAutoMangaReference] = useLocalStorage('nai_story_auto_manga_reference', true)
@@ -443,7 +445,7 @@ export default function Story() {
           split: {
             max_paragraphs: maxParagraphs,
             max_chars: maxChars,
-            max_scenes: autoMangaScenes,
+            max_scenes: autoMangaAll ? null : autoMangaScenes,
             volume_max_scenes: 0,
             adult: adultTags,
           },
@@ -954,10 +956,15 @@ export default function Story() {
                         min={1}
                         max={60}
                         value={autoMangaScenes}
-                        disabled={busy}
+                        disabled={busy || autoMangaAll}
                         onChange={e => setAutoMangaScenes(Math.min(60, Math.max(1, Number(e.target.value) || 1)))}
                       />
                       シーンまで
+                    </label>
+                    <label className="story-check" title="冒頭だけでなく、本文の最後までシーンに分けて漫画にします(長い物語は時間がかかります)">
+                      <input type="checkbox" checked={autoMangaAll} disabled={busy}
+                        onChange={e => setAutoMangaAll(e.target.checked)} />
+                      最後まで
                     </label>
                     <label className="story-check">
                       <input type="checkbox" checked={autoMangaColor} disabled={busy}
