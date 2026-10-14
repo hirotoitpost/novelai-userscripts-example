@@ -1,0 +1,63 @@
+/* 物語のページの全体のボタン・入力の見た目(.story-section button など)より強くするため、.scene-cast から書く */
+.scene-cast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: #9a9ac0;
+  margin-top: 0.3rem;
+}
+
+.scene-cast .scene-cast-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  border: 1px solid #2a2a50;
+  border-radius: 999px;
+  padding: 0.1rem 0.2rem 0.1rem 0.6rem;
+  color: #e8e8ff;
+}
+
+.scene-cast .scene-cast-chip button {
+  background: none;
+  border: none;
+  border-radius: 999px;
+  color: #9a9ac0;
+  cursor: pointer;
+  font-size: 0.75rem;
+  margin: 0;
+  padding: 0.1rem 0.35rem;
+}
+
+.scene-cast .scene-cast-chip button:hover:not(:disabled) { color: #ff8a9a; }
+.scene-cast .scene-cast-chip button:disabled { background: none; }
+
+.scene-cast .scene-cast-select,
+.scene-cast .scene-cast-new input,
+.scene-cast .scene-cast-new button {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.75rem;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.scene-cast .scene-cast-new {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.scene-cast .scene-cast-new input { flex: 1 1 auto; }
+.scene-cast .scene-cast-new button { cursor: pointer; white-space: nowrap; }
+.scene-cast .scene-cast-new button:disabled,
+.scene-cast .scene-cast-select:disabled { background: #14142a; opacity: 0.45; cursor: not-allowed; }
+.scene-cast-none { font-style: italic; }
+.scene-cast-warn { color: #e6c27a; }
+.scene-cast-error { color: #ff8a9a; }

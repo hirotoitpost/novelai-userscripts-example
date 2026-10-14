@@ -6,7 +6,8 @@ import MangaImageSettings, {
   DEFAULT_MANGA_IMAGE_SETTINGS,
   MangaImageSettingsValue,
 } from '../components/MangaImageSettings'
-import StoryCharacters, { SceneCharacter } from '../components/StoryCharacters'
+import StoryCharacters, { Character, SceneCharacter } from '../components/StoryCharacters'
+import SceneCast from '../components/SceneCast'
 import MangaV2Studio, { MangaV2ComposeSettings } from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { JOB_KIND_LABELS, TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
@@ -375,6 +376,20 @@ export default function Story() {
       loadHistory()
     })
   }
+
+  // シーンごとの登場人物を選ぶための、登録済みのキャラ全員。castVersion はキャラを作ったときに一覧を読み直す合図
+  const [allCharacters, setAllCharacters] = useState<Character[]>([])
+  const [castVersion, setCastVersion] = useState(0)
+  useEffect(() => {
+    fetch(`${API_ORIGIN}/api/story/characters`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(setAllCharacters)
+      .catch(() => {/* 選べないだけ */})
+  }, [castVersion])
+  const storyCastIds = useMemo(
+    () => [...new Set((story?.scenes ?? []).flatMap(s => s.characters.map(c => c.id)))],
+    [story],
+  )
 
   async function loadStory(id: number) {
     setError(null)
@@ -920,6 +935,11 @@ export default function Story() {
                 onChange={e => setImportText(e.target.value)}
                 rows={8}
               />
+              <p className="story-muted">
+                話し手や効果音をはっきりさせたい行は、台本の書き方で書けます:
+                <code>みお：「結構、降ってるね」</code> はみおのセリフ、<code>みお：（ガタッ、ドキドキ）</code> は描き文字の候補になります。
+                名前の付かない1行の（…）は心の声です。
+              </p>
               <div className="story-row">
                 <label>
                   シーン数
@@ -1038,11 +1058,15 @@ export default function Story() {
                     {scene.draft_prompt_tags && (
                       <p className="story-scene-tags">タグ: {scene.draft_prompt_tags}</p>
                     )}
-                    {scene.characters.length > 0 && (
-                      <p className="story-scene-tags">
-                        登場: {scene.characters.map(c => c.name).join(', ')}
-                      </p>
-                    )}
+                    <SceneCast
+                      apiOrigin={API_ORIGIN}
+                      sceneId={scene.id}
+                      current={scene.characters}
+                      characters={allCharacters}
+                      inStory={storyCastIds}
+                      disabled={busy}
+                      onChanged={() => { setCastVersion(v => v + 1); void loadStory(story.id) }}
+                    />
                   </li>
                 ))}
               </ol>
@@ -1104,6 +1128,7 @@ export default function Story() {
               <details className="story-characters-block">
                 <summary>登場人物（容姿の指定）</summary>
                 <StoryCharacters
+                  key={castVersion}
                   apiOrigin={API_ORIGIN}
                   storyId={story?.id}
                   onChanged={() => { if (story) void loadStory(story.id) }}

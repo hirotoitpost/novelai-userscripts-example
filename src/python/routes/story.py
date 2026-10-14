@@ -111,6 +111,7 @@ from ..models import (
 from ..novelai_image_v5 import _DEFAULT_NEGATIVE_PROMPT, DIALOGUE_RE, generate_manga_page
 from ..novelai_text import generate_kayra
 from ..novelai_text_oa import stream_chat
+from ..script_lines import script_names
 from .llm import sse_event, strip_think_tags, stream_llm_text
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
@@ -1728,6 +1729,10 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
     # 名前と容姿の一次情報として使う。本文からの候補探しはひらがなの名前(こはく)を拾えず、
     # 容姿も本文には書かれていないことが多いため。
     defined = _memory_characters(story.get("memory") or "")
+    # 台本の書き方(みお：「…」)で話し手として書かれた名前も、人物と分かっているので判定にかけない
+    for name in script_names(source_text):
+        if _is_usable_character_name(name) and not any(name in info["aliases"] for info in defined.values()):
+            defined[name] = {"aliases": [name], "description": ""}
 
     job.total = 3
     job.message = "本文から名前の候補を集めています"
@@ -1754,6 +1759,10 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
         else await _confirm_people([c["name"] for c in candidates if c["name"] not in defined])
     )
     people = [c for c in candidates if c["name"] in confirmed or c["name"] in defined]
+    if not people and not llm_named:
+        # 候補はあったが、判定で誰も人物と認められなかった(地名・物の名前ばかりを拾ったときなど)。本文を読ませて挙げさせる
+        job.message = "判定で人物が残らなかったので、本文を読ませて登場人物を挙げています"
+        people = await _ask_people_names(source_text)
     if not people:
         job.message = "候補から人物を判定できませんでした"
         return
@@ -1789,7 +1798,7 @@ async def _run_extract_characters(job: _Job, story: dict[str, Any], overwrite_ap
                 continue
             job.message = f"容姿の描写を探しています {index}/{len(people)}: {person['name']}"
             passages = _appearance_passages(source_text, person["aliases"])
-            if source in defined:
+            if source in defined and defined[source]["description"]:
                 passages = [defined[source]["description"], *passages][:_APPEARANCE_PASSAGE_LIMIT]
             tags = await _describe_appearance(source, passages) if passages else ""
             if tags:
