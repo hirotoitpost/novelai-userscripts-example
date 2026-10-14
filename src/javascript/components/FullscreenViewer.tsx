@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import './FullscreenViewer.css'
 
 interface Props {
@@ -12,7 +12,15 @@ interface Props {
   /** 右から左へ読む(漫画)。左端・右へのスワイプ・← が「次」になる */
   rtl?: boolean
   onClose: () => void
+  /**
+   * 下に出す道具(ギャラリーの「この範囲を高解像度に」など)。region() は、いま画面に見えている範囲を
+   * 元の画像のピクセルで返す([x, y, 幅, 高さ]。ズームしていなければ null)。
+   */
+  tool?: (region: () => Region | null, zoomed: boolean) => ReactNode
 }
+
+/** 元の画像のピクセルでの範囲 [x, y, 幅, 高さ] */
+export type Region = [number, number, number, number]
 
 /** これだけ操作が無ければ、閉じるボタンなどを隠す */
 const HIDE_CONTROLS_MS = 2500
@@ -52,7 +60,7 @@ const FIT: View = { scale: 1, x: 0, y: 0 }
  * - ズーム: ピンチ・ダブルタップ(ダブルクリック)・ホイール・+/-/0 キー。ズーム中のドラッグは絵の中の移動で、
  *   絵の端からさらに画面の幅の 1/4 以上押し出したときだけページを切り替える(少しのスワイプでは変わらない)
  */
-export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rtl = false, onClose }: Props) {
+export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rtl = false, onClose, tool }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
   const [controls, setControls] = useState(true)
@@ -129,6 +137,24 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     }
     // 開いたときに1回だけ
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** いま画面に見えている範囲(元の画像のピクセル)。絵は画面の真ん中に置き、translate → scale(中心が基準)で動かしている。 */
+  const region = useCallback((): Region | null => {
+    const image = imageRef.current
+    const root = rootRef.current
+    const { scale, x, y } = viewRef.current
+    if (!image || !root || scale <= MIN_SCALE || !image.naturalWidth) return null
+    const ratio = image.naturalWidth / image.offsetWidth
+    // 画面の端(画面の中心から ±幅/2)が、絵の中心から見てどこか → 絵の左上から見た位置
+    const span = (half: number, offset: number, size: number) => {
+      const from = Math.max(0, (-half - offset) / scale + size / 2)
+      const to = Math.min(size, (half - offset) / scale + size / 2)
+      return [from, to] as const
+    }
+    const [left, right] = span(root.clientWidth / 2, x, image.offsetWidth)
+    const [top, bottom] = span(root.clientHeight / 2, y, image.offsetHeight)
+    return [Math.round(left * ratio), Math.round(top * ratio), Math.round((right - left) * ratio), Math.round((bottom - top) * ratio)]
   }, [])
 
   /** 拡大した絵が画面からはみ出す量(移動できる範囲)。 */
@@ -243,7 +269,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
   }, [applyView, clamp, stopGlide])
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('.fsv-bar')) return
+    if ((e.target as HTMLElement).closest('.fsv-bar, .fsv-tool')) return
     // 惰性で動いている絵は、触ったところで止める
     stopGlide()
     samples.current = [{ t: performance.now(), x: e.clientX, y: e.clientY }]
@@ -390,7 +416,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
       onPointerCancel={finishGesture}
       onDoubleClick={e => {
         // マウスのダブルクリック(タッチはダブルタップで扱う)
-        if ((e.target as HTMLElement).closest('.fsv-bar')) return
+        if ((e.target as HTMLElement).closest('.fsv-bar, .fsv-tool')) return
         e.preventDefault()
       }}
     >
@@ -420,6 +446,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
         )}
         <button type="button" className="fsv-close" onClick={onClose}>全画面を終わる ✕</button>
       </div>
+      {tool && <div className="fsv-tool">{tool(region, zoomed)}</div>}
       {/* 画面読み上げ・キーボード向けの前後のボタン(見た目には出さない) */}
       <div className="fsv-sr">
         <button type="button" onClick={() => onPrev?.()} disabled={!onPrev}>前へ</button>

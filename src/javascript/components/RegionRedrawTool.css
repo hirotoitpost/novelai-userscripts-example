@@ -1,0 +1,56 @@
+.region-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: calc(100vw - 32px);
+}
+
+.region-tool-modes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.3rem;
+}
+
+.region-tool button {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.region-tool-modes button.is-on {
+  background: rgba(184, 164, 255, 0.85);
+  border-color: #b8a4ff;
+  color: #14142a;
+}
+
+.region-tool .region-tool-run {
+  padding: 0.5rem 1.1rem;
+  background: #7c5cff;
+  border-color: #b8a4ff;
+  font-size: 0.9rem;
+}
+
+.region-tool-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.4rem 0.8rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.region-tool-error {
+  color: #ffb4be;
+}

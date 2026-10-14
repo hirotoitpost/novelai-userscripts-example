@@ -254,6 +254,8 @@ class GalleryImage(BaseModel):
     # コマならシーン番号、挿絵ならページ番号(0始まり)
     index: int | None = None
     label: str | None = None
+    # ギャラリーの別の画像から作った画像なら、その画像のキー(範囲を描き直した画像など)
+    source_key: str | None = None
     bookmarked: bool = False
     # 成人向けか(手動指定があればそれ、無ければ自動判定)。adult_auto は自動判定、adult_manual は手動指定
     adult: bool = False
@@ -363,6 +365,7 @@ def _gallery_images() -> list[GalleryImage]:
                     prompt=row["prompt"],
                     seed=row["seed"],
                     model=row["model"],
+                    source_key=row.get("source_key"),
                 )
             )
     for row in panels:
@@ -462,6 +465,15 @@ class SimilarImage(BaseModel):
     image: GalleryImage
     score: float
     reasons: list[str]
+
+
+@router.get("/images/item", response_model=GalleryImage)
+def get_image(key: str) -> GalleryImage:
+    """ギャラリーの画像1枚(範囲を描き直した画像や、その元の画像を開くときに使う)。"""
+    item = next((i for i in _gallery_images() if i.key == key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    return item
 
 
 @router.get("/images/similar", response_model=list[SimilarImage])

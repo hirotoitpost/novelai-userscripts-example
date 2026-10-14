@@ -100,3 +100,19 @@
 @media (prefers-reduced-motion: reduce) {
   .fsv-bar, .fsv-image { transition: none; }
 }
+
+/* 下に出す道具(ギャラリーの「この範囲を高解像度に」など)。操作の表示を隠しても残す */
+.fsv-tool {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding: 1.6rem 16px calc(0.8rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
+  pointer-events: none;
+}
+
+.fsv-tool > * { pointer-events: auto; }
+.fsv-tool:empty { display: none; }

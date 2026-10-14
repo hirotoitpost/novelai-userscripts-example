@@ -125,6 +125,34 @@ class UpscaleToolRequest(BaseModel):
     image: str = Field(min_length=1, description="base64 または data URL")
 
 
+class RegionRedrawRequest(BaseModel):
+    """ギャラリーの画像の範囲を、高解像度で描き直す(切り出して img2img)。"""
+
+    key: str = Field(min_length=1, description="ギャラリーの画像のキー")
+    # redraw: AI 拡大してから img2img で描き直す / upscale: AI 拡大だけ(NovelAI を使わない)
+    mode: Literal["redraw", "upscale"] = "redraw"
+    # 元の画像のピクセルでの範囲 [x, y, 幅, 高さ]
+    box: list[int] = Field(min_length=4, max_length=4)
+    # 弱いほど元の絵に近い(線と細部だけ描き直す)
+    strength: float = Field(0.35, ge=0.1, le=0.8)
+    # 無ければ元の画像のシード
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
+
+
+class RegionRedrawResponse(BaseModel):
+    key: str
+    path: str
+    width: int
+    height: int
+    box: list[int]
+    mode: Literal["redraw", "upscale"]
+    # img2img の元をどう大きくしたか(ai: AI 拡大 / simple: モデルが無く単純な拡大)
+    enlarged_by: Literal["ai", "simple"]
+    prompt: str
+    # 引き継いだキャラごとのプロンプトの数
+    characters: int
+
+
 class GenerateImageResponse(BaseModel):
     images: list[str]
     format: str = "png"

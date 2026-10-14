@@ -837,6 +837,8 @@ _GENERATION_HISTORY_EXTRA_COLUMNS = {
     "metadata_incomplete": "INTEGER NOT NULL DEFAULT 0",
     "character_references": "TEXT",
     "characters": "TEXT",
+    # ギャラリーの別の画像から作ったとき、その画像のキー(拡大表示の範囲を描き直した画像など)
+    "source_key": "TEXT",
 }
 
 
@@ -1214,6 +1216,7 @@ def record_generation(
     characters: list[dict[str, Any]] | None = None,
     based_on_id: int | None = None,
     metadata_incomplete: bool = False,
+    source_key: str | None = None,
 ) -> dict[str, Any]:
     """
     /select 経由の画像生成だけを対象にした履歴保存。image_paths / i2i_image_path /
@@ -1224,6 +1227,7 @@ def record_generation(
     元に再生成された場合、その元エントリの id を入れておくことで rerun の系譜を遡れるようにする。
     metadata_incomplete: インポート時にメタデータの一部/全部が読み取れず、デフォルト値で
     補完した場合に立てる。ユーザーが再生成のベースにすべきかの目印になる。
+    source_key: ギャラリーの別の画像から作った場合、その画像のキー(コマ・挿絵なども指せる)。
     """
     now = datetime.now(timezone.utc).isoformat()
     row = conn.execute(
@@ -1231,8 +1235,8 @@ def record_generation(
         INSERT INTO generation_history
             (prompt, negative_prompt, model, size, steps, scale, seed, chunk_ids, image_paths,
              i2i_image_path, i2i_strength, i2i_noise, character_references, characters,
-             based_on_id, metadata_incomplete, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             based_on_id, metadata_incomplete, source_key, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id, created_at
         """,
         (
@@ -1252,6 +1256,7 @@ def record_generation(
             json.dumps(characters) if characters else None,
             based_on_id,
             1 if metadata_incomplete else 0,
+            source_key,
             now,
         ),
     ).fetchone()

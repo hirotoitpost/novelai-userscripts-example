@@ -41,6 +41,8 @@ from ..db import (
 from ..models import (
     EmotionToolRequest,
     UpscaleToolRequest,
+    RegionRedrawRequest,
+    RegionRedrawResponse,
     AnlasEstimateRequest,
     AnlasEstimateResponse,
     GenerateImageRequest,
@@ -72,6 +74,7 @@ def save_generation(
     *,
     chunk_ids: list[str] | None = None,
     based_on: int | None = None,
+    source_key: str | None = None,
 ) -> dict[str, Any]:
     """
     生成した画像(PNG)を outputs/history/ に保存し、generation_history に記録する。
@@ -130,6 +133,7 @@ def save_generation(
             character_references=character_references,
             characters=characters,
             based_on_id=based_on,
+            source_key=source_key,
         )
     finally:
         conn.close()
@@ -351,6 +355,124 @@ async def upscale_image(req: UpscaleToolRequest, client: ClientDep) -> GenerateI
     encoded = _pil_to_b64(images, "png")
     save_generation(_tool_history_request(source, "2倍に拡大"), [base64.b64decode(b) for b in encoded])
     return GenerateImageResponse(images=encoded, format="png")
+
+
+@router.post("/region-redraw", response_model=RegionRedrawResponse)
+async def region_redraw(req: RegionRedrawRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    ギャラリーの画像の範囲(拡大表示で見ている範囲)を切り出し、高解像度にする。結果はギャラリーに新しい画像として残し、
+    元の画像のキーを記録する(元の画像は変えない)。
+
+    - redraw: AI 拡大(この PC)した切り出しを元に、NovelAI の img2img で弱めに描き直す(線と細部が描き直される)
+    - upscale: AI 拡大だけ(NovelAI を使わない。絵の中身は変わらない)
+    """
+    import asyncio
+
+    from PIL import Image
+
+    from ..nai_metadata import generation_settings
+    from ..region_redraw import RegionError, clamp_box, target_size, upscale_size
+    from ..upscaler import enlarge
+    from .library import _gallery_images, _history_key, _served_path
+
+    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    data = _served_path(item.path).read_bytes()
+    with Image.open(io.BytesIO(data)) as opened:
+        source = opened.convert("RGB")
+    box = clamp_box(tuple(req.box), source.size)  # type: ignore[arg-type]
+    x, y, w, h = box
+    try:
+        size = target_size(w, h) if req.mode == "redraw" else upscale_size(w, h)
+    except RegionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    crop = source.crop((x, y, x + w, y + h))
+    try:
+        base = await asyncio.to_thread(enlarge, crop, size)
+        enlarged_by = "ai"
+    except Exception:  # noqa: BLE001 AI 拡大のモデルを取ってこられないときは、単純な拡大で続ける
+        if req.mode == "upscale":
+            raise HTTPException(status_code=503, detail="AI 拡大のモデルを読み込めませんでした。")
+        base = crop.resize(size, Image.Resampling.LANCZOS)
+        enlarged_by = "simple"
+
+    prompt = ""
+    characters: list[dict[str, Any]] = []
+    if req.mode == "upscale":
+        gen = _tool_history_request(data, "AI拡大(範囲)").model_copy(update={"size": list(size), "i2i": None})
+        images = [_png_bytes(base)]
+    else:
+        gen, characters = await asyncio.to_thread(_region_request, req, item.prompt, item.seed, generation_settings(data), base, box, source.size)
+        prompt = gen.prompt
+        try:
+            generated = await client.image.generate(GenerateImageParams(**_build_kwargs(gen)))
+        except Exception as exc:
+            raise HTTPException(status_code=_http_status(exc), detail=str(exc))
+        images = [base64.b64decode(b) for b in _pil_to_b64(generated, "png")]
+    based_on = int(item.key.split(":")[1]) if item.key.startswith("history:") else None
+    saved = save_generation(gen, images, based_on=based_on, source_key=item.key)
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT image_paths FROM generation_history WHERE id = ?", (saved["id"],)).fetchone()
+    finally:
+        conn.close()
+    path = json.loads(row["image_paths"])[0]
+    return {
+        "key": _history_key(saved["id"], path),
+        "path": path,
+        "width": size[0],
+        "height": size[1],
+        "box": list(box),
+        "mode": req.mode,
+        "enlarged_by": enlarged_by,
+        "prompt": prompt,
+        "characters": len(characters),
+    }
+
+
+def _png_bytes(image: Any) -> bytes:
+    buf = io.BytesIO()
+    image.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _region_request(
+    req: RegionRedrawRequest, fallback_prompt: str, fallback_seed: int | None, settings: dict[str, Any] | None, base: Any,
+    box: tuple[int, int, int, int], source_size: tuple[int, int],
+) -> tuple[GenerateImageRequest, list[dict[str, Any]]]:
+    """
+    範囲の描き直しの生成リクエスト(img2img)。プロンプトは region_redraw を参照。画像に設定(メタデータ)が無ければ、
+    ギャラリーの記録のプロンプトとシードを使う。
+    """
+    from ..image_tagger import build_prompt, tag_image
+    from ..region_redraw import region_characters, region_prompt
+
+    settings = settings or {}
+    prompt = region_prompt(settings.get("prompt") or fallback_prompt, build_prompt(tag_image(base)))
+    characters = region_characters(settings, box, source_size)
+    seed = next((s for s in (req.seed, settings.get("seed"), fallback_seed) if s is not None), None)
+    fields: dict[str, Any] = {
+        "prompt": prompt,
+        # 画像に入っているのは品質タグ・UC プリセットを足した後のプロンプトなので、もう一度は足さない
+        "quality": not settings,
+        "uc_preset": "none" if settings else "light",
+        "negative_prompt": settings.get("negative_prompt") or None,
+        "size": [base.width, base.height],
+        # 28 ステップまでなら Opus で Anlas がかからない
+        "steps": min(settings.get("steps") or 28, 28),
+        "seed": seed,
+        "i2i": {"image": base64.b64encode(_png_bytes(base)).decode(), "strength": req.strength, "noise": 0.0, "seed": seed},
+        "characters": characters or None,
+    }
+    for key in ("model", "scale", "sampler", "noise_schedule"):
+        if settings.get(key):
+            fields[key] = settings[key]
+    try:
+        return GenerateImageRequest(**fields), characters
+    except ValidationError:
+        fields = {k: v for k, v in fields.items() if k not in ("model", "sampler", "noise_schedule")}
+        return GenerateImageRequest(**fields), characters
 
 
 # タグの候補は同じ問い合わせが続くので、少しだけ覚えておく(NovelAI への問い合わせを減らす)
