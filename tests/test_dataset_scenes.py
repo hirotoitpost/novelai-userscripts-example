@@ -52,7 +52,9 @@ NAP = {
 FULL = {"name": "食べ過ぎ", "add_tags": "round belly, plump", "remove_tags": "slim, flat stomach"}
 
 
-def test_state_swaps_body_tags_and_leaves_the_rest() -> None:
+def test_state_swaps_body_tags_and_leaves_the_rest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 成人キャラだけのタグはコンテンツガードの設定(DB)から読むので、はじめの値の入った別の DB で確かめる
+    monkeypatch.setattr(db, "_DB_PATH", tmp_path / "app.db")
     assert body_tags(YURA["appearance_tags"], FULL) == "1girl, brown hair, round belly, plump"
     assert body_tags(YURA["appearance_tags"], None) == YURA["appearance_tags"]
     assert adult_only_tags("pregnant, big belly") == ["pregnant"] and adult_only_tags("round belly") == []
