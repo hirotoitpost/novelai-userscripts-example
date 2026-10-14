@@ -58,6 +58,7 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
   const [useTrends, setUseTrends] = useLocalStorage('nai_quick_trends', true)
   const [review, setReview] = useLocalStorage('nai_quick_review', true)
   const [checkPanels, setCheckPanels] = useLocalStorage('nai_quick_check_panels', true)
+  const [redrawStates, setRedrawStates] = useLocalStorage('nai_quick_redraw_states', true)
   const [themes, setThemes] = useState<ThemeResult | null>(null)
   const [thinking, setThinking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -107,7 +108,7 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
       const job = await apiFetch<QuickJob>(token, '/api/quick-manga', {
         theme: theme.trim(), genre: genre.trim() || DEFAULT_GENRE, episodes, character_ids: castIds, cast_count: castCount,
         color, stop_after_script: scriptOnly, use_character_reference: useReference,
-        review_script: review, check_panels: checkPanels,
+        review_script: review, check_panels: checkPanels, redraw_states: redrawStates,
       })
       void follow(job)
     } catch (e) {
@@ -186,6 +187,9 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
         </label>
         <label className="md-check" title="判定モデルで物や人数が描かれているかを確かめ、外れたコマはタグを強めて描き直します">
           <input type="checkbox" checked={checkPanels} onChange={e => setCheckPanels(e.target.checked)} disabled={scriptOnly} />絵を確かめて、ずれたコマを描き直す
+        </label>
+        <label className="md-check" title="透明・幽霊など、描き直しで作る状態の人物がいるコマは、その人物の範囲だけを描き直します(状態は下の「描き直しで作る状態の管理」で足せます)">
+          <input type="checkbox" checked={redrawStates} onChange={e => setRedrawStates(e.target.checked)} disabled={scriptOnly} />状態(透明 など)の人物を描き直す
         </label>
       </div>
       <button type="button" className="md-primary" onClick={() => void start()} disabled={!theme.trim() || task.busy}>おまかせで作る</button>

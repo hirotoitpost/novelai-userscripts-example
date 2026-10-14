@@ -97,7 +97,7 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
     from ..models import MangaDraftCreateRequest, MangaDraftPanel, MangaV2ComposeRequest, MangaV2PanelsRequest
     from ..panel_check import review_script
     from .manga_draft import post_create
-    from .manga_v2 import _check_and_redraw, _run_panels, check_summary_text, compose
+    from .manga_v2 import _check_and_redraw, _redraw_states, _run_panels, check_summary_text, compose, redraw_summary_text
 
     try:
         characters = await _prepare_characters(req, api_key, job)
@@ -145,6 +145,9 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
         checked = ""
         if req.check_panels:
             checked = "。" + check_summary_text(await _check_and_redraw(job, story.id, panels, api_key, 2))
+        redrawn = redraw_summary_text(await _redraw_states(job, story.id, panels, api_key)) if req.redraw_states else ""
+        if redrawn:
+            checked += f"。{redrawn}"
         job.message = "ページに合成しています"
         result = await asyncio.to_thread(compose, story.id, MangaV2ComposeRequest(template=req.template))
         job.message = f"漫画ができました: {outline['title']}({len(result['pages'])}ページ・{count}コマ){checked}"

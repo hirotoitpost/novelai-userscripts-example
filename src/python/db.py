@@ -486,6 +486,25 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             save_dataset_situation(conn, None, item["name"], item["axes"], item.get("extra_tags", ""))
         for item in DEFAULT_DATASET_STATES:
             save_dataset_state(conn, None, item["name"], item["add_tags"], item["remove_tags"], item.get("part", "none"))
+    # 描き直しで作る人物の状態(透明 など)。初めて表を作るときだけ、例を入れる
+    first_redraw_states = (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'panel_redraw_states'").fetchone() is None
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS panel_redraw_states (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            match_tags TEXT NOT NULL DEFAULT '',
+            redraw_tags TEXT NOT NULL DEFAULT '',
+            look TEXT NOT NULL DEFAULT 'none',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    if first_redraw_states:
+        for item in DEFAULT_REDRAW_STATES:
+            save_redraw_state(conn, None, item["name"], item["match_tags"], item["redraw_tags"], item["look"])
     # キャストのセット(よく使うキャラの組み合わせ)
     conn.execute(
         """
@@ -2635,6 +2654,69 @@ def save_dataset_state(
 
 def delete_dataset_state(conn: sqlite3.Connection, state_id: int) -> bool:
     cur = conn.execute("DELETE FROM dataset_states WHERE id = ?", (state_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+# ---- 描き直しで作る人物の状態 ----
+
+# 初めて表を作るときに入れる例。look は、描き直しに入れるその人物の見た目(none / outfit: 服だけ / full: 容姿・体型・服装)
+DEFAULT_REDRAW_STATES: list[dict[str, str]] = [
+    {
+        "name": "透明",
+        "match_tags": "invisible, invisibility, invisible person",
+        "redraw_tags": "empty clothes, floating clothes, invisible, no head, no hands",
+        "look": "outfit",
+    },
+    {
+        "name": "幽霊",
+        "match_tags": "ghost, spirit",
+        "redraw_tags": "ghost, translucent body, floating, faded, glowing outline",
+        "look": "full",
+    },
+    {
+        "name": "石化",
+        "match_tags": "petrification, petrified, stone statue",
+        "redraw_tags": "petrification, stone statue, grey stone body, cracked",
+        "look": "full",
+    },
+]
+
+
+def _redraw_state(row: sqlite3.Row) -> dict[str, Any]:
+    return {k: row[k] for k in ("id", "name", "match_tags", "redraw_tags", "look")}
+
+
+def list_redraw_states(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [_redraw_state(row) for row in conn.execute("SELECT * FROM panel_redraw_states ORDER BY id")]
+
+
+def get_redraw_state(conn: sqlite3.Connection, state_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM panel_redraw_states WHERE id = ?", (state_id,)).fetchone()
+    return _redraw_state(row) if row else None
+
+
+def save_redraw_state(
+    conn: sqlite3.Connection, state_id: int | None, name: str, match_tags: str, redraw_tags: str, look: str
+) -> dict[str, Any]:
+    """状態を作る(state_id が None)か、書き換える。同じ名前がほかにあれば sqlite3.IntegrityError。"""
+    if state_id is None:
+        cur = conn.execute(
+            "INSERT INTO panel_redraw_states (name, match_tags, redraw_tags, look, created_at) VALUES (?, ?, ?, ?, ?)",
+            (name, match_tags, redraw_tags, look, datetime.now(timezone.utc).isoformat()),
+        )
+        state_id = int(cur.lastrowid or 0)
+    else:
+        conn.execute(
+            "UPDATE panel_redraw_states SET name = ?, match_tags = ?, redraw_tags = ?, look = ? WHERE id = ?",
+            (name, match_tags, redraw_tags, look, state_id),
+        )
+    conn.commit()
+    return get_redraw_state(conn, state_id) or {}
+
+
+def delete_redraw_state(conn: sqlite3.Connection, state_id: int) -> bool:
+    cur = conn.execute("DELETE FROM panel_redraw_states WHERE id = ?", (state_id,))
     conn.commit()
     return cur.rowcount > 0
 

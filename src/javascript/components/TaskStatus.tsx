@@ -40,6 +40,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   cast: '登場人物をそろえる(参照画像も)',
   auto_manga: '取り込んだ物語を漫画にする',
   check_panels: 'コマの絵を確かめて描き直す',
+  redraw_states: '状態の人物を描き直す',
   sfx: '効果音の提案',
   narration: 'ナレーションの作成',
   panels: 'コマの絵の生成',

@@ -584,6 +584,8 @@ class QuickMangaRequest(BaseModel):
     review_script: bool = True
     # コマの絵を確かめて、外れたコマを描き直す(生成の後)
     check_panels: bool = True
+    # 状態(透明 など)の人物がいるコマを、その人物の範囲だけ描き直す
+    redraw_states: bool = True
 
 
 class GalleryMangaRequest(BaseModel):
@@ -798,7 +800,8 @@ class StoryJobResponse(BaseModel):
 
     story_id: int
     kind: Literal[
-        "split", "illustrate", "characters", "cast", "panels", "sfx", "narration", "sfx_fonts", "manga", "auto_manga", "check_panels"
+        "split", "illustrate", "characters", "cast", "panels", "sfx", "narration", "sfx_fonts", "manga", "auto_manga",
+        "check_panels", "redraw_states"
     ]
     status: Literal["running", "done", "error", "cancelled"]
     message: str = ""
@@ -1185,6 +1188,23 @@ class MangaV2CheckRequest(BaseModel):
     max_redraws: int = Field(2, ge=1, le=3)
 
 
+class PanelRedrawStateRequest(BaseModel):
+    """描き直しで作る人物の状態。match_tags に当たる動作のタグの人物を、コマを描いたあとに redraw_tags で描き直す。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    match_tags: str = Field(min_length=1, max_length=500)
+    redraw_tags: str = Field(min_length=1, max_length=500)
+    # 描き直しに入れる、その人物の見た目(none: 入れない / outfit: 服装だけ / full: 容姿・体型・服装)
+    look: Literal["none", "outfit", "full"] = "none"
+
+
+class MangaV2RedrawStatesRequest(BaseModel):
+    """物語のコマのうち、状態(透明 など)の人物がいるコマを描き直して、ページに合成し直す。"""
+
+    panels: MangaV2PanelsRequest = Field(default_factory=lambda: MangaV2PanelsRequest())
+    compose: MangaV2ComposeRequest = Field(default_factory=lambda: MangaV2ComposeRequest())
+
+
 class MangaV2MakeRequest(BaseModel):
     """
     まだ絵の無いコマを生成してから、ページに合成するまでを1つのジョブで行う(漫画ドラフトの「漫画にする」)。
@@ -1196,6 +1216,8 @@ class MangaV2MakeRequest(BaseModel):
     # コマを生成したあとに絵を確かめて、外れたコマを描き直す(MangaV2CheckRequest と同じ)
     check_panels: bool = False
     max_redraws: int = Field(2, ge=1, le=3)
+    # 状態(透明 など)の人物がいるコマを、その人物の範囲だけ描き直す
+    redraw_states: bool = True
 
 
 class StoryAutoMangaRequest(BaseModel):

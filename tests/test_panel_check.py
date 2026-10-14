@@ -76,6 +76,9 @@ def test_check_and_redraw_keeps_the_better_picture(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(manga_v2, "_PROJECT_ROOT", tmp_path)
     conn = db.get_connection()
     try:
+        # 描き直しで作る状態(透明 など)のタグは確かめないので、ここでは状態を無くして、確かめと描き直しだけを見る
+        for state in db.list_redraw_states(conn):
+            db.delete_redraw_state(conn, state["id"])
         story = db.create_story(conn, "x", 2, 4)
         db.add_story_scenes(conn, story["id"], [
             {"draft_title": "1", "draft_text": "「消えた！」", "draft_prompt_tags": "open door", "novelai_text": "x"},

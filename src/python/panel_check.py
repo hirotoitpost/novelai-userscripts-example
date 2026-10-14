@@ -42,7 +42,9 @@ def tagger_vocabulary() -> set[str]:
     return {name.replace("_", " ") for name, category in tags if category == _GENERAL}
 
 
-def checkable_tags(prompt_tags: str, actions: list[str], vocabulary: set[str]) -> list[str]:
+def checkable_tags(
+    prompt_tags: str, actions: list[str], vocabulary: set[str], skip: set[str] | None = None
+) -> list[str]:
     """
     作画タグ・動作のタグのうち、判定モデルで確かめられるもの。人数・絵柄・構図・時間帯と、表情(驚き・得意げ など。
     判定モデルの当たり外れが大きく、確かめると正しい絵まで外れにした)は除く。
@@ -53,6 +55,7 @@ def checkable_tags(prompt_tags: str, actions: list[str], vocabulary: set[str]) -
     return [
         t for t in dict.fromkeys(t.lower() for t in tags)
         if t in vocabulary and not _SKIP.match(t) and not _PEOPLE.match(t) and axis_of(t) != "expressions"
+        and t not in (skip or set())
     ]
 
 

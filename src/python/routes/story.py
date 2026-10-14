@@ -1913,7 +1913,7 @@ async def _run_auto_manga(
     job: _Job, story_id: int, req: StoryAutoMangaRequest, api_key: str, options: TagOptions
 ) -> None:
     # コマの生成・合成は漫画v2のもの(漫画v2は story を読み込むので、ここでは使うときに読む)
-    from .manga_v2 import _run_panels, compose
+    from .manga_v2 import _redraw_states, _run_panels, compose, redraw_summary_text
 
     conn = get_connection()
     try:
@@ -1950,9 +1950,12 @@ async def _run_auto_manga(
     if targets:
         job.progress = 0
         await _run_panels(job, story_id, panels, api_key, targets)
+    redrawn = ""
+    if req.make.redraw_states:
+        redrawn = redraw_summary_text(await _redraw_states(job, story_id, panels, api_key))
     job.message = "ページに合成しています"
     result = await asyncio.to_thread(compose, story_id, req.make.compose)
-    job.message = f"漫画ができました({len(result['pages'])}ページ・{len(scenes)}コマ)"
+    job.message = f"漫画ができました({len(result['pages'])}ページ・{len(scenes)}コマ)" + (f"。{redrawn}" if redrawn else "")
 
 
 @router.get("/cast-presets")
