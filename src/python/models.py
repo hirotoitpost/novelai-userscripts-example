@@ -205,6 +205,29 @@ class DatasetVariationsExtractRequest(BaseModel):
     hints: Optional[list[Optional[str]]] = Field(None, max_length=400)
 
 
+class DatasetSituationRequest(BaseModel):
+    """
+    キャラ別データセットのシチュエーション。軸(構図・ポーズ・服装・表情・場所)ごとに、このシチュエーションで
+    使うものを並べる(空の軸は、ふつうのバリエーションから選ぶ)。extra_tags は、いつも足すタグ(時間帯など)。
+    """
+
+    name: str = Field(min_length=1, max_length=100)
+    framings: list[str] = Field(default_factory=list, max_length=30)
+    poses: list[str] = Field(default_factory=list, max_length=30)
+    outfits: list[str] = Field(default_factory=list, max_length=30)
+    expressions: list[str] = Field(default_factory=list, max_length=30)
+    locations: list[str] = Field(default_factory=list, max_length=30)
+    extra_tags: str = Field("", max_length=500)
+
+
+class DatasetStateRequest(BaseModel):
+    """キャラ別データセットの状態。容姿から remove_tags を外して add_tags を足す(例: 食べ過ぎでお腹が出る)。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    add_tags: str = Field("", max_length=500)
+    remove_tags: str = Field("", max_length=500)
+
+
 class CharacterDatasetRequest(BaseModel):
     """キャラシートを元に、ポーズ/服装/表情/場所を差し替えたデータセットを作る。"""
 
@@ -214,6 +237,11 @@ class CharacterDatasetRequest(BaseModel):
     outfits: list[str] = Field(default_factory=list)
     expressions: list[str] = Field(default_factory=list)
     locations: list[str] = Field(default_factory=list)
+    # シチュエーション(1枚ごとにどれか1つ。決めている軸はその中からだけ選ぶ)と状態(容姿を一時的に変える)
+    situation_ids: list[int] = Field(default_factory=list, max_length=50)
+    state_ids: list[int] = Field(default_factory=list, max_length=20)
+    # 状態を選んだとき、状態なし(ふだんの体)の枚も作るか
+    include_plain_state: bool = True
     count: int = Field(10, ge=1, le=200, description="生成枚数。組み合わせから重複なしで選ぶ")
     model: ImageModelLiteral = "nai-diffusion-4-5-full"
     width: int = Field(832, ge=64, le=1600)

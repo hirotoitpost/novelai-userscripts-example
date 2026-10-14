@@ -448,6 +448,38 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             ("framings", FRAMINGS), ("poses", POSES), ("outfits", OUTFITS), ("expressions", EXPRESSIONS), ("locations", LOCATIONS)
         ):
             add_dataset_variations(conn, axis, values)
+    # キャラ別データセットのシチュエーション(場所・服装・ポーズなどをひとまとまりにしたもの)と状態(容姿を一時的に
+    # 変えるもの)。初めて表を作るときだけ、例を入れる(消したものが、起動のたびに戻らないように)
+    first_scenes = (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dataset_situations'").fetchone() is None
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dataset_situations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            axes TEXT NOT NULL DEFAULT '{}',
+            extra_tags TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dataset_states (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            add_tags TEXT NOT NULL DEFAULT '',
+            remove_tags TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    if first_scenes:
+        for item in DEFAULT_DATASET_SITUATIONS:
+            save_dataset_situation(conn, None, item["name"], item["axes"], item.get("extra_tags", ""))
+        for item in DEFAULT_DATASET_STATES:
+            save_dataset_state(conn, None, item["name"], item["add_tags"], item["remove_tags"])
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -2410,6 +2442,148 @@ def add_dataset_variations(conn: sqlite3.Connection, axis: str, values: list[str
 
 def delete_dataset_variation(conn: sqlite3.Connection, axis: str, value: str) -> bool:
     cur = conn.execute("DELETE FROM dataset_variations WHERE axis = ? AND value = ?", (axis, value))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+# ---- キャラ別データセットのシチュエーション・状態 ----
+
+# 初めて表を作るときに入れる例(そのあとは、画面や API で足したり直したり消したりする)
+DEFAULT_DATASET_SITUATIONS: list[dict[str, Any]] = [
+    {
+        "name": "ジムで運動",
+        "axes": {
+            "locations": ["gym, indoors"],
+            # 全年齢のガード(dataset.blocked_tags)に当たるタグ(sports bra など)は入れない
+            "outfits": ["sportswear, track jacket, track pants", "tank top, shorts, sneakers"],
+            "poses": ["running on treadmill", "lifting dumbbell", "stretching", "jumping rope"],
+            "expressions": ["sweat, determined", "sweat, smile"],
+        },
+    },
+    {
+        "name": "カフェで休憩",
+        "axes": {
+            "locations": ["cafe, indoors, table"],
+            "poses": ["sitting, holding cup", "sitting, drinking", "sitting, hand on own cheek"],
+            "expressions": ["smile", "light smile, closed eyes", "relaxed"],
+        },
+    },
+    {
+        "name": "体育の授業で立位体前屈",
+        "axes": {
+            "locations": ["gymnasium, indoors"],
+            "outfits": ["gym uniform, gym shirt, shorts"],
+            "poses": ["standing forward bend, bent over, touching toes, legs straight"],
+            "framings": ["full body, from side", "full body"],
+            "expressions": ["closed mouth, strained", "smile"],
+        },
+    },
+    {
+        "name": "昼寝",
+        "axes": {
+            "locations": ["bedroom, on bed", "living room, on couch"],
+            "poses": ["sleeping, lying on back", "sleeping, lying on side"],
+            "expressions": ["closed eyes, open mouth", "closed eyes, peaceful"],
+            "framings": ["from above", "full body", "upper body"],
+        },
+        "extra_tags": "daytime, sunlight",
+    },
+]
+DEFAULT_DATASET_STATES: list[dict[str, Any]] = [
+    {
+        "name": "食べ過ぎでお腹が出る",
+        "add_tags": "plump, round belly, belly, stomach bulge",
+        "remove_tags": "slim, slender, thin, skinny, flat stomach, narrow waist, toned, abs",
+    },
+    {
+        "name": "妊娠してお腹が大きい",
+        "add_tags": "pregnant, big belly, hand on own stomach",
+        "remove_tags": "slim, slender, thin, skinny, flat stomach, narrow waist, toned, abs",
+    },
+]
+
+_SITUATION_AXES = ("framings", "poses", "outfits", "expressions", "locations")
+
+
+def _situation(row: sqlite3.Row) -> dict[str, Any]:
+    axes = json.loads(row["axes"] or "{}")
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        **{axis: [str(v) for v in axes.get(axis) or []] for axis in _SITUATION_AXES},
+        "extra_tags": row["extra_tags"] or "",
+    }
+
+
+def list_dataset_situations(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [_situation(row) for row in conn.execute("SELECT * FROM dataset_situations ORDER BY id")]
+
+
+def get_dataset_situation(conn: sqlite3.Connection, situation_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM dataset_situations WHERE id = ?", (situation_id,)).fetchone()
+    return _situation(row) if row else None
+
+
+def save_dataset_situation(
+    conn: sqlite3.Connection, situation_id: int | None, name: str, axes: dict[str, list[str]], extra_tags: str
+) -> dict[str, Any]:
+    """シチュエーションを作る(situation_id が None)か、書き換える。同じ名前がほかにあれば sqlite3.IntegrityError。"""
+    data = json.dumps({axis: list(axes.get(axis) or []) for axis in _SITUATION_AXES}, ensure_ascii=False)
+    if situation_id is None:
+        cur = conn.execute(
+            "INSERT INTO dataset_situations (name, axes, extra_tags, created_at) VALUES (?, ?, ?, ?)",
+            (name, data, extra_tags, datetime.now(timezone.utc).isoformat()),
+        )
+        situation_id = int(cur.lastrowid or 0)
+    else:
+        conn.execute(
+            "UPDATE dataset_situations SET name = ?, axes = ?, extra_tags = ? WHERE id = ?",
+            (name, data, extra_tags, situation_id),
+        )
+    conn.commit()
+    return get_dataset_situation(conn, situation_id) or {}
+
+
+def delete_dataset_situation(conn: sqlite3.Connection, situation_id: int) -> bool:
+    cur = conn.execute("DELETE FROM dataset_situations WHERE id = ?", (situation_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def _state(row: sqlite3.Row) -> dict[str, Any]:
+    return {"id": row["id"], "name": row["name"], "add_tags": row["add_tags"] or "", "remove_tags": row["remove_tags"] or ""}
+
+
+def list_dataset_states(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [_state(row) for row in conn.execute("SELECT * FROM dataset_states ORDER BY id")]
+
+
+def get_dataset_state(conn: sqlite3.Connection, state_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM dataset_states WHERE id = ?", (state_id,)).fetchone()
+    return _state(row) if row else None
+
+
+def save_dataset_state(
+    conn: sqlite3.Connection, state_id: int | None, name: str, add_tags: str, remove_tags: str
+) -> dict[str, Any]:
+    """状態を作る(state_id が None)か、書き換える。同じ名前がほかにあれば sqlite3.IntegrityError。"""
+    if state_id is None:
+        cur = conn.execute(
+            "INSERT INTO dataset_states (name, add_tags, remove_tags, created_at) VALUES (?, ?, ?, ?)",
+            (name, add_tags, remove_tags, datetime.now(timezone.utc).isoformat()),
+        )
+        state_id = int(cur.lastrowid or 0)
+    else:
+        conn.execute(
+            "UPDATE dataset_states SET name = ?, add_tags = ?, remove_tags = ? WHERE id = ?",
+            (name, add_tags, remove_tags, state_id),
+        )
+    conn.commit()
+    return get_dataset_state(conn, state_id) or {}
+
+
+def delete_dataset_state(conn: sqlite3.Connection, state_id: int) -> bool:
+    cur = conn.execute("DELETE FROM dataset_states WHERE id = ?", (state_id,))
     conn.commit()
     return cur.rowcount > 0
 

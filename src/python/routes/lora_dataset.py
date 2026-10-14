@@ -6,6 +6,7 @@ import binascii
 import io
 import json
 import re
+import sqlite3
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -16,6 +17,7 @@ from novelai.types import CharacterReference
 from PIL import Image, UnidentifiedImageError
 
 from ..character_sheet import (
+    adult_only_tags,
     blocked_tags,
     build_variation_shots,
     caption_for,
@@ -31,7 +33,15 @@ from ..dataset_variations import clean_value
 from ..dataset_variations import extract as extract_variation_tags
 from ..db import (
     add_dataset_variations,
+    delete_dataset_situation,
+    delete_dataset_state,
     delete_dataset_variation,
+    get_dataset_situation,
+    get_dataset_state,
+    list_dataset_situations,
+    list_dataset_states,
+    save_dataset_situation,
+    save_dataset_state,
     delete_guard_profile,
     get_character,
     get_connection,
@@ -52,6 +62,8 @@ from ..lora_dataset import (
 )
 from ..models import (
     CharacterDatasetRequest,
+    DatasetSituationRequest,
+    DatasetStateRequest,
     DatasetVariationsAddRequest,
     DatasetVariationsExtractRequest,
     CharacterSheetPromptResponse,
@@ -190,6 +202,20 @@ def _check_tags(character: dict, text: str, guard: dict, r18: bool) -> None:
     R18:    成人フラグのあるキャラだけ。性的なタグは許す代わりに、キャラシートと text に
             未成年を示すタグがあれば弾く(プロファイルの追加分は引き続き効く)。
     """
+    # 成人キャラだけに使うタグ(妊娠など)は、全年齢でも R18 でも、成人キャラで、未成年を示すタグと一緒でないときだけ
+    adult_only = adult_only_tags(text)
+    if adult_only:
+        if not character.get("is_adult"):
+            raise HTTPException(
+                status_code=403,
+                detail=f"成人キャラ(キャラシートの成人フラグ)にだけ使えるタグがあります: {', '.join(adult_only)}",
+            )
+        found = sorted(set(character_minor_tags(character)) | set(minor_tags(text)))
+        if found:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{', '.join(adult_only)} は、未成年を示すタグと一緒には使えません: {', '.join(found)}",
+            )
     if r18:
         if not character.get("is_adult"):
             raise HTTPException(status_code=403, detail="R18は成人キャラ(キャラシートの成人フラグ)でのみ使えます。")
@@ -282,6 +308,142 @@ async def remove_variation(axis: str, value: str) -> dict[str, list[str]]:
     return _variations()
 
 
+# ---- シチュエーション・状態 ----
+
+
+def _load_scenes(req: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """生成で使うシチュエーションと状態(選んだ順)。無いIDは 404。"""
+    conn = get_connection()
+    try:
+        situations = [get_dataset_situation(conn, i) for i in dict.fromkeys(req.situation_ids)]
+        states = [get_dataset_state(conn, i) for i in dict.fromkeys(req.state_ids)]
+    finally:
+        conn.close()
+    if any(s is None for s in situations) or any(s is None for s in states):
+        raise HTTPException(status_code=404, detail="選んだシチュエーションか状態が見つかりません(消された可能性があります)。")
+    return [s for s in situations if s], [s for s in states if s]
+
+
+def _scene_tags(situations: list[dict[str, Any]], states: list[dict[str, Any]]) -> list[str]:
+    """シチュエーションと状態が足すタグ(検査用)。"""
+    tags: list[str] = []
+    for situation in situations:
+        for axis in ("framings", "poses", "outfits", "expressions", "locations"):
+            tags.extend(situation[axis])
+        tags.append(situation["extra_tags"])
+    tags.extend(state["add_tags"] for state in states)
+    return [t for t in tags if t]
+
+
+def _situation_response(situation: dict[str, Any]) -> dict[str, Any]:
+    return {**situation, "adult_only": adult_only_tags(", ".join(_scene_tags([situation], [])))}
+
+
+def _state_response(state: dict[str, Any]) -> dict[str, Any]:
+    return {**state, "adult_only": adult_only_tags(state["add_tags"])}
+
+
+def _clean_list(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(v for v in (clean_value(v) for v in values) if v))
+
+
+@router.get("/situations")
+async def get_situations() -> list[dict[str, Any]]:
+    """
+    シチュエーション(場所・服装・ポーズなどをひとまとまりにしたもの)の一覧。adult_only は、成人キャラにだけ使える
+    タグ(コンテンツガードの dataset.adult_only_tags)。
+    """
+    conn = get_connection()
+    try:
+        return [_situation_response(s) for s in list_dataset_situations(conn)]
+    finally:
+        conn.close()
+
+
+def _save_situation(situation_id: int | None, req: DatasetSituationRequest) -> dict[str, Any]:
+    axes = {axis: _clean_list(getattr(req, axis)) for axis in ("framings", "poses", "outfits", "expressions", "locations")}
+    extra = clean_value(req.extra_tags) if req.extra_tags.strip() else ""
+    if not any(axes.values()) and not extra:
+        raise HTTPException(status_code=422, detail="場所・服装・ポーズなど、どれか1つは入れてください。")
+    conn = get_connection()
+    try:
+        if situation_id is not None and get_dataset_situation(conn, situation_id) is None:
+            raise HTTPException(status_code=404, detail="situation not found")
+        try:
+            return _situation_response(save_dataset_situation(conn, situation_id, req.name.strip(), axes, extra))
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail=f"「{req.name.strip()}」というシチュエーションはもうあります。")
+    finally:
+        conn.close()
+
+
+@router.post("/situations")
+async def post_situation(req: DatasetSituationRequest) -> dict[str, Any]:
+    return _save_situation(None, req)
+
+
+@router.put("/situations/{situation_id}")
+async def put_situation(situation_id: int, req: DatasetSituationRequest) -> dict[str, Any]:
+    return _save_situation(situation_id, req)
+
+
+@router.delete("/situations/{situation_id}", status_code=204)
+async def remove_situation(situation_id: int) -> None:
+    conn = get_connection()
+    try:
+        if not delete_dataset_situation(conn, situation_id):
+            raise HTTPException(status_code=404, detail="situation not found")
+    finally:
+        conn.close()
+
+
+@router.get("/states")
+async def get_states() -> list[dict[str, Any]]:
+    """状態(容姿を一時的に変えるもの)の一覧。adult_only は、成人キャラにだけ使えるタグ。"""
+    conn = get_connection()
+    try:
+        return [_state_response(s) for s in list_dataset_states(conn)]
+    finally:
+        conn.close()
+
+
+def _save_state(state_id: int | None, req: DatasetStateRequest) -> dict[str, Any]:
+    add = ", ".join(_clean_list(req.add_tags.split(",")))
+    remove = ", ".join(_clean_list(req.remove_tags.split(",")))
+    if not add and not remove:
+        raise HTTPException(status_code=422, detail="足すタグか外すタグを入れてください。")
+    conn = get_connection()
+    try:
+        if state_id is not None and get_dataset_state(conn, state_id) is None:
+            raise HTTPException(status_code=404, detail="state not found")
+        try:
+            return _state_response(save_dataset_state(conn, state_id, req.name.strip(), add, remove))
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail=f"「{req.name.strip()}」という状態はもうあります。")
+    finally:
+        conn.close()
+
+
+@router.post("/states")
+async def post_state(req: DatasetStateRequest) -> dict[str, Any]:
+    return _save_state(None, req)
+
+
+@router.put("/states/{state_id}")
+async def put_state(state_id: int, req: DatasetStateRequest) -> dict[str, Any]:
+    return _save_state(state_id, req)
+
+
+@router.delete("/states/{state_id}", status_code=204)
+async def remove_state(state_id: int) -> None:
+    conn = get_connection()
+    try:
+        if not delete_dataset_state(conn, state_id):
+            raise HTTPException(status_code=404, detail="state not found")
+    finally:
+        conn.close()
+
+
 @router.post("/variations/extract")
 async def extract_variations(req: DatasetVariationsExtractRequest) -> dict[str, Any]:
     """
@@ -322,10 +484,16 @@ async def generate_character_dataset(
     character = _load_character(character_id)
     guard = _load_guard(req.guard_profile_id)
     r18 = req.rating == "r18"
+    situations, states = _load_scenes(req)
     variations = req.framings + req.poses + req.outfits + req.expressions + req.locations
     _check_tags(
         character,
-        ", ".join([*variations, character.get("outfit_tags") or "", character.get("style_tags") or ""]),
+        ", ".join([
+            *variations,
+            *_scene_tags(situations, states),
+            character.get("outfit_tags") or "",
+            character.get("style_tags") or "",
+        ]),
         guard,
         r18,
     )
@@ -370,6 +538,8 @@ async def generate_character_dataset(
         locations=req.locations,
         count=req.count,
         r18=r18,
+        situations=situations or None,
+        states=[*states, *([None] if req.include_plain_state else [])] if states else None,
     )
     # R18 は全年齢のデータセットと混ざらないよう別フォルダにする
     suffix = "_r18" if r18 else ""
@@ -386,7 +556,10 @@ async def generate_character_dataset(
         succeeded = failed = 0
         for i, shot in enumerate(shots, start=1):
             stem = f"{start + i:04d}"
-            event: dict = {"current": i, "total": len(shots), "category": out_dir.name, "file": f"{stem}.png"}
+            event: dict = {
+                "current": i, "total": len(shots), "category": out_dir.name, "file": f"{stem}.png",
+                "situation": shot.situation, "state": shot.state,
+            }
             try:
                 candidates: list[tuple[float, Image.Image]] = []
                 for attempt in range(req.max_attempts):

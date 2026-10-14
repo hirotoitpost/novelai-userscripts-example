@@ -49,6 +49,7 @@ Python のコードには書いていません。API(`/api/content-guard`)と、
 | 13 | 成人向けの自動判定 | 表示の区分 | 本棚、ギャラリー、作品の関連 | `scene.sexual_tags`、`library.adult_tags`、`library.adult_text`、`library.adult_text_min_hits` | §19 |
 | 14 | 成人向けの手動指定 | 表示の区分 | 本棚、ギャラリー | テーブル `adult_marks` | §19.3 |
 | 15 | 描き文字素材の成人向け | 自動選択からの除外 | 漫画v2の描き文字の自動選択 | `stamp_sources.adult`(pixiv から取り込むときの判定は `stamps.adult_tags`) | §20 |
+| 16 | 成人キャラだけに使うタグ(妊娠など) | ブロック | キャラ別データセットの生成(全年齢・R18。状態・シチュエーション・バリエーションのタグ) | `dataset.adult_only_tags` | §9.1 |
 
 「値の場所」の `dataset.blocked_tags` のような名前は、テーブル `content_guard_rules` の項目のキーです(§3)。
 
@@ -105,6 +106,7 @@ Python のコードには書いていません。API(`/api/content-guard`)と、
 |---|---|---|---|
 | `dataset.blocked_tags` | patterns・word | 全年齢で止めるタグ(基本のガード) | §7 |
 | `dataset.minor_tags` | patterns・word | 未成年を示すタグ(未成年ガード) | §8 |
+| `dataset.adult_only_tags` | patterns・word | 成人キャラだけに使うタグ | §9.1 |
 | `general.safe_negative` | text | 全年齢のネガティブ | §7.3、§16 |
 | `dataset.r18_positive` | text | R18 で足すタグ | §8.3 |
 | `dataset.r18_negative` | text | R18 のネガティブ | §8.3 |
@@ -378,7 +380,19 @@ R18 では、次の2つを合わせて検査します。
 
 成人フラグを外す(`false`)のはいつでもできます。
 
-成人フラグが効くのは**キャラ別データセットの R18 だけ**です。物語のタグ付け・漫画のコマ生成・本棚やギャラリーの成人向け判定は、このフラグを見ません。
+成人フラグが効くのは**キャラ別データセットだけ**です(R18 と、次の §9.1)。物語のタグ付け・漫画のコマ生成・本棚やギャラリーの成人向け判定は、このフラグを見ません。
+
+### 9.1 成人キャラだけに使うタグ(`dataset.adult_only_tags`)
+
+妊娠のように、性的ではないが成人にだけ使うべき表現のタグです。キャラ別データセットの生成で、選んだ状態・シチュエーション・
+バリエーションのタグにこれが当たると、**全年齢でも R18 でも**次のときに止めます。
+
+- キャラに成人フラグが無い: `403「成人キャラ(キャラシートの成人フラグ)にだけ使えるタグがあります: …」`
+- キャラシートか、選んだタグの中に、未成年を示すタグ(`dataset.minor_tags`)がある: `422「… は、未成年を示すタグと一緒には使えません: …」`
+  (例: 状態「妊娠」と、シチュエーション「体育の授業」の `gym uniform`)
+
+はじめの値は `pregnan(t|cy)`、`maternity`、`lactation`、`breast ?feeding` です。状態・シチュエーションの一覧の API
+(`GET /api/lora-dataset/states`、`/situations`)は、当たったタグを `adult_only` に入れて返し、画面ではそれに印を付けます。
 
 ## 10. ガードプロファイル
 

@@ -407,6 +407,9 @@ export interface LoraDatasetProgressEvent {
   prompt?: string
   attempts?: number
   score?: number | null
+  /** この1枚のシチュエーション・状態の名前(使っていなければ空) */
+  situation?: string
+  state?: string
 }
 
 export interface LoraDatasetRetryEvent {
@@ -424,6 +427,11 @@ export interface CharacterDatasetRequest {
   outfits: string[]
   expressions: string[]
   locations: string[]
+  /** シチュエーション(1枚ごとにどれか1つ)と状態(容姿を一時的に変える) */
+  situation_ids?: number[]
+  state_ids?: number[]
+  /** 状態を選んだとき、状態なし(ふだんの体)の枚も作るか */
+  include_plain_state?: boolean
   count: number
   model: string
   width: number

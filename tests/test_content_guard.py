@@ -48,7 +48,7 @@ def put(client: TestClient, key: str, value: object) -> dict:
 
 def test_defaults_are_seeded_into_the_db(client: TestClient, tmp_path: Path) -> None:
     rules = client.get("/api/content-guard/rules").json()["rules"]
-    assert len(rules) == 20 and not any(r["modified"] for r in rules)
+    assert len(rules) == 21 and not any(r["modified"] for r in rules)
     conn = sqlite3.connect(tmp_path / "app.db")
     try:
         stored = {row[0] for row in conn.execute("SELECT key FROM content_guard_rules")}
