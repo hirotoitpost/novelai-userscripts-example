@@ -105,7 +105,8 @@ def minor_tags(tags: str) -> list[str]:
 def character_minor_tags(character: dict[str, Any]) -> list[str]:
     """キャラシートの中で未成年を示すタグ(成人フラグを付けられるかの判定に使う)。"""
     text = ", ".join(
-        str(character.get(k) or "") for k in ("name", "trigger_word", "appearance_tags", "outfit_tags", "style_tags")
+        str(character.get(k) or "")
+        for k in ("name", "trigger_word", "appearance_tags", "body_tags", "outfit_tags", "style_tags")
     )
     return minor_tags(text)
 
@@ -186,7 +187,7 @@ def split_prompt(prompt: str) -> dict[str, str]:
 
 def character_prompt_tags(character: dict[str, Any]) -> str:
     """挿絵/コマ生成で characterPrompts に渡すタグ。容姿+普段の服装(画風は混ぜない)。"""
-    return join_tags(character.get("appearance_tags"), character.get("outfit_tags"))
+    return join_tags(character.get("appearance_tags"), character.get("body_tags"), character.get("outfit_tags"))
 
 
 def characters_negative(characters: list[dict[str, Any]]) -> str:
@@ -201,6 +202,7 @@ def sheet_prompt(character: dict[str, Any], *, r18: bool = False) -> str:
     """
     return join_tags(
         character.get("appearance_tags"),
+        character.get("body_tags"),
         r18_positive() if r18 else "",
         character.get("outfit_tags"),
         character.get("style_tags"),
@@ -332,7 +334,7 @@ def build_variation_shots(
         ]
         head = join_tags(
             character.get("trigger_word"),
-            body_tags(character.get("appearance_tags"), state),
+            look_tags(character, state),
             r18_positive() if r18 else "",
         )
         extra = (situation or {}).get("extra_tags") or ""
@@ -365,6 +367,42 @@ def body_tags(appearance: str | None, state: dict[str, Any] | None) -> str:
     return join_tags(", ".join(kept), state.get("add_tags"))
 
 
+def look_tags(character: dict[str, Any], state: dict[str, Any] | None = None) -> str:
+    """
+    その1枚の見た目(容姿+体型)。キャラシートに標準の体型(body_tags)があれば、状態はそれを丸ごと置き換える
+    (外すタグを書き漏らしても、元の体型とぶつからない)。体型が無いキャラは、これまでどおり容姿から外して足す。
+    """
+    body = character.get("body_tags") or ""
+    if not state:
+        return join_tags(character.get("appearance_tags"), body)
+    if body.strip():
+        removed = {_plain(t) for t in split_tags(state.get("remove_tags"))}
+        face = ", ".join(t for t in split_tags(character.get("appearance_tags")) if _plain(t) not in removed)
+        return join_tags(face, state.get("add_tags"))
+    return body_tags(character.get("appearance_tags"), state)
+
+
+# 体型のタグに入っている語(体つき・胸・腰など)。顔・髪・目・肌の色は容姿の側に残す
+BODY_SHAPE_WORDS = {
+    "breasts", "breast", "chest", "flat", "slim", "slender", "thin", "skinny", "petite", "curvy", "voluptuous",
+    "plump", "chubby", "fat", "muscular", "toned", "abs", "stomach", "belly", "waist", "hips", "hip", "thighs",
+    "thigh", "tall", "height", "figure", "build", "body", "bodied", "stature", "legs", "shoulders", "ass", "butt",
+    "pregnant", "muscle", "muscles", "athletic", "busty", "huge", "gigantic", "small", "large", "medium",
+}
+# 語は体型のものでも、顔・髪・目のタグ(long hair の long、large eyes の large など)は容姿に残す
+_FACE_WORDS = {"hair", "eyes", "eye", "face", "ears", "ear", "nose", "mouth", "lips", "eyebrows", "eyelashes", "skin", "teeth"}
+
+
+def split_body(appearance: str) -> tuple[str, str]:
+    """容姿のタグを(顔・髪・目など, 体型)に分ける。人数のタグ(1girl など)は顔の側に残す。"""
+    face: list[str] = []
+    body: list[str] = []
+    for tag in split_tags(appearance):
+        words = set(_plain(tag).replace("(", " ").replace(")", " ").split())
+        (body if words & BODY_SHAPE_WORDS and not words & _FACE_WORDS else face).append(tag)
+    return ", ".join(face), ", ".join(body)
+
+
 def adult_only_tags(tags: str) -> list[str]:
     """成人キャラだけに使うタグ(コンテンツガードの dataset.adult_only_tags。妊娠など)。"""
     return content_guard.find("dataset.adult_only_tags", tags)
@@ -372,4 +410,4 @@ def adult_only_tags(tags: str) -> list[str]:
 
 def caption_for(character: dict[str, Any], extra: str | None = None) -> str:
     """手動で取り込む画像のキャプション既定値(トリガーワード+容姿+任意の追加タグ)。"""
-    return join_tags(character.get("trigger_word"), character.get("appearance_tags"), extra)
+    return join_tags(character.get("trigger_word"), character.get("appearance_tags"), character.get("body_tags"), extra)

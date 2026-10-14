@@ -17,9 +17,10 @@ export const AXES: { key: Axis; label: string }[] = [
 ]
 
 /** キャラシートの項目のうち、キーワードから足せるもの(容姿・普段の服装・画風) */
-export type SheetField = 'appearance' | 'outfit' | 'style'
-export const SHEET_FIELDS: { key: SheetField; label: string; column: 'appearance_tags' | 'outfit_tags' | 'style_tags' }[] = [
-  { key: 'appearance', label: '容姿', column: 'appearance_tags' },
+export type SheetField = 'appearance' | 'body' | 'outfit' | 'style'
+export const SHEET_FIELDS: { key: SheetField; label: string; column: 'appearance_tags' | 'body_tags' | 'outfit_tags' | 'style_tags' }[] = [
+  { key: 'appearance', label: '容姿(顔・髪・目)', column: 'appearance_tags' },
+  { key: 'body', label: '標準の体型', column: 'body_tags' },
   { key: 'outfit', label: '普段の服装', column: 'outfit_tags' },
   { key: 'style', label: '画風', column: 'style_tags' },
 ]
@@ -32,6 +33,7 @@ export interface SheetCharacter {
   id: number
   name: string
   appearance_tags: string
+  body_tags?: string | null
   outfit_tags?: string | null
   style_tags?: string | null
 }
@@ -40,12 +42,12 @@ export interface SheetCharacter {
 interface Extracted {
   axes: Variations
   /** キャラシートの側のキーワード(容姿、品質・画風) */
-  sheet: { appearance: string[]; style: string[] }
+  sheet: { appearance: string[]; body: string[]; style: string[] }
   other: string[]
   adult: string[]
   skipped: string[]
   /** 軸が分からなかったキーワードの、チャンクの分類から付けた見当(軸か、キャラシートの項目) */
-  suggested: Partial<Record<string, Axis | 'appearance' | 'style'>>
+  suggested: Partial<Record<string, Axis | 'appearance' | 'body' | 'style'>>
 }
 
 /** 人数のタグ(1girl, 2boys, solo など)。キーワードとしては取り出さないが、キャラシートの容姿には入っている */
@@ -97,9 +99,10 @@ interface Props {
 }
 
 /** 分類の名前から、軸の見当を付ける(サーバーの dataset_variations.hint_axis と同じ語) */
-const HINT_WORDS: [Axis | 'appearance' | 'style', string[]][] = [
+const HINT_WORDS: [Axis | 'appearance' | 'body' | 'style', string[]][] = [
   ['style', ['絵柄', '画風', 'アーティスト', '作家', 'artist', 'style']],
-  ['appearance', ['髪', '体型', '体格', '容姿', '瞳', '肌', 'hair', 'body', 'appearance']],
+  ['body', ['体型', '体格', 'スタイル', 'body', 'figure']],
+  ['appearance', ['髪', '容姿', '瞳', '肌', '顔立ち', 'hair', 'appearance']],
   ['expressions', ['表情', '顔', 'expression', 'face']],
   ['outfits', ['服', '衣装', '衣服', 'アクセ', 'コスチューム', 'outfit', 'cloth', 'costume']],
   ['framings', ['カメラ', '構図', '視点', 'アングル', 'camera', 'framing', 'angle']],
@@ -107,7 +110,7 @@ const HINT_WORDS: [Axis | 'appearance' | 'style', string[]][] = [
   ['poses', ['ポーズ', '姿勢', '動作', '仕草', 'pose', 'action']],
 ]
 
-function hintAxis(label: string): Axis | 'appearance' | 'style' | null {
+function hintAxis(label: string): Axis | 'appearance' | 'body' | 'style' | null {
   const text = label.toLowerCase()
   return HINT_WORDS.find(([, words]) => words.some(w => text.includes(w)))?.[0] ?? null
 }
@@ -232,8 +235,8 @@ export default function VariationImportDialog({ token, existing, character, onCl
     const result = await apiFetch<Extracted>(token, '/api/lora-dataset/variations/extract', { prompts, hints })
     const nextPlaced: Record<string, Zone> = {}
     const nextChecked: Record<string, boolean> = {}
-    const zoneOf = (hint: Axis | 'appearance' | 'style' | undefined): Zone =>
-      hint === undefined ? '' : hint === 'appearance' || hint === 'style' ? `sheet:${hint}` : hint
+    const zoneOf = (hint: Axis | 'appearance' | 'body' | 'style' | undefined): Zone =>
+      hint === undefined ? '' : hint === 'appearance' || hint === 'body' || hint === 'style' ? `sheet:${hint}` : hint
     // 軸が分かったものは、登録済みでなければ足す。分からないものは、見当があればその枠に置く(成人向けは選ぶまで足さない)
     for (const { key } of AXES) {
       for (const tag of result.axes[key]) {
@@ -242,7 +245,7 @@ export default function VariationImportDialog({ token, existing, character, onCl
       }
     }
     // キャラシートの側のものは、キャラシートの枠に置く(キャラシートを変えるので、選ぶまで入れない)
-    for (const field of ['appearance', 'style'] as const) {
+    for (const field of ['appearance', 'body', 'style'] as const) {
       for (const tag of result.sheet[field]) {
         nextPlaced[tag] = `sheet:${field}`
         nextChecked[tag] = false
@@ -280,7 +283,7 @@ export default function VariationImportDialog({ token, existing, character, onCl
   const sheetChosen = SHEET_FIELDS.map(f => ({ ...f, zone: `sheet:${f.key}` as Zone, values: picked(`sheet:${f.key}`) }))
     .filter(f => (sheetMode === 'replace' ? tagsIn(f.zone).length > 0 && character !== null : f.values.length > 0))
   /** その項目に入れる内容。足す: いまの内容の後ろに足す。置き換える: 人数のタグと、チェックしたものだけにする */
-  const sheetValue = (column: 'appearance_tags' | 'outfit_tags' | 'style_tags', values: string[]) => {
+  const sheetValue = (column: 'appearance_tags' | 'body_tags' | 'outfit_tags' | 'style_tags', values: string[]) => {
     const current = splitTags(character?.[column])
     const kept = sheetMode === 'replace' ? current.filter(tag => COUNT_TAG.test(tag)) : current
     return [...new Set([...kept, ...values])].join(', ')

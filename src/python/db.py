@@ -560,6 +560,8 @@ def _migrate_scene_characters(conn: sqlite3.Connection) -> None:
 # negative_tags はそのキャラで出てほしくない要素、seed は基準シード。
 _CHARACTERS_EXTRA_COLUMNS = {
     "reference_image_path": "TEXT",
+    # 標準の体型(キャラ別データセットの状態は、ここを置き換える。顔・髪・目は appearance_tags)
+    "body_tags": "TEXT",
     "trigger_word": "TEXT",
     "outfit_tags": "TEXT",
     "style_tags": "TEXT",
@@ -751,7 +753,7 @@ def update_character_reference(conn: sqlite3.Connection, character_id: int, imag
 
 
 CHARACTER_SHEET_FIELDS = (
-    "appearance_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
+    "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
 )
 
 

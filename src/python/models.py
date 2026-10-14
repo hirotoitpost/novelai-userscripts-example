@@ -795,6 +795,8 @@ class CharacterResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     reference_image_path: Optional[str] = None
+    # 標準の体型(顔・髪・目は appearance_tags)
+    body_tags: Optional[str] = None
     trigger_word: Optional[str] = None
     outfit_tags: Optional[str] = None
     style_tags: Optional[str] = None
@@ -807,6 +809,8 @@ class CharacterSheetRequest(BaseModel):
     """キャラシートの更新。送った項目だけ書き換える(未送信の項目は変えない)。"""
 
     appearance_tags: Optional[str] = None
+    # 標準の体型(キャラ別データセットの状態は、ここを置き換える)
+    body_tags: Optional[str] = None
     trigger_word: Optional[str] = None
     outfit_tags: Optional[str] = None
     style_tags: Optional[str] = None

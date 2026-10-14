@@ -3,10 +3,11 @@ import ReferenceCandidates from './ReferenceCandidates'
 import type { Character } from './StoryCharacters'
 
 /** キャラシートで編集する項目。容姿は変えない部分、服装は場面で差し替える部分。 */
-export type SheetField = 'appearance_tags' | 'outfit_tags' | 'style_tags' | 'negative_tags' | 'trigger_word' | 'seed'
+export type SheetField = 'appearance_tags' | 'body_tags' | 'outfit_tags' | 'style_tags' | 'negative_tags' | 'trigger_word' | 'seed'
 
 export const SHEET_FIELDS: { key: SheetField; label: string; placeholder: string; rows: number }[] = [
-  { key: 'appearance_tags', label: '容姿(固定)', placeholder: '1girl, brown hair, long hair, two side up, pink scrunchie, yellow eyes', rows: 2 },
+  { key: 'appearance_tags', label: '容姿(顔・髪・目。固定)', placeholder: '1girl, brown hair, long hair, two side up, pink scrunchie, yellow eyes', rows: 2 },
+  { key: 'body_tags', label: '標準の体型(データセットの状態はここを置き換える)', placeholder: 'slim, medium breasts', rows: 1 },
   { key: 'outfit_tags', label: '普段の服装', placeholder: 'school uniform, cardigan, pleated skirt', rows: 1 },
   { key: 'style_tags', label: '画風(データセット用)', placeholder: 'best quality, masterpiece, flat color', rows: 1 },
   { key: 'negative_tags', label: 'ネガティブ', placeholder: 'short hair, blue eyes', rows: 1 },
@@ -136,6 +137,28 @@ export default function CharacterSheetEditor({
     if (body && (await put(body))) setDraft({})
   }
 
+  /** 容姿のうち体型のタグ(体つき・胸・腰など)を、標準の体型の欄へ移す(書きかけにするだけ。保存は「保存」で)。 */
+  async function moveBodyTags() {
+    setError(null)
+    try {
+      const res = await fetch(`${apiOrigin}/api/story/characters/split-body`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: value('appearance_tags') }),
+      })
+      if (!res.ok) throw new Error(await errorDetail(res))
+      const { face, body } = await res.json() as { face: string; body: string }
+      if (!body) {
+        setError('容姿に体型のタグは見つかりませんでした。')
+        return
+      }
+      const current = value('body_tags').trim()
+      setDraft({ ...draft, appearance_tags: face, body_tags: [current, body].filter(Boolean).join(', ') })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   /** 別名保存: 今の内容(書きかけの変更を含む)を新しい名前のキャラとして保存する。元のキャラは変えない。 */
   async function saveAs() {
     const body = changes()
@@ -225,6 +248,13 @@ export default function CharacterSheetEditor({
             disabled={busy}
             onChange={e => setDraft({ ...draft, [field.key]: e.target.value })}
           />
+          {field.key === 'body_tags' && (
+            <button type="button" className={classes.button} disabled={busy || !value('appearance_tags').trim()}
+              onClick={() => void moveBodyTags()}
+              title="容姿のうち体つき・胸・腰などのタグを、この欄へ移します(保存するまでは書きかけです)">
+              容姿から体型のタグを移す
+            </button>
+          )}
         </label>
       ))}
 

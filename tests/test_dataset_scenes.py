@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from python import db  # noqa: E402
-from python.character_sheet import adult_only_tags, body_tags, build_variation_shots  # noqa: E402
+from python.character_sheet import adult_only_tags, body_tags, build_variation_shots, look_tags, split_body  # noqa: E402
 from python.routes import lora_dataset as routes  # noqa: E402
 
 YURA = {
@@ -200,3 +200,16 @@ def test_adult_only_states_need_an_adult_character_without_minor_tags(
     assert res.status_code == 200
     assert prompts and "round belly" in prompts[0] and "cafe" in prompts[0]
     assert '"situation": "カフェで休憩"' in res.text and '"state": "食べ過ぎでお腹が出る"' in res.text
+
+
+def test_body_field_is_replaced_by_states() -> None:
+    face, body = split_body("1girl, black hair, long hair, large eyes, pale skin, slim, flat stomach, medium breasts, tall")
+    assert face == "1girl, black hair, long hair, large eyes, pale skin" and body == "slim, flat stomach, medium breasts, tall"
+    character = {**YURA, "appearance_tags": "1girl, brown hair", "body_tags": "slim, flat stomach, medium breasts"}
+    assert look_tags(character) == "1girl, brown hair, slim, flat stomach, medium breasts"
+    # 体型の欄があれば、状態はそれを丸ごと置き換える(外すタグを書かなくても、元の体型とぶつからない)
+    assert look_tags(character, {"name": "x", "add_tags": "plump, round belly", "remove_tags": ""}) == "1girl, brown hair, plump, round belly"
+    # 体型の欄が無いキャラは、これまでどおり容姿から外して足す
+    assert look_tags(YURA, FULL) == body_tags(YURA["appearance_tags"], FULL)
+    shot = build_variation_shots(character, poses=[], outfits=[], expressions=[], locations=[], count=1)[0]
+    assert shot.prompt == "yura, 1girl, brown hair, slim, flat stomach, medium breasts, hoodie, best quality"
