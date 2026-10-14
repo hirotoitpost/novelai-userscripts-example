@@ -1434,9 +1434,6 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
     状態(透明 など)の人物がいるコマを、その人物の範囲だけインペイントで描き直す。戻り値は {redrawn, skipped}。
     skipped は描き直せなかったコマ(シーン番号と理由)。
     """
-    from novelai import AsyncNovelAI
-    from novelai.types import GenerateImageParams, InpaintParams
-
     from ..manga_v2.detect import detect_heads
     from ..panel_states import find_targets, matched_state, redraw_scene_tags, target_mask
 
@@ -1452,7 +1449,7 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
     if not states:
         return summary
     settings = req.settings
-    client = AsyncNovelAI(api_key=api_key)
+    client = None
     try:
         for scene in scenes:
             panel = panels.get(scene["id"])
@@ -1469,6 +1466,12 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
                 summary["skipped"].append({"scene": scene["scene_index"] + 1, "reason": reason})
                 continue
             for target in targets:
+                if client is None:
+                    from novelai import AsyncNovelAI
+
+                    client = AsyncNovelAI(api_key=api_key)
+                from novelai.types import GenerateImageParams, InpaintParams
+
                 job.message = f"シーン{scene['scene_index'] + 1}の{target.character['name']}を「{target.state['name']}」に描き直しています"
                 tags = redraw_scene_tags(scene["draft_prompt_tags"] or "", target)
                 seed = ((panel.get("seed") or story_id * 1000 + scene["scene_index"]) + 101) % 4294967296
@@ -1501,7 +1504,8 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
                     {"scene": scene["scene_index"] + 1, "who": [f"{t.character['name']}({t.state['name']})" for t in targets]}
                 )
     finally:
-        await client.close()
+        if client is not None:
+            await client.close()
     return summary
 
 

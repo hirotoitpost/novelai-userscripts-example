@@ -134,6 +134,18 @@ def _fake_writer(monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr("python.cast.auto_reference", fake_reference)
     monkeypatch.setattr(manga_v2, "_run_panels", fake_panels)
     monkeypatch.setattr(manga_v2, "compose", lambda story_id, req: {"pages": ["p1", "p2"]})
+
+    # 絵の確かめと状態の描き直しは、判定モデル・頭の検出を使うので差し替える(呼ばれたことだけ見る)
+    async def fake_check(job, story_id, req, api_key, max_redraws):
+        seen["check"] = max_redraws
+        return {"checked": 0, "flagged": 0, "fixed": 0, "unresolved": []}
+
+    async def fake_states(job, story_id, req, api_key):
+        seen["states"] = story_id
+        return {"redrawn": [{"scene": 1, "who": ["蓮(透明)"]}], "skipped": []}
+
+    monkeypatch.setattr(manga_v2, "_check_and_redraw", fake_check)
+    monkeypatch.setattr(manga_v2, "_redraw_states", fake_states)
     return seen
 
 
@@ -161,6 +173,9 @@ def test_quick_manga_makes_cast_story_and_pages(client: TestClient, monkeypatch:
     assert len(scenes) == 8 and job["title"] == "正体バレ"
     assert seen["references"] == [("水瀬 しずく", 2), ("真島 航2", 2)]
     assert seen["panels"] == ("vertical4", True, False, 8)
+    # 絵の確かめのあとに、状態(透明 など)の描き直しをして、結果を知らせる
+    assert seen["check"] == 2 and seen["states"] == job["story_id"]
+    assert "シーン1 蓮(透明)" in job["message"]
     assert "漫画ができました: 正体バレ(2ページ・8コマ)" in job["message"]
 
 
