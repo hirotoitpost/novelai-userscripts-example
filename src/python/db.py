@@ -225,6 +225,30 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # コンテンツガードを緩めるときのパスワード(guard_password.py)。パスワードそのものではなく、塩と scrypt の値だけ
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS guard_secret (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            salt TEXT NOT NULL,
+            hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    # 未成年キャラの安全対策で止めた・全年齢にした記録(minor_guard.py)。どこで止まったかを管理ページで見る
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS guard_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            action TEXT NOT NULL,
+            story_id INTEGER,
+            place TEXT NOT NULL,
+            detail TEXT NOT NULL
+        )
+        """
+    )
     # 出版物(publish.py): 選んだ画像・本から NovelAI の生成情報を取り除いて別に保存し、ZIP にまとめたもの。
     # dir / zip_path はリポジトリのルートからのパス。items は入れたもの(JSON)
     conn.execute(
@@ -605,6 +629,8 @@ _CHARACTERS_EXTRA_COLUMNS = {
     "seed": "INTEGER",
     # 成人キャラ。1 のときだけデータセットのR18生成を許す(未成年を示すタグがない場合に限る)
     "is_adult": "INTEGER NOT NULL DEFAULT 0",
+    # 未成年キャラ(定義してあれば、性的な場面には出さない)。is_adult と同時には立たない
+    "is_minor": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -790,6 +816,7 @@ def update_character_reference(conn: sqlite3.Connection, character_id: int, imag
 
 CHARACTER_SHEET_FIELDS = (
     "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
+    "is_minor",
 )
 
 

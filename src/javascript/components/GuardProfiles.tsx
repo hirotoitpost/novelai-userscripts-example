@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { guardFetch } from '../guardFetch'
 import type { GuardCore, GuardProfile } from '../api'
 
 interface Props {
@@ -58,12 +59,13 @@ export default function GuardProfiles({ selectedId, onSelect, disabled, onSaved 
   async function save() {
     setError(null)
     try {
-      const res = await fetch('/api/lora-dataset/guards', {
+      // 禁止タグ・ネガティブを減らす上書きは守りを緩めるので、パスワードを聞かれることがある
+      const res = await guardFetch('/api/lora-dataset/guards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), blocked_tags: tags, negative_tags: negative }),
       })
-      if (!res.ok) throw new Error((await res.json()).detail ?? '保存に失敗しました')
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? '保存に失敗しました')
       const saved: GuardProfile = await res.json()
       load()
       onSelect(saved.id)
@@ -77,7 +79,12 @@ export default function GuardProfiles({ selectedId, onSelect, disabled, onSaved 
     if (selectedId == null) return
     const profile = profiles.find(p => p.id === selectedId)
     if (!window.confirm(`ガードプロファイル「${profile?.name ?? ''}」を削除しますか？`)) return
-    await fetch(`/api/lora-dataset/guards/${selectedId}`, { method: 'DELETE' }).catch(() => {})
+    // 消すのは守りを緩める変更なので、パスワードが要る
+    const res = await guardFetch(`/api/lora-dataset/guards/${selectedId}`, { method: 'DELETE' }).catch(() => null)
+    if (!res?.ok) {
+      setError((await res?.json().catch(() => null))?.detail ?? '削除できませんでした')
+      return
+    }
     onSelect(null)
     load()
     onSaved?.(`ガードプロファイル「${profile?.name ?? ''}」の削除`)

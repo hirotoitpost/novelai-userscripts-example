@@ -34,12 +34,17 @@ class Rule:
     group: str
     label: str
     description: str
-    # "patterns"(正規表現の並び)| "words"(語の並び)| "text" | "int"
+    # "patterns"(正規表現の並び)| "words"(語の並び)| "text" | "int" | "choice"(choices のどれか)
     kind: str
     default: Any
     match: str | None = None
     minimum: int | None = None
     maximum: int | None = None
+    # choice の選択肢(先のものほど強い守り)と、画面に出す名前
+    choices: tuple[str, ...] = ()
+    choice_labels: tuple[str, ...] = ()
+    # 守りが強くなる向き。無ければ「語が増える・数が大きい」ほど強い。fewer: 語が減るほど強い / lower: 数が小さいほど強い
+    stricter: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -56,6 +61,9 @@ def _rules() -> dict[str, Rule]:
             match=r.get("match"),
             minimum=r.get("minimum"),
             maximum=r.get("maximum"),
+            choices=tuple(r.get("choices") or ()),
+            choice_labels=tuple(r.get("choice_labels") or ()),
+            stricter=r.get("stricter"),
         )
         for r in data["rules"]
     }
@@ -233,6 +241,10 @@ def coerce(rule: Rule, value: Any) -> Any:
         if len(items) > _MAX_ITEMS:
             raise ValueError(f"多すぎます({_MAX_ITEMS}件まで)")
         return items
+    if rule.kind == "choice":
+        if value not in rule.choices:
+            raise ValueError(f"{', '.join(rule.choices)} のどれかで指定してください")
+        return value
     if rule.kind == "text":
         if not isinstance(value, str):
             raise ValueError("文字列で指定してください")
@@ -274,6 +286,46 @@ def set_value(key: str, value: Any) -> dict[str, Any]:
     return describe_one(key)
 
 
+def rule_of(key: str) -> Rule:
+    rule = _rules().get(key)
+    if rule is None:
+        raise KeyError(key)
+    return rule
+
+
+def _items(rule: Rule, value: Any) -> set[str]:
+    """語の並び・テキストを、比べるための語の集まりにする(テキストは 、 , 改行 で区切る)。"""
+    if rule.kind in ("patterns", "words"):
+        return {v if rule.match == "exact" else v.lower() for v in value}
+    return {w.strip().lower() for w in re.split(r"[,、\n]", str(value)) if w.strip()}
+
+
+def change_direction(key: str, new: Any) -> dict[str, Any]:
+    """
+    今の値から new に変えると、守りが強まるか緩むか。{"direction": same|stricter|looser, "added": [...], "removed": [...]}。
+    語の並び・テキストは、何も消していなければ強める変更(語が増えるほど守りが弱まる項目は逆)。数は stricter の向きで、
+    選択肢は先のものほど強い。new は coerce 済みの値。
+    """
+    rule = rule_of(key)
+    old = get(key)
+    if old == new:
+        return {"direction": "same", "added": [], "removed": []}
+    if rule.kind == "choice":
+        looser = rule.choices.index(new) > rule.choices.index(old)
+        return {"direction": "looser" if looser else "stricter", "added": [new], "removed": [old]}
+    if rule.kind == "int":
+        looser = new > old if rule.stricter == "lower" else new < old
+        return {"direction": "looser" if looser else "stricter", "added": [str(new)], "removed": [str(old)]}
+    before, after = _items(rule, old), _items(rule, new)
+    added, removed = sorted(after - before), sorted(before - after)
+    if not added and not removed:
+        # 並びや書き方だけが変わった(同じ語)。テキストは文の中身が変わっているかもしれないので緩める扱い
+        return {"direction": "stricter" if rule.kind in ("patterns", "words") else "looser", "added": [], "removed": []}
+    grows = added if rule.stricter != "fewer" else removed
+    shrinks = removed if rule.stricter != "fewer" else added
+    return {"direction": "looser" if shrinks else "stricter" if grows else "same", "added": added, "removed": removed}
+
+
 def reset(key: str) -> dict[str, Any]:
     """はじめの値(content_guard_defaults.json)に戻す。"""
     rule = _rules().get(key)
@@ -306,6 +358,7 @@ def describe_one(key: str) -> dict[str, Any]:
         "modified": value != rule.default,
         "minimum": rule.minimum,
         "maximum": rule.maximum,
+        "choices": [{"value": v, "label": label} for v, label in zip(rule.choices, rule.choice_labels)],
         "updated_at": loaded.updated.get(key),
     }
 

@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from python import content_guard, db  # noqa: E402
+from python import content_guard, db, guard_password  # noqa: E402
 from python.character_sheet import blocked_tags, minor_tags, sheet_negative, sheet_prompt  # noqa: E402
 from python.manga_draft import _OUTLINE_SYSTEM, _content_rule  # noqa: E402
 from python.manga_similar import _is_safe, _naming_system  # noqa: E402
@@ -34,10 +34,17 @@ CHARACTER = {"appearance_tags": "1girl, black hair", "outfit_tags": "blouse", "n
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(db, "_DB_PATH", tmp_path / "app.db")
     content_guard.reset_cache()
+    guard_password.reset_state()
     app = FastAPI()
     app.include_router(content_guard_routes.router)
-    yield TestClient(app)
+    test_client = TestClient(app)
+    # 守りを緩める変更もするので、パスワードを設定して開けておく(開けないときの動きは test_guard_safety.py)
+    assert test_client.post("/api/content-guard/password/setup", json={"password": "test-password"}).status_code == 204
+    token = test_client.post("/api/content-guard/unlock", json={"password": "test-password"}).json()["token"]
+    test_client.headers["X-Guard-Token"] = token
+    yield test_client
     content_guard.reset_cache()
+    guard_password.reset_state()
 
 
 def put(client: TestClient, key: str, value: object) -> dict:
@@ -48,7 +55,7 @@ def put(client: TestClient, key: str, value: object) -> dict:
 
 def test_defaults_are_seeded_into_the_db(client: TestClient, tmp_path: Path) -> None:
     rules = client.get("/api/content-guard/rules").json()["rules"]
-    assert len(rules) == 21 and not any(r["modified"] for r in rules)
+    assert len(rules) == 23 and not any(r["modified"] for r in rules)
     conn = sqlite3.connect(tmp_path / "app.db")
     try:
         stored = {row[0] for row in conn.execute("SELECT key FROM content_guard_rules")}

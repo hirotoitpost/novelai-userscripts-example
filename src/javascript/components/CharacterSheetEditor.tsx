@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { guardFetch } from '../guardFetch'
 import ReferenceCandidates from './ReferenceCandidates'
 import type { Character } from './StoryCharacters'
 
@@ -97,7 +98,8 @@ export default function CharacterSheetEditor({
     setError(null)
     setSaving(true)
     try {
-      const res = await fetch(`${apiOrigin}/api/story/characters/${character.id}/sheet`, {
+      // 未成年の定義を外すのは守りを緩める変更なので、パスワードを聞かれることがある
+      const res = await guardFetch(`${apiOrigin}/api/story/characters/${character.id}/sheet`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -175,7 +177,7 @@ export default function CharacterSheetEditor({
     setError(null)
     setSaving(true)
     try {
-      const res = await fetch(`${apiOrigin}/api/story/characters/${character.id}/duplicate`, {
+      const res = await guardFetch(`${apiOrigin}/api/story/characters/${character.id}/duplicate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, sheet: { ...body, trigger_word: trigger.trim() } }),
@@ -203,7 +205,7 @@ export default function CharacterSheetEditor({
       : '\n\nどの物語のシーンにも割り当てられていません。'
     if (!window.confirm(`「${character.name}」を削除しますか？元に戻せません。${where}`)) return
     try {
-      const res = await fetch(`${apiOrigin}/api/story/characters/${character.id}`, { method: 'DELETE' })
+      const res = await guardFetch(`${apiOrigin}/api/story/characters/${character.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(await errorDetail(res))
       onDeleted()
     } catch (e) {
@@ -259,14 +261,24 @@ export default function CharacterSheetEditor({
       ))}
 
       <label className={classes.field}>
-        <span>
-          <input
-            type="checkbox"
-            checked={!!character.is_adult}
-            disabled={busy}
-            onChange={e => void put({ is_adult: e.target.checked })}
-          />
-          {' '}成人キャラ(データセットのR18生成を許可。未成年を示すタグがあると付けられません)
+        <span className={classes.label}>年齢区分</span>
+        <select
+          value={character.is_minor ? 'minor' : character.is_adult ? 'adult' : 'undefined'}
+          disabled={busy}
+          onChange={e => void put(
+            e.target.value === 'minor' ? { is_minor: true }
+              : e.target.value === 'adult' ? { is_adult: true }
+              : { is_adult: false, is_minor: false },
+          )}
+        >
+          <option value="undefined">未定義</option>
+          <option value="minor">未成年</option>
+          <option value="adult">成人</option>
+        </select>
+        <span className={classes.label}>
+          未成年: 性的な場面には描きません(外すときはコンテンツガードのパスワードが要ります)。
+          成人: データセットのR18生成も使えます(未成年を示すタグがあると選べません)。
+          未定義のキャラが性的な場面にいるときの扱いは、管理ページのコンテンツガードで決めます。
         </span>
       </label>
 

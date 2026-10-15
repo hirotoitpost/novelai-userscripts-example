@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import ContentGuardRules from '../components/ContentGuardRules'
 import GuardProfiles from '../components/GuardProfiles'
+import GuardSafety from '../components/GuardSafety'
 import { formatDuration } from '../components/TaskStatus'
 import type { ImagePreset } from '../api'
 import './LoraDataset.css'
@@ -805,6 +806,8 @@ function DefaultsTab() {
           性的な内容と、未成年に見える内容を扱う定義です(止めるタグ・取り除くタグ・足すネガティブ・LLM への指示・成人向けの判定の語)。
           値は DB にあり、保存すると次の処理から効きます(再起動は要りません)。API は <code>/api/content-guard</code> です。
         </p>
+        <GuardSafety onSaved={what => applied({ level: 'immediate', what })} />
+        <h3>項目の一覧</h3>
         <ContentGuardRules onSaved={what => applied({ level: 'immediate', what })} />
         <h3>ガードプロファイル(キャラ別データセット)</h3>
         <p className="adm-hint">「全年齢で止めるタグ」に、データセットごとに足すタグとネガティブです。</p>

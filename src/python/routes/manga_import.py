@@ -304,7 +304,7 @@ async def _finish(
     await _run_panels(job, story.id, panels, api_key, targets)
     job.message = "ページに合成しています"
     result = await asyncio.to_thread(compose, story.id, MangaV2ComposeRequest(template="grid4"))
-    job.message = f"漫画ができました: {title}({len(result['pages'])}ページ・{len(targets)}コマ)"
+    job.message = f"漫画ができました: {title}({len(result['pages'])}ページ・{len(targets)}コマ)" + (f"。{job.guard_note}" if getattr(job, "guard_note", "") else "")
     return story.id
 
 

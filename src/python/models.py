@@ -876,6 +876,8 @@ class CharacterResponse(BaseModel):
     negative_tags: Optional[str] = None
     seed: Optional[int] = None
     is_adult: bool = False
+    # 未成年キャラ(定義してあれば、性的な場面には出さない)
+    is_minor: bool = False
 
 
 class CharacterSheetRequest(BaseModel):
@@ -890,6 +892,7 @@ class CharacterSheetRequest(BaseModel):
     negative_tags: Optional[str] = None
     seed: Optional[int] = Field(None, ge=0, le=4294967295)
     is_adult: Optional[bool] = Field(None, description="成人キャラ。未成年を示すタグがあると付けられない")
+    is_minor: Optional[bool] = Field(None, description="未成年キャラ。外すにはコンテンツガードのパスワードが要る")
 
 
 class CharacterSplitRequest(BaseModel):

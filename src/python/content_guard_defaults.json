@@ -2,6 +2,30 @@
   "_comment": "コンテンツガードのはじめの値。DB(content_guard_rules)に無い項目だけをここから入れる。「既定に戻す」もこの値に戻す。ふだんの編集は API(/api/content-guard)か開発管理者のページで行う。",
   "rules": [
     {
+      "key": "safety.undefined_age",
+      "group": "未成年キャラ",
+      "label": "年齢区分が未定義のキャラの扱い",
+      "description": "性的な場面(コマ・ページ)に、キャラシートで成人とも未成年とも定義していないキャラがいるとき(キャラが割り当てられていない場面も含む)の扱い。止める: その場面は生成しない。全年齢で描く: 性的なタグを外し、未成年対策のネガティブを足して描く。未成年と定義したキャラや、未成年の手がかりがあるキャラがいる場面は、これに関係なく止める。",
+      "kind": "choice",
+      "choices": ["block", "all_ages"],
+      "choice_labels": ["止める", "全年齢で描く"],
+      "value": "block"
+    },
+    {
+      "key": "story.minor_words",
+      "group": "未成年キャラ",
+      "label": "本文で未成年を示す語",
+      "description": "キャラの名前と同じ文にこれがあると、そのキャラは未成年の手がかりありとみなす(キャラシートのメモも見る)。物語の本文のどこかにこれがあると、成人向けのタグ付けをしない。正規表現。",
+      "kind": "patterns",
+      "match": "substring",
+      "value": [
+        "女子高生", "男子高校生", "高校生", "高校[一二三1-3１-３]年", "女子中学生", "男子中学生", "中学生", "中学[一二三1-3１-３]年",
+        "小学生", "小学[一二三四五六1-6１-６]年", "園児", "幼稚園", "保育園", "ランドセル", "児童", "幼女", "女児", "男児",
+        "(?<![0-9０-９])(1[0-7]|[1-9])[歳才]", "(?<![0-9０-９])(１[０-７]|[１-９])[歳才]", "(?<![一二三四五六七八九十百])十[一二三四五六七]?[歳才]",
+        "(?<![一二三四五六七八九十百])[一二三四五六七八九][歳才]"
+      ]
+    },
+    {
       "key": "dataset.blocked_tags",
       "group": "キャラ別データセット",
       "label": "全年齢で止めるタグ(基本のガード)",
@@ -102,6 +126,7 @@
       "label": "性器が関わるタグ",
       "description": "成人向けのタグ付けで、これがある場面に explicit, uncensored を足す(ガードではなく、成人向けの絵を意図どおりに出すため)。",
       "kind": "patterns",
+      "stricter": "fewer",
       "match": "word",
       "value": [
         "pussy", "vagina", "vaginal", "clitoris", "labia", "anus", "anal", "penis", "testicles", "sex",
@@ -115,6 +140,7 @@
       "label": "女性器が関わるタグ",
       "description": "成人向けのタグ付けで、これがある場面に pussy も足す。",
       "kind": "patterns",
+      "stricter": "fewer",
       "match": "word",
       "value": [
         "pussy", "vagina", "vaginal", "clitoris", "labia", "sex", "intercourse", "penetration", "creampie",
@@ -202,6 +228,7 @@
       "label": "本文で成人向けと判定する回数",
       "description": "上の語が合計でこの回数以上出てきたら成人向けとみなす。",
       "kind": "int",
+      "stricter": "lower",
       "minimum": 1,
       "maximum": 1000,
       "value": 3

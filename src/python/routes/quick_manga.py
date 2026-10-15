@@ -150,7 +150,7 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
             checked += f"。{redrawn}"
         job.message = "ページに合成しています"
         result = await asyncio.to_thread(compose, story.id, MangaV2ComposeRequest(template=req.template))
-        job.message = f"漫画ができました: {outline['title']}({len(result['pages'])}ページ・{count}コマ){checked}"
+        job.message = f"漫画ができました: {outline['title']}({len(result['pages'])}ページ・{count}コマ){checked}" + (f"。{job.guard_note}" if getattr(job, "guard_note", "") else "")
         job.status = "done"
     except Exception as exc:  # noqa: BLE001 失敗も状態として返す
         job.status = "error"
