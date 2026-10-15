@@ -10,6 +10,7 @@
   GET    /jobs/{id}               進み具合
   GET    /                        作ったうごイラの一覧
   GET    /{id}                    1つ
+  POST   /{id}/interpolate        C. コマのあいだを補う(中割りを足したうごイラを新しく作る。処理を切り離す)
   PUT    /{id}/frames             コマの並び・表示時間を変える
   GET    /{id}/export             書き出す(format=zip|gif|webp、max_side=長い辺)
   DELETE /{id}                    ごみ箱へ(30日のあいだは元に戻せる)
@@ -243,6 +244,72 @@ async def get_project(project_id: int) -> dict[str, Any]:
     if project is None:
         raise HTTPException(status_code=404, detail="うごイラが見つかりません。")
     return project
+
+
+class InterpolateRequest(BaseModel):
+    # コマのあいだに足す枚数
+    count: int = Field(1, ge=1, le=3)
+    # 最後のコマから最初のコマへ戻るところにも足す(繰り返して見るとき)
+    loop: bool = True
+
+
+@router.post("/{project_id}/interpolate")
+async def start_interpolate(project_id: int, req: InterpolateRequest) -> dict[str, Any]:
+    """
+    C. コマのあいだを補う(frame_interpolation.py。この PC で、NovelAI は使わない)。元のうごイラは残し、中割りを足した
+    うごイラを新しく作る(コマの画像も写すので、片方を消してももう片方は残る)。
+    """
+    project = ugoira.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="うごイラが見つかりません。")
+    if len(project["frames"]) < 2:
+        raise HTTPException(status_code=422, detail="コマが2枚以上いります。")
+    gaps = len(project["frames"]) - (0 if req.loop else 1)
+    job_id = uuid4().hex
+    job = _Job(total=gaps * req.count)
+    _jobs[job_id] = job
+    job.task = asyncio.create_task(_run_interpolate(job, project, req))
+    return _job_response(job_id, job)
+
+
+async def _run_interpolate(job: _Job, project: dict[str, Any], req: InterpolateRequest) -> None:
+    from PIL import Image
+
+    from .. import frame_interpolation
+
+    try:
+        frames = project["frames"]
+        images = [Image.open(ugoira._PROJECT_ROOT / f["path"]).convert("RGB") for f in frames]
+        new_id = ugoira.create_project(f"{project['name']}(中割り{req.count})", project.get("source_key") or "", f"{project['method']}+interpolated")
+        job.project_id = new_id
+        result: list[dict[str, Any]] = []
+        done = 0
+        job.message = "中割りのモデルを読み込んでいます(はじめての時は、取ってきます)"
+        for index, frame in enumerate(frames):
+            result.append({**frame, "path": ugoira.save_frame(new_id, len(result), images[index])})
+            following = index + 1
+            if following == len(frames):
+                if not req.loop:
+                    break
+                following = 0
+            a, b = images[index], images[following]
+            if frame_interpolation.same(a, b):
+                done += req.count
+                job.progress = done
+                continue
+            # 中割りのコマの表示時間: 前後のコマの短い方を、足す枚数+1 で分ける(長く止めるコマを、中割りで延ばさない)
+            delay = max(20, min(int(frame["delay"]), int(frames[following]["delay"])) // (req.count + 1))
+            for step in range(1, req.count + 1):
+                job.message = f"コマ {index + 1} と {following + 1} のあいだ({step}/{req.count})"
+                middle = await asyncio.to_thread(frame_interpolation.between, a, b, step / (req.count + 1))
+                result.append({"path": ugoira.save_frame(new_id, len(result), middle), "delay": delay, "tags": "(中割り)"})
+                done += 1
+                job.progress = done
+        ugoira._store_frames(new_id, result)
+        job.message = f"できました({len(frames)}コマ → {len(result)}コマ)"
+        job.status = "done"
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        job.status, job.message = "error", str(exc)
 
 
 @router.put("/{project_id}/frames")

@@ -62,6 +62,8 @@ export default function Ugoira() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [maxSide, setMaxSide] = useState('')
+  const [interpCount, setInterpCount] = useState(1)
+  const [interpLoop, setInterpLoop] = useState(true)
   const [editing, setEditing] = useState<Motion | null>(null)
   const [draft, setDraft] = useState({ name: '', region: 'eyes', lines: '' })
   const timer = useRef<number | null>(null)
@@ -121,6 +123,21 @@ export default function Ugoira() {
     ;[next[index], next[target]] = [next[target], next[index]]
     return next
   })
+
+  /** C. 中割りを足したうごイラを新しく作る(この PC で。元のうごイラは残る) */
+  async function interpolate() {
+    if (!project) return
+    setError(null)
+    try {
+      const started = await call<Job>(`/${project.id}/interpolate`, {
+        method: 'POST', body: JSON.stringify({ count: interpCount, loop: interpLoop }),
+      })
+      setJob(started)
+      follow(started.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   async function saveFrames() {
     if (!project) return
@@ -283,6 +300,30 @@ export default function Ugoira() {
               <button type="button" className="ugo-primary" disabled={!dirty} onClick={() => void saveFrames()}>並び・表示時間を保存</button>
               {dirty && <button type="button" onClick={() => setFrames(project.frames)}>元に戻す</button>}
             </div>
+            <h3>中割り(コマのあいだを補う)</h3>
+            <p className="pub-meta">
+              コマとコマのあいだの絵を、この PC で作って足します(フレーム補間のモデル RIFE。NovelAI は使いません)。
+              動きがなめらかになります。元のうごイラは残し、中割りを足したうごイラを新しく作ります。
+            </p>
+            <div className="ugo-row">
+              <label>あいだに{' '}
+                <select value={interpCount} disabled={running} onChange={e => setInterpCount(Number(e.target.value))}>
+                  {[1, 2, 3].map(n => <option key={n} value={n}>{n}枚</option>)}
+                </select>
+              </label>
+              <label><input type="checkbox" checked={interpLoop} disabled={running} onChange={e => setInterpLoop(e.target.checked)} /> 最後から最初へ戻るところにも</label>
+              <button type="button" disabled={running || dirty || frames.length < 2} onClick={() => void interpolate()}>
+                {running ? '作っています…' : '中割りを足す'}
+              </button>
+              {dirty && <span className="pub-meta">先に保存してください</span>}
+            </div>
+            {job && project && (
+              <div className="ugo-row" role="status">
+                {running && <progress max={job.total} value={job.progress} />}
+                <span className="pub-meta">{job.message}</span>
+              </div>
+            )}
+
             <h3>書き出す</h3>
             <div className="ugo-row">
               <label>長い辺{' '}
