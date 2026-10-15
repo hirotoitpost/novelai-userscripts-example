@@ -1,0 +1,160 @@
+/* データの点検(GuardInspect.tsx)。見出しなどは出版物のページ(Publications.css)と同じ */
+.gi-main h2 {
+  font-size: 1rem;
+  margin: 1.4rem 0 0.5rem;
+}
+
+.gi-summary {
+  list-style: none;
+  margin: 0.8rem 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.5rem;
+}
+
+.gi-summary li {
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.75rem;
+  color: #9a9ac0;
+}
+
+.gi-summary strong {
+  display: block;
+  font-size: 1.3rem;
+  color: #e8e8ff;
+}
+
+.gi-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: #1a1030;
+  border: 1px solid #7a2a3a;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+.gi-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.gi-list > li {
+  border: 1px solid #1f1f3a;
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.82rem;
+  word-break: break-word;
+}
+
+.gi-main button {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+  margin-top: 0.3rem;
+  cursor: pointer;
+}
+
+.gi-main button.gi-danger {
+  border-color: #7a2a3a;
+  color: #ff9aa8;
+  margin-top: 0;
+}
+
+.gi-main button.gi-link {
+  margin-top: 0;
+  padding: 0.1rem 0.5rem;
+}
+
+.gi-tag {
+  display: inline-block;
+  border: 1px solid #3a3a6a;
+  border-radius: 999px;
+  padding: 0 0.45rem;
+  font-size: 0.7rem;
+  color: #c8c8ec;
+}
+
+.gi-tag--minor {
+  border-color: #ff8a9a;
+  color: #ff9aa8;
+}
+
+.gi-warn {
+  color: #e6c27a;
+  margin: 0.25rem 0;
+}
+
+.gi-filter {
+  display: block;
+  font-size: 0.8rem;
+  color: #c8c8ec;
+  margin: 0.3rem 0 0.6rem;
+}
+
+.gi-scene {
+  border-left: 3px solid #2a2a50;
+  padding-left: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.gi-thumbs,
+.gi-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.gi-images {
+  list-style: none;
+  padding: 0;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+}
+
+.gi-thumbs label,
+.gi-images label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  padding: 0.25rem;
+  min-width: 0;
+}
+
+.gi-images li.is-picked label,
+.gi-thumbs label.is-picked {
+  border-color: #ff8a9a;
+}
+
+/* 見本は、いつもぼかす(性的で未成年を思わせるもの。中身はギャラリーで確かめる) */
+.gi-thumbs img,
+.gi-images img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  filter: blur(14px);
+  border-radius: 4px;
+  background: #0a0a14;
+}
+
+.gi-actions {
+  margin-bottom: 0.4rem;
+}

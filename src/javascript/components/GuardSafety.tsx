@@ -130,6 +130,13 @@ export default function GuardSafety({ onSaved }: { onSaved?: (what: string) => v
       {error && <p className="adm-error" role="alert">{error}</p>}
       {message && <p className="adm-hint" role="status">{message}</p>}
 
+      <div className="adm-row">
+        <a className="adm-primary guard-inspect-link" href="/guard-inspect"
+          title="今の設定で止まるはずのものが、前に作ったキャラ・物語・画像に残っていないかを一覧にします(データは変えません)">
+          今の設定でデータを点検する
+        </a>
+      </div>
+
       <h3>パスワード(守りを緩める変更に使う)</h3>
       <p className="adm-hint">
         止める語を減らす・未定義のキャラの扱いを変える・未成年の定義を外す・ガードプロファイルを消す、といった変更のときだけ聞きます。

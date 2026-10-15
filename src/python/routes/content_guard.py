@@ -265,3 +265,13 @@ async def get_character_ages() -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+@router.get("/inspect")
+async def inspect_data() -> dict[str, Any]:
+    """今あるデータの点検(guard_inspect.py)。今の設定で止まるはずのものの一覧。データは変えない。"""
+    import asyncio
+
+    from ..guard_inspect import inspect
+
+    return await asyncio.to_thread(inspect)
