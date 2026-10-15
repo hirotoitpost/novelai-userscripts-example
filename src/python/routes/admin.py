@@ -515,6 +515,44 @@ def _referenced_panels() -> set[str]:
         conn.close()
 
 
+def _composed_targets() -> list[Path]:
+    """
+    合成したページの前の版: 物語の final_image_path が指している版(token)以外の、ページとつなげた画像。
+    物語が無くなっているものも入れる。
+    """
+    folder = _PROJECT_ROOT / "outputs/manga/v2"
+    if not folder.is_dir():
+        return []
+    conn = get_connection()
+    try:
+        current = {
+            row["id"]: (re.search(r"_final_([0-9a-f]+)\.png$", row["final_image_path"] or "") or [None, None])[1]
+            for row in conn.execute("SELECT id, final_image_path FROM stories")
+        }
+    finally:
+        conn.close()
+    targets = []
+    for path in folder.glob("*.png"):
+        match = re.fullmatch(r"story(\d+)_(?:page\d+|final)_([0-9a-f]+)\.png", path.name)
+        if match and (int(match.group(1)) not in current or current[int(match.group(1))] != match.group(2)):
+            targets.append(path)
+    return sorted(targets)
+
+
+def _v1_page_targets() -> list[Path]:
+    """v1(ページごとに生成)の挿絵・完成画像で、どの物語のページにも使われていないもの。"""
+    folder = _PROJECT_ROOT / "outputs/manga"
+    if not folder.is_dir():
+        return []
+    conn = get_connection()
+    try:
+        used = {Path(r[0]).name for r in conn.execute("SELECT image_path FROM manga_pages")}
+        used |= {Path(r[0]).name for r in conn.execute("SELECT final_image_path FROM stories WHERE final_image_path IS NOT NULL")}
+    finally:
+        conn.close()
+    return sorted(p for p in folder.glob("story*.png") if p.name not in used)
+
+
 def _cleanup_targets(category: str) -> list[Path]:
     """消してよいファイル。DB から参照されているものは入れない。"""
     if category == "candidates":
@@ -528,6 +566,10 @@ def _cleanup_targets(category: str) -> list[Path]:
         folder = _PROJECT_ROOT / "outputs/manga/panels"
         used = _referenced_panels()
         return sorted(p for p in folder.glob("*.png") if p.name not in used) if folder.is_dir() else []
+    if category == "composed":
+        return _composed_targets()
+    if category == "v1_pages":
+        return _v1_page_targets()
     raise HTTPException(status_code=404, detail="その種類はありません。")
 
 
@@ -535,7 +577,34 @@ _CLEANUP = {
     "candidates": "参照画像の候補(選んだものは参照画像として別に保存済み)",
     "references": "どのキャラにも使われていない参照画像",
     "panels": "どのシーンにも使われていないコマの絵(描き直す前の絵など)",
+    "composed": "合成したページの前の版(合成し直す前のページ。いまの版は残る)",
+    "v1_pages": "どの物語にも使われていない挿絵(v1 のページごとの生成)",
 }
+
+
+class CleanupRequest(BaseModel):
+    # 片付けるファイルの名前(一覧から選んだもの)。無ければその種類の全部
+    names: list[str] | None = Field(None, max_length=20000)
+
+
+@router.get("/cleanup/{category}/files")
+async def get_cleanup_files(category: str) -> dict[str, Any]:
+    """片付けられるファイルの一覧(新しい順。画面で見本を見て選ぶ)。"""
+    targets = await asyncio.to_thread(_cleanup_targets, category)
+    files = []
+    for path in targets:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        files.append({
+            "name": path.name,
+            "path": path.relative_to(_PROJECT_ROOT).as_posix(),
+            "bytes": stat.st_size,
+            "modified_at": stat.st_mtime,
+        })
+    files.sort(key=lambda f: -f["modified_at"])
+    return {"category": category, "label": _CLEANUP.get(category, ""), "files": files}
 
 
 @router.get("/storage")
@@ -560,17 +629,25 @@ async def get_storage() -> dict[str, Any]:
 
 
 @router.post("/cleanup/{category}")
-async def post_cleanup(category: str) -> dict[str, Any]:
+async def post_cleanup(category: str, req: CleanupRequest | None = None) -> dict[str, Any]:
+    """
+    片付ける。ファイルはごみ箱(trash.py)に移すので、30日のあいだは元に戻せる(ディスクが空くのは、ごみ箱から
+    消したとき・期限が来たとき)。names を渡せば、その名前のものだけ(いま片付けてよいものに限る)。
+    """
+    from .. import trash
+
     targets = _cleanup_targets(category)
-    freed = 0
-    for path in targets:
-        try:
-            size = path.stat().st_size
-            path.unlink()
-            freed += size
-        except OSError:
-            continue
-    return {"deleted": len(targets), "bytes": freed}
+    if req is not None and req.names is not None:
+        wanted = set(req.names)
+        targets = [p for p in targets if p.name in wanted]
+    if not targets:
+        return {"deleted": 0, "bytes": 0, "trash_id": None}
+    sizes = {p: p.stat().st_size for p in targets if p.is_file()}
+    label = f"{_CLEANUP[category]}: {len(targets)}件"
+    trash_id = await asyncio.to_thread(trash.put, "cleanup", label, {"category": category}, targets)
+    # 実際にごみ箱へ移せたものだけを数える
+    moved = [p for p in sizes if not p.exists()]
+    return {"deleted": len(moved), "bytes": sum(sizes[p] for p in moved), "trash_id": trash_id}
 
 
 def _backups() -> list[dict[str, Any]]:

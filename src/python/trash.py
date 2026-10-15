@@ -37,6 +37,7 @@ KIND_LABELS = {
     "dataset_image": "データセットの画像",
     "book": "物語(本)",
     "character": "キャラ",
+    "cleanup": "ディスクの整理で片付けたファイル",
 }
 
 

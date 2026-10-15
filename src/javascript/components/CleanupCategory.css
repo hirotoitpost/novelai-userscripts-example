@@ -1,0 +1,62 @@
+.cleanup-category {
+  border-top: 1px solid #1f1f3a;
+  padding: 0.6rem 0;
+}
+
+.cleanup-head,
+.cleanup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+
+.cleanup-head strong {
+  flex: 1 1 14rem;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.cleanup-actions {
+  margin: 0.5rem 0;
+}
+
+.cleanup-grid {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.cleanup-grid li {
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  padding: 0.3rem;
+  min-width: 0;
+}
+
+.cleanup-grid li.is-picked {
+  border-color: #ff8a9a;
+}
+
+.cleanup-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  cursor: pointer;
+}
+
+.cleanup-grid img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
+  background: #0a0a14;
+  border-radius: 4px;
+}
+
+.cleanup-name {
+  font-size: 0.7rem;
+  word-break: break-all;
+}

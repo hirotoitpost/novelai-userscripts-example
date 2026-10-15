@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from python import app_settings, db  # noqa: E402
+from python import app_settings, db, trash  # noqa: E402
 from python.routes import admin  # noqa: E402
 
 ENV = """# NovelAI のトークン
@@ -38,6 +38,8 @@ EXAMPLE = """# NovelAI API トークン(ログインの代わり)
 def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.setattr(db, "_DB_PATH", tmp_path / "app.db")
     monkeypatch.setattr(admin, "_PROJECT_ROOT", tmp_path)
+    # 片付けたファイルはごみ箱に移すので、ごみ箱も同じ一時フォルダを見る
+    monkeypatch.setattr(trash, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(admin, "_ENV_FILE", tmp_path / ".env")
     monkeypatch.setattr(admin, "_ENV_EXAMPLE", tmp_path / ".env.example")
     monkeypatch.setattr(admin, "_BACKUP_DIR", tmp_path / "data" / "backups")
