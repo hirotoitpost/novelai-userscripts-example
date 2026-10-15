@@ -34,6 +34,8 @@ from ..character_sheet import (
 from ..client import get_client
 from ..dataset_variations import clean_value
 from ..dataset_variations import extract as extract_variation_tags
+from .. import guard_password
+from ..guard_password import guard_token
 from ..db import (
     add_dataset_variations,
     delete_dataset_situation,
@@ -248,8 +250,13 @@ async def get_guard_profiles() -> list[dict]:
 
 
 @router.post("/guards", response_model=GuardProfileResponse)
-async def post_guard_profile(req: GuardProfileSaveRequest) -> dict:
-    """ガードプロファイルを保存する(同名は上書き)。基本のガードと重複するタグは保存しない。"""
+async def post_guard_profile(req: GuardProfileSaveRequest, token: str | None = Depends(guard_token)) -> dict:
+    """
+    ガードプロファイルを保存する(同名は上書き)。基本のガードと重複するタグは保存しない。上書きで禁止タグ・ネガティブの
+    語を減らすのは守りを緩める変更なので、コンテンツガードのパスワードの合言葉が要る。
+    """
+    from .content_guard import _profile_direction
+
     core = {t.lower() for t in core_blocked_tags()}
     tags: list[str] = []
     for tag in (t.strip() for t in req.blocked_tags):
@@ -257,13 +264,18 @@ async def post_guard_profile(req: GuardProfileSaveRequest) -> dict:
             tags.append(tag)
     conn = get_connection()
     try:
+        current = next((p for p in list_guard_profiles(conn) if p["name"] == req.name.strip()), None)
+        if _profile_direction(current, tags, req.negative_tags.strip())["direction"] == "looser":
+            guard_password.require_unlocked(token)
         return save_guard_profile(conn, req.name.strip(), tags, req.negative_tags.strip())
     finally:
         conn.close()
 
 
 @router.delete("/guards/{profile_id}", status_code=204)
-async def delete_guard_profile_endpoint(profile_id: int) -> None:
+async def delete_guard_profile_endpoint(profile_id: int, token: str | None = Depends(guard_token)) -> None:
+    """ガードプロファイルを消すのは守りを緩める変更なので、コンテンツガードのパスワードの合言葉が要る。"""
+    guard_password.require_unlocked(token)
     conn = get_connection()
     try:
         delete_guard_profile(conn, profile_id)

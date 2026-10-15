@@ -116,7 +116,7 @@ async def _make(req: GalleryMangaRequest, api_key: str, job: _GalleryJob) -> Non
         await _run_panels(job, story.id, MangaV2PanelsRequest(template="grid4", color=req.color), api_key, targets)
         job.message = "ページに合成しています"
         result = await asyncio.to_thread(compose, story.id, MangaV2ComposeRequest(template="grid4"))
-        job.message = f"漫画ができました: {title}({len(result['pages'])}ページ・{len(targets)}コマ){note}"
+        job.message = f"漫画ができました: {title}({len(result['pages'])}ページ・{len(targets)}コマ){note}" + (f"。{job.guard_note}" if getattr(job, "guard_note", "") else "")
         job.status = "done"
     except Exception as exc:  # noqa: BLE001 失敗も状態として返す
         job.status = "error"

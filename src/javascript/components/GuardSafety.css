@@ -1,0 +1,50 @@
+/* 未成年キャラの安全対策の管理(GuardSafety.tsx)と、コンテンツガードの取り込み(ContentGuardRules.tsx) */
+.guard-password input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.guard-ages th,
+.guard-events th {
+  width: auto;
+}
+
+.guard-ages select {
+  max-width: 100%;
+}
+
+.guard-top {
+  border-bottom: 1px solid #1f1f3a;
+  padding-bottom: 0.5rem;
+}
+
+.guard-import {
+  border: 1px solid #3a3a6a;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin: 0.5rem 0;
+}
+
+.guard-import-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.guard-import-list li {
+  border-left: 3px solid #2a2a50;
+  padding-left: 0.5rem;
+  word-break: break-word;
+}
+
+.guard-import-looser { border-left-color: #e6a23c !important; }
+.guard-import-stricter { border-left-color: #4caf7a !important; }
+.guard-import-invalid { opacity: 0.6; }
+
+/* 表は狭い画面では横に送る(ページ全体は横に広げない) */
+.guard-safety .adm-table {
+  display: block;
+  overflow-x: auto;
+}

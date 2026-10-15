@@ -141,6 +141,7 @@ from ..character_sheet import (
     characters_seed,
     join_tags,
 )
+from .. import minor_guard
 from ..script_lines import script_sfx
 from ..novelai_image_v5 import DIALOGUE_RE, CharacterReferenceInput, generate_image_v5, reference_image_b64
 from .llm import stream_llm_text, strip_think_tags
@@ -1040,6 +1041,7 @@ async def _run_panels(
     try:
         characters = characters_by_scene(conn, story_id)
         layouts = get_manga_v2_page_layouts(conn, story_id)
+        guard_text = minor_guard.story_text(get_story(conn, story_id))
     finally:
         conn.close()
     # コマの形(生成サイズを決める)。写したコマ割りがあればそれ、無ければテンプレート
@@ -1047,12 +1049,37 @@ async def _run_panels(
 
     _PANEL_DIR.mkdir(parents=True, exist_ok=True)
     job.total = len(targets)
+    blocked: list[int] = []
+    softened: list[int] = []
     for i, scene in enumerate(targets, start=1):
         job.message = f"シーン{scene['scene_index'] + 1}のコマを生成中 ({i}/{len(targets)})"
         width, height = generation_size(rects[scene["scene_index"]])
         # そのシーンに出るキャラだけの容姿を渡す(v1はページ内の全員をまとめていた)
         # (キャラシートの普段の服装も含む)
         scene_characters = characters.get(scene["id"], [])
+        # 未成年キャラの安全対策: 性的な場面に成人でないキャラがいれば止めるか、全年齢で描く(minor_guard.py)
+        scene_tags = scene["draft_prompt_tags"]
+        guard_negative = ""
+        decision = minor_guard.decide(scene_tags, scene_characters, guard_text)
+        place = f"漫画のコマ(シーン{scene['scene_index'] + 1})"
+        if decision.action == minor_guard.BLOCK:
+            minor_guard.record(minor_guard.BLOCK, place, decision.reasons, story_id)
+            blocked.append(scene["scene_index"] + 1)
+            # 前に描いたコマが残っていれば、合成に使われないよう外す(画像ファイルは残す)
+            conn = get_connection()
+            try:
+                conn.execute("DELETE FROM manga_panels WHERE scene_id = ?", (scene["id"],))
+                conn.commit()
+            finally:
+                conn.close()
+            job.progress = i
+            continue
+        if decision.action == minor_guard.ALL_AGES:
+            minor_guard.record(minor_guard.ALL_AGES, place, decision.reasons, story_id)
+            softened.append(scene["scene_index"] + 1)
+            scene_tags = minor_guard.all_ages_tags(scene_tags)
+            scene_characters = minor_guard.all_ages_members(scene_characters)
+            guard_negative = minor_guard.all_ages_negative()
         character_tags, character_negatives, count_tags = _cast_prompt(scene_characters)
         # 二人以上なら、キャラごとのネガティブはキャラの欄に分ける(全体にまとめると打ち消し合う)
         multiple = len(character_tags) > 1
@@ -1067,14 +1094,13 @@ async def _run_panels(
         references = _scene_references(scene_characters, req) if req.use_character_reference else []
         if references:
             job.message += f"(キャラ参照{len(references)}人・V4.5)"
-        sexual = is_sexual(scene["draft_prompt_tags"])
+        sexual = is_sexual(scene_tags)
         image = await generate_image_v5(
             api_key,
-            build_panel_prompt(
-                join_tags(count_tags, scene["draft_prompt_tags"]), color=req.color, complexity=settings.complexity
-            ),
+            build_panel_prompt(join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity),
             join_tags(
                 build_panel_negative(settings.negative_prompt, color=req.color, sexual=sexual),
+                guard_negative,
                 "" if multiple else characters_negative(scene_characters),
             ),
             model=_REFERENCE_MODEL if references else settings.model,
@@ -1102,7 +1128,19 @@ async def _run_panels(
             conn.close()
         job.progress = i
 
-    job.message = f"{len(targets)}コマの絵を生成しました"
+    # 確かめのあとの描き直しでも呼ばれるので、最初の生成の知らせを消さない
+    job.guard_note = guard_note(blocked, softened) or getattr(job, "guard_note", "")
+    job.message = f"{len(targets) - len(blocked)}コマの絵を生成しました" + (f"。{job.guard_note}" if job.guard_note else "")
+
+
+def guard_note(blocked: list[int], softened: list[int]) -> str:
+    """未成年キャラの安全対策で止めた・全年齢にしたコマの知らせ(無ければ空)。"""
+    parts = []
+    if blocked:
+        parts.append(f"性的な場面に成人でないキャラがいるため、シーン{'・'.join(map(str, blocked))}のコマは描きませんでした")
+    if softened:
+        parts.append(f"年齢区分が未定義のキャラがいるため、シーン{'・'.join(map(str, softened))}は全年齢で描きました")
+    return "。".join(parts) + ("(管理ページのコンテンツガードに記録があります)" if parts else "")
 
 
 def _compose_inputs(
@@ -1125,8 +1163,15 @@ def _compose_inputs(
             for word, stamp_id in get_manga_v2_sfx_stamps(conn, story_id).items()
             if (stamp := get_stamp(conn, stamp_id)) is not None
         }
+        guard_text = minor_guard.story_text(get_story(conn, story_id))
     finally:
         conn.close()
+    # 未成年キャラの安全対策で止める場面の絵は、前に描いたものが残っていても使わない
+    for s in scenes:
+        if s["id"] in panels and minor_guard.decide(
+            s["draft_prompt_tags"], s.get("characters") or [], guard_text
+        ).action == minor_guard.BLOCK:
+            del panels[s["id"]]
     installed = {f.id: f.path for f in available_fonts()}
     style = LetteringStyle(
         font_path=resolve_font(req.font),
@@ -1446,6 +1491,7 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
         scenes = list_story_scenes(conn, story_id)
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
         cast = characters_by_scene(conn, story_id)
+        guard_text = minor_guard.story_text(get_story(conn, story_id))
     finally:
         conn.close()
     summary: dict[str, Any] = {"redrawn": [], "skipped": []}
@@ -1460,6 +1506,13 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
             # 状態の人物がいないコマは、頭の検出もしない
             if panel is None or not any(matched_state(m.get("action_tags") or "", states) for m in members):
                 continue
+            # 未成年キャラの安全対策(コマの生成と同じ判定)
+            decision = minor_guard.decide(scene["draft_prompt_tags"] or "", members, guard_text)
+            if decision.action == minor_guard.BLOCK:
+                minor_guard.record(minor_guard.BLOCK, f"状態の描き直し(シーン{scene['scene_index'] + 1})", decision.reasons, story_id)
+                summary["skipped"].append({"scene": scene["scene_index"] + 1, "reason": "性的な場面に成人でないキャラがいるため"})
+                continue
+            softened = decision.action == minor_guard.ALL_AGES
             path = _PROJECT_ROOT / panel["image_path"]
             heads = await asyncio.to_thread(detect_heads, path)
             with Image.open(path) as source:
@@ -1477,10 +1530,15 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
 
                 job.message = f"シーン{scene['scene_index'] + 1}の{target.character['name']}を「{target.state['name']}」に描き直しています"
                 tags = redraw_scene_tags(scene["draft_prompt_tags"] or "", target)
+                if softened:
+                    tags = minor_guard.all_ages_tags(tags)
                 seed = ((panel.get("seed") or story_id * 1000 + scene["scene_index"]) + 101) % 4294967296
                 params = GenerateImageParams(
                     prompt=build_panel_prompt(tags, color=req.color, complexity=settings.complexity),
-                    negative_prompt=build_panel_negative(settings.negative_prompt, color=req.color),
+                    negative_prompt=join_tags(
+                        build_panel_negative(settings.negative_prompt, color=req.color),
+                        minor_guard.all_ages_negative() if softened else "",
+                    ),
                     model=settings.model,
                     size=image.size,
                     steps=settings.steps,
@@ -1650,7 +1708,7 @@ async def make_manga(story_id: int, req: MangaV2MakeRequest, client: ClientDep) 
             checked += f"。{redrawn}" if redrawn else ""
         job.message = "ページに合成しています"
         result = await asyncio.to_thread(compose, story_id, req.compose)
-        job.message = f"漫画ができました({len(result['pages'])}ページ){checked}"
+        job.message = f"漫画ができました({len(result['pages'])}ページ){checked}" + (f"。{job.guard_note}" if getattr(job, "guard_note", "") else "")
 
     return _job_response(_start_job(story_id, "manga", runner))
 

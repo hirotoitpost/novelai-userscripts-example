@@ -111,6 +111,8 @@ from ..models import (
 from ..novelai_image_v5 import _DEFAULT_NEGATIVE_PROMPT, DIALOGUE_RE, generate_manga_page
 from ..novelai_text import generate_kayra
 from ..novelai_text_oa import stream_chat
+from .. import guard_password, minor_guard
+from ..guard_password import guard_token
 from ..script_lines import script_names
 from .llm import sse_event, strip_think_tags, stream_llm_text
 
@@ -769,6 +771,21 @@ class TagOptions:
     api_key: str | None = None
 
 
+def _guarded_options(options: TagOptions, story: dict[str, Any] | None, place: str) -> tuple[TagOptions, str]:
+    """
+    未成年キャラの安全対策: 物語の本文・メモリに未成年を示す語があれば、成人向けのタグ付けをしない(全年齢のタグ付けにする)。
+    「全員成人」の前提で押し通さないため。戻り値の2つ目は知らせる文(しなかったときだけ)。
+    """
+    if not options.adult:
+        return options, ""
+    found = minor_guard.minor_words(minor_guard.story_text(story))
+    if not found:
+        return options, ""
+    reason = f"本文に未成年を示す語があるため、成人向けのタグ付けをしませんでした: {', '.join(found[:5])}"
+    minor_guard.record(minor_guard.BLOCK, place, [reason], story["id"] if story else None)
+    return TagOptions(), reason
+
+
 def _adult_tags_system_prompt(n_scenes: int) -> str:
     # 未成年についての前提と決まりは content_guard(DB)にある
     premise = content_guard.text("scene.adult_tagging_premise")
@@ -900,6 +917,7 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest, options: 
         update_story_status(conn, story_id, "written")
         # タグ付けは今回追加したシーンだけ
         scenes = list_story_scenes(conn, story_id)[len(existing) :]
+        options, guard_reason = _guarded_options(options or TagOptions(), story, "成人向けのタグ付け(分割)")
         panels_per_page = story["panels_per_page"]
     finally:
         conn.close()
@@ -923,6 +941,8 @@ async def _run_split(job: _Job, story_id: int, req: StorySplitRequest, options: 
             break
 
     job.message = f"{len(scene_texts)}シーンに分割し、{tagged}シーンにタグを付けました"
+    if guard_reason:
+        job.message += f"。{guard_reason}"
     if partial:
         job.message += f"(冒頭のみ。残り約{len(all_texts) - len(scene_texts)}シーンは「続きを分割」で処理できます)"
     if gave_up:
@@ -1069,10 +1089,12 @@ async def _run_illustrate(
     conn = get_connection()
     try:
         scenes = list_story_scenes(conn, story_id)
+        guard_text = minor_guard.story_text(get_story(conn, story_id))
     finally:
         conn.close()
 
     pages_scenes: dict[int, list[dict[str, Any]]] = {}
+    blocked_pages: list[int] = []
     for scene in scenes:
         pages_scenes.setdefault(scene["page_index"], []).append(scene)
 
@@ -1080,10 +1102,28 @@ async def _run_illustrate(
     for i, page_index in enumerate(targets, start=1):
         job.message = f"ページ{page_index + 1}を生成中 ({i}/{len(targets)})"
         page_scenes = pages_scenes[page_index]
+        # 未成年キャラの安全対策: ページ全体を1枚で描くので、ページのどれかの場面が止まればページごと止める
+        decisions = [minor_guard.decide(s["draft_prompt_tags"], s.get("characters") or [], guard_text) for s in page_scenes]
+        reasons = [r for d in decisions for r in d.reasons]
+        if any(d.action == minor_guard.BLOCK for d in decisions):
+            minor_guard.record(minor_guard.BLOCK, f"挿絵(ページ{page_index + 1})", reasons, story_id)
+            blocked_pages.append(page_index + 1)
+            # 前に描いた挿絵が残っていれば外す(画像ファイルは残す)
+            conn = get_connection()
+            try:
+                conn.execute("DELETE FROM manga_pages WHERE story_id = ? AND page_index = ?", (story_id, page_index))
+                conn.commit()
+            finally:
+                conn.close()
+            job.progress = i
+            continue
+        softened = any(d.action == minor_guard.ALL_AGES for d in decisions)
+        if softened:
+            minor_guard.record(minor_guard.ALL_AGES, f"挿絵(ページ{page_index + 1})", reasons, story_id)
         panels = [
             {
                 "draft_text": s["novelai_text"] or s["draft_text"],
-                "draft_prompt_tags": s["draft_prompt_tags"],
+                "draft_prompt_tags": minor_guard.all_ages_tags(s["draft_prompt_tags"]) if softened else s["draft_prompt_tags"],
             }
             for s in page_scenes
         ]
@@ -1107,7 +1147,7 @@ async def _run_illustrate(
             seed = characters_seed(page_characters)
         if seed is None:
             seed = story_id * 1000 + page_index
-        char_negative = characters_negative(page_characters)
+        char_negative = join_tags(characters_negative(page_characters), minor_guard.all_ages_negative() if softened else "")
         negative = (
             {"negative_prompt": join_tags(settings.negative_prompt or _DEFAULT_NEGATIVE_PROMPT, char_negative)}
             if settings.negative_prompt or char_negative
@@ -1148,7 +1188,12 @@ async def _run_illustrate(
             conn.close()
         job.progress = i
 
-    job.message = f"{len(targets)}ページの挿絵を生成しました"
+    job.message = f"{len(targets) - len(blocked_pages)}ページの挿絵を生成しました" + (
+        f"。性的な場面に成人でないキャラがいるため、ページ{'・'.join(map(str, blocked_pages))}は描きませんでした"
+        "(管理ページのコンテンツガードに記録があります)"
+        if blocked_pages
+        else ""
+    )
 
 
 @router.get("/{story_id}/page-stats", response_model=list[StoryPageStats])
@@ -1237,10 +1282,19 @@ async def retag_story(story_id: int, client: ClientDep, adult: bool = False, all
     untagged = scenes if all else [scene for scene in scenes if not scene["draft_prompt_tags"]]
     if not untagged:
         raise HTTPException(status_code=409, detail="タグ付けされていないシーンはありません。")
-    options = TagOptions(adult=adult, api_key=client.api_key if adult else None)
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    options, guard_reason = _guarded_options(
+        TagOptions(adult=adult, api_key=client.api_key if adult else None), story, "成人向けのタグ付け(付け直し)"
+    )
 
     async def runner(job: _Job) -> None:
         await _run_retag(job, untagged, options)
+        if guard_reason:
+            job.message += f"。{guard_reason}"
 
     return _job_response(_start_job(story_id, "split", runner))
 
@@ -1964,7 +2018,7 @@ async def _run_auto_manga(
         redrawn = redraw_summary_text(await _redraw_states(job, story_id, panels, api_key))
     job.message = "ページに合成しています"
     result = await asyncio.to_thread(compose, story_id, req.make.compose)
-    job.message = f"漫画ができました({len(result['pages'])}ページ・{len(scenes)}コマ)" + (f"。{redrawn}" if redrawn else "")
+    job.message = f"漫画ができました({len(result['pages'])}ページ・{len(scenes)}コマ)" + (f"。{redrawn}" if redrawn else "") + (f"。{job.guard_note}" if getattr(job, "guard_note", "") else "")
 
 
 @router.get("/cast-presets")
@@ -2065,7 +2119,9 @@ async def create_new_character(req: CharacterNewRequest) -> dict[str, Any]:
 
 
 @router.put("/characters/{character_id}/sheet", response_model=CharacterResponse)
-async def put_character_sheet(character_id: int, req: CharacterSheetRequest) -> dict[str, Any]:
+async def put_character_sheet(
+    character_id: int, req: CharacterSheetRequest, token: str | None = Depends(guard_token)
+) -> dict[str, Any]:
     """キャラシート(容姿/服装/画風/ネガティブ/基準シード/トリガーワード)を更新する。"""
     conn = get_connection()
     try:
@@ -2073,17 +2129,28 @@ async def put_character_sheet(character_id: int, req: CharacterSheetRequest) -> 
         if current is None:
             raise HTTPException(status_code=404, detail="character not found")
         # seed は null で「基準シードなし」に戻せるよう、送られたものはそのまま反映する
-        sheet = _checked_sheet(current, req.model_dump(exclude_unset=True))
+        sheet = _checked_sheet(current, req.model_dump(exclude_unset=True), token)
         return update_character_sheet(conn, character_id, sheet) or {}
     finally:
         conn.close()
 
 
-def _checked_sheet(current: dict[str, Any], sheet: dict[str, Any]) -> dict[str, Any]:
-    """キャラシートの更新内容を検査する(上書き保存と別名保存で共通)。"""
+def _checked_sheet(current: dict[str, Any], sheet: dict[str, Any], token: str | None = None) -> dict[str, Any]:
+    """
+    キャラシートの更新内容を検査する(上書き保存と別名保存で共通)。年齢区分は 成人(is_adult)・未成年(is_minor)・
+    どちらでもない(未定義)のどれか。未成年の定義を外すのは守りを緩める変更なので、パスワードの合言葉(token)が要る。
+    """
     sheet = dict(sheet)
-    if sheet.get("is_adult") is None:
-        sheet.pop("is_adult", None)
+    for key in ("is_adult", "is_minor"):
+        if sheet.get(key) is None:
+            sheet.pop(key, None)
+    # 片方を立てたら、もう片方は下ろす
+    if sheet.get("is_adult"):
+        sheet["is_minor"] = False
+    if sheet.get("is_minor"):
+        sheet["is_adult"] = False
+    if current.get("is_minor") and not sheet.get("is_minor", True):
+        guard_password.require_unlocked(token)
     # 成人フラグは、保存後のキャラシートに未成年を示すタグがない場合だけ付けられる
     if sheet.get("is_adult", bool(current.get("is_adult"))):
         found = character_minor_tags({**current, **sheet})
@@ -2092,13 +2159,16 @@ def _checked_sheet(current: dict[str, Any], sheet: dict[str, Any]) -> dict[str, 
                 status_code=422,
                 detail=f"未成年を示すタグがあるため成人キャラにできません: {', '.join(found)}",
             )
-    if "is_adult" in sheet:
-        sheet["is_adult"] = int(sheet["is_adult"])
+    for key in ("is_adult", "is_minor"):
+        if key in sheet:
+            sheet[key] = int(sheet[key])
     return sheet
 
 
 @router.post("/characters/{character_id}/duplicate", response_model=CharacterResponse)
-async def duplicate_character(character_id: int, req: CharacterDuplicateRequest) -> dict[str, Any]:
+async def duplicate_character(
+    character_id: int, req: CharacterDuplicateRequest, token: str | None = Depends(guard_token)
+) -> dict[str, Any]:
     """
     別名保存。元キャラのシート(参照画像を含む)を新しい名前のキャラとして複製する。
     参照画像はファイルごと複製し、片方を差し替えてももう片方に影響しないようにする。
@@ -2116,10 +2186,16 @@ async def duplicate_character(character_id: int, req: CharacterDuplicateRequest)
             key: source.get(key)
             for key in (
                 "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
+                "is_minor",
             )
         }
         overrides = req.sheet.model_dump(exclude_unset=True) if req.sheet else {}
-        sheet = _checked_sheet(source, {**copied, "is_adult": bool(copied["is_adult"]), **overrides})
+        # 未成年の定義も引き継ぐ(別名で保存して定義を外せないように)
+        sheet = _checked_sheet(
+            source,
+            {**copied, "is_adult": bool(copied["is_adult"]), "is_minor": bool(copied["is_minor"]), **overrides},
+            token,
+        )
         # トリガーワードはデータセットの保存先フォルダにも使うので、既存キャラと同じだと画像が混ざる
         trigger = (sheet.get("trigger_word") or "").strip()
         if trigger and any((c.get("trigger_word") or "").strip() == trigger for c in list_characters(conn)):
@@ -2151,9 +2227,13 @@ async def get_character_usage(character_id: int) -> dict[str, Any]:
 
 
 @router.delete("/characters/{character_id}", status_code=204)
-async def delete_character_endpoint(character_id: int) -> None:
+async def delete_character_endpoint(character_id: int, token: str | None = Depends(guard_token)) -> None:
     conn = get_connection()
     try:
+        current = get_character(conn, character_id)
+        # 未成年と定義したキャラを消して同じ名前で作り直すと、定義を外せてしまうので、パスワードが要る
+        if current and current.get("is_minor"):
+            guard_password.require_unlocked(token)
         delete_character(conn, character_id)
     finally:
         conn.close()

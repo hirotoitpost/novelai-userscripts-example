@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { guardFetch } from '../guardFetch'
 import { useNavigate } from 'react-router-dom'
 import CharacterSheetEditor from './CharacterSheetEditor'
 
@@ -18,6 +19,8 @@ export interface Character {
   seed?: number | null
   /** 成人キャラ。データセットのR18生成はこれが true のキャラだけ */
   is_adult?: boolean
+  /** 未成年キャラ。性的な場面には描かない(外すにはコンテンツガードのパスワードが要る) */
+  is_minor?: boolean
 }
 
 export interface SceneCharacter {
@@ -123,7 +126,9 @@ export default function StoryCharacters({ apiOrigin, onChanged, disabled, storyI
   async function remove(id: number) {
     setError(null)
     try {
-      await fetch(`${apiOrigin}/api/story/characters/${id}`, { method: 'DELETE' })
+      // 未成年と定義したキャラを消すときは、パスワードを聞かれる
+      const res = await guardFetch(`${apiOrigin}/api/story/characters/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
       load()
       onChanged()
     } catch (e) {

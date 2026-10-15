@@ -1,18 +1,47 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { guardFetch } from '../guardFetch'
+import './GuardSafety.css'
 
 interface Rule {
   key: string
   group: string
   label: string
   description: string
-  kind: 'patterns' | 'words' | 'text' | 'int'
+  kind: 'patterns' | 'words' | 'text' | 'int' | 'choice'
   match: 'word' | 'tag' | 'substring' | 'exact' | null
   value: string[] | string | number
   default: string[] | string | number
   modified: boolean
   minimum: number | null
   maximum: number | null
+  /** choice の選択肢(先のものほど強い守り) */
+  choices: { value: string; label: string }[]
   updated_at: string | null
+}
+
+type Direction = 'same' | 'stricter' | 'looser' | 'invalid'
+
+interface PlanItem {
+  key?: string
+  name?: string
+  label?: string
+  direction: Direction
+  added?: string[]
+  removed?: string[]
+  reason?: string
+}
+
+interface ImportPlan {
+  exported_at: string | null
+  rules: PlanItem[]
+  profiles: PlanItem[]
+}
+
+const DIRECTION_LABELS: Record<Direction, string> = {
+  same: '同じ',
+  stricter: '強める',
+  looser: '緩める(パスワードが要る)',
+  invalid: '取り込めない',
 }
 
 interface CheckResult {
@@ -38,6 +67,11 @@ function toText(value: Rule['value']): string {
   return Array.isArray(value) ? value.join('\n') : String(value)
 }
 
+function shown(rule: Rule, value: Rule['value']): string {
+  if (rule.kind === 'choice') return rule.choices.find(c => c.value === value)?.label ?? String(value)
+  return toText(value)
+}
+
 async function errorOf(res: Response): Promise<string> {
   try {
     const detail = (await res.json()).detail
@@ -57,12 +91,17 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
   const [error, setError] = useState<string | null>(null)
   const [checkTags, setCheckTags] = useState('')
   const [checked, setChecked] = useState<CheckResult | null>(null)
+  const [plan, setPlan] = useState<{ data: unknown; plan: ImportPlan } | null>(null)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [notice, setNotice] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
+  function load() {
     fetch(`${API}/rules`)
       .then(async r => (r.ok ? setRules((await r.json()).rules) : setError(await errorOf(r))))
       .catch(e => setError(String(e)))
-  }, [])
+  }
+  useEffect(load, [])
 
   function replace(rule: Rule) {
     setRules(prev => prev.map(r => (r.key === rule.key ? rule : r)))
@@ -72,8 +111,8 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
   async function save(rule: Rule) {
     setError(null)
     const draft = drafts[rule.key]
-    const value = rule.kind === 'text' ? draft : rule.kind === 'int' ? Number(draft) : draft.split('\n')
-    const res = await fetch(`${API}/rules/${rule.key}`, {
+    const value = rule.kind === 'text' || rule.kind === 'choice' ? draft : rule.kind === 'int' ? Number(draft) : draft.split('\n')
+    const res = await guardFetch(`${API}/rules/${rule.key}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value }),
@@ -102,6 +141,70 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
     onSaved?.('コンテンツガードのすべての項目(はじめの値に戻す)')
   }
 
+  async function exportRules() {
+    setError(null)
+    const res = await fetch(`${API}/export`)
+    if (!res.ok) return setError(await errorOf(res))
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `content-guard_${String(data.exported_at).slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
+
+  async function previewImport(file: File) {
+    setError(null)
+    setNotice(null)
+    let data: unknown
+    try {
+      data = JSON.parse(await file.text())
+    } catch {
+      return setError('JSON として読めないファイルです。')
+    }
+    const res = await fetch(`${API}/import/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data }),
+    })
+    if (!res.ok) return setError(await errorOf(res))
+    const next: ImportPlan = await res.json()
+    setPlan({ data, plan: next })
+    // はじめは、取り込める変更をすべて選んでおく
+    setPicked(new Set([
+      ...next.rules.filter(r => r.direction === 'stricter' || r.direction === 'looser').map(r => `rule:${r.key}`),
+      ...next.profiles.filter(p => p.direction === 'stricter' || p.direction === 'looser').map(p => `profile:${p.name}`),
+    ]))
+  }
+
+  async function applyImport() {
+    if (!plan) return
+    setError(null)
+    const keys = [...picked].filter(k => k.startsWith('rule:')).map(k => k.slice(5))
+    const profiles = [...picked].filter(k => k.startsWith('profile:')).map(k => k.slice(8))
+    const res = await guardFetch(`${API}/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: plan.data, keys, profiles }),
+    })
+    if (!res.ok) return setError(await errorOf(res))
+    const done = await res.json()
+    setPlan(null)
+    setNotice(`取り込みました(項目${done.rules}件・ガードプロファイル${done.profiles}件)`)
+    load()
+    onSaved?.('コンテンツガードの取り込み')
+  }
+
+  function toggle(id: string, on: boolean) {
+    setPicked(prev => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
   async function check() {
     setError(null)
     const res = await fetch(`${API}/check`, {
@@ -114,8 +217,51 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
   }
 
   const groups = [...new Set(rules.map(r => r.group))]
+  const modified = rules.filter(r => r.modified).length
+  const planRows = plan ? [
+    ...plan.plan.rules.map(r => ({ id: `rule:${r.key}`, title: r.label ?? r.key ?? '', item: r })),
+    ...plan.plan.profiles.map(p => ({ id: `profile:${p.name}`, title: `ガードプロファイル「${p.name}」`, item: p })),
+  ].filter(row => row.item.direction !== 'same') : []
   return (
     <>
+      <div className="adm-row guard-top">
+        <span className="adm-hint">はじめの値と違う項目: {modified}件</span>
+        <button type="button" className="adm-danger" disabled={modified === 0} onClick={() => void resetAll()}
+          title="すべての項目をはじめの値に戻します(パスワードは要りません)">すべてはじめの値に戻す</button>
+        <button type="button" onClick={() => void exportRules()} title="すべての項目とガードプロファイルを JSON ファイルに書き出します">書き出す</button>
+        <button type="button" onClick={() => fileRef.current?.click()} title="書き出したファイルを読み、違いを確かめてから取り込みます">取り込む</button>
+        <input ref={fileRef} type="file" accept="application/json,.json" hidden aria-label="取り込むファイル"
+          onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void previewImport(file) }} />
+      </div>
+      {notice && <p className="adm-hint" role="status">{notice}</p>}
+      {plan && (
+        <div className="guard-import">
+          <h3>取り込む内容の確認</h3>
+          <p className="adm-hint">
+            {plan.plan.exported_at ? `${plan.plan.exported_at.slice(0, 16).replace('T', ' ')} に書き出したファイルです。` : ''}
+            今の値と違う項目だけを出しています。「緩める」項目を取り込むときは、パスワードを聞きます。
+          </p>
+          {planRows.length === 0 && <p className="adm-hint">今の値と同じです。取り込むものはありません。</p>}
+          <ul className="guard-import-list">
+            {planRows.map(({ id, title, item }) => (
+              <li key={id} className={`guard-import-${item.direction}`}>
+                <label>
+                  <input type="checkbox" disabled={item.direction === 'invalid'} checked={picked.has(id)}
+                    onChange={e => toggle(id, e.target.checked)} />
+                  {' '}<strong>{title}</strong> <span className="adm-tag">{DIRECTION_LABELS[item.direction]}</span>
+                </label>
+                {item.reason && <span className="adm-hint"> {item.reason}</span>}
+                {!!item.added?.length && <div className="adm-hint">増える: {item.added.join(', ')}</div>}
+                {!!item.removed?.length && <div className="adm-hint">減る: {item.removed.join(', ')}</div>}
+              </li>
+            ))}
+          </ul>
+          <div className="adm-row">
+            <button type="button" className="adm-primary" disabled={picked.size === 0} onClick={() => void applyImport()}>選んだ項目を取り込む</button>
+            <button type="button" onClick={() => setPlan(null)}>やめる</button>
+          </div>
+        </div>
+      )}
       {error && <p className="adm-error" role="alert">{error}</p>}
       {groups.map(group => (
         <div key={group}>
@@ -131,7 +277,7 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
                   <strong>{rule.label}</strong>
                   {rule.modified && <span className="adm-tag">変更あり</span>}
                   {dirty && <span className="adm-tag">未保存</span>}
-                  {' '}<span className="adm-hint">{list ? `${(rule.value as string[]).length}件` : toText(rule.value)}</span>
+                  {' '}<span className="adm-hint">{list ? `${(rule.value as string[]).length}件` : shown(rule, rule.value)}</span>
                 </summary>
                 <p className="adm-hint">{rule.description}</p>
                 <p className="adm-hint">
@@ -140,7 +286,11 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
                   {rule.kind === 'patterns' && ' ・ 正規表現(大文字・小文字を区別しない)'}
                   {rule.match && ` ・ ${MATCH_LABELS[rule.match]}`}
                 </p>
-                {rule.kind === 'int'
+                {rule.kind === 'choice'
+                  ? <select value={draft} onChange={e => setDrafts({ ...drafts, [rule.key]: e.target.value })}>
+                      {rule.choices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    </select>
+                  : rule.kind === 'int'
                   ? <input type="number" step={1} min={rule.minimum ?? undefined} max={rule.maximum ?? undefined}
                       value={draft} onChange={e => setDrafts({ ...drafts, [rule.key]: e.target.value })} />
                   : <textarea rows={list ? Math.min(16, Math.max(4, count + 1)) : 3} spellCheck={false} value={draft}
@@ -148,7 +298,7 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
                 <div className="adm-row">
                   <button type="button" className="adm-primary" disabled={!dirty} onClick={() => void save(rule)}>保存</button>
                   <button type="button" disabled={!rule.modified} onClick={() => void reset(rule)}>はじめの値に戻す</button>
-                  {rule.modified && <span className="adm-hint">はじめの値: {toText(rule.default).replace(/\n/g, ', ')}</span>}
+                  {rule.modified && <span className="adm-hint">はじめの値: {shown(rule, rule.default).replace(/\n/g, ', ')}</span>}
                 </div>
               </details>
             )
@@ -162,7 +312,6 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
         onChange={e => setCheckTags(e.target.value)} />
       <div className="adm-row">
         <button type="button" disabled={!checkTags.trim()} onClick={() => void check()}>確かめる</button>
-        <button type="button" className="adm-danger" onClick={() => void resetAll()}>すべてはじめの値に戻す</button>
       </div>
       {checked && (
         <table className="adm-table adm-table--rows">
