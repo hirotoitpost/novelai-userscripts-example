@@ -85,6 +85,17 @@ On Windows, `scripts/dev-ctl.ps1` starts both services without the `uv run`/`--r
 
 Open **http://localhost:5173** in your browser (**https://** once you have made the LAN certificate below).
 
+### Run in Docker
+
+The app (backend + built frontend on port 8000) can also run as a container next to the Ollama service. Stop the dev servers first, since it uses the same `data/` and `outputs/` and the same port:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/dev-ctl.ps1 stop -Target all
+docker compose --profile app up -d --build
+```
+
+Then open **http://localhost:8000**. See [docs/docker.md](docs/docker.md) for volumes, fonts, logs and how it differs from the dev setup.
+
 ### Install on a phone (PWA, HTTPS on the LAN)
 
 Browsers only install a web app (and only run its service worker, which the completion notifications need) over HTTPS.

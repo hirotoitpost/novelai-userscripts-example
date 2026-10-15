@@ -38,7 +38,11 @@ from .. import app_settings, db
 from ..db import get_connection
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_RUN_DIR = _PROJECT_ROOT / "data" / "run"
+# Docker のコンテナ(APP_IN_CONTAINER=1)では、開発中のサーバー(dev-ctl.ps1)の記録と混ざらないよう別のフォルダ
+# (scripts/container_start.py が作る)。コンテナのイメージを作った日時は /app/BUILD_INFO(Dockerfile が書く)
+_IN_CONTAINER = os.environ.get("APP_IN_CONTAINER") == "1"
+_RUN_DIR = _PROJECT_ROOT / "data" / "run" / ("container" if _IN_CONTAINER else "")
+_BUILD_INFO = _PROJECT_ROOT / "BUILD_INFO"
 _ENV_FILE = _PROJECT_ROOT / ".env"
 _ENV_EXAMPLE = _PROJECT_ROOT / ".env.example"
 _BACKUP_DIR = _PROJECT_ROOT / "data" / "backups"
@@ -150,11 +154,18 @@ async def get_status() -> dict[str, Any]:
             "uptime_seconds": time.time() - _STARTED_AT,
             "python": sys.version.split()[0],
         },
-        "frontend": {
-            "pid": _read(_RUN_DIR / "frontend.pid") or None,
-            "scheme": frontend_scheme,
-            "alive": await _frontend_alive(frontend_scheme),
-        },
+        # コンテナでは、ビルドした画面をバックエンドが配る(Vite は動かない)
+        "frontend": (
+            {"pid": None, "scheme": backend_scheme, "alive": True, "served_by_backend": True}
+            if _IN_CONTAINER
+            else {
+                "pid": _read(_RUN_DIR / "frontend.pid") or None,
+                "scheme": frontend_scheme,
+                "alive": await _frontend_alive(frontend_scheme),
+                "served_by_backend": False,
+            }
+        ),
+        "container": {"built_at": _read(_BUILD_INFO)} if _IN_CONTAINER else None,
         "git": {
             "commit": _git("rev-parse", "--short", "HEAD"),
             "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
@@ -786,7 +797,12 @@ async def post_restart(req: RestartRequest) -> dict[str, Any]:
     script = _PROJECT_ROOT / "scripts" / "dev-ctl.ps1"
     if os.name != "nt" or not script.is_file():
         raise HTTPException(
-            status_code=501, detail="この環境では画面から再起動できません(Windows の dev-ctl.ps1 を使います)。"
+            status_code=501,
+            detail=(
+                "Docker のコンテナでは、画面から起動し直せません。docker compose --profile app restart app を使ってください。"
+                if _IN_CONTAINER
+                else "この環境では画面から再起動できません(Windows の dev-ctl.ps1 を使います)。"
+            ),
         )
     current_http = (_read(_RUN_DIR / "backend.scheme") or "http") == "http"
     has_cert = (_CERT_DIR / "server.crt").is_file()

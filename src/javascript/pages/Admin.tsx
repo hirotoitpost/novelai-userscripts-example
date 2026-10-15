@@ -1,3 +1,4 @@
+import { BACKEND_ORIGIN } from '../backendOrigin'
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
@@ -25,7 +26,7 @@ import './Admin.css'
  */
 
 const HOST = window.location.hostname
-const BACKEND = `${window.location.protocol}//${HOST}:8000`
+const BACKEND = BACKEND_ORIGIN
 
 async function admin<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BACKEND}/api/admin${path}`, {
@@ -210,8 +211,10 @@ function usePolling<T>(load: () => Promise<T>, intervalMs: number | null) {
 
 interface Status {
   backend: { pid: number; scheme: string; started_at: number; uptime_seconds: number; python: string }
-  frontend: { pid: string | null; scheme: string; alive: boolean }
+  frontend: { pid: string | null; scheme: string; alive: boolean; served_by_backend?: boolean }
   git: { commit: string; branch: string; subject: string; date: string; dirty: boolean }
+  /** Docker のコンテナで動いているとき(イメージを作った日時) */
+  container?: { built_at: string } | null
   database: { path: string; bytes: number }
 }
 
@@ -253,20 +256,27 @@ function StatusTab() {
             <tbody>
               <tr>
                 <th>バックエンド</th>
-                <td><span className="adm-ok">● 起動中</span> {s.backend.scheme}://{HOST}:8000 ・ PID {s.backend.pid} ・
+                <td><span className="adm-ok">● 起動中</span> {s.container ? `${window.location.origin}(Docker のコンテナ)` : `${s.backend.scheme}://${HOST}:8000`} ・ PID {s.backend.pid} ・
                   稼働 {formatDuration(s.backend.uptime_seconds * 1000)}(起動 {when(s.backend.started_at)})・ Python {s.backend.python}</td>
               </tr>
+              {s.frontend.served_by_backend ? (
+              <tr>
+                <th>フロント</th>
+                <td><span className="adm-ok">● バックエンドが配っています</span>(ビルドした画面。起動し直すときは <code>docker compose --profile app restart app</code>)</td>
+              </tr>
+              ) : (
               <tr>
                 <th>フロント(Vite)</th>
                 <td>{s.frontend.alive ? <span className="adm-ok">● 起動中</span> : <span className="adm-bad">● 応答なし</span>}{' '}
                   {s.frontend.scheme}://{window.location.host}{s.frontend.pid && ` ・ PID ${s.frontend.pid}`}
                   {s.frontend.scheme !== s.backend.scheme && <span className="adm-bad"> ・ バックエンドと方式が違います(両方を起動し直してください)</span>}</td>
               </tr>
+              )}
               <tr>
                 <th>バージョン</th>
-                <td><code>{s.git.commit || '?'}</code> {s.git.branch && `(${s.git.branch})`} {s.git.subject}
+                <td>{s.container && <>コンテナのイメージ(作成 {s.container.built_at || '?'})</>}{!s.container && <><code>{s.git.commit || '?'}</code> {s.git.branch && `(${s.git.branch})`} {s.git.subject}
                   {s.git.date && ` ・ ${new Date(s.git.date).toLocaleString('ja-JP')}`}
-                  {s.git.dirty && <span className="adm-warn"> ・ コミットしていない変更あり</span>}</td>
+                  {s.git.dirty && <span className="adm-warn"> ・ コミットしていない変更あり</span>}</>}</td>
               </tr>
               <tr>
                 <th>DB</th>

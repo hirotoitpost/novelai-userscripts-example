@@ -29,3 +29,6 @@ data/
 
 # Reference samples (third-party HTML, not source code)
 samples/
+
+# Docker で動かすときの、画像・作品データのバックアップの写し先(docs/docker.md)
+backups/

@@ -1,0 +1,22 @@
+# イメージに入れないもの(データ・秘密・作業用のフォルダ)。データはボリュームで渡す(docs/docker.md)
+.git
+.github
+.claude
+.vscode
+.venv
+.pytest_cache
+.ruff_cache
+node_modules
+dist
+data
+outputs
+samples
+usr
+tests
+docs
+assets
+.env
+.env.*
+!.env.example
+**/__pycache__
+*.pyc

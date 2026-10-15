@@ -1,3 +1,4 @@
+import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
@@ -110,7 +111,7 @@ async function readErrorDetail(res: Response): Promise<string> {
 // Vite側の制限。念のためこのページの/api/story/*呼び出しは全てプロキシを迂回して
 // バックエンド(ポート8000)に直接アクセスする。CORSはバックエンド側で allow_origins=["*"]
 // になっているため問題ない。
-const API_ORIGIN = `${window.location.protocol}//${window.location.hostname}:8000`
+const API_ORIGIN = BACKEND_ORIGIN
 
 /**
  * サーバーが event:progress / event:done / event:error の3種類だけ送ってくる

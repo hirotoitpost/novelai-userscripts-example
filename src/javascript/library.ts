@@ -1,5 +1,6 @@
+import { BACKEND_ORIGIN } from './backendOrigin'
 // ギャラリーと本棚で共用する API 呼び出し。他の物語系ページと同じく、バックエンドへ直接アクセスする。
-export const API_ORIGIN = `${window.location.protocol}//${window.location.hostname}:8000`
+export const API_ORIGIN = BACKEND_ORIGIN
 
 export function fileUrl(path: string, download = false): string {
   return `${API_ORIGIN}/api/library/file?path=${encodeURIComponent(path)}${download ? '&download=true' : ''}`

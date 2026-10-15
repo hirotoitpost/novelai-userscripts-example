@@ -22,6 +22,33 @@
 #   qwen3-vl:8b    — VRAM 8GB 以上（高品質）
 
 services:
+  # アプリ本体(バックエンド + ビルドした画面)。docs/docker.md を参照。開発中のサーバー(dev-ctl.ps1)と同じ
+  # data/・outputs/ を使うので、同時には動かさない(ポート 8000 も同じなので、片方を止めてから起動する)
+  app:
+    build: .
+    image: novelai-userscripts-example:local
+    profiles: ["app"]
+    ports:
+      - "8000:8000"
+    # .env はボリュームで渡し、アプリが読む(env_file にすると、.env の $env:… が compose に展開されてしまう)
+    environment:
+      # .env の値(localhost:11434)ではなく、compose の中の Ollama を使う
+      VLLM_BASE_URL: http://ollama:11434/v1
+      VLLM_VISION_BASE_URL: http://ollama:11434/v1
+      # Windows のフォント(下で読み取り専用で渡す)。同じ PC の中で使うときだけ
+      WINDOWS_FONTS_DIR: /windows-fonts
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      # 管理ページから .env を書き換えられるように
+      - ./.env:/app/.env
+      # 画像・作品データのバックアップの写し先(管理ページでは /backup を指定する)
+      - ${BACKUP_DIR:-./backups}:/backup
+      - ${WINDOWS_FONTS:-C:/Windows/Fonts}:/windows-fonts:ro
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
   ollama:
     image: ollama/ollama:latest
     runtime: nvidia
