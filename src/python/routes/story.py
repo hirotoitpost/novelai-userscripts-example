@@ -39,7 +39,6 @@ from ..db import (
     create_manga_page,
     create_story,
     character_usage,
-    delete_character,
     replace_story_character,
     story_characters,
     get_character,
@@ -111,7 +110,7 @@ from ..models import (
 from ..novelai_image_v5 import _DEFAULT_NEGATIVE_PROMPT, DIALOGUE_RE, generate_manga_page
 from ..novelai_text import generate_kayra
 from ..novelai_text_oa import stream_chat
-from .. import guard_password, minor_guard
+from .. import guard_password, minor_guard, trash
 from ..guard_password import guard_token
 from ..script_lines import script_names
 from .llm import sse_event, strip_think_tags, stream_llm_text
@@ -2234,9 +2233,10 @@ async def delete_character_endpoint(character_id: int, token: str | None = Depen
         # 未成年と定義したキャラを消して同じ名前で作り直すと、定義を外せてしまうので、パスワードが要る
         if current and current.get("is_minor"):
             guard_password.require_unlocked(token)
-        delete_character(conn, character_id)
     finally:
         conn.close()
+    # ごみ箱に預ける(30日のあいだは元に戻せる)
+    trash.character(character_id)
 
 
 @router.get("/{story_id}/characters", response_model=list[StoryCharacterUsage])

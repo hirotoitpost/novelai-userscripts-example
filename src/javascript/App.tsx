@@ -7,6 +7,7 @@ import BatchOrganize from './pages/BatchOrganize'
 import Bookshelf from './pages/Bookshelf'
 import Gallery from './pages/Gallery'
 import Publications from './pages/Publications'
+import Trash from './pages/Trash'
 import ImageGenerate from './pages/ImageGenerate'
 import LLMPage from './pages/LLMPage'
 import Metadata from './pages/Metadata'
@@ -111,6 +112,10 @@ function AppRoutes() {
       <Route
         path="/publications"
         element={<ProtectedRoute><Publications /></ProtectedRoute>}
+      />
+      <Route
+        path="/trash"
+        element={<ProtectedRoute><Trash /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

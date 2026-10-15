@@ -203,7 +203,7 @@ export default function CharacterSheetEditor({
       ? `\n\n${usage.stories}件の物語・${usage.scenes}シーンで使われています。削除すると割り当ても外れます。\n` +
         usage.story_titles.map(t => `・${t}`).join('\n')
       : '\n\nどの物語のシーンにも割り当てられていません。'
-    if (!window.confirm(`「${character.name}」を削除しますか？元に戻せません。${where}`)) return
+    if (!window.confirm(`「${character.name}」を削除しますか？(ごみ箱に入り、30日のあいだは元に戻せます)${where}`)) return
     try {
       const res = await guardFetch(`${apiOrigin}/api/story/characters/${character.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(await errorDetail(res))

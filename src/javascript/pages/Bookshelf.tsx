@@ -222,7 +222,7 @@ export default function Bookshelf() {
 
   async function removeBook(book: Pick<Book, 'id' | 'title'>) {
     const ok = window.confirm(
-      `「${book.title}」を削除します。元に戻せません。よろしいですか？\n` +
+      `「${book.title}」を削除します(ごみ箱に入り、30日のあいだは元に戻せます)。よろしいですか？\n` +
         '(本文・コマ・挿絵・合成した漫画のページも消えます。物語エディタの下書きは残ります)',
     )
     if (!ok) return false
@@ -358,6 +358,7 @@ export default function Bookshelf() {
           {selecting ? '完了' : '選択'}
         </button>
         <button type="button" className="shelf-back" onClick={() => navigate('/publications')}>出版物</button>
+        <button type="button" className="shelf-back" onClick={() => navigate('/trash')}>ごみ箱</button>
       </header>
 
       <div className="shelf-toolbar">
