@@ -41,11 +41,29 @@ load_dotenv(_env_path, override=True)
 
 
 
+async def _auto_backup_loop() -> None:
+    """1時間ごとに、自動バックアップ(1日1回)を取る頃かを見る(backup.py)。"""
+    import asyncio
+
+    from . import backup
+
+    while True:
+        try:
+            await asyncio.to_thread(backup.auto_tick)
+        except Exception:  # noqa: BLE001 見回りが止まらないように
+            pass
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    import asyncio
+
     await init_client()
     await init_llm_clients()
+    auto_backup = asyncio.create_task(_auto_backup_loop())
     yield
+    auto_backup.cancel()
     await close_client()
     await close_llm_clients()
 
