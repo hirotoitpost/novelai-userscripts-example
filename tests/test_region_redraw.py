@@ -105,7 +105,9 @@ def _gallery_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     finally:
         conn.close()
     monkeypatch.setattr(library, "_served_path", lambda path: tmp_path / path)
-    monkeypatch.setattr(upscaler, "upscale", lambda img: img.resize((img.width * 4, img.height * 4)))
+    # 判定モデルは重いので差し替える(未成年キャラの安全対策の判定にも使う)
+    monkeypatch.setattr("python.image_tagger.tag_image", lambda img: [])
+    monkeypatch.setattr(upscaler, "upscale", lambda img, *args: img.resize((img.width * 4, img.height * 4)))
     return f"history:{row['id']}:src.png"
 
 

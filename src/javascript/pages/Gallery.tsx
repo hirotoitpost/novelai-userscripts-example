@@ -17,6 +17,7 @@ import {
 } from '../library'
 import FullscreenViewer from '../components/FullscreenViewer'
 import RegionRedrawTool from '../components/RegionRedrawTool'
+import WholeEnhance from '../components/WholeEnhance'
 import { apiFetch, GENERATE_FROM_IMAGE_KEY } from '../api'
 import type { MetadataGenerationSettings } from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -781,6 +782,7 @@ export default function Gallery() {
                 削除
               </button>
             </div>
+            {token && <WholeEnhance key={current.key} token={token} imageKey={current.key} onOpen={key => void openKey(key)} />}
             <dl className="gallery-meta">
               <dt>種類</dt>
               <dd>{SOURCE_LABELS[current.source]}{describe(current) && ` ・ ${describe(current)}`}</dd>

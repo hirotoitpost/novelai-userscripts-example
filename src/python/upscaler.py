@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -75,15 +76,22 @@ def _run(tile: np.ndarray) -> np.ndarray:
     return y.reshape(c, SCALE * hh, SCALE * ww).transpose(1, 2, 0)[: SCALE * h, : SCALE * w]
 
 
-def upscale(image: Image.Image) -> Image.Image:
-    """縦横4倍にする(大きすぎる画像は、先に MAX_INPUT_PIXELS まで縮める)。"""
+def upscale(
+    image: Image.Image, max_input: int = MAX_INPUT_PIXELS, progress: Callable[[int, int], None] | None = None
+) -> Image.Image:
+    """
+    縦横4倍にする(max_input より大きい画像は、先にそこまで縮める)。progress は (済んだタイルの数, タイルの数) で
+    呼ぶ(画像全体を拡大するときの進み具合)。
+    """
     image = image.convert("RGB")
-    if image.width * image.height > MAX_INPUT_PIXELS:
-        ratio = (MAX_INPUT_PIXELS / (image.width * image.height)) ** 0.5
+    if image.width * image.height > max_input:
+        ratio = (max_input / (image.width * image.height)) ** 0.5
         image = image.resize((max(1, int(image.width * ratio)), max(1, int(image.height * ratio))), Image.Resampling.LANCZOS)
     arr = np.asarray(image)
     h, w, _ = arr.shape
     out = np.zeros((h * SCALE, w * SCALE, 3), np.float32)
+    total = -(-h // _TILE) * -(-w // _TILE)
+    done = 0
     for y0 in range(0, h, _TILE):
         for x0 in range(0, w, _TILE):
             ys, xs = max(y0 - _PAD, 0), max(x0 - _PAD, 0)
@@ -92,9 +100,15 @@ def upscale(image: Image.Image) -> Image.Image:
             th, tw = min(_TILE, h - y0), min(_TILE, w - x0)
             oy, ox = (y0 - ys) * SCALE, (x0 - xs) * SCALE
             out[y0 * SCALE:(y0 + th) * SCALE, x0 * SCALE:(x0 + tw) * SCALE] = result[oy:oy + th * SCALE, ox:ox + tw * SCALE]
+            done += 1
+            if progress is not None:
+                progress(done, total)
     return Image.fromarray((out.clip(0, 1) * 255).round().astype(np.uint8))
 
 
-def enlarge(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+def enlarge(
+    image: Image.Image, size: tuple[int, int], max_input: int = MAX_INPUT_PIXELS,
+    progress: Callable[[int, int], None] | None = None,
+) -> Image.Image:
     """AI 拡大してから、指定の大きさに合わせる。"""
-    return upscale(image).resize(size, Image.Resampling.LANCZOS)
+    return upscale(image, max_input, progress).resize(size, Image.Resampling.LANCZOS)

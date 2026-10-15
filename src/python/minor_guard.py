@@ -116,6 +116,33 @@ def decide(tags: str, members: list[dict[str, Any]], story_text: str = "") -> De
     return Decision(ALL_AGES if policy == ALL_AGES else BLOCK, [undefined_reason])
 
 
+# 判定モデルで、未成年を思わせるタグをこの確率以上なら手がかりにする(当たり外れがあるので、低めに拾って止める側に倒す)
+_IMAGE_MINOR_THRESHOLD = 0.35
+# 判定モデルの評価(rating)でこの確率以上なら、性的な画像とみなす
+_IMAGE_SEXUAL_THRESHOLD = 0.5
+
+
+def image_decision(prompt: str, scores: list[Any]) -> Decision:
+    """
+    ギャラリーの画像の画質を上げるとき(範囲・画像全体)の判定。画像にはキャラの年齢区分が無いので、プロンプトと
+    判定モデルの結果(image_tagger.TagScore)だけで見る: 性的な画像に未成年を思わせるタグがあれば止める。
+    """
+    rating = {s.tag: s.probability for s in scores if s.category == "rating"}
+    sexual = content_guard.is_sexual(prompt) or rating.get("explicit", 0) + rating.get("questionable", 0) >= _IMAGE_SEXUAL_THRESHOLD
+    if not sexual:
+        return Decision(OK)
+    tags = [t.strip() for t in (prompt or "").split(",") if t.strip()]
+    found = [t for t in tags if content_guard.search("scene.minor_tags", t)]
+    found += [
+        f"{s.tag}(判定 {s.probability:.2f})"
+        for s in scores
+        if s.category == "general" and s.probability >= _IMAGE_MINOR_THRESHOLD and content_guard.search("scene.minor_tags", s.tag)
+    ]
+    if found:
+        return Decision(BLOCK, [f"性的な画像に未成年を思わせるタグ: {', '.join(dict.fromkeys(found))}"])
+    return Decision(OK)
+
+
 def all_ages_tags(tags: str) -> str:
     """性的なタグ(scene.sexual_tags・性器のタグ)を外したタグ。"""
     items = [t.strip() for t in (tags or "").split(",") if t.strip()]

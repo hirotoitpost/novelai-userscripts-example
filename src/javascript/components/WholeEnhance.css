@@ -1,0 +1,74 @@
+.whole-enhance {
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+  margin: 0.6rem 0;
+  font-size: 0.82rem;
+  color: #c8c8ec;
+}
+
+.whole-enhance summary {
+  cursor: pointer;
+  color: #b8a4ff;
+}
+
+.whole-enhance-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0.45rem 0;
+}
+
+.whole-enhance-hint {
+  margin: 0.35rem 0;
+  color: #9a9ac0;
+  line-height: 1.6;
+}
+
+.whole-enhance select {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.82rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.whole-enhance button {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.whole-enhance .whole-enhance-run {
+  background: #7b5cf6;
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.whole-enhance button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.whole-enhance-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.whole-enhance-status progress {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+
+.whole-enhance-error {
+  color: #ff8a9a;
+  margin: 0.4rem 0 0;
+}
