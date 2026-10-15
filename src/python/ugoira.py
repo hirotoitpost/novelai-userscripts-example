@@ -29,8 +29,16 @@ from .db import get_connection
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 FOLDER = "outputs/ugoira"
-REGIONS = ("eyes", "mouth", "face", "hair")
-REGION_LABELS = {"eyes": "目", "mouth": "口", "face": "顔(表情)", "hair": "髪"}
+REGIONS = ("eyes", "mouth", "face", "hair", "person", "all")
+REGION_LABELS = {
+    "eyes": "目", "mouth": "口", "face": "顔(表情)", "hair": "髪",
+    "person": "体ごと(背景は元のまま)", "all": "絵全体",
+}
+# B. 全体を少しずつ描き直す(img2img)範囲。ほかの範囲は A(インペイント)
+WHOLE_REGIONS = ("person", "all")
+# person の範囲: 頭の枠を単位に、左右へ広げ、頭の少し上から絵の下まで(体の動き。背景は元の絵のまま重ねる)
+_PERSON_SPREAD = 1.4
+_PERSON_FEATHER = 18
 # 頭の枠に対する範囲(左, 上, 右, 下。枠の幅・高さの割合)。hair は枠を広げて、顔の範囲を除く
 _BOXES = {
     # 目は広めに(下まぶたが範囲の外に残ると、そこに合わせて目が開いたまま描かれた。実機で確認)
@@ -49,6 +57,12 @@ _CONFLICTS = {
     "mouth": r".*\b(mouth|lips?|teeth|tongue|fang)\b.*|:d|:o|:p|:3|smile|grin|talking|frown|pout",
     "face": r".*\b(eyes?|mouth|lips?|teeth)\b.*|smile|grin|frown|pout|crying|tears|blush|surprised|angry|sad|happy|expressionless|sanpaku|wink",
     "hair": r"hair (blowing|flowing)|floating hair|wind",
+    # 体の動き: 姿勢・手・腕・頭の向きのタグ
+    "person": (
+        r".*\b(arms?|hands?|waving|wave|pose|posing|leaning|bowing|nodding|jumping|tilt|tilted|crossed|outstretched|raised)\b.*"
+        r"|standing|sitting|kneeling|squatting|looking (back|away|down|up|to the side)|head tilt"
+    ),
+    "all": r".*\b(arms?|hands?|waving|wave|pose|posing|leaning|bowing|nodding|jumping|tilt|tilted)\b.*|standing|sitting",
 }
 # コマのタグを強める重み(NovelAI の 1.4::タグ::)。元の絵の描き方に引っ張られないように
 FRAME_WEIGHT = 1.4
@@ -66,7 +80,14 @@ DEFAULT_MOTIONS = [
      "delays": [800, 150, 150, 1500]},
     {"name": "髪の揺れ", "region": "hair", "frames": ["", "hair blowing, wind", "floating hair, wind", "hair blowing, wind"],
      "delays": [250, 250, 250, 250]},
+    # B. 全体を少しずつ描き直す(体ごと。背景は元の絵のまま)
+    {"name": "手を振る", "region": "person", "frames": ["", "waving, hand up", "waving, arm raised, open hand", "waving, hand up"],
+     "delays": [300, 200, 200, 200]},
+    {"name": "首をかしげる", "region": "person", "frames": ["", "head tilt", "head tilt, smile", "head tilt"],
+     "delays": [700, 250, 900, 250]},
 ]
+# 既定の動きを入れるとき、すでに入れたもの(消したものも)は入れ直さない
+_SEEDED_KEY = "ugoira.seeded_motions"
 
 
 class UgoiraError(ValueError):
@@ -90,6 +111,15 @@ def region_box(head: tuple[float, float, float, float], region: str, size: tuple
 
 def region_mask(head: tuple[float, float, float, float], region: str, size: tuple[int, int]) -> Image.Image:
     """描き直す範囲の白いマスク(ふちをぼかす。髪のときは顔を除く)。L の画像。"""
+    if region == "all":
+        return Image.new("L", size, 255)
+    if region == "person":
+        x0, y0, x1, y1 = head
+        w = x1 - x0
+        mask = Image.new("L", size, 0)
+        box = (max(0, x0 - _PERSON_SPREAD * w), max(0, y0 - 0.15 * (y1 - y0)), min(size[0], x1 + _PERSON_SPREAD * w), size[1])
+        ImageDraw.Draw(mask).rectangle(box, fill=255)
+        return mask.filter(ImageFilter.GaussianBlur(_PERSON_FEATHER))
     mask = Image.new("L", size, 0)
     draw = ImageDraw.Draw(mask)
     draw.rectangle(region_box(head, region, size), fill=255)
@@ -149,19 +179,36 @@ def composite(source: Image.Image, generated: Image.Image, mask: Image.Image) ->
 # ---- 動き(DB) ----
 
 
+def _seed_motions(conn: Any) -> None:
+    """
+    既定の動きを、まだ入れていないものだけ入れる(あとから増えた既定の動きも入る。ユーザーが消したものは入れ直さない)。
+    入れた名前は ugoira_meta に覚える。前の版で入れた動き(名前が同じもの)は、入れたものとして覚える。
+    """
+    row = conn.execute("SELECT value FROM ugoira_meta WHERE key = ?", (_SEEDED_KEY,)).fetchone()
+    seeded = set(json.loads(row["value"])) if row else set()
+    existing = {r["name"] for r in conn.execute("SELECT name FROM ugoira_motions")}
+    seeded |= {m["name"] for m in DEFAULT_MOTIONS if m["name"] in existing}
+    now = datetime.now(timezone.utc).isoformat()
+    for m in DEFAULT_MOTIONS:
+        if m["name"] in seeded:
+            continue
+        conn.execute(
+            "INSERT INTO ugoira_motions (name, region, frames, delays, created_at) VALUES (?, ?, ?, ?, ?)",
+            (m["name"], m["region"], json.dumps(m["frames"], ensure_ascii=False), json.dumps(m["delays"]), now),
+        )
+        seeded.add(m["name"])
+    conn.execute(
+        "INSERT INTO ugoira_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_SEEDED_KEY, json.dumps(sorted(seeded), ensure_ascii=False)),
+    )
+    conn.commit()
+
+
 def list_motions() -> list[dict[str, Any]]:
     conn = get_connection()
     try:
+        _seed_motions(conn)
         rows = conn.execute("SELECT * FROM ugoira_motions ORDER BY id").fetchall()
-        if not rows:
-            now = datetime.now(timezone.utc).isoformat()
-            for m in DEFAULT_MOTIONS:
-                conn.execute(
-                    "INSERT INTO ugoira_motions (name, region, frames, delays, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (m["name"], m["region"], json.dumps(m["frames"], ensure_ascii=False), json.dumps(m["delays"]), now),
-                )
-            conn.commit()
-            rows = conn.execute("SELECT * FROM ugoira_motions ORDER BY id").fetchall()
     finally:
         conn.close()
     return [{**dict(r), "frames": json.loads(r["frames"]), "delays": json.loads(r["delays"])} for r in rows]

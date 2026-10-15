@@ -53,7 +53,8 @@ export default function Ugoira() {
   const [motions, setMotions] = useState<Motion[]>([])
   const [regions, setRegions] = useState<Record<string, string>>({})
   const [motionId, setMotionId] = useState<number | null>(null)
-  const [strength, setStrength] = useState(1.0)
+  // 描き直しの強さ。'auto' は方法ごとの既定(A: 1.0、B: 0.7)
+  const [strength, setStrength] = useState<string>('auto')
   const [projects, setProjects] = useState<Project[]>([])
   const [project, setProject] = useState<Project | null>(null)
   const [frames, setFrames] = useState<Frame[]>([])
@@ -105,7 +106,7 @@ export default function Ugoira() {
     if (!sourceKey || motionId === null) return
     setError(null)
     try {
-      const started = await call<Job>('/partial', { method: 'POST', body: JSON.stringify({ key: sourceKey, motion_id: motionId, strength }) })
+      const started = await call<Job>('/partial', { method: 'POST', body: JSON.stringify({ key: sourceKey, motion_id: motionId, ...(strength === 'auto' ? {} : { strength: Number(strength) }) }) })
       setJob(started)
       follow(started.id)
     } catch (e) {
@@ -193,6 +194,8 @@ export default function Ugoira() {
   }
 
   const motion = motions.find(m => m.id === motionId)
+  // 体ごと・絵全体の動きは B(全体を少しずつ描き直す)
+  const whole = motion?.region === 'person' || motion?.region === 'all'
   const running = job?.status === 'running'
   const dirty = !!project && JSON.stringify(frames) !== JSON.stringify(project.frames)
   return (
@@ -208,7 +211,7 @@ export default function Ugoira() {
         {notice && <p className="pub-hint" role="status">{notice}</p>}
 
         <section className="ugo-section">
-          <h2>作る(部分だけ描き直す)</h2>
+          <h2>作る</h2>
           {!sourceKey && <p className="pub-hint">ギャラリーで画像を開き、「うごイラを作る」を押すと、ここに元の絵が入ります。</p>}
           {sourceKey && (
             <>
@@ -223,14 +226,15 @@ export default function Ugoira() {
                   </select>
                 </label>
                 <label>描き直しの強さ{' '}
-                  <select value={strength} disabled={running} onChange={e => setStrength(Number(e.target.value))}>
-                    <option value={1.0}>強い(1.0。動きがはっきり出る)</option>
-                    <option value={0.8}>ふつう(0.8)</option>
-                    <option value={0.6}>弱い(0.6。元の絵に近い)</option>
+                  <select value={strength} disabled={running} onChange={e => setStrength(e.target.value)}>
+                    <option value="auto">おまかせ({whole ? '0.7' : '1.0'})</option>
+                    {(whole ? ['0.8', '0.6', '0.5'] : ['0.8', '0.6']).map(v => (
+                      <option key={v} value={v}>{v}{Number(v) < (whole ? 0.7 : 1.0) ? '(元の絵に近い)' : '(動きが大きい・変わりやすい)'}</option>
+                    ))}
                   </select>
                 </label>
               </div>
-              {motion && <p className="pub-meta">コマ: {motion.frames.map((f, i) => `${f || '(元のまま)'} ${motion.delays[i]}ms`).join(' → ')}</p>}
+              {motion && <p className="pub-meta">コマ: {motion.frames.map((f, i) => `${f || (whole ? '(タグを足さずに描き直す)' : '(元のまま)')} ${motion.delays[i]}ms`).join(' → ')}</p>}
               <button type="button" className="ugo-primary" disabled={running || !motion} onClick={() => void start()}>
                 {running ? '作っています…' : 'うごイラを作る'}
               </button>
@@ -241,7 +245,10 @@ export default function Ugoira() {
                 </div>
               )}
               <p className="pub-hint">
-                頭の検出から目・口・髪の範囲を決め、そこだけを描き直します(範囲の外は元の絵のまま)。1MP 以内なので、Opus なら Anlas はかかりません。
+                {whole
+                  ? '体ごとの動き(B): 元の絵から毎回描き直します(img2img)。手を振るなどの大きい動きが出ますが、服や細部が少し変わることがあります。体ごとのときは、背景は元の絵のままです。'
+                  : '部分の動き(A): 頭の検出から目・口・髪の範囲を決め、そこだけを描き直します(範囲の外は元の絵のまま)。'}
+                1MP 以内なので、Opus なら Anlas はかかりません。
               </p>
             </>
           )}

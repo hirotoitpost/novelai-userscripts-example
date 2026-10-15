@@ -249,6 +249,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute("CREATE TABLE IF NOT EXISTS ugoira_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ugoira_projects (
