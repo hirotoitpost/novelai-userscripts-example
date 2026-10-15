@@ -66,10 +66,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("python.image_tagger.tag_image", lambda img: [])
     monkeypatch.setattr("python.manga_v2.detect.detect_heads_in_image", lambda img: [HEAD])
     prompts: list[tuple[str, str]] = []
+    calls: list = []
 
     class FakeImage:
         async def generate(self, params):
             prompts.append((params.prompt, params.negative_prompt or ""))
+            calls.append(params)
             return [Image.new("RGB", params.size, "black")]
 
     class JobClient:
@@ -156,3 +158,29 @@ def test_motions_and_trash(client, tmp_path: Path) -> None:
     assert entry["kind"] == "ugoira"
     assert test_client.post(f"/api/trash/{entry['id']}/restore").status_code == 200
     assert test_client.get(f"/api/ugoira/{project_id}").status_code == 200 and all(f.exists() for f in files)
+
+
+def test_whole_motion_uses_img2img_and_redraws_every_frame(client, tmp_path: Path) -> None:
+    test_client, key, prompts = client
+    wave = next(m for m in test_client.get("/api/ugoira/motions").json()["motions"] if m["name"] == "手を振る")
+    assert wave["region"] == "person"
+    job = _wait(test_client, test_client.post("/api/ugoira/partial", json={"key": key, "motion_id": wave["id"]}).json()["id"])
+    assert job["status"] == "done", job
+    project = test_client.get(f"/api/ugoira/{job['project_id']}").json()
+    # B は、タグの無いコマも描き直す(4コマとも生成)。毎回、元の絵から img2img する
+    assert project["method"] == "whole" and len(prompts) == 4
+    assert prompts[1][0].startswith("1.4::waving::, 1.4::hand up::")
+
+
+def test_default_motions_are_seeded_once(client) -> None:
+    test_client, _, _ = client
+    motions = test_client.get("/api/ugoira/motions").json()["motions"]
+    names = [m["name"] for m in motions]
+    assert names.count("手を振る") == 1 and "まばたき" in names
+    # 消した既定の動きは、入れ直さない
+    wave = next(m for m in motions if m["name"] == "手を振る")
+    test_client.delete(f"/api/ugoira/motions/{wave['id']}")
+    assert "手を振る" not in [m["name"] for m in test_client.get("/api/ugoira/motions").json()["motions"]]
+    assert ugoira.region_mask(HEAD, "all", (400, 600)).getpixel((0, 0)) == 255
+    person = ugoira.region_mask(HEAD, "person", (400, 600))
+    assert person.getpixel((200, 590)) == 255 and person.getpixel((200, 10)) == 0

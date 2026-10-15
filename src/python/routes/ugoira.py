@@ -5,7 +5,8 @@
   POST   /motions                 動きを足す
   PUT    /motions/{id}            動きを直す
   DELETE /motions/{id}            動きを消す
-  POST   /partial                 A. 部分だけ描き直してうごイラを作る(処理を切り離す。GET /jobs/{id} で進み具合)
+  POST   /partial                 うごイラを作る(処理を切り離す。GET /jobs/{id} で進み具合)。動きの範囲で方法が決まる:
+                                    目・口・顔・髪は A(部分だけインペイント)、体ごと・絵全体は B(全体を img2img)
   GET    /jobs/{id}               進み具合
   GET    /                        作ったうごイラの一覧
   GET    /{id}                    1つ
@@ -33,12 +34,15 @@ from .. import ugoira
 from ..client import get_client
 
 router = APIRouter(prefix="/api/ugoira", tags=["ugoira"])
+# B(全体を img2img)の既定の強さ。実機で、0.55 では手が上がらず、0.8 では背景・服まで変わった。0.7 で手を振りつつ
+# 顔・髪はそろった
+WHOLE_STRENGTH = 0.7
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
 
 class MotionRequest(BaseModel):
     name: str = Field(min_length=1, max_length=60)
-    region: Literal["eyes", "mouth", "face", "hair"]
+    region: Literal["eyes", "mouth", "face", "hair", "person", "all"]
     frames: list[str] = Field(min_length=2, max_length=24)
     delays: list[int] = Field(min_length=2, max_length=24)
 
@@ -46,8 +50,8 @@ class MotionRequest(BaseModel):
 class PartialRequest(BaseModel):
     key: str = Field(min_length=1, description="ギャラリーの画像のキー")
     motion_id: int
-    # インペイントの強さ(弱いほど元の絵に近い)
-    strength: float = Field(1.0, ge=0.3, le=1.0)
+    # 描き直しの強さ(弱いほど元の絵に近い)。無ければ方法ごとの既定: A(部分・インペイント)1.0、B(全体・img2img)0.7
+    strength: float | None = Field(None, ge=0.2, le=1.0)
     seed: int | None = Field(None, ge=0, le=4294967295)
 
 
@@ -166,14 +170,18 @@ async def _run_partial(job: _Job, req: PartialRequest, item: Any, motion: dict[s
         settings = generation_settings(data) or {}
         base_prompt = settings.get("prompt") or item.prompt or ""
         seed = next((s for s in (req.seed, settings.get("seed"), item.seed) if s is not None), 1)
-        project_id = ugoira.create_project(f"{motion['name']}({item.label or item.key})", item.key, "partial")
+        whole = motion["region"] in ugoira.WHOLE_REGIONS
+        strength = req.strength if req.strength is not None else (WHOLE_STRENGTH if whole else 1.0)
+        project_id = ugoira.create_project(f"{motion['name']}({item.label or item.key})", item.key, "whole" if whole else "partial")
         job.project_id = project_id
         frames: list[dict[str, Any]] = []
         client = None
         try:
             for index, (tags, delay) in enumerate(zip(motion["frames"], motion["delays"])):
                 job.message = f"コマ {index + 1}/{len(motion['frames'])} を描いています"
-                if not tags.strip():
+                # A ではタグの無いコマは元の絵のまま。B では元の絵だけ描き方が違って見える(動きが飛ぶ)ので、
+                # タグの無いコマも同じ強さで描き直す
+                if not tags.strip() and not whole:
                     image = source
                 else:
                     fields: dict[str, Any] = {
@@ -186,7 +194,14 @@ async def _run_partial(job: _Job, req: PartialRequest, item: Any, motion: dict[s
                         "size": list(source.size),
                         "steps": min(settings.get("steps") or 28, 28),
                         "seed": seed,
-                        "inpaint": {"image": _png_b64(source), "mask": _png_b64(mask.convert("RGB")), "strength": req.strength, "seed": seed},
+                        **(
+                            # B: 元の絵から img2img(毎回、元の絵から。前のコマからつなぐと少しずつずれていく)。体ごとのときは、
+                            # 背景は元の絵のまま重ねる(ちらつきを抑える)
+                            {"i2i": {"image": _png_b64(source), "strength": strength, "noise": 0.0, "seed": seed}}
+                            if whole
+                            # A: 範囲だけインペイント
+                            else {"inpaint": {"image": _png_b64(source), "mask": _png_b64(mask.convert("RGB")), "strength": strength, "seed": seed}}
+                        ),
                         "characters": whole_characters(settings) or None,
                     }
                     for key in ("model", "scale", "sampler", "noise_schedule"):
