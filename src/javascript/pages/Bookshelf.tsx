@@ -19,6 +19,7 @@ import {
 } from '../library'
 import WorkRelations, { Author } from '../components/WorkRelations'
 import FullscreenViewer from '../components/FullscreenViewer'
+import { WorkExportButton, WorkImport } from '../components/WorkTransfer'
 import './Bookshelf.css'
 
 interface Book {
@@ -359,6 +360,7 @@ export default function Bookshelf() {
         </button>
         <button type="button" className="shelf-back" onClick={() => navigate('/publications')}>出版物</button>
         <button type="button" className="shelf-back" onClick={() => navigate('/trash')}>ごみ箱</button>
+        <WorkImport buttonClassName="shelf-back" onImported={id => { void loadBooks(); openBook(id) }} />
       </header>
 
       <div className="shelf-toolbar">
@@ -784,6 +786,7 @@ function Reader({
                 title="この本の漫画のページから NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として保存します">
                 出版する
               </button>
+              <WorkExportButton storyId={book.id} />
               <button type="button" onClick={() => onToggleSelect(book.id)} aria-pressed={selectedForPublish}
                 title="ほかの本とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
                 {selectedForPublish ? `出版の選択から外す(${selectedCount}冊選択中)` : `出版に選ぶ${selectedCount > 0 ? `(${selectedCount}冊選択中)` : ''}`}
