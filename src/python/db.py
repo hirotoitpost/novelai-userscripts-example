@@ -236,6 +236,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # ごみ箱(trash.py): 消したものの行(JSON)と、預かったファイル([元の場所, 預けた名前, 大きさ] の並び)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trash_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            label TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            files TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )
+        """
+    )
     # 未成年キャラの安全対策で止めた・全年齢にした記録(minor_guard.py)。どこで止まったかを管理ページで見る
     conn.execute(
         """

@@ -351,8 +351,8 @@ export default function Gallery() {
 
   async function deleteKeys(keys: string[]) {
     const message = keys.length === 1
-      ? 'この画像を削除します。元に戻せません。よろしいですか？'
-      : `${keys.length} 枚の画像を削除します。元に戻せません。よろしいですか？`
+      ? 'この画像を削除します(ごみ箱に入り、30日のあいだは元に戻せます)。よろしいですか？'
+      : `${keys.length} 枚の画像を削除します(ごみ箱に入り、30日のあいだは元に戻せます)。よろしいですか？`
     const datasetCount = items.filter(i => keys.includes(i.key) && i.source === 'dataset').length
     const notes = ['(漫画のコマを消しても、合成済みのページはそのまま残ります)']
     if (datasetCount > 0) {
@@ -495,6 +495,7 @@ export default function Gallery() {
         >
           {selecting ? '完了' : '選択'}
         </button>
+        <button type="button" className="gallery-back" onClick={() => navigate('/trash')}>ごみ箱</button>
       </header>
 
       <div className="gallery-toolbar">

@@ -291,6 +291,19 @@ export default function Home() {
             <p>生成した画像・漫画のコマ・挿絵を一覧で見て、ブックマークやダウンロードができます。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/trash')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/trash')}
+          >
+            <div className="home-card-icon">🗑️</div>
+            <h2>ごみ箱</h2>
+            <p>ギャラリー・本棚・キャラで消したもの。30日のあいだは元に戻せます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
         </div>
 
         <div className="home-sdk-info">

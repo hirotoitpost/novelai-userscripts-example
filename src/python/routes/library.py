@@ -21,20 +21,12 @@ from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from .. import content_guard
+from .. import content_guard, trash
 from ..db import (
     list_characters,
-    delete_generation_entry,
-    delete_manga_page,
-    delete_manga_panel,
-    delete_series_if_empty,
-    delete_story,
     forget_library_items,
-    forget_work,
-    get_series,
     list_work_authors,
     get_connection,
-    get_generation_entry,
     get_story,
     list_adult_marks,
     list_bookmarks,
@@ -48,7 +40,6 @@ from ..db import (
     list_story_texts,
     set_adult_mark,
     set_bookmark,
-    set_generation_image_paths,
 )
 from ..relatedness import Item, idf_weights, normalize_tags, rank
 from .lora_dataset import _safe_name
@@ -326,16 +317,6 @@ def _dataset_images() -> list[GalleryImage]:
                         )
                     )
     return items
-
-
-def _delete_dataset_image(rel: str) -> bool:
-    """データセットの画像と、対になるキャプション(.txt)を消す。"""
-    full = (_OUTPUTS / rel).resolve()
-    if not _is_dataset_file(full) or not full.is_file():
-        return False
-    full.unlink()
-    full.with_suffix(".txt").unlink(missing_ok=True)
-    return True
 
 
 def _gallery_images() -> list[GalleryImage]:
@@ -802,32 +783,6 @@ def _remove_file(path: str | None) -> None:
         full.unlink()
 
 
-def _delete_history_image(entry_id: int, filename: str) -> bool:
-    conn = get_connection()
-    try:
-        entry = get_generation_entry(conn, entry_id)
-        if entry is None:
-            return False
-        target = next(
-            (p for p in entry["image_paths"] if Path(p).name == filename), None
-        )
-        if target is None:
-            return False
-        rest = [p for p in entry["image_paths"] if p != target]
-        if rest:
-            set_generation_image_paths(conn, entry_id, rest)
-        else:
-            # 最後の1枚なら履歴ごと消し、i2i・キャラクター参照の元画像も片付ける
-            delete_generation_entry(conn, entry_id)
-            _remove_file(entry.get("i2i_image_path"))
-            for ref in entry["character_references"]:
-                _remove_file(ref.get("image_path"))
-    finally:
-        conn.close()
-    _remove_file(target)
-    return True
-
-
 class ImagesDeleteRequest(BaseModel):
     keys: list[str] = Field(min_length=1, max_length=2000)
 
@@ -835,30 +790,25 @@ class ImagesDeleteRequest(BaseModel):
 @router.post("/images/delete")
 def delete_images(req: ImagesDeleteRequest) -> dict[str, int]:
     """
-    ギャラリーで選んだ画像を消す(元に戻せない)。生成履歴の画像は履歴から外し、漫画のコマ・挿絵は
-    その行を消す。漫画のコマを消しても合成済みのページはそのまま残る(合成し直すとそのコマが空く)。
+    ギャラリーで選んだ画像を消す(ごみ箱に入り、30日のあいだは元に戻せる)。生成履歴の画像は履歴から外し、漫画のコマ・
+    挿絵はその行を消す。漫画のコマを消しても合成済みのページはそのまま残る(合成し直すとそのコマが空く)。
     """
     deleted: list[str] = []
     for key in dict.fromkeys(req.keys):
         kind, _, rest = key.partition(":")
+        # どれもごみ箱に預ける(trash.py。30日のあいだは元に戻せる)
         if kind == "history":
             entry_id, _, filename = rest.partition(":")
-            if entry_id.isdigit() and _delete_history_image(int(entry_id), filename):
+            if entry_id.isdigit() and trash.history_image(int(entry_id), filename) is not None:
                 deleted.append(key)
         elif kind == "dataset":
-            # データセットの画像は学習用フォルダから消える(キャプションも一緒に)
-            if _delete_dataset_image(rest):
+            # データセットの画像は学習用フォルダから外れる(キャプションも一緒に)
+            full = (_OUTPUTS / rest).resolve()
+            if _is_dataset_file(full) and full.is_file():
+                trash.dataset_image(full)
                 deleted.append(key)
         elif kind in ("panel", "illustration") and rest.isdigit():
-            conn = get_connection()
-            try:
-                path = (delete_manga_panel if kind == "panel" else delete_manga_page)(
-                    conn, int(rest)
-                )
-            finally:
-                conn.close()
-            if path is not None:
-                _remove_file(path)
+            if trash.manga_row(kind, int(rest)) is not None:
                 deleted.append(key)
     conn = get_connection()
     try:
@@ -871,8 +821,8 @@ def delete_images(req: ImagesDeleteRequest) -> dict[str, int]:
 @router.delete("/books/{story_id}", status_code=204)
 def delete_book(story_id: int) -> None:
     """
-    物語を消す(元に戻せない)。シーン・コマ・挿絵の行と画像、合成したページも消す。
-    物語エディタの下書きは残る(物語との結び付きだけ外れる)。
+    物語を消す(ごみ箱に入り、30日のあいだは元に戻せる)。シーン・コマ・挿絵の行と画像、合成したページも預ける。
+    物語エディタの下書きは残る(物語との結び付きだけ外れる。戻すと結び付きも戻る)。
     """
     job = _jobs.get(story_id)
     if job is not None and job.status == "running":
@@ -880,27 +830,7 @@ def delete_book(story_id: int) -> None:
             status_code=409,
             detail="この物語は処理中です。終わってから削除してください。",
         )
-    image_keys = [item.key for item in _gallery_images() if item.story_id == story_id]
-    conn = get_connection()
-    try:
-        if get_story(conn, story_id) is None:
-            raise HTTPException(status_code=404, detail="story not found")
-        series_id = (get_story(conn, story_id) or {}).get("series_id")
-        paths = delete_story(conn, story_id)
-        # 作品の作者・関連も外す(シリーズは最後の巻を消して無くなったときだけ)
-        if series_id is None:
-            forget_work(conn, "story", story_id)
-        else:
-            delete_series_if_empty(conn, series_id)
-            if get_series(conn, series_id) is None:
-                forget_work(conn, "series", series_id)
-        forget_library_items(conn, "image", image_keys)
-        forget_library_items(conn, "book", [str(story_id)])
-    finally:
-        conn.close()
-    for path in paths:
-        _remove_file(path)
-    # 合成したページ・完成画像(漫画v2は outputs/manga/v2、v1 の完成画像は outputs/manga)
-    for folder in (_OUTPUTS / "manga" / "v2", _OUTPUTS / "manga"):
-        for file in folder.glob(f"story{story_id}_*.png"):
-            file.unlink()
+    # 合成したページ・完成画像(漫画v2は outputs/manga/v2、v1 の完成画像は outputs/manga)も預ける
+    composed = [file for folder in (_OUTPUTS / "manga" / "v2", _OUTPUTS / "manga") for file in folder.glob(f"story{story_id}_*.png")]
+    if trash.book(story_id, composed) is None:
+        raise HTTPException(status_code=404, detail="story not found")
