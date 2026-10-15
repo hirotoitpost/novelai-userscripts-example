@@ -17,6 +17,7 @@ from .routes.batch import router as batch_router
 from .routes.chunks import router as chunks_router
 from .routes.content_guard import router as content_guard_router
 from .routes.trash import router as trash_router
+from .routes.ugoira import router as ugoira_router
 from .routes.gallery_manga import router as gallery_manga_router
 from .routes.quick_manga import router as quick_manga_router
 from .routes.image import router as image_router
@@ -91,6 +92,7 @@ app.include_router(batch_router)
 app.include_router(chunks_router)
 app.include_router(content_guard_router)
 app.include_router(trash_router)
+app.include_router(ugoira_router)
 app.include_router(gallery_manga_router)
 app.include_router(quick_manga_router)
 app.include_router(image_router)

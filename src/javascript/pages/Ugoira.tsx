@@ -1,0 +1,345 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { API_ORIGIN, fileUrl } from '../library'
+import './Publications.css'
+import './Ugoira.css'
+
+/**
+ * うごイラ(Pixiv のパラパラ漫画のような動く絵)を作る・直す・書き出す(/api/ugoira)。
+ * A. 部分だけ描き直す: ギャラリーの画像の、目・口・髪など動かす所だけを描き直してコマにする(範囲の外は元のまま)。
+ * コマの並び・表示時間を直し、プレビューで確かめて、Pixiv 用 ZIP・GIF・アニメ WebP に書き出す。
+ */
+
+interface Motion { id: number; name: string; region: string; frames: string[]; delays: number[] }
+interface Frame { path: string; delay: number; tags: string }
+interface Project { id: number; name: string; source_key: string | null; method: string; frames: Frame[]; created_at: string }
+interface Job { id: string; status: 'running' | 'done' | 'error'; message: string; progress: number; total: number; project_id: number | null }
+
+async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_ORIGIN}/api/ugoira${path}`, {
+    ...init,
+    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+  })
+  const body = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : `HTTP ${res.status}`)
+  return body as T
+}
+
+function Preview({ frames }: { frames: Frame[] }) {
+  const [index, setIndex] = useState(0)
+  const [playing, setPlaying] = useState(true)
+  useEffect(() => {
+    if (!playing || frames.length === 0) return
+    const id = window.setTimeout(() => setIndex(i => (i + 1) % frames.length), frames[index % frames.length]?.delay ?? 100)
+    return () => window.clearTimeout(id)
+  }, [index, playing, frames])
+  if (frames.length === 0) return null
+  const current = frames[index % frames.length]
+  return (
+    <div className="ugo-preview">
+      <img src={fileUrl(current.path)} alt={`コマ ${index % frames.length + 1}`} />
+      <div className="ugo-row">
+        <button type="button" onClick={() => setPlaying(!playing)}>{playing ? '止める' : '動かす'}</button>
+        <span className="pub-meta">コマ {index % frames.length + 1}/{frames.length}・{current.delay}ms</span>
+      </div>
+    </div>
+  )
+}
+
+export default function Ugoira() {
+  const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const sourceKey = params.get('key')
+  const [motions, setMotions] = useState<Motion[]>([])
+  const [regions, setRegions] = useState<Record<string, string>>({})
+  const [motionId, setMotionId] = useState<number | null>(null)
+  const [strength, setStrength] = useState(1.0)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [project, setProject] = useState<Project | null>(null)
+  const [frames, setFrames] = useState<Frame[]>([])
+  const [job, setJob] = useState<Job | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [maxSide, setMaxSide] = useState('')
+  const [editing, setEditing] = useState<Motion | null>(null)
+  const [draft, setDraft] = useState({ name: '', region: 'eyes', lines: '' })
+  const timer = useRef<number | null>(null)
+  const [sourcePath, setSourcePath] = useState<string | null>(null)
+  useEffect(() => {
+    if (!sourceKey) return
+    fetch(`${API_ORIGIN}/api/library/images/item?key=${encodeURIComponent(sourceKey)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(item => setSourcePath(item?.path ?? null))
+      .catch(() => setSourcePath(null))
+  }, [sourceKey])
+
+  const loadMotions = useCallback(() => {
+    call<{ motions: Motion[]; regions: Record<string, string> }>('/motions')
+      .then(data => { setMotions(data.motions); setRegions(data.regions); setMotionId(id => id ?? data.motions[0]?.id ?? null) })
+      .catch(e => setError(String(e)))
+  }, [])
+  const loadProjects = useCallback(() => { call<Project[]>('').then(setProjects).catch(() => {}) }, [])
+  useEffect(() => { loadMotions(); loadProjects() }, [loadMotions, loadProjects])
+  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current) }, [])
+
+  const open = useCallback(async (id: number) => {
+    const p = await call<Project>(`/${id}`)
+    setProject(p)
+    setFrames(p.frames)
+    setParams(prev => { const next = new URLSearchParams(prev); next.set('project', String(id)); return next })
+  }, [setParams])
+  useEffect(() => {
+    const id = Number(params.get('project'))
+    if (id && project?.id !== id) void open(id).catch(e => setError(String(e)))
+  }, [params, project, open])
+
+  const follow = (id: string) => {
+    call<Job>(`/jobs/${id}`).then(next => {
+      setJob(next)
+      if (next.status === 'running') timer.current = window.setTimeout(() => follow(id), 1500)
+      else if (next.status === 'done' && next.project_id) { void open(next.project_id); loadProjects() }
+    }).catch(e => setError(String(e)))
+  }
+
+  async function start() {
+    if (!sourceKey || motionId === null) return
+    setError(null)
+    try {
+      const started = await call<Job>('/partial', { method: 'POST', body: JSON.stringify({ key: sourceKey, motion_id: motionId, strength }) })
+      setJob(started)
+      follow(started.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const move = (index: number, step: number) => setFrames(prev => {
+    const next = [...prev]
+    const target = index + step
+    if (target < 0 || target >= next.length) return prev
+    ;[next[index], next[target]] = [next[target], next[index]]
+    return next
+  })
+
+  async function saveFrames() {
+    if (!project) return
+    setError(null)
+    try {
+      const saved = await call<Project>(`/${project.id}/frames`, { method: 'PUT', body: JSON.stringify({ frames }) })
+      setProject(saved)
+      setFrames(saved.frames)
+      setNotice('コマの並び・表示時間を保存しました。')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function download(format: 'zip' | 'gif' | 'webp') {
+    if (!project) return
+    setError(null)
+    try {
+      const query = new URLSearchParams({ format, ...(maxSide ? { max_side: maxSide } : {}) })
+      const res = await fetch(`${API_ORIGIN}/api/ugoira/${project.id}/export?${query}`)
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(await res.blob())
+      link.download = `ugoira_${project.id}.${format}`
+      link.click()
+      URL.revokeObjectURL(link.href)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function remove() {
+    if (!project || !window.confirm(`「${project.name}」をごみ箱へ移します(30日のあいだは元に戻せます)。よろしいですか?`)) return
+    await fetch(`${API_ORIGIN}/api/ugoira/${project.id}`, { method: 'DELETE' })
+    setProject(null)
+    setFrames([])
+    setParams(prev => { const next = new URLSearchParams(prev); next.delete('project'); return next })
+    loadProjects()
+  }
+
+  function editMotion(motion: Motion | null) {
+    setEditing(motion ?? { id: 0, name: '', region: 'eyes', frames: [], delays: [] })
+    setDraft(motion
+      ? { name: motion.name, region: motion.region, lines: motion.frames.map((f, i) => `${f} ; ${motion.delays[i]}`).join('\n') }
+      : { name: '', region: 'eyes', lines: ' ; 1000\nclosed eyes ; 100' })
+  }
+
+  async function saveMotion() {
+    if (!editing) return
+    const rows = draft.lines.split('\n').filter(l => l.trim())
+    const body = {
+      name: draft.name, region: draft.region,
+      frames: rows.map(l => l.split(';')[0].trim()),
+      delays: rows.map(l => Number(l.split(';')[1]?.trim() || 100)),
+    }
+    setError(null)
+    try {
+      await call(editing.id ? `/motions/${editing.id}` : '/motions', { method: editing.id ? 'PUT' : 'POST', body: JSON.stringify(body) })
+      setEditing(null)
+      loadMotions()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function deleteMotion(motion: Motion) {
+    if (!window.confirm(`動き「${motion.name}」を消します。よろしいですか?`)) return
+    await fetch(`${API_ORIGIN}/api/ugoira/motions/${motion.id}`, { method: 'DELETE' })
+    setMotionId(null)
+    loadMotions()
+  }
+
+  const motion = motions.find(m => m.id === motionId)
+  const running = job?.status === 'running'
+  const dirty = !!project && JSON.stringify(frames) !== JSON.stringify(project.frames)
+  return (
+    <div className="pub-root">
+      <header className="pub-header">
+        <button type="button" className="pub-link" onClick={() => navigate('/')}>← ホーム</button>
+        <h1>うごイラ</h1>
+        <span className="pub-count">{projects.length} 件</span>
+        <button type="button" className="pub-link" onClick={() => navigate('/gallery')}>ギャラリーへ</button>
+      </header>
+      <main className="pub-main ugo-main">
+        {error && <p className="pub-error" role="alert">{error}</p>}
+        {notice && <p className="pub-hint" role="status">{notice}</p>}
+
+        <section className="ugo-section">
+          <h2>作る(部分だけ描き直す)</h2>
+          {!sourceKey && <p className="pub-hint">ギャラリーで画像を開き、「うごイラを作る」を押すと、ここに元の絵が入ります。</p>}
+          {sourceKey && (
+            <>
+              <div className="ugo-source">
+                {sourcePath && <img src={`${API_ORIGIN}/api/library/thumb?path=${encodeURIComponent(sourcePath)}&w=240`} alt="元の絵" />}
+                <span className="pub-meta">元の絵: <code>{sourceKey}</code></span>
+              </div>
+              <div className="ugo-row">
+                <label>動き{' '}
+                  <select value={motionId ?? ''} disabled={running} onChange={e => setMotionId(Number(e.target.value))}>
+                    {motions.map(m => <option key={m.id} value={m.id}>{m.name}({regions[m.region]}・{m.frames.length}コマ)</option>)}
+                  </select>
+                </label>
+                <label>描き直しの強さ{' '}
+                  <select value={strength} disabled={running} onChange={e => setStrength(Number(e.target.value))}>
+                    <option value={1.0}>強い(1.0。動きがはっきり出る)</option>
+                    <option value={0.8}>ふつう(0.8)</option>
+                    <option value={0.6}>弱い(0.6。元の絵に近い)</option>
+                  </select>
+                </label>
+              </div>
+              {motion && <p className="pub-meta">コマ: {motion.frames.map((f, i) => `${f || '(元のまま)'} ${motion.delays[i]}ms`).join(' → ')}</p>}
+              <button type="button" className="ugo-primary" disabled={running || !motion} onClick={() => void start()}>
+                {running ? '作っています…' : 'うごイラを作る'}
+              </button>
+              {job && (
+                <div className="ugo-row" role="status">
+                  {running && <progress max={job.total} value={job.progress} />}
+                  <span className="pub-meta">{job.message}</span>
+                </div>
+              )}
+              <p className="pub-hint">
+                頭の検出から目・口・髪の範囲を決め、そこだけを描き直します(範囲の外は元の絵のまま)。1MP 以内なので、Opus なら Anlas はかかりません。
+              </p>
+            </>
+          )}
+        </section>
+
+        {project && (
+          <section className="ugo-section">
+            <h2>{project.name}</h2>
+            <div className="ugo-editor">
+              <Preview frames={frames} />
+              <div className="ugo-frames">
+                {frames.map((frame, index) => (
+                  <div key={frame.path} className="ugo-frame">
+                    <img src={fileUrl(frame.path)} alt={`コマ ${index + 1}`} loading="lazy" />
+                    <div className="ugo-row">
+                      <span className="pub-meta">{index + 1}. {frame.tags || '(元のまま)'}</span>
+                    </div>
+                    <div className="ugo-row">
+                      <input type="number" min={20} max={10000} step={10} value={frame.delay} aria-label={`コマ ${index + 1} の表示時間`}
+                        onChange={e => setFrames(prev => prev.map((f, i) => (i === index ? { ...f, delay: Number(e.target.value) } : f)))} />ms
+                      <button type="button" onClick={() => move(index, -1)} disabled={index === 0} aria-label="前へ">↑</button>
+                      <button type="button" onClick={() => move(index, 1)} disabled={index === frames.length - 1} aria-label="後ろへ">↓</button>
+                      <button type="button" onClick={() => setFrames(prev => [...prev.slice(0, index + 1), { ...frame }, ...prev.slice(index + 1)])}
+                        title="同じコマを、すぐ後ろにもう1枚入れます">複製</button>
+                      <button type="button" disabled={frames.length <= 1} onClick={() => setFrames(prev => prev.filter((_, i) => i !== index))}>外す</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="ugo-row">
+              <button type="button" className="ugo-primary" disabled={!dirty} onClick={() => void saveFrames()}>並び・表示時間を保存</button>
+              {dirty && <button type="button" onClick={() => setFrames(project.frames)}>元に戻す</button>}
+            </div>
+            <h3>書き出す</h3>
+            <div className="ugo-row">
+              <label>長い辺{' '}
+                <select value={maxSide} onChange={e => setMaxSide(e.target.value)}>
+                  <option value="">元のまま</option>
+                  <option value="1200">1200px</option>
+                  <option value="800">800px</option>
+                  <option value="600">600px</option>
+                </select>
+              </label>
+              <button type="button" disabled={dirty} onClick={() => void download('zip')} title="Pixiv のうごイラの投稿に使う ZIP(コマの画像を順番どおりに。表示時間は投稿の画面で決めます)">Pixiv 用 ZIP</button>
+              <button type="button" disabled={dirty} onClick={() => void download('gif')}>GIF</button>
+              <button type="button" disabled={dirty} onClick={() => void download('webp')}>アニメ WebP</button>
+              {dirty && <span className="pub-meta">先に保存してください</span>}
+            </div>
+            <button type="button" className="ugo-danger" onClick={() => void remove()}>このうごイラをごみ箱へ</button>
+          </section>
+        )}
+
+        <section className="ugo-section">
+          <h2>作ったうごイラ</h2>
+          {projects.length === 0 && <p className="pub-hint">まだありません。</p>}
+          <ul className="ugo-list">
+            {projects.map(p => (
+              <li key={p.id}>
+                <button type="button" onClick={() => void open(p.id)} className={project?.id === p.id ? 'is-open' : undefined}>
+                  {p.frames[0] && <img src={fileUrl(p.frames[0].path)} alt="" loading="lazy" />}
+                  <span>{p.name}</span>
+                  <span className="pub-meta">{p.frames.length}コマ</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <details className="ugo-section">
+          <summary>動きの管理(足す・直す・消す)</summary>
+          <p className="pub-hint">コマは1行に1つ、「タグ ; 表示時間(ミリ秒)」の形です。タグが空の行は元の絵のままのコマになります。</p>
+          <ul className="ugo-motions">
+            {motions.map(m => (
+              <li key={m.id}>
+                <strong>{m.name}</strong> <span className="pub-meta">{regions[m.region]}・{m.frames.length}コマ</span>{' '}
+                <button type="button" onClick={() => editMotion(m)}>直す</button>
+                <button type="button" onClick={() => void deleteMotion(m)}>消す</button>
+              </li>
+            ))}
+          </ul>
+          <button type="button" onClick={() => editMotion(null)}>動きを足す</button>
+          {editing && (
+            <div className="ugo-motion-form">
+              <input value={draft.name} placeholder="名前(例: ウインク)" aria-label="動きの名前" onChange={e => setDraft({ ...draft, name: e.target.value })} />
+              <select value={draft.region} aria-label="描き直す範囲" onChange={e => setDraft({ ...draft, region: e.target.value })}>
+                {Object.entries(regions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+              <textarea rows={6} value={draft.lines} aria-label="コマ(タグ ; ミリ秒)" spellCheck={false}
+                onChange={e => setDraft({ ...draft, lines: e.target.value })} />
+              <div className="ugo-row">
+                <button type="button" className="ugo-primary" onClick={() => void saveMotion()}>保存</button>
+                <button type="button" onClick={() => setEditing(null)}>やめる</button>
+              </div>
+            </div>
+          )}
+        </details>
+      </main>
+    </div>
+  )
+}

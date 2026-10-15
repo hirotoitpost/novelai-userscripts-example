@@ -294,6 +294,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/ugoira')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/ugoira')}
+          >
+            <div className="home-card-icon">🎞️</div>
+            <h2>うごイラ</h2>
+            <p>ギャラリーの絵の目・口・髪だけを描き直して、まばたき・口パクなどのパラパラ漫画にします。Pixiv 用 ZIP・GIF・WebP に書き出せます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/trash')}
             role="button"
             tabIndex={0}

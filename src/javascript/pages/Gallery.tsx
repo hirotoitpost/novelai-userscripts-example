@@ -755,6 +755,10 @@ export default function Gallery() {
                 title="ほかの画像とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
                 {selected.has(current.key) ? `出版の選択から外す(${selected.size}枚選択中)` : `出版に選ぶ${selected.size > 0 ? `(${selected.size}枚選択中)` : ''}`}
               </button>
+              <button type="button" onClick={() => navigate(`/ugoira?key=${encodeURIComponent(current.key)}`)}
+                title="この絵の目・口・髪だけを描き直して、まばたき・口パクなどのうごイラを作ります">
+                うごイラを作る
+              </button>
               <button type="button" onClick={() => void sendToGenerate(current)} disabled={sending}
                 title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値も入れます)">
                 {sending ? '読み取り中…' : '似た画像を生成(画像生成ページへ)'}

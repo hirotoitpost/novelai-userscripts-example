@@ -1,0 +1,180 @@
+/* うごイラ(Ugoira.tsx)。見出しなどは出版物のページ(Publications.css)と同じ */
+.ugo-section {
+  border: 1px solid #1f1f3a;
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  margin: 0.8rem 0;
+  font-size: 0.85rem;
+}
+
+.ugo-section h2 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
+.ugo-section h3 {
+  font-size: 0.9rem;
+  margin: 0.8rem 0 0.3rem;
+}
+
+.ugo-section summary {
+  cursor: pointer;
+  color: #b8a4ff;
+}
+
+.ugo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  margin: 0.4rem 0;
+}
+
+.ugo-main button,
+.ugo-main select,
+.ugo-main input,
+.ugo-main textarea {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.6rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ugo-main button {
+  cursor: pointer;
+}
+
+.ugo-main button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ugo-main button.ugo-primary {
+  background: #7b5cf6;
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.ugo-main button.ugo-danger {
+  border-color: #7a2a3a;
+  color: #ff9aa8;
+  margin-top: 0.6rem;
+}
+
+.ugo-main input[type='number'] {
+  width: 5.5rem;
+}
+
+.ugo-source {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+  word-break: break-all;
+}
+
+.ugo-source img {
+  width: 90px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.ugo-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.8rem;
+}
+
+@media (min-width: 760px) {
+  .ugo-editor {
+    grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  }
+}
+
+.ugo-preview img {
+  width: 100%;
+  border-radius: 8px;
+  background: #0a0a14;
+}
+
+.ugo-frames {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.5rem;
+}
+
+.ugo-frame {
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  padding: 0.3rem;
+  min-width: 0;
+}
+
+.ugo-frame img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.ugo-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.ugo-list button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  text-align: left;
+}
+
+.ugo-list button.is-open {
+  border-color: #7b5cf6;
+}
+
+.ugo-list img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.ugo-motions {
+  list-style: none;
+  padding: 0;
+  margin: 0.4rem 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.ugo-motion-form {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.ugo-motion-form textarea {
+  font-family: ui-monospace, monospace;
+  width: 100%;
+}
+
+.ugo-section h2 {
+  word-break: break-all;
+}
+
+/* 名前に入る画像のキー(history:…png)などの長い語を折り返す */
+.ugo-main {
+  overflow-wrap: anywhere;
+}

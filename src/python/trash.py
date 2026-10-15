@@ -38,6 +38,7 @@ KIND_LABELS = {
     "book": "物語(本)",
     "character": "キャラ",
     "cleanup": "ディスクの整理で片付けたファイル",
+    "ugoira": "うごイラ",
 }
 
 
@@ -185,7 +186,7 @@ def _restore_rows(conn: sqlite3.Connection, entry: dict[str, Any]) -> None:
             _insert(conn, table, payload["row"])
         except sqlite3.IntegrityError as exc:
             raise TrashConflict("そのシーン(ページ)には、消したあとに新しい絵ができているので戻せません。") from exc
-    elif kind in ("book", "character"):
+    elif kind in ("book", "character", "ugoira"):
         for table, table_rows in payload["rows"].items():
             for row in table_rows:
                 try:

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   translucent body のように言い換える)。生成の後に、判定モデルで物や人数が描かれているかを確かめ、外れたコマは NovelAI の
   強調(1.5::タグ::)・抑制(-1::1girl::)を使って描き直す(よくなったときだけ置き換える)。おまかせ漫画と漫画ドラフトで使える。
   API は `POST /api/manga-v2/{id}/check-panels`。試行記録は `docs/trials/2026-10-14_panel-check.md`
+- **うごイラ(部分だけ描き直す)** — ギャラリーの絵の目・口・髪だけを NovelAI のインペイントで描き直して、まばたき・口パク・
+  笑顔に変わる・髪の揺れのパラパラ漫画にする(範囲の外は元の絵のまま。Opus なら Anlas 0)。コマの並び・表示時間を直し、
+  プレビューで確かめて、Pixiv 用 ZIP・GIF・アニメ WebP に書き出せる。動きは画面から足せる。ギャラリーの「うごイラを作る」と
+  ホームから開く。試行記録は `docs/trials/2026-10-16_ugoira.md`
 - **Docker で動かす** — アプリ本体(バックエンド + ビルドした画面)のイメージ(`Dockerfile`)と、compose の `app` サービス
   (profile `app`)を追加した。画面と API を :8000 から配り、LLM は compose の中の Ollama を使う。data/・outputs/・.env・
   バックアップの写し先・Windows のフォント(読み取り専用)をボリュームで渡す。開発は今までどおり dev-ctl.ps1。
