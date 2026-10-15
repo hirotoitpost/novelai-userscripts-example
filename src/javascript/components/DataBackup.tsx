@@ -1,3 +1,4 @@
+import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useCallback, useEffect, useState } from 'react'
 
 /**
@@ -25,7 +26,7 @@ interface State {
   job: { kind: string; status: 'idle' | 'running' | 'done' | 'error'; message: string; done: number; total: number; result: Record<string, unknown> | null; finished_at: string | null }
 }
 
-const BACKEND = `${window.location.protocol}//${window.location.hostname}:8000`
+const BACKEND = BACKEND_ORIGIN
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BACKEND}/api/admin${path}`, {

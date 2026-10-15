@@ -9,6 +9,7 @@ Pillow の縦書き(direction="ttb")は libraqm が要り、Windows の標準ビ
 from __future__ import annotations
 
 import math
+import os
 import random
 import re
 from dataclasses import dataclass
@@ -19,8 +20,9 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from .fonts import CATALOG
 
-# 選べるフォント。PCに入っているものだけを候補として返す。
-_FONT_DIR = Path("C:/Windows/Fonts")
+# 選べるフォント。PCに入っているものだけを候補として返す。Docker では、Windows のフォントのフォルダを読み取り専用で
+# 渡して、環境変数 WINDOWS_FONTS_DIR でその場所を教えれば、同じフォントが使える(同じ PC の中で使うときだけ)
+_FONT_DIR = Path(os.environ.get("WINDOWS_FONTS_DIR") or "C:/Windows/Fonts")
 _FONT_CANDIDATES: list[tuple[str, str, str]] = [
     ("yu-mincho-demibold", "游明朝 Demibold", "yumindb.ttf"),
     ("yu-mincho", "游明朝", "yumin.ttf"),

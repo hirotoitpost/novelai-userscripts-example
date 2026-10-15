@@ -1,3 +1,4 @@
+import { BACKEND_ORIGIN } from './backendOrigin'
 /**
  * 処理の終了をブラウザ通知で知らせる。
  *
@@ -12,7 +13,7 @@
 export type NotifySupport = 'granted' | 'default' | 'denied' | 'unsupported'
 
 // Story ページと同じく、Vite のプロキシを通さずバックエンドへ直接アクセスする
-const API_ORIGIN = `${window.location.protocol}//${window.location.hostname}:8000`
+const API_ORIGIN = BACKEND_ORIGIN
 // バックエンドが応答しないときに、ボタンが押せないまま固まらないようにする
 const TIMEOUT_MS = 10000
 

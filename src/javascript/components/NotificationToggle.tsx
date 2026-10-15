@@ -1,3 +1,4 @@
+import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useEffect, useState } from 'react'
 import {
   disablePush,
@@ -78,7 +79,7 @@ export default function NotificationToggle() {
   }
 
   const page = window.location.origin
-  const api = `${window.location.protocol}//${window.location.hostname}:8000`
+  const api = BACKEND_ORIGIN
 
   return (
     <div className="notify-toggle">

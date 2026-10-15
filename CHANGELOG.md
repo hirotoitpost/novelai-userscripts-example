@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   translucent body のように言い換える)。生成の後に、判定モデルで物や人数が描かれているかを確かめ、外れたコマは NovelAI の
   強調(1.5::タグ::)・抑制(-1::1girl::)を使って描き直す(よくなったときだけ置き換える)。おまかせ漫画と漫画ドラフトで使える。
   API は `POST /api/manga-v2/{id}/check-panels`。試行記録は `docs/trials/2026-10-14_panel-check.md`
+- **Docker で動かす** — アプリ本体(バックエンド + ビルドした画面)のイメージ(`Dockerfile`)と、compose の `app` サービス
+  (profile `app`)を追加した。画面と API を :8000 から配り、LLM は compose の中の Ollama を使う。data/・outputs/・.env・
+  バックアップの写し先・Windows のフォント(読み取り専用)をボリュームで渡す。開発は今までどおり dev-ctl.ps1。
+  管理ページは、コンテナで動いているときはそれに合わせて表示する。使い方は `docs/docker.md`
 - **データの点検** — 管理ページのコンテンツガードの「今の設定でデータを点検する」で、今の設定(未成年キャラの安全対策)で
   止まるはずのものが前に作ったデータに残っていないかを一覧にする: 未成年の手がかりがあるのに成人・未定義のキャラ、
   未成年がいる性的な場面とそのコマ・挿絵、本文に未成年を示す語がある成人向けの物語、性的で未成年を思わせるタグの

@@ -1,3 +1,4 @@
+import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './StoryLibrary.css'
@@ -31,7 +32,7 @@ interface StoryDetail {
 
 // Story.tsx と同じ理由(Viteのdevプロキシ経由だとSSEが詰まる件とは無関係だが、
 // このページも他の/api/story/*呼び出しと挙動を揃えるため)でバックエンドへ直接アクセスする。
-const API_ORIGIN = `${window.location.protocol}//${window.location.hostname}:8000`
+const API_ORIGIN = BACKEND_ORIGIN
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'ドラフト',

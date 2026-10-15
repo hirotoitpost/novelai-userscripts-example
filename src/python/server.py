@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
@@ -37,7 +38,9 @@ from .routes.writer import router as writer_router
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _env_path = _PROJECT_ROOT / ".env"
-load_dotenv(_env_path, override=True)
+# ふだんは .env の値を優先する(PC の環境変数に古い値が残っていても、.env を直せば効くように)。Docker では
+# compose の environment(LLM の場所を http://ollama:11434 にする など)を優先したいので、上書きしない
+load_dotenv(_env_path, override=os.environ.get("APP_IN_CONTAINER") != "1")
 
 
 
@@ -122,6 +125,35 @@ async def lan_ca() -> Response:
         media_type="application/x-x509-ca-cert",
         headers={"Content-Disposition": 'attachment; filename="novelai-lan-ca.crt"'},
     )
+
+
+# ---- ビルドした画面を配る(Docker。SERVE_FRONTEND=1 のときだけ) ----
+# 開発中は Vite の開発サーバー(:5173)が画面を配るので、ここでは何もしない。Docker では画面と API を同じ場所(:8000)
+# から配る(画面は backendOrigin.ts で、ビルドしたときは同じ場所の API を呼ぶ)。API の道は先に登録してあるので、
+# ここに来るのは API 以外の道だけ。知らない道は index.html を返す(画面の中の道 /gallery などは画面が見分ける)。
+_DIST = _PROJECT_ROOT / "dist"
+
+
+def _serve_frontend() -> None:
+    import os
+
+    from fastapi.responses import FileResponse
+
+    if os.environ.get("SERVE_FRONTEND") != "1" or not (_DIST / "index.html").is_file():
+        return
+    root = _DIST.resolve()
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def frontend(path: str) -> FileResponse:
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file = (root / path).resolve()
+        if path and file.is_file() and root in file.parents:
+            return FileResponse(file)
+        return FileResponse(root / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+_serve_frontend()
 
 
 if __name__ == "__main__":

@@ -9,14 +9,18 @@ V5自体の画像内文字描画は信頼できない(diffusionモデルで任�
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+_FONTS = os.environ.get("WINDOWS_FONTS_DIR") or "C:/Windows/Fonts"
 _CAPTION_FONT_CANDIDATES = [
-    "C:/Windows/Fonts/meiryo.ttc",
-    "C:/Windows/Fonts/YuGothR.ttc",
-    "C:/Windows/Fonts/NotoSansJP-VF.ttf",
+    f"{_FONTS}/meiryo.ttc",
+    f"{_FONTS}/YuGothR.ttc",
+    f"{_FONTS}/NotoSansJP-VF.ttf",
+    # Linux(Docker)の fonts-noto-cjk
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 ]
 _CAPTION_FONT_SIZE = 28
 _CAPTION_PADDING = 24

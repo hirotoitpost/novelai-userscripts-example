@@ -1,3 +1,4 @@
+import { BACKEND_ORIGIN } from '../backendOrigin'
 import { KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
@@ -41,7 +42,7 @@ interface Draft {
 
 // Story ページと同じ理由(Vite の dev プロキシは SSE をバッファしてしまう)で、
 // バックエンド(ポート8000)へ直接つなぐ。
-const API_ORIGIN = `${window.location.protocol}//${window.location.hostname}:8000`
+const API_ORIGIN = BACKEND_ORIGIN
 const AUTOSAVE_MS = 1200
 
 async function readErrorDetail(res: Response): Promise<string> {
