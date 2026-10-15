@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 import io
 import re
@@ -16,14 +17,18 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
 from .. import content_guard, trash
+from ..guard_password import guard_token
 from ..db import (
     list_characters,
+    save_character,
+    update_character_reference,
+    update_character_sheet,
     forget_library_items,
     list_work_authors,
     get_connection,
@@ -816,6 +821,132 @@ def delete_images(req: ImagesDeleteRequest) -> dict[str, int]:
     finally:
         conn.close()
     return {"deleted": len(deleted)}
+
+
+@router.get("/books/{story_id}/export")
+def export_book(story_id: int) -> Response:
+    """
+    物語を ZIP に書き出す(work_transfer.py。本文・タグ・コマ・ページ・合成したページ・登場キャラのキャラシートと参照画像)。
+    性的な場面に成人でないキャラがいるコマ・ページの画像は入れない(X-Skipped-Images ヘッダーにその数)。
+    """
+    from ..character_transfer import TransferError
+    from ..work_transfer import export_zip
+
+    conn = get_connection()
+    try:
+        data, title, skipped = export_zip(conn, story_id)
+    except TransferError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    finally:
+        conn.close()
+    return Response(
+        data, media_type="application/zip",
+        headers={
+            "Content-Disposition": _attachment(title, "zip", f"story{story_id}"),
+            "X-Skipped-Images": str(skipped),
+            "Access-Control-Expose-Headers": "Content-Disposition, X-Skipped-Images",
+        },
+    )
+
+
+def _book_import_plan(manifest: dict[str, Any]) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        library = {c["name"]: c for c in list_characters(conn)}
+    finally:
+        conn.close()
+    story = manifest["story"]
+    characters = []
+    for index, c in enumerate(manifest["characters"]):
+        name = str(c.get("name") or "").strip()
+        current = library.get(name)
+        characters.append({
+            "index": index, "name": name, "exists": current is not None, "is_minor": bool(c.get("is_minor")),
+            "action": "existing" if current is not None else "new", "new_name": name if current is None else f"{name}(取り込み)",
+        })
+    return {
+        "title": str(story.get("title") or story.get("premise") or "").splitlines()[0][:60] if (story.get("title") or story.get("premise")) else "",
+        "scenes": len(manifest["scenes"]),
+        "panels": len(manifest["panels"]),
+        "pages": len(manifest["pages"]),
+        "characters": characters,
+    }
+
+
+@router.post("/books/import/preview")
+async def preview_book_import(file: UploadFile) -> dict[str, Any]:
+    """取り込む作品の中身(題名・シーン・コマの数・登場キャラと、同じ名前のキャラがあるか)。まだ何も変えない。"""
+    from ..character_transfer import TransferError
+    from ..work_transfer import read_zip
+
+    try:
+        manifest, _ = read_zip(await file.read())
+    except TransferError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return _book_import_plan(manifest)
+
+
+@router.post("/books/import")
+async def import_book(
+    file: UploadFile, choices: str = Form("[]"), token: str | None = Depends(guard_token)
+) -> dict[str, Any]:
+    """
+    作品を新しい物語として取り込む。choices は登場キャラごとの扱い [{"index", "action": existing|new|rename, "name"}]。
+    existing は同じ名前のキャラを使う(キャラシートは変えない)。new / rename はキャラシートの検査(未成年を示すタグがあると
+    成人にできない など)を通して新しく入れる。
+    """
+    from ..character_transfer import TransferError, save_reference
+    from ..work_transfer import import_work, read_zip
+    from .story import _checked_sheet
+
+    try:
+        manifest, zf = read_zip(await file.read())
+        picked = {c.get("index"): c for c in json.loads(choices)}
+    except TransferError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except (json.JSONDecodeError, AttributeError):
+        raise HTTPException(status_code=422, detail="choices が読めません。")
+    conn = get_connection()
+    try:
+        library = {c["name"]: c for c in list_characters(conn)}
+        # 先に全員の扱いを決めて検査する(途中で止まって半分だけ入らないように)
+        plan: list[tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] = []
+        names: set[str] = set()
+        for index, c in enumerate(manifest["characters"]):
+            name = str(c.get("name") or "").strip()[:100]
+            choice = picked.get(index) or {"action": "existing" if name in library else "new"}
+            action = choice.get("action")
+            if action == "rename":
+                name = str(choice.get("name") or "").strip()[:100]
+            if not name:
+                raise HTTPException(status_code=422, detail="名前の無いキャラがあります。")
+            if action == "existing":
+                if name not in library:
+                    raise HTTPException(status_code=422, detail=f"「{name}」というキャラはありません。")
+                plan.append((name, c, None, library[name]))
+                continue
+            if name in library or name in names:
+                raise HTTPException(status_code=409, detail=f"「{name}」という名前のキャラは既にあります。別の名前にしてください。")
+            names.add(name)
+            sheet = {k: c.get(k) for k in ("appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed")}
+            sheet.update({"is_adult": bool(c.get("is_adult")), "is_minor": bool(c.get("is_minor"))})
+            plan.append((name, c, _checked_sheet({"name": name}, sheet, token), None))
+        character_ids = []
+        for name, c, sheet, existing in plan:
+            if existing is not None:
+                character_ids.append(existing["id"])
+                continue
+            created = save_character(conn, name, str(sheet.get("appearance_tags") or ""), c.get("notes"))
+            update_character_sheet(conn, created["id"], sheet)
+            if c.get("reference"):
+                try:
+                    update_character_reference(conn, created["id"], save_reference(zf, c["reference"], created["id"]))
+                except (TransferError, KeyError):
+                    pass
+            character_ids.append(created["id"])
+        return import_work(conn, manifest, zf, character_ids)
+    finally:
+        conn.close()
 
 
 @router.delete("/books/{story_id}", status_code=204)
