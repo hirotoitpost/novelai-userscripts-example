@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
@@ -41,6 +42,7 @@ from ..db import (
 from ..models import (
     EmotionToolRequest,
     UpscaleToolRequest,
+    EnhanceRequest,
     RegionRedrawRequest,
     RegionRedrawResponse,
     AnlasEstimateRequest,
@@ -381,6 +383,7 @@ async def region_redraw(req: RegionRedrawRequest, client: ClientDep) -> dict[str
     data = _served_path(item.path).read_bytes()
     with Image.open(io.BytesIO(data)) as opened:
         source = opened.convert("RGB")
+    await asyncio.to_thread(_guard_image, data, item.prompt, source, item.key)
     box = clamp_box(tuple(req.box), source.size)  # type: ignore[arg-type]
     x, y, w, h = box
     try:
@@ -431,6 +434,25 @@ async def region_redraw(req: RegionRedrawRequest, client: ClientDep) -> dict[str
     }
 
 
+def _guard_image(data: bytes, fallback_prompt: str, image: Any, key: str) -> None:
+    """
+    未成年キャラの安全対策(minor_guard.image_decision): 性的な画像に未成年を思わせるタグがあれば、画質を上げない(422)。
+    範囲・画像全体、AI 拡大・描き直しのどれでも同じ。
+    """
+    from .. import minor_guard
+    from ..image_tagger import tag_image
+    from ..nai_metadata import generation_settings
+
+    settings = generation_settings(data) or {}
+    prompt = ", ".join(
+        p for p in (settings.get("prompt") or fallback_prompt, *(c.get("prompt") or "" for c in settings.get("characters") or [])) if p
+    )
+    decision = minor_guard.image_decision(prompt, tag_image(image))
+    if decision.action == minor_guard.BLOCK:
+        minor_guard.record(minor_guard.BLOCK, f"ギャラリーの画質向上({key})", decision.reasons)
+        raise HTTPException(status_code=422, detail=f"この画像の画質は上げられません。{decision.reasons[0]}")
+
+
 def _png_bytes(image: Any) -> bytes:
     buf = io.BytesIO()
     image.save(buf, "PNG")
@@ -452,6 +474,13 @@ def _region_request(
     prompt = region_prompt(settings.get("prompt") or fallback_prompt, build_prompt(tag_image(base)))
     characters = region_characters(settings, box, source_size)
     seed = next((s for s in (req.seed, settings.get("seed"), fallback_seed) if s is not None), None)
+    return _i2i_request(prompt, characters, settings, base, req.strength, seed), characters
+
+
+def _i2i_request(
+    prompt: str, characters: list[dict[str, Any]], settings: dict[str, Any], base: Any, strength: float, seed: int | None
+) -> GenerateImageRequest:
+    """画質を上げるための img2img の生成リクエスト(範囲・画像全体で共通)。settings は元の画像の設定(無ければ空)。"""
     fields: dict[str, Any] = {
         "prompt": prompt,
         # 画像に入っているのは品質タグ・UC プリセットを足した後のプロンプトなので、もう一度は足さない
@@ -462,17 +491,189 @@ def _region_request(
         # 28 ステップまでなら Opus で Anlas がかからない
         "steps": min(settings.get("steps") or 28, 28),
         "seed": seed,
-        "i2i": {"image": base64.b64encode(_png_bytes(base)).decode(), "strength": req.strength, "noise": 0.0, "seed": seed},
+        "i2i": {"image": base64.b64encode(_png_bytes(base)).decode(), "strength": strength, "noise": 0.0, "seed": seed},
         "characters": characters or None,
     }
     for key in ("model", "scale", "sampler", "noise_schedule"):
         if settings.get(key):
             fields[key] = settings[key]
     try:
-        return GenerateImageRequest(**fields), characters
+        return GenerateImageRequest(**fields)
     except ValidationError:
         fields = {k: v for k, v in fields.items() if k not in ("model", "sampler", "noise_schedule")}
-        return GenerateImageRequest(**fields), characters
+        return GenerateImageRequest(**fields)
+
+
+# ---- 画像全体の画質を上げる(whole_enhance.py) ----
+
+
+@dataclass
+class _EnhanceJob:
+    status: str = "running"
+    message: str = "開始しました"
+    progress: int = 0
+    total: int = 100
+    result: dict[str, Any] | None = None
+    task: Any = field(default=None, repr=False)
+
+
+_enhance_jobs: dict[str, _EnhanceJob] = {}
+
+
+def _enhance_response(job_id: str, job: _EnhanceJob) -> dict[str, Any]:
+    return {"id": job_id, **{k: getattr(job, k) for k in ("status", "message", "progress", "total", "result")}}
+
+
+@router.get("/enhance/plan")
+async def enhance_plan(key: str) -> dict[str, Any]:
+    """画像の大きさと、方法ごとに作れる大きさ(作れなければ理由)・どちらが合うかの目安。"""
+    from PIL import Image
+
+    from ..region_redraw import RegionError
+    from ..whole_enhance import SCALES, redraw_size, suggestion, upscale_target
+    from .library import _gallery_images, _served_path
+
+    item = next((i for i in _gallery_images() if i.key == key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    with Image.open(_served_path(item.path)) as opened:
+        width, height = opened.size
+    targets: dict[str, Any] = {}
+    for scale in SCALES:
+        try:
+            targets[str(scale)] = list(upscale_target(width, height, scale))
+        except RegionError as exc:
+            targets[str(scale)] = str(exc)
+    return {
+        "width": width,
+        "height": height,
+        "upscale": targets,
+        "redraw_size": list(redraw_size(width, height)),
+        "suggestion": suggestion(width, height),
+    }
+
+
+@router.post("/enhance")
+async def start_enhance(req: EnhanceRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    ギャラリーの画像全体の画質を上げる(時間がかかるので、処理は切り離して進める。GET /enhance/jobs/{id} で進み具合)。
+    結果はギャラリーに新しい画像として残し、元の画像のキーを記録する(元の画像は変えない)。
+    """
+    import asyncio
+
+
+    from .library import _gallery_images
+
+    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    job_id = uuid4().hex
+    job = _EnhanceJob()
+    _enhance_jobs[job_id] = job
+    # リクエストの client は返したあとで閉じられるので、処理では同じトークンで別に作る(_job_client)
+    job.task = asyncio.create_task(_run_enhance(job, req, item, getattr(client, "api_key", None)))
+    return _enhance_response(job_id, job)
+
+
+def _job_client(api_key: str | None) -> Any:
+    """切り離した処理で使う NovelAI のクライアント(テストで差し替える)。"""
+    from ..client import api_keys_with_fallback
+
+    return AsyncNovelAI(api_key=api_keys_with_fallback(api_key)[0] if api_key else None)
+
+
+@router.get("/enhance/jobs/{job_id}")
+async def get_enhance_job(job_id: str) -> dict[str, Any]:
+    job = _enhance_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="その処理はありません(バックエンドを起動し直すと消えます)。")
+    return _enhance_response(job_id, job)
+
+
+async def _run_enhance(job: _EnhanceJob, req: EnhanceRequest, item: Any, api_key: str | None) -> None:
+    import asyncio
+
+    from PIL import Image
+
+    from ..image_tagger import build_prompt, tag_image
+    from ..nai_metadata import generation_settings
+    from ..region_redraw import RegionError
+    from ..upscaler import enlarge
+    from ..whole_enhance import AI_MAX_INPUT, redraw_size, upscale_target, whole_characters
+    from .library import _history_key, _served_path
+
+    loop = asyncio.get_running_loop()
+
+    def tiles(start: int, span: int, label: str):
+        """AI 拡大のタイルの進み具合を、全体の start〜start+span に割り当てる。"""
+        def report(done: int, total: int) -> None:
+            def update() -> None:
+                job.progress = start + span * done // total
+                job.message = f"{label}({done}/{total})"
+            loop.call_soon_threadsafe(update)
+        return report
+
+    try:
+        data = _served_path(item.path).read_bytes()
+        with Image.open(io.BytesIO(data)) as opened:
+            source = opened.convert("RGB")
+        job.message = "画像を確かめています"
+        await asyncio.to_thread(_guard_image, data, item.prompt, source, item.key)
+        width, height = source.size
+        try:
+            target = upscale_target(width, height, req.scale)
+        except RegionError:
+            if req.mode == "upscale":
+                raise
+            target = None
+        if req.mode == "upscale":
+            job.message = "AI 拡大しています(はじめての時は、モデルを取ってきます)"
+            final = await asyncio.to_thread(enlarge, source, target, AI_MAX_INPUT, tiles(0, 100, "AI 拡大しています"))
+            gen = _tool_history_request(data, f"AI拡大(全体・{req.scale}倍)").model_copy(
+                update={"size": list(final.size), "i2i": None}
+            )
+            prompt = ""
+        else:
+            size = redraw_size(width, height)
+            if size[0] * size[1] > width * height:
+                job.message = "描き直す大きさまで AI 拡大しています"
+                base = await asyncio.to_thread(enlarge, source, size, AI_MAX_INPUT, tiles(0, 30, "描き直す大きさまで AI 拡大しています"))
+            else:
+                base = source.resize(size, Image.Resampling.LANCZOS)
+            job.progress = 30
+            job.message = "NovelAI で描き直しています"
+            settings = generation_settings(data) or {}
+            prompt = settings.get("prompt") or item.prompt or await asyncio.to_thread(lambda: build_prompt(tag_image(base)))
+            seed = next((s for s in (req.seed, settings.get("seed"), item.seed) if s is not None), None)
+            gen = _i2i_request(prompt, whole_characters(settings), settings, base, req.strength, seed)
+            client = _job_client(api_key)
+            try:
+                generated = await client.image.generate(GenerateImageParams(**_build_kwargs(gen)))
+            finally:
+                await client.close()
+            final = generated[0].convert("RGB")
+            job.progress = 60
+            if target is not None and target[0] * target[1] > final.width * final.height * 1.2:
+                job.message = "描き直した絵を AI 拡大しています"
+                final = await asyncio.to_thread(enlarge, final, target, AI_MAX_INPUT, tiles(60, 40, "描き直した絵を AI 拡大しています"))
+        based_on = int(item.key.split(":")[1]) if item.key.startswith("history:") else None
+        saved = save_generation(gen, [_png_bytes(final)], based_on=based_on, source_key=item.key)
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT image_paths FROM generation_history WHERE id = ?", (saved["id"],)).fetchone()
+        finally:
+            conn.close()
+        path = json.loads(row["image_paths"])[0]
+        job.result = {
+            "key": _history_key(saved["id"], path), "path": path, "width": final.width, "height": final.height,
+            "mode": req.mode, "prompt": prompt,
+        }
+        job.progress = 100
+        job.message = f"できました({width}×{height} → {final.width}×{final.height})"
+        job.status = "done"
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        job.status = "error"
+        job.message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
 
 
 # タグの候補は同じ問い合わせが続くので、少しだけ覚えておく(NovelAI への問い合わせを減らす)

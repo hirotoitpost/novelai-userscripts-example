@@ -139,6 +139,18 @@ class RegionRedrawRequest(BaseModel):
     seed: Optional[int] = Field(None, ge=0, le=4294967295)
 
 
+class EnhanceRequest(BaseModel):
+    """ギャラリーの画像全体の画質を上げる(whole_enhance.py)。"""
+
+    key: str = Field(min_length=1, description="ギャラリーの画像のキー")
+    # upscale: AI 拡大だけ(NovelAI を使わない)/ redraw: 1MP 以内で img2img で描き直してから AI 拡大
+    mode: Literal["upscale", "redraw"] = "upscale"
+    # 縦横の倍率(長い辺は 4096px まで)
+    scale: Literal[2, 4] = 2
+    strength: float = Field(0.35, ge=0.1, le=0.8)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
+
+
 class RegionRedrawResponse(BaseModel):
     key: str
     path: str
