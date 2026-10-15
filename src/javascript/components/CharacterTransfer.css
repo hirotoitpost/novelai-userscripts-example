@@ -1,0 +1,100 @@
+/* キャラシートの書き出し・取り込み(CharacterTransfer.tsx)。置く場所のボタンの見た目に左右されないよう .char-transfer から書く */
+.char-transfer {
+  border: 1px dashed #2a2a50;
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  margin: 0.6rem 0;
+  font-size: 0.8rem;
+  color: #c8c8ec;
+}
+
+.char-transfer summary {
+  cursor: pointer;
+  color: #b8a4ff;
+}
+
+.char-transfer .char-transfer-hint {
+  color: #9a9ac0;
+  margin: 0.4rem 0;
+  line-height: 1.6;
+}
+
+.char-transfer .char-transfer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.8rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  margin: 0.4rem 0;
+}
+
+.char-transfer .char-transfer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0;
+}
+
+.char-transfer button,
+.char-transfer select,
+.char-transfer input:not([type='checkbox']) {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.8rem;
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.char-transfer button {
+  cursor: pointer;
+}
+
+.char-transfer button.char-transfer-primary {
+  background: #7b5cf6;
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.char-transfer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.char-transfer .char-transfer-plan ul {
+  list-style: none;
+  margin: 0.4rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.char-transfer .char-transfer-plan li {
+  border-left: 3px solid #2a2a50;
+  padding-left: 0.5rem;
+}
+
+.char-transfer .char-transfer-tag {
+  display: inline-block;
+  margin-left: 0.4rem;
+  border: 1px solid #3a3a6a;
+  border-radius: 999px;
+  padding: 0 0.45rem;
+  font-size: 0.72rem;
+  color: #c8c8ec;
+}
+
+.char-transfer .char-transfer-tag--warn {
+  border-color: #e6a23c;
+  color: #e6c27a;
+}
+
+.char-transfer .char-transfer-warn,
+.char-transfer .char-transfer-error {
+  color: #ff8a9a;
+  margin: 0.3rem 0;
+}

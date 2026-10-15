@@ -11,6 +11,7 @@ import {
 } from '../api'
 import type { Character } from '../components/StoryCharacters'
 import CharacterSheetEditor, { type SheetEditorClasses } from '../components/CharacterSheetEditor'
+import CharacterTransfer from '../components/CharacterTransfer'
 import GuardProfiles from '../components/GuardProfiles'
 import ImagePreview from '../components/ImagePreview'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
@@ -390,6 +391,7 @@ export default function CharacterDataset() {
               </button>
             </div>
             {charError && <p className="lora-error" role="alert">{charError}</p>}
+            <CharacterTransfer apiOrigin="" characters={characters} onImported={loadCharacters} />
 
             {character && editingSheet && (
               <div className="chards-sheet chards-sheet--edit">

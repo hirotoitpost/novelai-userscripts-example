@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { guardFetch } from '../guardFetch'
+import CharacterTransfer from './CharacterTransfer'
 import { useNavigate } from 'react-router-dom'
 import CharacterSheetEditor from './CharacterSheetEditor'
 
@@ -261,6 +262,7 @@ export default function StoryCharacters({ apiOrigin, onChanged, disabled, storyI
           追加
         </button>
       </div>
+      <CharacterTransfer apiOrigin={apiOrigin} characters={characters} onImported={() => { load(); onChanged() }} />
     </div>
   )
 }

@@ -15,14 +15,17 @@ import time
 from collections import Counter
 from base64 import b64decode
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, AsyncGenerator, Awaitable, Callable
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from novelai import AsyncNovelAI
+from pydantic import BaseModel, Field
 
 from ..cast import auto_reference, match_existing
 from .. import content_guard
@@ -2094,6 +2097,141 @@ async def split_character_body(req: CharacterSplitRequest) -> dict[str, str]:
     return {"face": face, "body": body}
 
 
+class CharacterExportRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+@router.post("/characters/export")
+async def export_characters(req: CharacterExportRequest) -> Response:
+    """選んだキャラのキャラシートと参照画像を ZIP にする(character_transfer.py)。"""
+    from ..character_transfer import export_zip
+
+    conn = get_connection()
+    try:
+        by_id = {c["id"]: c for c in list_characters(conn)}
+    finally:
+        conn.close()
+    chosen = [by_id[i] for i in dict.fromkeys(req.ids) if i in by_id]
+    if not chosen:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    data = await asyncio.to_thread(export_zip, chosen)
+    label = chosen[0]["name"] if len(chosen) == 1 else f"{len(chosen)}人"
+    filename = f"characters_{label}_{datetime.now().strftime('%Y%m%d')}.zip"
+    return Response(
+        data, media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+def _import_plan(characters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """取り込むキャラごとの、今のキャラとの関係と、はじめに選んでおく扱い。"""
+    from ..character_transfer import free_name
+
+    conn = get_connection()
+    try:
+        library = {c["name"]: c for c in list_characters(conn)}
+    finally:
+        conn.close()
+    taken = set(library)
+    plan = []
+    for index, entry in enumerate(characters):
+        current = library.get(entry["name"])
+        suggested = free_name(entry["name"], taken)
+        taken.add(suggested)
+        plan.append({
+            "index": index,
+            "name": entry["name"],
+            "exists": current is not None,
+            "existing_minor": bool(current and current.get("is_minor")),
+            "is_minor": entry["is_minor"],
+            "is_adult": entry["is_adult"],
+            "minor_tags": character_minor_tags(entry),
+            "appearance_tags": entry.get("appearance_tags") or "",
+            "reference": entry["reference"] is not None,
+            "action": "rename" if current is not None else "new",
+            "new_name": suggested,
+        })
+    return plan
+
+
+@router.post("/characters/import/preview")
+async def preview_character_import(file: UploadFile) -> dict[str, Any]:
+    """取り込む ZIP の中のキャラと、同じ名前のキャラがあるか(まだ何も変えない)。"""
+    from ..character_transfer import TransferError, read_zip
+
+    try:
+        characters, _ = read_zip(await file.read())
+    except TransferError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"characters": _import_plan(characters)}
+
+
+@router.post("/characters/import")
+async def import_characters(
+    file: UploadFile, choices: str = Form(...), token: str | None = Depends(guard_token)
+) -> dict[str, Any]:
+    """
+    選んだ扱いでキャラを取り込む。choices は [{"index", "action": new|rename|overwrite|skip, "name"}] の JSON。
+    キャラシートの検査は、画面から保存するときと同じ(未成年を示すタグがあると成人にできない・未成年の定義を
+    外す上書きはパスワードが要る)。1人でも検査で止まれば、何も入れない。
+    """
+    from ..character_transfer import TransferError, read_zip, save_reference
+
+    try:
+        characters, zf = read_zip(await file.read())
+        picked = json.loads(choices)
+    except TransferError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="choices が読めません。")
+    conn = get_connection()
+    try:
+        library = {c["name"]: c for c in list_characters(conn)}
+        # 先に全員を検査する(途中で止まって半分だけ入らないように)
+        work: list[tuple[str, dict[str, Any], dict[str, Any], dict[str, Any] | None]] = []
+        names: set[str] = set()
+        for choice in picked:
+            action = choice.get("action")
+            index = choice.get("index")
+            if action == "skip":
+                continue
+            if action not in ("new", "rename", "overwrite") or not isinstance(index, int) or not 0 <= index < len(characters):
+                raise HTTPException(status_code=422, detail=f"扱いが読めません: {choice}")
+            entry = characters[index]
+            name = str(choice.get("name") or entry["name"]).strip()[:100] if action == "rename" else entry["name"]
+            current = library.get(name)
+            if action == "overwrite" and current is None:
+                action = "new"
+            if action in ("new", "rename") and current is not None:
+                raise HTTPException(status_code=409, detail=f"「{name}」という名前のキャラは既にあります。別の名前にするか、上書きを選んでください。")
+            if name in names:
+                raise HTTPException(status_code=409, detail=f"「{name}」が2回入っています。")
+            names.add(name)
+            sheet = {key: entry[key] for key in ("appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed")}
+            sheet.update({"is_adult": entry["is_adult"], "is_minor": entry["is_minor"]})
+            sheet = _checked_sheet(current or {"name": name}, sheet, token)
+            work.append((name, entry, sheet, current))
+        done = []
+        for name, entry, sheet, current in work:
+            if current is None:
+                current = save_character(conn, name, str(sheet.get("appearance_tags") or ""), entry.get("notes"))
+            else:
+                conn.execute("UPDATE characters SET notes = ? WHERE id = ?", (entry.get("notes"), current["id"]))
+                conn.commit()
+            update_character_sheet(conn, current["id"], sheet)
+            if entry["reference"]:
+                try:
+                    update_character_reference(conn, current["id"], save_reference(zf, entry["reference"], current["id"]))
+                except TransferError:
+                    pass
+            done.append({"id": current["id"], "name": name})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    finally:
+        conn.close()
+    return {"imported": done}
+
+
 @router.post("/characters/new", response_model=CharacterResponse)
 async def create_new_character(req: CharacterNewRequest) -> dict[str, Any]:
     """
@@ -2143,11 +2281,11 @@ def _checked_sheet(current: dict[str, Any], sheet: dict[str, Any], token: str | 
     for key in ("is_adult", "is_minor"):
         if sheet.get(key) is None:
             sheet.pop(key, None)
-    # 片方を立てたら、もう片方は下ろす
-    if sheet.get("is_adult"):
-        sheet["is_minor"] = False
+    # 片方を立てたら、もう片方は下ろす(両方立っていたら未成年を残す。取り込んだファイルなどで成人にすり替わらないように)
     if sheet.get("is_minor"):
         sheet["is_adult"] = False
+    elif sheet.get("is_adult"):
+        sheet["is_minor"] = False
     if current.get("is_minor") and not sheet.get("is_minor", True):
         guard_password.require_unlocked(token)
     # 成人フラグは、保存後のキャラシートに未成年を示すタグがない場合だけ付けられる
