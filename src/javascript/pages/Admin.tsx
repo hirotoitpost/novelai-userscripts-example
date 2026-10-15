@@ -4,6 +4,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage'
 import ContentGuardRules from '../components/ContentGuardRules'
 import GuardProfiles from '../components/GuardProfiles'
 import GuardSafety from '../components/GuardSafety'
+import DataBackup from '../components/DataBackup'
 import { formatDuration } from '../components/TaskStatus'
 import type { ImagePreset } from '../api'
 import './LoraDataset.css'
@@ -641,6 +642,8 @@ function OpsTab() {
           </>
         )}
       </section>
+
+      <DataBackup />
 
       <section className="adm-section">
         <div className="adm-row">

@@ -15,6 +15,7 @@ LAN の中から使える(require_lan)。この PC のほか、スマホや LAN 
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import ipaddress
 import os
@@ -612,6 +613,82 @@ async def delete_backup(name: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="そのバックアップはありません。")
     path.unlink()
     return {"backups": _backups()}
+
+
+# ---- 画像・作品データのバックアップ(backup.py。写し先は管理ページで指定する) ----
+
+
+class DataBackupSettings(BaseModel):
+    destination: str = Field("", max_length=1000)
+    include_datasets: bool = False
+    auto: bool = True
+
+
+def _data_backup_state() -> dict[str, Any]:
+    from .. import backup
+
+    settings = backup.load_settings()
+    snapshots: list[dict[str, Any]] = []
+    error = None
+    if settings.destination:
+        try:
+            snapshots = backup.snapshots(backup.check_destination(settings.destination))
+        except ValueError as exc:
+            error = str(exc)
+    job = backup.job()
+    return {
+        "settings": settings.__dict__,
+        "keep": backup.KEEP,
+        "snapshots": snapshots,
+        "destination_error": error,
+        "job": {k: getattr(job, k) for k in ("kind", "status", "message", "done", "total", "result", "started_at", "finished_at")},
+    }
+
+
+@router.get("/data-backup")
+async def get_data_backup() -> dict[str, Any]:
+    return await asyncio.to_thread(_data_backup_state)
+
+
+@router.put("/data-backup/settings")
+async def put_data_backup_settings(req: DataBackupSettings) -> dict[str, Any]:
+    from .. import backup
+
+    if req.destination.strip():
+        try:
+            backup.check_destination(req.destination)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    backup.save_settings(backup.Settings(req.destination.strip(), req.include_datasets, req.auto))
+    return await asyncio.to_thread(_data_backup_state)
+
+
+@router.post("/data-backup/run")
+async def post_data_backup_run() -> dict[str, Any]:
+    from .. import backup
+
+    settings = backup.load_settings()
+    if not settings.destination:
+        raise HTTPException(status_code=422, detail="先に写し先のフォルダを指定してください。")
+    try:
+        backup.start("backup", lambda progress: backup.run_backup(settings, reason="手動", progress=progress))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return await asyncio.to_thread(_data_backup_state)
+
+
+@router.post("/data-backup/restore/{name}")
+async def post_data_backup_restore(name: str) -> dict[str, Any]:
+    from .. import backup
+
+    settings = backup.load_settings()
+    if not settings.destination:
+        raise HTTPException(status_code=422, detail="写し先のフォルダが指定されていません。")
+    try:
+        backup.start("restore", lambda progress: backup.restore(settings, name, progress=progress))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return await asyncio.to_thread(_data_backup_state)
 
 
 # ---- サーバーの操作 ----

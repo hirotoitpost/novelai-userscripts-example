@@ -236,6 +236,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 画像・作品データのバックアップの設定(backup.py。写し先・データセットを入れるか・自動か)。1行だけ
+    conn.execute("CREATE TABLE IF NOT EXISTS backup_config (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL)")
     # ごみ箱(trash.py): 消したものの行(JSON)と、預かったファイル([元の場所, 預けた名前, 大きさ] の並び)
     conn.execute(
         """
