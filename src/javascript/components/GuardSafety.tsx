@@ -53,9 +53,15 @@ export default function GuardSafety({ onSaved }: { onSaved?: (what: string) => v
   const [filter, setFilter] = useState<'all' | 'minor' | 'undefined'>('minor')
 
   function load() {
-    fetch(`${API}/password`, { headers: guardHeaders() }).then(r => r.json()).then(setState).catch(() => {})
-    fetch(`${API}/characters`).then(r => r.json()).then(setCharacters).catch(() => {})
-    fetch(`${API}/events?limit=50`).then(r => r.json()).then(setEvents).catch(() => {})
+    // 読めないとき(バックエンドが古い・止まっている)は、欄を空のままにする(ページ全体を止めない)
+    const json = async (res: Response) => {
+      if (!res.ok) throw new Error(`${res.url}: HTTP ${res.status}`)
+      return res.json()
+    }
+    const failed = (e: unknown) => setError(`未成年キャラの安全対策の情報を読めませんでした(バックエンドを起動し直すと直ることがあります): ${e instanceof Error ? e.message : String(e)}`)
+    fetch(`${API}/password`, { headers: guardHeaders() }).then(json).then(setState).catch(failed)
+    fetch(`${API}/characters`).then(json).then(data => setCharacters(Array.isArray(data) ? data : [])).catch(failed)
+    fetch(`${API}/events?limit=50`).then(json).then(data => setEvents(Array.isArray(data) ? data : [])).catch(failed)
   }
   useEffect(load, [])
 
