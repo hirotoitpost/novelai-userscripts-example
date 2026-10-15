@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,10 +103,12 @@ def export_zip(conn: Any, story_id: int) -> tuple[bytes, str, int]:
                 "page_index": page["page_index"], "scenes": [scene_index[sid] for sid in page_scene_ids if sid in scene_index],
                 "file": add(page["image_path"], "pages"), "seed": page.get("seed"), "created_at": page["created_at"],
             })
-        # 合成したページ(止めるシーンがあれば入れない。合成し直せば作り直せる)
+        # 合成したページ(いまの版だけ。止めるシーンがあれば入れない。合成し直せば作り直せる)
         composed = []
-        if not blocked:
-            for path in sorted((_PROJECT_ROOT / "outputs" / "manga" / "v2").glob(f"story{story_id}_*.png")):
+        final = re.fullmatch(r"outputs/manga/v2/story\d+_final_([0-9a-f]+)\.png", story.get("final_image_path") or "")
+        if not blocked and final:
+            token = final.group(1)
+            for path in sorted((_PROJECT_ROOT / "outputs" / "manga" / "v2").glob(f"story{story_id}_*_{token}.png")):
                 composed.append(add(path.relative_to(_PROJECT_ROOT).as_posix(), "composed"))
         character_entries = []
         for cid in character_ids:
@@ -243,8 +246,19 @@ def import_work(conn: Any, manifest: dict[str, Any], zf: zipfile.ZipFile, charac
                 (story_id, page["page_index"], path, json.dumps(scene_ids), page.get("created_at") or now, page.get("seed")),
             )
     if not blocked:
-        for index, name in enumerate(manifest.get("composed") or []):
-            _extract(zf, name, "outputs/manga/v2", f"story{story_id}_imported{index}")
+        # 合成したページは、この物語の版として置き直す(本棚は final_image_path の版のページを見る)
+        token = uuid4().hex[:8]
+        folder = _PROJECT_ROOT / "outputs" / "manga" / "v2"
+        for name in manifest.get("composed") or []:
+            match = re.search(r"story\d+_(page\d+|final)_[0-9a-f]+\.png$", name or "")
+            if not match or name not in zf.namelist():
+                continue
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / f"story{story_id}_{match.group(1)}_{token}.png").write_bytes(zf.read(name))
+            if match.group(1) == "final":
+                conn.execute(
+                    "UPDATE stories SET final_image_path = ? WHERE id = ?", (f"outputs/manga/v2/story{story_id}_final_{token}.png", story_id)
+                )
     conn.execute(
         "UPDATE stories SET manga_v2_overrides = ? WHERE id = ?", (_remap_overrides(story_row.get("manga_v2_overrides"), mapping), story_id)
     )

@@ -64,7 +64,15 @@ def _story(tmp_path: Path, tags: list[str], minor: bool = False) -> tuple[int, l
         conn.commit()
     finally:
         conn.close()
-    _png(tmp_path, f"outputs/manga/v2/story{story['id']}_page0.png")
+    # 合成したページ: いまの版(abc12345)と、前の版(old00000。書き出さない)
+    for token in ("old00000", "abc12345"):
+        _png(tmp_path, f"outputs/manga/v2/story{story['id']}_page0_{token}.png")
+        _png(tmp_path, f"outputs/manga/v2/story{story['id']}_final_{token}.png")
+    conn = db.get_connection()
+    try:
+        db.update_story_final_image(conn, story["id"], f"outputs/manga/v2/story{story['id']}_final_abc12345.png")
+    finally:
+        conn.close()
     return story["id"], [s["id"] for s in scenes]
 
 
@@ -79,7 +87,10 @@ def test_round_trip_makes_a_new_story(client: TestClient, tmp_path: Path) -> Non
     data, skipped = _export(client, story_id)
     assert skipped == 0
     names = zipfile.ZipFile(io.BytesIO(data)).namelist()
-    assert "work.json" in names and sum(n.startswith("panels/") for n in names) == 2 and any(n.startswith("composed/") for n in names)
+    assert "work.json" in names and sum(n.startswith("panels/") for n in names) == 2
+    # 合成したページは、いまの版だけ(ページ1枚と、つなげた1枚)
+    assert sorted(n.split("_", 1)[1] for n in names if n.startswith("composed/")) == sorted(
+        [f"story{story_id}_final_abc12345.png", f"story{story_id}_page0_abc12345.png"])
     plan = client.post("/api/library/books/import/preview", files={"file": ("w.zip", data)}).json()
     assert plan["title"] == "雨の日" and plan["scenes"] == 2 and plan["characters"][0]["action"] == "existing"
     # 同じ名前のキャラは使わず、別名で新しく入れる
@@ -105,7 +116,14 @@ def test_round_trip_makes_a_new_story(client: TestClient, tmp_path: Path) -> Non
         assert set(overrides) == {f"{first}:0:bubble:0", f"scale:{first}:0:bubble:0"}
     finally:
         conn.close()
-    assert list((tmp_path / "outputs/manga/v2").glob(f"story{new_id}_*.png"))
+    # 取り込んだ物語の版として置き直し、本棚が見る final_image_path に付く
+    conn = db.get_connection()
+    try:
+        final = db.get_story(conn, new_id)["final_image_path"]
+    finally:
+        conn.close()
+    token = final.rsplit("_", 1)[1].removesuffix(".png")
+    assert (tmp_path / final).is_file() and (tmp_path / f"outputs/manga/v2/story{new_id}_page0_{token}.png").is_file()
 
 
 def test_sexual_scenes_with_minors_are_exported_without_images(client: TestClient, tmp_path: Path) -> None:

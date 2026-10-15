@@ -5,6 +5,7 @@ import ContentGuardRules from '../components/ContentGuardRules'
 import GuardProfiles from '../components/GuardProfiles'
 import GuardSafety from '../components/GuardSafety'
 import DataBackup from '../components/DataBackup'
+import CleanupCategory from '../components/CleanupCategory'
 import { formatDuration } from '../components/TaskStatus'
 import type { ImagePreset } from '../api'
 import './LoraDataset.css'
@@ -573,17 +574,6 @@ function OpsTab() {
     }
   }
 
-  const cleanup = async (category: string, label: string, files: number) => {
-    if (!window.confirm(`${label} ${files}個を消します。元に戻せません。よろしいですか?`)) return
-    try {
-      const r = await admin<{ deleted: number; bytes: number }>(`/cleanup/${category}`, { method: 'POST' })
-      setMessage(`${r.deleted}個(${bytes(r.bytes)})を消しました`)
-      void storage.refresh()
-    } catch (e) {
-      setMessage(errorText(e))
-    }
-  }
-
   return (
     <>
       <section className="adm-section">
@@ -624,21 +614,14 @@ function OpsTab() {
                 ))}
               </tbody>
             </table>
-            <h3>使われていないファイルの掃除</h3>
-            <table className="adm-table adm-table--rows">
-              <tbody>
-                {storage.data.cleanup.map(c => (
-                  <tr key={c.category}>
-                    <th>{c.label}</th>
-                    <td className="adm-num">{c.files.toLocaleString()}個 ・ {bytes(c.bytes)}</td>
-                    <td className="adm-actions">
-                      <button type="button" className="adm-danger" disabled={c.files === 0}
-                        onClick={() => void cleanup(c.category, c.label, c.files)}>消す</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <h3>使われていないファイルの整理</h3>
+            <p className="adm-hint">
+              片付けたものはごみ箱に入り、30日のあいだは元に戻せます。ディスクが空くのは、ごみ箱から消したとき(または期限が来たとき)です。
+            </p>
+            {storage.data.cleanup.map(c => (
+              <CleanupCategory key={c.category} backend={BACKEND} category={c.category} label={c.label} files={c.files} bytes={c.bytes}
+                onDone={text => { setMessage(text); void storage.refresh() }} />
+            ))}
           </>
         )}
       </section>
