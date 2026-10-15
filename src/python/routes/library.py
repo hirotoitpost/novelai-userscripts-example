@@ -55,7 +55,8 @@ router = APIRouter(prefix="/api/library", tags=["library"])
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _OUTPUTS = _PROJECT_ROOT / "outputs"
 # 配信してよいフォルダ(生成履歴と漫画)。LoRA の学習データなどは出さない。
-_SERVED_DIRS = (_OUTPUTS / "history", _OUTPUTS / "manga")
+# うごイラのコマ(outputs/ugoira)も画面に出す
+_SERVED_DIRS = (_OUTPUTS / "history", _OUTPUTS / "manga", _OUTPUTS / "ugoira")
 # キャラ別データセットの画像フォルダ: outputs/<ルート>/<キャラのフォルダ>/<この名前>/*.png
 # 引き直しの外れ(rejected)はギャラリーに出さない。
 _DATASET_SUBDIRS = ("generated", "generated_r18", "manual", "manual_r18")

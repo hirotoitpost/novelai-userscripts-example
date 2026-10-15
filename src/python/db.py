@@ -236,6 +236,31 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # うごイラ(ugoira.py): 動き(描き直す範囲・コマごとのタグと表示時間)と、作ったもの(コマの並び。JSON)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ugoira_motions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            region TEXT NOT NULL,
+            frames TEXT NOT NULL,
+            delays TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ugoira_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            source_key TEXT,
+            method TEXT NOT NULL,
+            frames TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     # 画像・作品データのバックアップの設定(backup.py。写し先・データセットを入れるか・自動か)。1行だけ
     conn.execute("CREATE TABLE IF NOT EXISTS backup_config (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL)")
     # ごみ箱(trash.py): 消したものの行(JSON)と、預かったファイル([元の場所, 預けた名前, 大きさ] の並び)
