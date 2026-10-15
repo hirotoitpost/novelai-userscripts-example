@@ -184,3 +184,50 @@ def test_default_motions_are_seeded_once(client) -> None:
     assert ugoira.region_mask(HEAD, "all", (400, 600)).getpixel((0, 0)) == 255
     person = ugoira.region_mask(HEAD, "person", (400, 600))
     assert person.getpixel((200, 590)) == 255 and person.getpixel((200, 10)) == 0
+
+
+def test_frame_interpolation_pads_and_crops(monkeypatch: pytest.MonkeyPatch) -> None:
+
+    from python import frame_interpolation
+
+    seen = {}
+
+    class FakeSession:
+        def run(self, names, feeds):
+            x = feeds["input"]
+            seen["shape"] = x.shape
+            # 2枚の平均(t の位置で混ぜる)を返す
+            t = float(feeds["timestep"].reshape(-1)[0])
+            return [x[:, :3] * (1 - t) + x[:, 3:] * t]
+
+    monkeypatch.setattr(frame_interpolation, "_get_session", lambda: FakeSession())
+    a = Image.new("RGB", (100, 70), (0, 0, 0))
+    b = Image.new("RGB", (100, 70), (200, 200, 200))
+    middle = frame_interpolation.between(a, b, 0.5)
+    # 64 の倍数に広げて通し、元の大きさに戻す
+    assert seen["shape"] == (1, 6, 128, 128) and middle.size == (100, 70) and middle.getpixel((50, 30)) == (100, 100, 100)
+    assert frame_interpolation.same(a, a.copy()) and not frame_interpolation.same(a, b)
+
+
+def test_interpolate_makes_a_new_project(client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import frame_interpolation
+
+    test_client, key, _ = client
+    monkeypatch.setattr(frame_interpolation, "between", lambda a, b, t: Image.blend(a, b.resize(a.size), t))
+    blink = next(m for m in test_client.get("/api/ugoira/motions").json()["motions"] if m["name"] == "まばたき")
+    job = _wait(test_client, test_client.post("/api/ugoira/partial", json={"key": key, "motion_id": blink["id"]}).json()["id"])
+    source = test_client.get(f"/api/ugoira/{job['project_id']}").json()
+    # 1コマ目(白)と2コマ目(黒)は違う。2〜4コマ目は同じ黒(テストの生成)なので、そのあいだは飛ばす
+    made = _wait(test_client, test_client.post(f"/api/ugoira/{source['id']}/interpolate", json={"count": 2, "loop": True}).json()["id"])
+    assert made["status"] == "done", made
+    result = test_client.get(f"/api/ugoira/{made['project_id']}").json()
+    tags = [f["tags"] for f in result["frames"]]
+    # 白→黒、黒→白(最後から最初へ戻る)のあいだにだけ2枚ずつ足す
+    assert len(result["frames"]) == 4 + 2 + 2 and tags[1:3] == ["(中割り)", "(中割り)"] and tags[-2:] == ["(中割り)", "(中割り)"]
+    # 中割りの表示時間: 前後の短い方を3で分ける(2200 と 60 → 20)
+    assert result["frames"][1]["delay"] == 20 and result["frames"][0]["delay"] == 2200
+    # 元のうごイラはそのまま。新しい方はコマの画像を写す(片方を消しても、もう片方は残る)
+    assert len(test_client.get(f"/api/ugoira/{source['id']}").json()["frames"]) == 4
+    assert all(f["path"].startswith(f"outputs/ugoira/{result['id']}/") for f in result["frames"])
+    test_client.delete(f"/api/ugoira/{source['id']}")
+    assert (tmp_path / result["frames"][0]["path"]).is_file()
