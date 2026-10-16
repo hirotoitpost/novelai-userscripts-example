@@ -131,9 +131,10 @@ def test_rig_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_models
     monkeypatch.setattr(rig, "detect_pose", lambda image, box: None)
     seen: list[str] = []
 
-    def split(image, head, person, skeleton, template):
+    def split(image, head, person, skeleton, template, hair=None):
         seen.append(template.name)
-        return rig.Parts(parts.person, parts.hair, parts.head, parts.hanging, parts.pivot, head, template)
+        used = parts.hair if hair is None else hair
+        return rig.Parts(parts.person, used, parts.head, parts.hanging, parts.pivot, head, template)
 
     monkeypatch.setattr(rig, "split_parts", split)
     (tmp_path / "outputs" / "history").mkdir(parents=True)
@@ -162,3 +163,83 @@ def test_rig_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_models
         assert seen == ["profile"] and "横顔" in job["message"]
         project = client.get(f"/api/ugoira/{job['project_id']}").json()
         assert project["method"] == "rig" and len(project["frames"]) == 24
+
+        # 半自動: 髪の範囲をタップで直す(切り出しは差し替え。タップした所のまわり 20 画素角)
+        pid = project["id"]
+        state = client.get(f"/api/ugoira/{pid}/rig").json()
+        assert state["source"].endswith("rig_source.png") and not state["can_undo"]
+        taps: list[tuple] = []
+
+        def zoom(image, point, detail, cache_key=None):
+            taps.append((point, detail))
+            region = np.zeros((image.height, image.width), np.float32)
+            region[int(point[1]) - 10 : int(point[1]) + 10, int(point[0]) - 10 : int(point[0]) + 10] = 1.0
+            return region
+
+        monkeypatch.setattr(rig, "zoom_segment", zoom)
+        hair_file = tmp_path / "outputs" / "ugoira" / str(pid) / "rig_hair.png"
+        before = np.asarray(Image.open(hair_file))
+        assert before[250, 128] == 0
+        edited = client.post(f"/api/ugoira/{pid}/rig/edit", json={"x": 128, "y": 250, "mode": "add"}).json()
+        # 小さい絵(256×384)なので、高精細(AI 拡大)を自動で使う
+        assert edited["can_undo"] and edited["detail"] is True and taps[-1][1] is True
+        assert np.asarray(Image.open(hair_file))[250, 128] == 255
+        client.post(f"/api/ugoira/{pid}/rig/edit", json={"x": 128, "y": 250, "mode": "remove", "detail": False})
+        assert np.asarray(Image.open(hair_file))[250, 128] == 0 and taps[-1][1] is False
+        client.post(f"/api/ugoira/{pid}/rig/undo")
+        assert np.asarray(Image.open(hair_file))[250, 128] == 255
+        assert client.post(f"/api/ugoira/{pid}/rig/undo").status_code == 409
+        client.post(f"/api/ugoira/{pid}/rig/reset")
+        assert np.array_equal(np.asarray(Image.open(hair_file)), before)
+        assert client.post(f"/api/ugoira/{pid}/rig/edit", json={"x": 999, "y": 10}).status_code == 422
+
+        # いまの範囲で作り直す: 同じうごイラのコマが入れ替わり、前のコマの絵は消える
+        client.post(f"/api/ugoira/{pid}/rig/edit", json={"x": 128, "y": 250, "mode": "add"})
+        old = [tmp_path / f["path"] for f in project["frames"]]
+        job = client.post(f"/api/ugoira/{pid}/rig/redo").json()
+        for _ in range(200):
+            job = client.get(f"/api/ugoira/jobs/{job['id']}").json()
+            if job["status"] != "running":
+                break
+            time.sleep(0.05)
+        assert job["status"] == "done", job
+        redone = client.get(f"/api/ugoira/{pid}").json()
+        assert len(redone["frames"]) == 24 and not any(p.exists() for p in old)
+        # ふつうのうごイラは、髪の範囲を直せない
+        other = ugoira.create_project("x", "k", "partial")
+        assert client.get(f"/api/ugoira/{other}/rig").status_code == 409
+
+
+def test_zoom_segment_maps_back_to_the_picture(monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import point_segment
+
+    encoded: list[tuple[int, int]] = []
+
+    def encode(image):
+        encoded.append(image.size)
+        return point_segment.Features(np.zeros(1), image.size, 1.0)
+
+    def segment(features, positives, negatives=()):
+        # 拡大した区画で、タップした所を中心に 40 画素角(元の絵では 10 画素角)
+        w, h = features.size
+        x, y = positives[0]
+        mask = np.zeros((h, w), bool)
+        mask[int(y) - 20 : int(y) + 20, int(x) - 20 : int(x) + 20] = True
+        return [(mask, 0.9)]
+
+    monkeypatch.setattr(point_segment, "encode", encode)
+    monkeypatch.setattr(point_segment, "segment", segment)
+    rig._zoom_cache.clear()
+    picture = _striped((600, 800))
+    region = rig.zoom_segment(picture, (300.0, 400.0), cache_key="t")
+    # 4倍に拡大した区画で切り出し、元の座標に戻す
+    assert encoded == [(rig.ZOOM_TILE * 4, rig.ZOOM_TILE * 4)]
+    ys, xs = np.nonzero(region > 0.5)
+    assert 294 <= xs.min() <= 296 and 304 <= xs.max() <= 306 and 394 <= ys.min() <= 396
+    # 同じ区画は覚えておく(2回目は特徴を作らない)
+    rig.zoom_segment(picture, (305.0, 402.0), cache_key="t")
+    assert len(encoded) == 1
+    # 絵の端の近くは、区画を絵の中へずらす
+    edge = rig.zoom_segment(picture, (5.0, 5.0))
+    assert edge[5, 5] > 0.5
+    assert np.array_equal(rig.edit_hair(np.zeros((2, 2)), np.ones((2, 2)), "add"), np.ones((2, 2)))

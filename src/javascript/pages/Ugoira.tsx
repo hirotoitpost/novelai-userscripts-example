@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { API_ORIGIN, fileUrl } from '../library'
+import UgoiraRigEditor from '../components/UgoiraRigEditor'
 import './Publications.css'
 import './Ugoira.css'
 
@@ -425,6 +426,10 @@ export default function Ugoira() {
               <button type="button" className="ugo-primary" disabled={!dirty} onClick={() => void saveFrames()}>並び・表示時間を保存</button>
               {dirty && <button type="button" onClick={() => setFrames(project.frames)}>元に戻す</button>}
             </div>
+            {project.method === 'rig' && (
+              <UgoiraRigEditor key={project.id} projectId={project.id} running={running}
+                onRedo={id => { setJob({ id, status: 'running', message: '作り直しています', progress: 0, total: 4, project_id: project.id }); follow(id) }} />
+            )}
             <h3>中割り(コマのあいだを補う)</h3>
             <p className="pub-meta">
               コマとコマのあいだの絵を、この PC で作って足します(フレーム補間のモデル RIFE。NovelAI は使いません)。

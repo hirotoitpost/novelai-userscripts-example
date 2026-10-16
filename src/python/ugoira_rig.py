@@ -238,8 +238,10 @@ def split_parts(
     person: np.ndarray,
     skeleton: Skeleton | None,
     template: PoseTemplate = STANDING,
+    hair: np.ndarray | None = None,
 ) -> Parts:
     """
+    hair(髪の重み 0〜1)を渡すと、髪は切り出さずにそれを使う(半自動で直した範囲)。
     髪: 頭のてっぺんの色(Lab の中央値)に近く、そこからつながっている所。顔(目・鼻のまわりの楕円)は除く。
     頭: 首の付け根より上で、人物の所。首の付け根は、肩の中点から鼻へ 35% の所(骨格が無ければ頭の枠の下)。
     """
@@ -248,7 +250,7 @@ def split_parts(
     height, width = person.shape
     inside = person > 0.5
 
-    hair = _hair_by_points(image, head, inside, skeleton, template)
+    hair = (hair > 0.5) if hair is not None else _hair_by_points(image, head, inside, skeleton, template)
 
     # 顔の楕円(目と鼻から)。骨格が無ければ頭の枠から
     eyes = [p for p in (skeleton.get("left_eye"), skeleton.get("right_eye")) if p is not None] if skeleton else []
@@ -306,6 +308,70 @@ def split_parts(
         head_box=head,
         template=template,
     )
+
+
+# ---- 半自動: タップした所のまわりを拡大して切り出す ----
+
+# 拡大して切り出す区画の大きさ(元の絵の画素)と倍率
+ZOOM_TILE = 256
+ZOOM_SCALE = 4
+_ZOOM_GRID = 64
+# 元の絵がこれより小さいときは、AI 拡大(高精細)を自動で使う(線がにじんで、ふつうの拡大では切り出しが外れやすい)
+DETAIL_AUTO_PIXELS = 512 * 768
+_zoom_cache: dict[tuple[Any, ...], Any] = {}
+_ZOOM_CACHE_MAX = 32
+
+
+def zoom_segment(
+    image: Image.Image, point: tuple[float, float], detail: bool = False, cache_key: Any = None
+) -> np.ndarray:
+    """
+    point のまわりの区画を4倍に拡大して切り出し、元の大きさに縮めて元の絵の座標に戻した重み(0〜1)。
+    縮めるので、ふちは「半分だけ」の中間の値になる(重ねたときに輪郭がギザギザにならない)。
+    detail なら AI 拡大(upscaler。この PC で、絵の中身は変えない)、そうでなければふつうの拡大。
+    同じ区画の特徴は覚えておく(同じ辺りを続けてタップしても待たない)。
+    """
+    from . import point_segment, upscaler
+
+    width, height = image.size
+    half = ZOOM_TILE // 2
+    # 区画の位置は 64 画素ごとにそろえる(近い所を続けてタップしたとき、同じ区画の特徴を使い回せる)
+    left = int(min(max(round((point[0] - half) / _ZOOM_GRID) * _ZOOM_GRID, 0), max(width - ZOOM_TILE, 0)))
+    top = int(min(max(round((point[1] - half) / _ZOOM_GRID) * _ZOOM_GRID, 0), max(height - ZOOM_TILE, 0)))
+    tile = image.crop((left, top, min(left + ZOOM_TILE, width), min(top + ZOOM_TILE, height)))
+    key = (cache_key, left, top, detail) if cache_key is not None else None
+    features = _zoom_cache.get(key) if key is not None else None
+    if features is None:
+        big = (
+            upscaler.upscale(tile)
+            if detail
+            else tile.resize((tile.width * ZOOM_SCALE, tile.height * ZOOM_SCALE), Image.Resampling.BICUBIC)
+        )
+        features = point_segment.encode(big)
+        if key is not None:
+            if len(_zoom_cache) >= _ZOOM_CACHE_MAX:
+                _zoom_cache.pop(next(iter(_zoom_cache)))
+            _zoom_cache[key] = features
+    scale = features.size[0] / tile.width
+    local = ((point[0] - left) * scale, (point[1] - top) * scale)
+    candidates = [m for m, _ in point_segment.segment(features, [local]) if m[min(int(local[1]), m.shape[0] - 1), min(int(local[0]), m.shape[1] - 1)]]
+    if not candidates:
+        return np.zeros((height, width), np.float32)
+    # いちばん小さい候補(タップした1本・1つ)
+    chosen = min(candidates, key=lambda m: int(m.sum()))
+    soft = cv2.resize(chosen.astype(np.float32), (tile.width, tile.height), interpolation=cv2.INTER_AREA)
+    out = np.zeros((height, width), np.float32)
+    out[top : top + tile.height, left : left + tile.width] = soft
+    return out
+
+
+def edit_hair(hair: np.ndarray, region: np.ndarray, mode: str) -> np.ndarray:
+    """髪の重みに、切り出した所を足す(add)か、引く(remove)。"""
+    if mode == "add":
+        return np.maximum(hair, region)
+    if mode == "remove":
+        return np.clip(hair - region, 0.0, 1.0)
+    raise RigError("直し方は add か remove です。")
 
 
 # ---- ばね(髪の鎖・頭の動き) ----
