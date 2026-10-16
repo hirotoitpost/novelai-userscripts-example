@@ -12,6 +12,7 @@ import './Ugoira.css'
 
 interface Motion { id: number; name: string; region: string; frames: string[]; delays: number[] }
 interface Frame { path: string; delay: number; tags: string }
+interface Warp { kind: string; name: string; period: number }
 interface Project { id: number; name: string; source_key: string | null; method: string; frames: Frame[]; created_at: string }
 interface Job { id: string; status: 'running' | 'done' | 'error'; message: string; progress: number; total: number; project_id: number | null }
 
@@ -64,6 +65,13 @@ export default function Ugoira() {
   const [maxSide, setMaxSide] = useState('')
   const [interpCount, setInterpCount] = useState(1)
   const [interpLoop, setInterpLoop] = useState(true)
+  // 作るときに足す中割りの枚数(0 は足さない)
+  const [between, setBetween] = useState(1)
+  const [warps, setWarps] = useState<Warp[]>([])
+  const [warpKind, setWarpKind] = useState('breath')
+  const [warpAmount, setWarpAmount] = useState(1)
+  const [warpFrames, setWarpFrames] = useState(16)
+  const [keepBackground, setKeepBackground] = useState(true)
   const [editing, setEditing] = useState<Motion | null>(null)
   const [draft, setDraft] = useState({ name: '', region: 'eyes', lines: '' })
   const timer = useRef<number | null>(null)
@@ -77,8 +85,13 @@ export default function Ugoira() {
   }, [sourceKey])
 
   const loadMotions = useCallback(() => {
-    call<{ motions: Motion[]; regions: Record<string, string> }>('/motions')
-      .then(data => { setMotions(data.motions); setRegions(data.regions); setMotionId(id => id ?? data.motions[0]?.id ?? null) })
+    call<{ motions: Motion[]; regions: Record<string, string>; warps?: Warp[] }>('/motions')
+      .then(data => {
+        setMotions(data.motions)
+        setRegions(data.regions)
+        setWarps(data.warps ?? [])
+        setMotionId(id => id ?? data.motions[0]?.id ?? null)
+      })
       .catch(e => setError(String(e)))
   }, [])
   const loadProjects = useCallback(() => { call<Project[]>('').then(setProjects).catch(() => {}) }, [])
@@ -108,7 +121,23 @@ export default function Ugoira() {
     if (!sourceKey || motionId === null) return
     setError(null)
     try {
-      const started = await call<Job>('/partial', { method: 'POST', body: JSON.stringify({ key: sourceKey, motion_id: motionId, ...(strength === 'auto' ? {} : { strength: Number(strength) }) }) })
+      const started = await call<Job>('/partial', { method: 'POST', body: JSON.stringify({ key: sourceKey, motion_id: motionId, interpolate: between, ...(strength === 'auto' ? {} : { strength: Number(strength) }) }) })
+      setJob(started)
+      follow(started.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** D. 絵を変形して動かす(描き直さない。この PC で) */
+  async function startWarp() {
+    if (!sourceKey) return
+    setError(null)
+    try {
+      const started = await call<Job>('/warp', {
+        method: 'POST',
+        body: JSON.stringify({ key: sourceKey, kind: warpKind, amount: warpAmount, frames: warpFrames, keep_background: keepBackground }),
+      })
       setJob(started)
       follow(started.id)
     } catch (e) {
@@ -250,6 +279,12 @@ export default function Ugoira() {
                     ))}
                   </select>
                 </label>
+                <label>中割り{' '}
+                  <select value={between} disabled={running} onChange={e => setBetween(Number(e.target.value))}>
+                    <option value={0}>足さない</option>
+                    {[1, 2].map(n => <option key={n} value={n}>コマのあいだに{n}枚(なめらか)</option>)}
+                  </select>
+                </label>
               </div>
               {motion && <p className="pub-meta">コマ: {motion.frames.map((f, i) => `${f || (whole ? '(タグを足さずに描き直す)' : '(元のまま)')} ${motion.delays[i]}ms`).join(' → ')}</p>}
               <button type="button" className="ugo-primary" disabled={running || !motion} onClick={() => void start()}>
@@ -265,8 +300,41 @@ export default function Ugoira() {
                 {whole
                   ? '体ごとの動き(B): 元の絵から毎回描き直します(img2img)。手を振るなどの大きい動きが出ますが、服や細部が少し変わることがあります。体ごとのときは、背景は元の絵のままです。'
                   : '部分の動き(A): 頭の検出から目・口・髪の範囲を決め、そこだけを描き直します(範囲の外は元の絵のまま)。'}
-                1MP 以内なので、Opus なら Anlas はかかりません。
+                1MP 以内なので、Opus なら Anlas はかかりません。描き直した所の明るさ・色は、元の絵に合わせてから重ねます。
+                中割りは、作ったあとにこの PC で足します(RIFE)。
               </p>
+
+              <h3>変形で動かす(描き直さない)</h3>
+              <p className="pub-hint">
+                元の絵をそのまま少しずつ動かします(D)。線・色・トーンがどのコマでも同じなので、ちらつきません。NovelAI は使わず、
+                この PC で作ります。呼吸・髪がなびく・首をかしげる・うなずく のような、小さく繰り返す動きに向きます。
+              </p>
+              <div className="ugo-row">
+                <label>動き{' '}
+                  <select value={warpKind} disabled={running} onChange={e => setWarpKind(e.target.value)}>
+                    {warps.map(w => <option key={w.kind} value={w.kind}>{w.name}(1周 {w.period / 1000}秒)</option>)}
+                  </select>
+                </label>
+                <label>大きさ{' '}
+                  <select value={warpAmount} disabled={running} onChange={e => setWarpAmount(Number(e.target.value))}>
+                    <option value={0.6}>小さく</option>
+                    <option value={1}>ふつう</option>
+                    <option value={1.5}>大きく</option>
+                  </select>
+                </label>
+                <label>コマ数{' '}
+                  <select value={warpFrames} disabled={running} onChange={e => setWarpFrames(Number(e.target.value))}>
+                    {[12, 16, 24].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <input type="checkbox" checked={keepBackground} disabled={running} onChange={e => setKeepBackground(e.target.checked)} />
+                  {' '}背景は動かさない(人物だけを動かす)
+                </label>
+              </div>
+              <button type="button" className="ugo-primary" disabled={running || warps.length === 0} onClick={() => void startWarp()}>
+                {running ? '作っています…' : '変形でうごイラを作る'}
+              </button>
             </>
           )}
         </section>

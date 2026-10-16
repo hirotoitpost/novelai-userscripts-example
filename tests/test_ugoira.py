@@ -14,6 +14,7 @@ import time
 import zipfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -47,7 +48,18 @@ def test_composite_keeps_outside_the_region() -> None:
     mask = ugoira.region_mask(HEAD, "mouth", source.size)
     result = ugoira.composite(source, generated, mask)
     assert result.getpixel((10, 10)) == (255, 255, 255)
-    assert result.getpixel((200, 270)) == (0, 0, 0)
+    # 範囲の中は描き直した絵(明るさを元に寄せるのは、ずれ 30 まで)
+    assert result.getpixel((200, 270)) == (30, 30, 30)
+
+
+def test_match_tone_follows_the_source_at_the_edge() -> None:
+    # 元の絵はグラデーション。描き直した絵は全体が暗く・コントラストが弱い(コマごとのトーンのずれ)
+    ramp = np.tile(np.linspace(40, 220, 400, dtype=np.float32), (600, 1))
+    source = Image.fromarray(np.stack([ramp] * 3, axis=-1).astype(np.uint8))
+    generated = Image.fromarray((np.asarray(source, dtype=np.float32) * 0.8 + 10).astype(np.uint8))
+    mask = ugoira.region_mask(HEAD, "eyes", source.size)
+    matched = np.asarray(ugoira.match_tone(source, generated, mask), dtype=np.float32)
+    assert np.abs(matched - np.asarray(source, dtype=np.float32)).max() <= 2
 
 
 @pytest.fixture()
@@ -207,6 +219,11 @@ def test_frame_interpolation_pads_and_crops(monkeypatch: pytest.MonkeyPatch) -> 
     # 64 の倍数に広げて通し、元の大きさに戻す
     assert seen["shape"] == (1, 6, 128, 128) and middle.size == (100, 70) and middle.getpixel((50, 30)) == (100, 100, 100)
     assert frame_interpolation.same(a, a.copy()) and not frame_interpolation.same(a, b)
+    # 目・口だけが変わるコマ(絵全体では小さな違い)も、同じとは見なさない
+    blank = Image.new("RGB", (512, 512), "white")
+    blink = blank.copy()
+    blink.paste((0, 0, 0), (220, 240, 280, 280))
+    assert not frame_interpolation.same(blank, blink)
 
 
 def test_interpolate_makes_a_new_project(client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,3 +248,77 @@ def test_interpolate_makes_a_new_project(client, tmp_path: Path, monkeypatch: py
     assert all(f["path"].startswith(f"outputs/ugoira/{result['id']}/") for f in result["frames"])
     test_client.delete(f"/api/ugoira/{source['id']}")
     assert (tmp_path / result["frames"][0]["path"]).is_file()
+
+
+def test_partial_can_add_in_betweens(client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import frame_interpolation
+
+    test_client, key, _ = client
+    monkeypatch.setattr(frame_interpolation, "between", lambda a, b, t: Image.blend(a, b.resize(a.size), t))
+    blink = next(m for m in test_client.get("/api/ugoira/motions").json()["motions"] if m["name"] == "まばたき")
+    job = _wait(test_client, test_client.post("/api/ugoira/partial", json={"key": key, "motion_id": blink["id"], "interpolate": 1}).json()["id"])
+    assert job["status"] == "done" and "中割り" in job["message"], job
+    project = test_client.get(f"/api/ugoira/{job['project_id']}").json()
+    # 白→黒、黒→白(最後から最初)のあいだに1枚ずつ。同じ絵のあいだは飛ばす。同じうごイラの中に足す
+    assert [f["tags"] == "(中割り)" for f in project["frames"]] == [False, True, False, False, False, True]
+    assert all(f["path"].startswith(f"outputs/ugoira/{project['id']}/") for f in project["frames"])
+
+
+def _striped(size=(400, 600)) -> Image.Image:
+    xs = np.arange(size[0])[None, :] + np.arange(size[1])[:, None]
+    value = ((xs // 8) % 2 * 180 + 40).astype(np.uint8)
+    return Image.fromarray(np.stack([value] * 3, axis=-1))
+
+
+def test_warp_moves_only_the_person() -> None:
+    from python import ugoira_warp
+
+    source = _striped()
+    # 頭と体の所だけが人物(背景の左上は人物でない)
+    mask = np.zeros((600, 400), np.float32)
+    mask[90:, 80:320] = 1.0
+    for kind in ugoira_warp.WARPS:
+        frames = ugoira_warp.render(source, HEAD, kind, 8, 1.0, mask)
+        assert len(frames) == 8
+        # 最初のコマは元の絵のまま。途中のコマは動く。頭から離れた背景(左下)は動かない
+        assert np.array_equal(np.asarray(frames[0]), np.asarray(source)), kind
+        middle = np.asarray(frames[4], dtype=np.int16)
+        assert np.abs(middle - np.asarray(source, dtype=np.int16)).max() > 50, kind
+        assert np.array_equal(middle[-60:, :60], np.asarray(source, dtype=np.int16)[-60:, :60]), kind
+    with pytest.raises(ugoira_warp.WarpError):
+        ugoira_warp.render(source, HEAD, "dance", 8)
+
+
+def test_warp_endpoint_makes_a_project(client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import anime_seg
+
+    test_client, key, _ = client
+    _striped().save(tmp_path / "outputs" / "history" / "src.png")
+    monkeypatch.setattr(anime_seg, "person_mask", lambda image: np.ones((image.height, image.width), np.float32))
+    warps = test_client.get("/api/ugoira/motions").json()["warps"]
+    assert {w["kind"] for w in warps} == {"breath", "hair", "tilt", "nod"}
+    job = _wait(test_client, test_client.post("/api/ugoira/warp", json={"key": key, "kind": "tilt", "frames": 8}).json()["id"])
+    assert job["status"] == "done", job
+    project = test_client.get(f"/api/ugoira/{job['project_id']}").json()
+    assert project["method"] == "warp" and len(project["frames"]) == 8
+    # 1周 2400ms(首をかしげるの既定)を8コマで
+    assert {f["delay"] for f in project["frames"]} == {300}
+    assert test_client.post("/api/ugoira/warp", json={"key": key, "kind": "dance"}).status_code == 422
+
+
+def test_in_between_keeps_unchanged_areas(monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import frame_interpolation
+
+    class NoisySession:
+        # モデルの出力: 全体が少し明るくずれる(実機の RIFE も、変わっていない所がわずかにずれた)
+        def run(self, _outputs, feeds):
+            x = feeds["input"]
+            return [np.clip((x[:, :3] + x[:, 3:]) / 2 + 0.03, 0, 1)]
+
+    monkeypatch.setattr(frame_interpolation, "_get_session", lambda: NoisySession())
+    a = Image.new("RGB", (256, 256), (120, 120, 120))
+    b = a.copy()
+    b.paste((0, 0, 0), (100, 100, 140, 120))
+    middle = np.asarray(frame_interpolation.between(a, b, 0.5))
+    # 変わった所はモデルの絵、離れた所は a のまま
+    assert middle[110, 120, 0] < 100 and (middle[:40, :40] == 120).all()
