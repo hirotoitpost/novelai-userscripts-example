@@ -8,6 +8,11 @@
   POST   /partial                 うごイラを作る(処理を切り離す。GET /jobs/{id} で進み具合)。動きの範囲で方法が決まる:
                                     目・口・顔・髪は A(部分だけインペイント)、体ごと・絵全体は B(全体を img2img)
   POST   /warp                    D. 絵を変形して動かす(描き直さない。呼吸・髪がなびく・首をかしげる・うなずく)
+  POST   /rig                     E. 部位ごとに分けて、骨格とばねで動かす(描き直さない。髪が風になびく・首をかしげる)
+  GET    /{id}/rig                E の半自動: 元の絵と、いまの髪の範囲
+  POST   /{id}/rig/edit           E の半自動: タップした所のまわりを拡大して切り出し、髪の範囲に足す・引く
+  POST   /{id}/rig/undo|reset     E の半自動: 一つ前に戻す・自動の範囲に戻す
+  POST   /{id}/rig/redo           E の半自動: いまの髪の範囲で、コマを作り直す
   GET    /jobs/{id}               進み具合
   GET    /                        作ったうごイラの一覧
   GET    /{id}                    1つ
@@ -32,7 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from novelai import AsyncNovelAI
 from pydantic import BaseModel, Field
 
-from .. import ugoira, ugoira_warp
+from .. import ugoira, ugoira_rig, ugoira_warp
 from ..client import get_client
 
 router = APIRouter(prefix="/api/ugoira", tags=["ugoira"])
@@ -71,6 +76,18 @@ class WarpRequest(BaseModel):
     keep_background: bool = True
 
 
+class RigRequest(BaseModel):
+    key: str = Field(min_length=1, description="ギャラリーの画像のキー")
+    kind: Literal["hair", "tilt"]
+    # 髪の表現: アニメ調(束ごと・2コマずつ止める)か、リアル寄り(細かい毛筋・毎コマ動く・少しぶれる)
+    style: Literal["anime", "real"] = "anime"
+    amount: float = Field(1.0, ge=0.3, le=2.0)
+    period: int | None = Field(None, ge=600, le=10000)
+    # 動いて見える所の裏の埋め方: lama(この PC で)か novelai(胴体だけを切り出して描く。Opus・1MP 以内なら Anlas 0。
+    # 髪が残ったらシードを変えて描き直し、3回とも残ったら lama)
+    plate: Literal["lama", "novelai"] = "lama"
+
+
 class FramesRequest(BaseModel):
     frames: list[dict[str, Any]] = Field(min_length=1, max_length=200)
 
@@ -89,6 +106,9 @@ async def get_motions() -> dict[str, Any]:
         "motions": ugoira.list_motions(),
         "regions": ugoira.REGION_LABELS,
         "warps": [{"kind": kind, "name": name, "period": period} for kind, (name, period) in ugoira_warp.WARPS.items()],
+        # rigs・styles: E(部位ごと)の動きと、髪の表現
+        "rigs": [{"kind": kind, "name": name, "period": period} for kind, (name, period) in ugoira_rig.RIGS.items()],
+        "styles": ugoira_rig.STYLES,
     }
 
 
@@ -448,3 +468,324 @@ async def delete_project(project_id: int) -> None:
         ugoira.frame_dir(project_id).rmdir()
     except OSError:
         pass
+
+
+# ---- E. 部位ごとに、骨格とばねで動かす ----
+
+
+@router.post("/rig")
+async def start_rig(req: RigRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    E. 人物・髪・頭を分け(人物の切り分け・点で指す切り出し)、骨格(RTMPose)から首の位置を取り、髪はばねの鎖で、
+    頭は首を中心に動かす。動いて見えるようになった裏は LaMa で埋める。この PC で作る(NovelAI は使わない)。
+    構図(寝ている・横顔・後ろ姿 など)は、絵のプロンプトのタグから選ぶ。
+    """
+    from .library import _gallery_images
+
+    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    job_id = uuid4().hex
+    job = _Job(total=4)
+    _jobs[job_id] = job
+    job.task = asyncio.create_task(_run_rig(job, req, item, getattr(client, "api_key", None)))
+    return _job_response(job_id, job)
+
+
+async def _rig_parts(job: _Job, source: Any, prompt: str, hair: Any = None) -> Any:
+    """人物の切り分け・骨格・構図の型から部位を分ける(hair を渡すと、髪はそれを使う)。"""
+    from .. import anime_seg
+    from ..manga_v2.detect import detect_heads_in_image
+
+    head = ugoira.pick_head(await asyncio.to_thread(detect_heads_in_image, source))
+    job.message = "人物を背景から切り分けています(はじめての時は、モデルを取ってきます)"
+    person = await asyncio.to_thread(anime_seg.person_mask, source)
+    job.progress = 1
+    ys, xs = (person > 0.5).nonzero()
+    if len(xs) == 0:
+        raise ugoira_rig.RigError("人物が見つかりませんでした。")
+    job.message = "骨格を取っています(はじめての時は、モデルを取ってきます)"
+    skeleton = await asyncio.to_thread(ugoira_rig.detect_pose, source, (xs.min(), ys.min(), xs.max(), ys.max()))
+    template = ugoira_rig.pose_template(prompt)
+    job.progress = 2
+    job.message = f"髪・頭を分けています(構図: {template.label})"
+    parts = await asyncio.to_thread(ugoira_rig.split_parts, source, head, person, skeleton, template, hair)
+    job.progress = 3
+    return parts
+
+
+# 半自動で直すときのファイル(うごイラのフォルダに置く)。元の絵(作ったときの大きさ)、自動の髪の範囲、いまの髪の範囲、
+# 一つ前の髪の範囲、画面に重ねる赤い絵、作ったときの設定
+_RIG_SOURCE = "rig_source.png"
+_RIG_HAIR_AUTO = "rig_hair_auto.png"
+_RIG_HAIR = "rig_hair.png"
+_RIG_HAIR_PREV = "rig_hair_prev.png"
+_RIG_VIEW = "rig_view.png"
+_RIG_SETTINGS = "rig.json"
+
+
+def _save_hair(project_id: int, hair: Any, name: str = _RIG_HAIR) -> None:
+    import numpy as np
+    from PIL import Image
+
+    folder = ugoira.frame_dir(project_id)
+    alpha = (np.clip(hair, 0, 1) * 255).astype(np.uint8)
+    Image.fromarray(alpha).save(folder / name)
+    if name == _RIG_HAIR:
+        view = np.zeros((*alpha.shape, 4), np.uint8)
+        view[..., 0] = 255
+        view[..., 3] = (alpha.astype(np.float32) * 0.55).astype(np.uint8)
+        Image.fromarray(view).save(folder / _RIG_VIEW)
+
+
+def _load_hair(project_id: int, name: str = _RIG_HAIR) -> Any:
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(ugoira.frame_dir(project_id) / name) as image:
+        return np.asarray(image.convert("L"), np.float32) / 255.0
+
+
+async def _novelai_plate(job: _Job, source: Any, parts: Any, settings: dict[str, Any], api_key: str | None) -> tuple[Any, str]:
+    """
+    髪の裏を NovelAI で描く: 頭を除いた胴体だけを切り出し、髪と頭の所を「頭なし・髪なし」で描かせて、LaMa で埋めた絵に重ねる。
+    描いた胴体に髪の色が残っていたら、シードを変えて描き直す。3回とも残ったら LaMa のまま。
+    """
+    from novelai.types import GenerateImageParams
+
+    from ..models import GenerateImageRequest
+    from .image import _build_kwargs, _job_client
+
+    job.message = "髪の裏を埋めています(LaMa)"
+    base = await asyncio.to_thread(ugoira_rig.base_plate, source, parts, settings["kind"])
+    nai = settings.get("nai") or {}
+    req = await asyncio.to_thread(
+        ugoira_rig.torso_request, source, parts, nai.get("prompt") or settings.get("prompt") or "", nai.get("negative_prompt") or ""
+    )
+    if req is None:
+        return base, "裏: LaMa(描かせる所がありません)"
+    client = _job_client(api_key)
+    try:
+        first = int(nai.get("seed") or 1)
+        for attempt in range(_PLATE_TRIES):
+            job.message = f"髪の裏を NovelAI で描いています({attempt + 1}/{_PLATE_TRIES})"
+            seed = (first + attempt * 7919) % 4294967295
+            fields: dict[str, Any] = {
+                "prompt": req.prompt,
+                "negative_prompt": req.negative,
+                "quality": False,
+                "uc_preset": "none",
+                "size": list(req.image.size),
+                "steps": min(int(nai.get("steps") or 28), 28),
+                "seed": seed,
+                "inpaint": {"image": _png_b64(req.image), "mask": _png_b64(req.mask), "strength": 1.0, "seed": seed},
+            }
+            for key in ("model", "scale", "sampler", "noise_schedule"):
+                if nai.get(key):
+                    fields[key] = nai[key]
+            try:
+                gen = GenerateImageRequest(**fields)
+            except ValueError:
+                gen = GenerateImageRequest(**{k: v for k, v in fields.items() if k not in ("model", "sampler", "noise_schedule")})
+            drawn = (await client.image.generate(GenerateImageParams(**_build_kwargs(gen))))[0]
+            left = await asyncio.to_thread(ugoira_rig.hair_left, source, parts, req, drawn)
+            if left <= ugoira_rig.HAIR_LEFT_LIMIT:
+                return await asyncio.to_thread(ugoira_rig.merge_torso, base, req, drawn), f"裏: NovelAI({attempt + 1}回目)"
+        return base, "裏: LaMa(NovelAI では髪が残ったため)"
+    finally:
+        await client.close()
+
+
+# NovelAI で髪の裏を描き直す回数
+_PLATE_TRIES = 3
+
+
+async def _render_rig(
+    job: _Job, project_id: int, source: Any, parts: Any, settings: dict[str, Any], api_key: str | None = None
+) -> tuple[list[dict[str, Any]], str]:
+    plate, note = None, "裏: LaMa"
+    if settings.get("plate") == "novelai":
+        plate, note = await _novelai_plate(job, source, parts, settings, api_key)
+    job.message = "動かしています(裏を埋めるモデルは、はじめての時に取ってきます)"
+    rendered = await asyncio.to_thread(
+        ugoira_rig.render, source, parts, settings["kind"], settings["style"], settings.get("period"), settings.get("amount", 1.0), plate
+    )
+    name = ugoira_rig.RIGS[settings["kind"]][0]
+    frames = [
+        {"path": ugoira.save_frame(project_id, index, image), "delay": delay, "tags": f"({name})"}
+        for index, (image, delay) in enumerate(rendered)
+    ]
+    return frames, note
+
+
+async def _run_rig(job: _Job, req: RigRequest, item: Any, api_key: str | None = None) -> None:
+    from PIL import Image
+
+    from ..nai_metadata import generation_settings
+    from .image import _guard_image
+    from .library import _served_path
+
+    try:
+        data = _served_path(item.path).read_bytes()
+        with Image.open(io.BytesIO(data)) as opened:
+            original = opened.convert("RGB")
+        job.message = "画像を確かめています"
+        await asyncio.to_thread(_guard_image, data, item.prompt, original, item.key)
+        size = ugoira.fit_size(original.size)
+        source = original.resize(size, Image.Resampling.LANCZOS) if size != original.size else original
+        parts = await _rig_parts(job, source, item.prompt or "")
+        name = ugoira_rig.RIGS[req.kind][0]
+        project_id = ugoira.create_project(
+            f"{name}(部位・{ugoira_rig.STYLES[req.style]}・{item.label or item.key})", item.key, "rig"
+        )
+        job.project_id = project_id
+        # 髪の裏を NovelAI で描くときの元の生成の設定(絵に埋め込まれたもの。無ければプロンプトだけ)
+        embedded = generation_settings(data) or {}
+        nai = {k: embedded.get(k) for k in ("prompt", "negative_prompt", "seed", "steps", "model", "scale", "sampler", "noise_schedule")}
+        settings = {**req.model_dump(), "prompt": item.prompt or "", "template": parts.template.name, "nai": nai}
+        frames, note = await _render_rig(job, project_id, source, parts, settings, api_key)
+        ugoira._store_frames(project_id, frames)
+        # 半自動で直せるよう、元の絵・髪の範囲・設定を残す
+        folder = ugoira.frame_dir(project_id)
+        source.save(folder / _RIG_SOURCE)
+        _save_hair(project_id, parts.hair, _RIG_HAIR_AUTO)
+        _save_hair(project_id, parts.hair)
+        (folder / _RIG_SETTINGS).write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+        job.progress = 4
+        job.message = f"できました({len(frames)}コマ・構図: {parts.template.label}・{note})"
+        job.status = "done"
+    except HTTPException as exc:
+        job.status, job.message = "error", str(exc.detail)
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        job.status, job.message = "error", str(exc)
+
+
+# ---- 半自動: 髪の範囲をタップで直して、作り直す ----
+
+
+def _rig_project(project_id: int) -> dict[str, Any]:
+    project = ugoira.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="うごイラが見つかりません。")
+    if project["method"] != "rig" or not (ugoira.frame_dir(project_id) / _RIG_SETTINGS).is_file():
+        raise HTTPException(status_code=409, detail="部位ごとに作ったうごイラではありません(髪の範囲は直せません)。")
+    return project
+
+
+def _rig_state(project_id: int) -> dict[str, Any]:
+    folder = ugoira.frame_dir(project_id)
+    settings = json.loads((folder / _RIG_SETTINGS).read_text(encoding="utf-8"))
+    base = f"{ugoira.FOLDER}/{project_id}"
+    return {
+        "source": f"{base}/{_RIG_SOURCE}",
+        "view": f"{base}/{_RIG_VIEW}",
+        "version": int((folder / _RIG_VIEW).stat().st_mtime_ns),
+        "can_undo": (folder / _RIG_HAIR_PREV).is_file(),
+        "settings": {k: settings.get(k) for k in ("kind", "style", "amount", "period", "template", "plate")},
+    }
+
+
+@router.get("/{project_id}/rig")
+async def get_rig(project_id: int) -> dict[str, Any]:
+    """半自動で直すための、元の絵と、いまの髪の範囲(赤く重ねる絵)。"""
+    _rig_project(project_id)
+    return _rig_state(project_id)
+
+
+class RigEditRequest(BaseModel):
+    # タップした所(元の絵の画素座標)
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    mode: Literal["add", "remove"] = "add"
+    # AI 拡大で切り出す(None なら、小さい絵のときだけ)
+    detail: bool | None = None
+
+
+@router.post("/{project_id}/rig/edit")
+def edit_rig(project_id: int, req: RigEditRequest) -> dict[str, Any]:
+    """タップした所のまわりを拡大して切り出し、髪の範囲に足す・引く(作り直すまで、コマは変わらない)。"""
+    import shutil
+
+    from PIL import Image
+
+    _rig_project(project_id)
+    folder = ugoira.frame_dir(project_id)
+    with Image.open(folder / _RIG_SOURCE) as opened:
+        source = opened.convert("RGB")
+    if req.x >= source.width or req.y >= source.height:
+        raise HTTPException(status_code=422, detail="絵の外です。")
+    detail = req.detail if req.detail is not None else source.width * source.height < ugoira_rig.DETAIL_AUTO_PIXELS
+    region = ugoira_rig.zoom_segment(source, (req.x, req.y), detail, cache_key=("rig", project_id))
+    if not region.any():
+        raise HTTPException(status_code=422, detail="そこからは範囲が切り出せませんでした。少しずらしてタップしてください。")
+    shutil.copyfile(folder / _RIG_HAIR, folder / _RIG_HAIR_PREV)
+    _save_hair(project_id, ugoira_rig.edit_hair(_load_hair(project_id), region, req.mode))
+    return {**_rig_state(project_id), "detail": detail}
+
+
+@router.post("/{project_id}/rig/undo")
+def undo_rig(project_id: int) -> dict[str, Any]:
+    """一つ前の髪の範囲に戻す。"""
+    _rig_project(project_id)
+    folder = ugoira.frame_dir(project_id)
+    if not (folder / _RIG_HAIR_PREV).is_file():
+        raise HTTPException(status_code=409, detail="戻せる直しがありません。")
+    _save_hair(project_id, _load_hair(project_id, _RIG_HAIR_PREV))
+    (folder / _RIG_HAIR_PREV).unlink()
+    return _rig_state(project_id)
+
+
+@router.post("/{project_id}/rig/reset")
+def reset_rig(project_id: int) -> dict[str, Any]:
+    """自動で取った髪の範囲に戻す。"""
+    import shutil
+
+    _rig_project(project_id)
+    folder = ugoira.frame_dir(project_id)
+    shutil.copyfile(folder / _RIG_HAIR, folder / _RIG_HAIR_PREV)
+    _save_hair(project_id, _load_hair(project_id, _RIG_HAIR_AUTO))
+    return _rig_state(project_id)
+
+
+class RigRedoRequest(BaseModel):
+    # 裏の埋め方を変えて作り直す(無ければ作ったときのまま)
+    plate: Literal["lama", "novelai"] | None = None
+
+
+@router.post("/{project_id}/rig/redo")
+async def redo_rig(project_id: int, client: ClientDep, req: RigRedoRequest | None = None) -> dict[str, Any]:
+    """いまの髪の範囲で、このうごイラのコマを作り直す(漫画へのつながりはそのまま)。"""
+    project = _rig_project(project_id)
+    if req is not None and req.plate is not None:
+        path = ugoira.frame_dir(project_id) / _RIG_SETTINGS
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**settings, "plate": req.plate}, ensure_ascii=False), encoding="utf-8")
+    job_id = uuid4().hex
+    job = _Job(total=4, project_id=project_id)
+    _jobs[job_id] = job
+    job.task = asyncio.create_task(_run_rig_redo(job, project, getattr(client, "api_key", None)))
+    return _job_response(job_id, job)
+
+
+async def _run_rig_redo(job: _Job, project: dict[str, Any], api_key: str | None = None) -> None:
+    from PIL import Image
+
+    try:
+        project_id = project["id"]
+        folder = ugoira.frame_dir(project_id)
+        settings = json.loads((folder / _RIG_SETTINGS).read_text(encoding="utf-8"))
+        with Image.open(folder / _RIG_SOURCE) as opened:
+            source = opened.convert("RGB")
+        parts = await _rig_parts(job, source, settings.get("prompt") or "", _load_hair(project_id))
+        frames, note = await _render_rig(job, project_id, source, parts, settings, api_key)
+        old = {f["path"] for f in project["frames"]}
+        ugoira._store_frames(project_id, frames)
+        for path in old - {f["path"] for f in frames}:
+            (ugoira._PROJECT_ROOT / path).unlink(missing_ok=True)
+        job.progress = 4
+        job.message = f"作り直しました({len(frames)}コマ・{note})"
+        job.status = "done"
+    except HTTPException as exc:
+        job.status, job.message = "error", str(exc.detail)
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        job.status, job.message = "error", str(exc)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { API_ORIGIN, fileUrl } from '../library'
+import UgoiraRigEditor from '../components/UgoiraRigEditor'
 import './Publications.css'
 import './Ugoira.css'
 
@@ -72,6 +73,13 @@ export default function Ugoira() {
   const [warpAmount, setWarpAmount] = useState(1)
   const [warpFrames, setWarpFrames] = useState(16)
   const [keepBackground, setKeepBackground] = useState(true)
+  const [rigs, setRigs] = useState<Warp[]>([])
+  const [rigStyles, setRigStyles] = useState<Record<string, string>>({})
+  const [rigKind, setRigKind] = useState('hair')
+  const [rigStyle, setRigStyle] = useState('anime')
+  const [rigAmount, setRigAmount] = useState(1)
+  // 髪の裏を NovelAI で描く(胴体だけを切り出して。髪が残ったら LaMa)
+  const [rigNovelai, setRigNovelai] = useState(false)
   const [editing, setEditing] = useState<Motion | null>(null)
   const [draft, setDraft] = useState({ name: '', region: 'eyes', lines: '' })
   const timer = useRef<number | null>(null)
@@ -85,11 +93,13 @@ export default function Ugoira() {
   }, [sourceKey])
 
   const loadMotions = useCallback(() => {
-    call<{ motions: Motion[]; regions: Record<string, string>; warps?: Warp[] }>('/motions')
+    call<{ motions: Motion[]; regions: Record<string, string>; warps?: Warp[]; rigs?: Warp[]; styles?: Record<string, string> }>('/motions')
       .then(data => {
         setMotions(data.motions)
         setRegions(data.regions)
         setWarps(data.warps ?? [])
+        setRigs(data.rigs ?? [])
+        setRigStyles(data.styles ?? {})
         setMotionId(id => id ?? data.motions[0]?.id ?? null)
       })
       .catch(e => setError(String(e)))
@@ -137,6 +147,22 @@ export default function Ugoira() {
       const started = await call<Job>('/warp', {
         method: 'POST',
         body: JSON.stringify({ key: sourceKey, kind: warpKind, amount: warpAmount, frames: warpFrames, keep_background: keepBackground }),
+      })
+      setJob(started)
+      follow(started.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** E. 部位ごとに分けて、骨格とばねで動かす(描き直さない。この PC で) */
+  async function startRig() {
+    if (!sourceKey) return
+    setError(null)
+    try {
+      const started = await call<Job>('/rig', {
+        method: 'POST',
+        body: JSON.stringify({ key: sourceKey, kind: rigKind, style: rigStyle, amount: rigAmount, plate: rigNovelai ? 'novelai' : 'lama' }),
       })
       setJob(started)
       follow(started.id)
@@ -335,6 +361,46 @@ export default function Ugoira() {
               <button type="button" className="ugo-primary" disabled={running || warps.length === 0} onClick={() => void startWarp()}>
                 {running ? '作っています…' : '変形でうごイラを作る'}
               </button>
+
+              <h3>部位ごとに動かす(骨格とばね)</h3>
+              <p className="pub-hint">
+                人物・髪・頭を分けて、髪だけ・頭だけを動かします(E)。髪はばねでつないで、遅れて付いてくるように揺らします。
+                動いて見えるようになった裏(髪の下の服など)は、この PC のモデルで埋めます。構図(寝ている・横顔・後ろ姿 など)は、
+                絵のプロンプトから選びます。はじめての時は、モデル(合わせて約480MB)を取ってきます。
+              </p>
+              <div className="ugo-row">
+                <label>動き{' '}
+                  <select value={rigKind} disabled={running} onChange={e => setRigKind(e.target.value)}>
+                    {rigs.map(r => <option key={r.kind} value={r.kind}>{r.name}(1周 {r.period / 1000}秒)</option>)}
+                  </select>
+                </label>
+                {Object.entries(rigStyles).map(([value, label]) => (
+                  <label key={value}>
+                    <input type="radio" name="ugo-rig-style" checked={rigStyle === value} disabled={running} onChange={() => setRigStyle(value)} />
+                    {' '}{label}
+                  </label>
+                ))}
+                <label>大きさ{' '}
+                  <select value={rigAmount} disabled={running} onChange={e => setRigAmount(Number(e.target.value))}>
+                    <option value={0.6}>小さく</option>
+                    <option value={1}>ふつう</option>
+                    <option value={1.5}>大きく</option>
+                  </select>
+                </label>
+              </div>
+              <div className="ugo-row">
+                <label>
+                  <input type="checkbox" checked={rigNovelai} disabled={running} onChange={e => setRigNovelai(e.target.checked)} />
+                  {' '}髪の裏を NovelAI で描く(頭を除いた胴体だけを描き直す。Opus なら Anlas 0。髪が残ったら、この PC の埋め方に戻す)
+                </label>
+              </div>
+              <p className="pub-meta">
+                アニメ調: 髪の束ごとに大きく揺れ、2コマずつ止めてメリハリを付けます。リアル寄り: 細かい毛筋ごとに波が流れ、
+                毎コマなめらかに動き、少しぶれます。
+              </p>
+              <button type="button" className="ugo-primary" disabled={running || rigs.length === 0} onClick={() => void startRig()}>
+                {running ? '作っています…' : '部位ごとにうごイラを作る'}
+              </button>
             </>
           )}
         </section>
@@ -368,6 +434,10 @@ export default function Ugoira() {
               <button type="button" className="ugo-primary" disabled={!dirty} onClick={() => void saveFrames()}>並び・表示時間を保存</button>
               {dirty && <button type="button" onClick={() => setFrames(project.frames)}>元に戻す</button>}
             </div>
+            {project.method === 'rig' && (
+              <UgoiraRigEditor key={project.id} projectId={project.id} running={running}
+                onRedo={id => { setJob({ id, status: 'running', message: '作り直しています', progress: 0, total: 4, project_id: project.id }); follow(id) }} />
+            )}
             <h3>中割り(コマのあいだを補う)</h3>
             <p className="pub-meta">
               コマとコマのあいだの絵を、この PC で作って足します(フレーム補間のモデル RIFE。NovelAI は使いません)。
