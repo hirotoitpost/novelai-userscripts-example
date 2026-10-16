@@ -8,6 +8,7 @@
   POST   /partial                 うごイラを作る(処理を切り離す。GET /jobs/{id} で進み具合)。動きの範囲で方法が決まる:
                                     目・口・顔・髪は A(部分だけインペイント)、体ごと・絵全体は B(全体を img2img)
   POST   /warp                    D. 絵を変形して動かす(描き直さない。呼吸・髪がなびく・首をかしげる・うなずく)
+  POST   /rig                     E. 部位ごとに分けて、骨格とばねで動かす(描き直さない。髪が風になびく・首をかしげる)
   GET    /jobs/{id}               進み具合
   GET    /                        作ったうごイラの一覧
   GET    /{id}                    1つ
@@ -32,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from novelai import AsyncNovelAI
 from pydantic import BaseModel, Field
 
-from .. import ugoira, ugoira_warp
+from .. import ugoira, ugoira_rig, ugoira_warp
 from ..client import get_client
 
 router = APIRouter(prefix="/api/ugoira", tags=["ugoira"])
@@ -71,6 +72,15 @@ class WarpRequest(BaseModel):
     keep_background: bool = True
 
 
+class RigRequest(BaseModel):
+    key: str = Field(min_length=1, description="ギャラリーの画像のキー")
+    kind: Literal["hair", "tilt"]
+    # 髪の表現: アニメ調(束ごと・2コマずつ止める)か、リアル寄り(細かい毛筋・毎コマ動く・少しぶれる)
+    style: Literal["anime", "real"] = "anime"
+    amount: float = Field(1.0, ge=0.3, le=2.0)
+    period: int | None = Field(None, ge=600, le=10000)
+
+
 class FramesRequest(BaseModel):
     frames: list[dict[str, Any]] = Field(min_length=1, max_length=200)
 
@@ -89,6 +99,9 @@ async def get_motions() -> dict[str, Any]:
         "motions": ugoira.list_motions(),
         "regions": ugoira.REGION_LABELS,
         "warps": [{"kind": kind, "name": name, "period": period} for kind, (name, period) in ugoira_warp.WARPS.items()],
+        # rigs・styles: E(部位ごと)の動きと、髪の表現
+        "rigs": [{"kind": kind, "name": name, "period": period} for kind, (name, period) in ugoira_rig.RIGS.items()],
+        "styles": ugoira_rig.STYLES,
     }
 
 
@@ -448,3 +461,76 @@ async def delete_project(project_id: int) -> None:
         ugoira.frame_dir(project_id).rmdir()
     except OSError:
         pass
+
+
+# ---- E. 部位ごとに、骨格とばねで動かす ----
+
+
+@router.post("/rig")
+async def start_rig(req: RigRequest) -> dict[str, Any]:
+    """
+    E. 人物・髪・頭を分け(人物の切り分け・点で指す切り出し)、骨格(RTMPose)から首の位置を取り、髪はばねの鎖で、
+    頭は首を中心に動かす。動いて見えるようになった裏は LaMa で埋める。この PC で作る(NovelAI は使わない)。
+    構図(寝ている・横顔・後ろ姿 など)は、絵のプロンプトのタグから選ぶ。
+    """
+    from .library import _gallery_images
+
+    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    job_id = uuid4().hex
+    job = _Job(total=4)
+    _jobs[job_id] = job
+    job.task = asyncio.create_task(_run_rig(job, req, item))
+    return _job_response(job_id, job)
+
+
+async def _run_rig(job: _Job, req: RigRequest, item: Any) -> None:
+    from PIL import Image
+
+    from .. import anime_seg
+    from ..manga_v2.detect import detect_heads_in_image
+    from .image import _guard_image
+    from .library import _served_path
+
+    try:
+        data = _served_path(item.path).read_bytes()
+        with Image.open(io.BytesIO(data)) as opened:
+            original = opened.convert("RGB")
+        job.message = "画像を確かめています"
+        await asyncio.to_thread(_guard_image, data, item.prompt, original, item.key)
+        size = ugoira.fit_size(original.size)
+        source = original.resize(size, Image.Resampling.LANCZOS) if size != original.size else original
+        head = ugoira.pick_head(await asyncio.to_thread(detect_heads_in_image, source))
+        job.message = "人物を背景から切り分けています(はじめての時は、モデルを取ってきます)"
+        person = await asyncio.to_thread(anime_seg.person_mask, source)
+        job.progress = 1
+        ys, xs = (person > 0.5).nonzero()
+        if len(xs) == 0:
+            raise ugoira_rig.RigError("人物が見つかりませんでした。")
+        job.message = "骨格を取っています(はじめての時は、モデルを取ってきます)"
+        skeleton = await asyncio.to_thread(ugoira_rig.detect_pose, source, (xs.min(), ys.min(), xs.max(), ys.max()))
+        template = ugoira_rig.pose_template(item.prompt or "")
+        job.progress = 2
+        job.message = f"髪・頭を分けています(構図: {template.label})"
+        parts = await asyncio.to_thread(ugoira_rig.split_parts, source, head, person, skeleton, template)
+        job.progress = 3
+        job.message = "動かしています(裏を埋めるモデルは、はじめての時に取ってきます)"
+        rendered = await asyncio.to_thread(ugoira_rig.render, source, parts, req.kind, req.style, req.period, req.amount)
+        name = ugoira_rig.RIGS[req.kind][0]
+        project_id = ugoira.create_project(
+            f"{name}(部位・{ugoira_rig.STYLES[req.style]}・{item.label or item.key})", item.key, "rig"
+        )
+        job.project_id = project_id
+        frames = [
+            {"path": ugoira.save_frame(project_id, index, image), "delay": delay, "tags": f"({name})"}
+            for index, (image, delay) in enumerate(rendered)
+        ]
+        ugoira._store_frames(project_id, frames)
+        job.progress = 4
+        job.message = f"できました({len(frames)}コマ・構図: {template.label})"
+        job.status = "done"
+    except HTTPException as exc:
+        job.status, job.message = "error", str(exc.detail)
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        job.status, job.message = "error", str(exc)
