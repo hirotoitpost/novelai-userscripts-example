@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from .db import get_connection
@@ -49,6 +50,10 @@ _BOXES = {
 _HAIR_SPREAD = (0.4, 0.05, 0.4, 0.9)
 _FEATHER = 6
 MAX_PIXELS = 1024 * 1024
+# 明るさ・色を元の絵に合わせるとき(match_tone)の、倍率・ずれの上限と、合わせるのに要るふちの画素数
+_TONE_MAX_GAIN = 1.25
+_TONE_MAX_OFFSET = 30.0
+_TONE_MIN_PIXELS = 200
 
 # 描き直す範囲ごとに、元のプロンプトから外すタグ(コマのタグとぶつかるもの)。目は、目のことを書いたタグを全部外す
 # (yellow eyes・sanpaku・detailed eyes などが残っていると、closed eyes を入れても目が開いたまま描かれた。実機で確認)
@@ -171,9 +176,31 @@ def frame_prompt(base: str, region: str, tags: str) -> str:
     return ", ".join(dict.fromkeys([*frame, *kept]))
 
 
+def match_tone(source: Image.Image, generated: Image.Image, mask: Image.Image) -> Image.Image:
+    """
+    描き直した絵の明るさ・色を、元の絵に合わせる。範囲のふち(ぼかした所。描き直しても元と同じはずの所)で、色ごとに
+    「元 = 描き直し × 倍率 + ずれ」を求めて、描き直した絵全体に当てる(コマごとに陰影・トーンがずれて、ちらつくのを抑える)。
+    """
+    gen = np.asarray(generated.convert("RGB").resize(source.size), dtype=np.float32)
+    src = np.asarray(source.convert("RGB"), dtype=np.float32)
+    m = np.asarray(mask.convert("L"), dtype=np.float32) / 255.0
+    ring = (m > 0.03) & (m < 0.7)
+    if ring.sum() < _TONE_MIN_PIXELS:
+        return Image.fromarray(gen.astype(np.uint8))
+    out = np.empty_like(gen)
+    for ch in range(3):
+        g, s = gen[..., ch][ring], src[..., ch][ring]
+        var = float(g.var())
+        gain = float(((g - g.mean()) * (s - s.mean())).mean() / var) if var > 1.0 else 1.0
+        gain = min(max(gain, 1 / _TONE_MAX_GAIN), _TONE_MAX_GAIN)
+        offset = min(max(float(s.mean() - gain * g.mean()), -_TONE_MAX_OFFSET), _TONE_MAX_OFFSET)
+        out[..., ch] = gen[..., ch] * gain + offset
+    return Image.fromarray(np.clip(out, 0, 255).round().astype(np.uint8))
+
+
 def composite(source: Image.Image, generated: Image.Image, mask: Image.Image) -> Image.Image:
-    """描き直した絵の、範囲の中だけを元の絵に重ねる(範囲の外は元のまま)。"""
-    return Image.composite(generated.convert("RGB").resize(source.size), source, mask)
+    """描き直した絵の、範囲の中だけを元の絵に重ねる(範囲の外は元のまま)。明るさ・色は元の絵に合わせてから重ねる。"""
+    return Image.composite(match_tone(source, generated, mask), source, mask)
 
 
 # ---- 動き(DB) ----
@@ -385,6 +412,8 @@ def encode(frames: list[tuple[Image.Image, int]], fmt: str) -> tuple[bytes, str,
         palette[0].save(buf, "GIF", save_all=True, append_images=palette[1:], duration=delays, loop=0, disposal=1)
         return buf.getvalue(), "gif", "image/gif"
     if fmt == "webp":
-        images[0].save(buf, "WEBP", save_all=True, append_images=images[1:], duration=delays, loop=0, quality=90)
+        # minimize_size: 前のコマと同じ所はそのまま使う(既定では、動かない所も少しずつ違って圧縮され、ちらついた。
+        # 漫画の動くページで確認。大きさも半分ほどになる)
+        images[0].save(buf, "WEBP", save_all=True, append_images=images[1:], duration=delays, loop=0, quality=90, minimize_size=True)
         return buf.getvalue(), "webp", "image/webp"
     raise UgoiraError("書き出す形は zip・gif・webp のどれかです。")

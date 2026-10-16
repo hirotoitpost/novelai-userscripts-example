@@ -7,6 +7,7 @@
   DELETE /motions/{id}            動きを消す
   POST   /partial                 うごイラを作る(処理を切り離す。GET /jobs/{id} で進み具合)。動きの範囲で方法が決まる:
                                     目・口・顔・髪は A(部分だけインペイント)、体ごと・絵全体は B(全体を img2img)
+  POST   /warp                    D. 絵を変形して動かす(描き直さない。呼吸・髪がなびく・首をかしげる・うなずく)
   GET    /jobs/{id}               進み具合
   GET    /                        作ったうごイラの一覧
   GET    /{id}                    1つ
@@ -31,7 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from novelai import AsyncNovelAI
 from pydantic import BaseModel, Field
 
-from .. import ugoira
+from .. import ugoira, ugoira_warp
 from ..client import get_client
 
 router = APIRouter(prefix="/api/ugoira", tags=["ugoira"])
@@ -54,6 +55,20 @@ class PartialRequest(BaseModel):
     # 描き直しの強さ(弱いほど元の絵に近い)。無ければ方法ごとの既定: A(部分・インペイント)1.0、B(全体・img2img)0.7
     strength: float | None = Field(None, ge=0.2, le=1.0)
     seed: int | None = Field(None, ge=0, le=4294967295)
+    # 作ったあと、コマのあいだに中割り(C)を足す枚数(0 なら足さない)。最後から最初へ戻るところにも足す
+    interpolate: int = Field(0, ge=0, le=3)
+
+
+class WarpRequest(BaseModel):
+    key: str = Field(min_length=1, description="ギャラリーの画像のキー")
+    kind: Literal["breath", "hair", "tilt", "nod"]
+    # 動きの大きさ(1 が標準)
+    amount: float = Field(1.0, ge=0.3, le=2.0)
+    # 1周のコマ数と長さ(ミリ秒。無ければ種類ごとの既定)
+    frames: int = Field(16, ge=4, le=48)
+    period: int | None = Field(None, ge=400, le=10000)
+    # 人物だけを動かす(背景は動かさない。人物の切り分けのモデルを使う)
+    keep_background: bool = True
 
 
 class FramesRequest(BaseModel):
@@ -69,7 +84,12 @@ def _error(exc: Exception) -> HTTPException:
 
 @router.get("/motions")
 async def get_motions() -> dict[str, Any]:
-    return {"motions": ugoira.list_motions(), "regions": ugoira.REGION_LABELS}
+    # warps: D(変形)の種類と、1周の長さの既定
+    return {
+        "motions": ugoira.list_motions(),
+        "regions": ugoira.REGION_LABELS,
+        "warps": [{"kind": kind, "name": name, "period": period} for kind, (name, period) in ugoira_warp.WARPS.items()],
+    }
 
 
 @router.post("/motions")
@@ -140,7 +160,7 @@ async def start_partial(req: PartialRequest, client: ClientDep) -> dict[str, Any
     if motion is None:
         raise HTTPException(status_code=404, detail="その動きはありません。")
     job_id = uuid4().hex
-    job = _Job(total=len(motion["frames"]))
+    job = _Job(total=len(motion["frames"]) * (1 + req.interpolate))
     _jobs[job_id] = job
     job.task = asyncio.create_task(_run_partial(job, req, item, motion, getattr(client, "api_key", None)))
     return _job_response(job_id, job)
@@ -222,7 +242,12 @@ async def _run_partial(job: _Job, req: PartialRequest, item: Any, motion: dict[s
         finally:
             if client is not None:
                 await client.close()
-        job.message = f"できました({len(frames)}コマ)"
+        count = len(frames)
+        if req.interpolate and len(frames) >= 2:
+            images = [Image.open(ugoira._PROJECT_ROOT / f["path"]).convert("RGB") for f in frames]
+            frames = await _add_between(job, project_id, frames, images, req.interpolate, True)
+            ugoira._store_frames(project_id, frames)
+        job.message = f"できました({count}コマ)" if len(frames) == count else f"できました({count}コマ + 中割り → {len(frames)}コマ)"
         job.status = "done"
     except HTTPException as exc:
         job.status, job.message = "error", str(exc.detail)
@@ -272,42 +297,108 @@ async def start_interpolate(project_id: int, req: InterpolateRequest) -> dict[st
     return _job_response(job_id, job)
 
 
+async def _add_between(
+    job: _Job, project_id: int, frames: list[dict[str, Any]], images: list[Any], count: int, loop: bool, *, copy: bool = False
+) -> list[dict[str, Any]]:
+    """
+    コマのあいだに中割りを count 枚ずつ足した並びを返す(中割りの絵は project_id のフォルダに保存する)。
+    copy なら元のコマの絵も project_id のフォルダに写す(別のうごイラとして作るとき)。job.progress は今の値から進める。
+    """
+    from .. import frame_interpolation
+
+    result: list[dict[str, Any]] = []
+    job.message = "中割りのモデルを読み込んでいます(はじめての時は、取ってきます)"
+    for index, frame in enumerate(frames):
+        result.append({**frame, "path": ugoira.save_frame(project_id, len(result), images[index])} if copy else dict(frame))
+        following = index + 1
+        if following == len(frames):
+            if not loop:
+                break
+            following = 0
+        a, b = images[index], images[following]
+        if frame_interpolation.same(a, b):
+            job.progress += count
+            continue
+        # 中割りのコマの表示時間: 前後のコマの短い方を、足す枚数+1 で分ける(長く止めるコマを、中割りで延ばさない)
+        delay = max(20, min(int(frame["delay"]), int(frames[following]["delay"])) // (count + 1))
+        for step in range(1, count + 1):
+            job.message = f"中割り: コマ {index + 1} と {following + 1} のあいだ({step}/{count})"
+            middle = await asyncio.to_thread(frame_interpolation.between, a, b, step / (count + 1))
+            result.append({"path": ugoira.save_frame(project_id, len(result), middle), "delay": delay, "tags": "(中割り)"})
+            job.progress += 1
+    return result
+
+
 async def _run_interpolate(job: _Job, project: dict[str, Any], req: InterpolateRequest) -> None:
     from PIL import Image
-
-    from .. import frame_interpolation
 
     try:
         frames = project["frames"]
         images = [Image.open(ugoira._PROJECT_ROOT / f["path"]).convert("RGB") for f in frames]
         new_id = ugoira.create_project(f"{project['name']}(中割り{req.count})", project.get("source_key") or "", f"{project['method']}+interpolated")
         job.project_id = new_id
-        result: list[dict[str, Any]] = []
-        done = 0
-        job.message = "中割りのモデルを読み込んでいます(はじめての時は、取ってきます)"
-        for index, frame in enumerate(frames):
-            result.append({**frame, "path": ugoira.save_frame(new_id, len(result), images[index])})
-            following = index + 1
-            if following == len(frames):
-                if not req.loop:
-                    break
-                following = 0
-            a, b = images[index], images[following]
-            if frame_interpolation.same(a, b):
-                done += req.count
-                job.progress = done
-                continue
-            # 中割りのコマの表示時間: 前後のコマの短い方を、足す枚数+1 で分ける(長く止めるコマを、中割りで延ばさない)
-            delay = max(20, min(int(frame["delay"]), int(frames[following]["delay"])) // (req.count + 1))
-            for step in range(1, req.count + 1):
-                job.message = f"コマ {index + 1} と {following + 1} のあいだ({step}/{req.count})"
-                middle = await asyncio.to_thread(frame_interpolation.between, a, b, step / (req.count + 1))
-                result.append({"path": ugoira.save_frame(new_id, len(result), middle), "delay": delay, "tags": "(中割り)"})
-                done += 1
-                job.progress = done
+        result = await _add_between(job, new_id, frames, images, req.count, req.loop, copy=True)
         ugoira._store_frames(new_id, result)
         job.message = f"できました({len(frames)}コマ → {len(result)}コマ)"
         job.status = "done"
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        job.status, job.message = "error", str(exc)
+
+
+# ---- D. 絵を変形して動かす ----
+
+
+@router.post("/warp")
+async def start_warp(req: WarpRequest) -> dict[str, Any]:
+    """D. 元の絵の画素を少しずつ動かしてうごイラにする(この PC で。NovelAI は使わない)。"""
+    from .library import _gallery_images
+
+    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    job_id = uuid4().hex
+    job = _Job(total=req.frames)
+    _jobs[job_id] = job
+    job.task = asyncio.create_task(_run_warp(job, req, item))
+    return _job_response(job_id, job)
+
+
+async def _run_warp(job: _Job, req: WarpRequest, item: Any) -> None:
+    from PIL import Image
+
+    from .. import anime_seg
+    from ..manga_v2.detect import detect_heads_in_image
+    from .image import _guard_image
+    from .library import _served_path
+
+    try:
+        data = _served_path(item.path).read_bytes()
+        with Image.open(io.BytesIO(data)) as opened:
+            original = opened.convert("RGB")
+        job.message = "画像を確かめています"
+        await asyncio.to_thread(_guard_image, data, item.prompt, original, item.key)
+        size = ugoira.fit_size(original.size)
+        source = original.resize(size, Image.Resampling.LANCZOS) if size != original.size else original
+        head = ugoira.pick_head(await asyncio.to_thread(detect_heads_in_image, source))
+        mask = None
+        if req.keep_background:
+            job.message = "人物を背景から切り分けています(はじめての時は、モデルを取ってきます)"
+            mask = await asyncio.to_thread(anime_seg.person_mask, source)
+        name, default_period = ugoira_warp.WARPS[req.kind]
+        job.message = "コマを作っています"
+        images = await asyncio.to_thread(ugoira_warp.render, source, head, req.kind, req.frames, req.amount, mask)
+        project_id = ugoira.create_project(f"{name}(変形・{item.label or item.key})", item.key, "warp")
+        job.project_id = project_id
+        delay = max(20, round((req.period or default_period) / req.frames))
+        frames = []
+        for index, image in enumerate(images):
+            frames.append({"path": ugoira.save_frame(project_id, index, image), "delay": delay, "tags": f"({name})"})
+            job.progress = index + 1
+        ugoira._store_frames(project_id, frames)
+        job.message = f"できました({len(frames)}コマ)"
+        job.status = "done"
+    except HTTPException as exc:
+        job.status, job.message = "error", str(exc.detail)
     except Exception as exc:  # noqa: BLE001 失敗も状態として返す
         job.status, job.message = "error", str(exc)
 
