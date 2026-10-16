@@ -463,9 +463,7 @@ def render(
             offsets -= offsets[:, :1]  # 最初のコマを元の形に
     angle = angle[-steps:] - angle[-steps]
 
-    # 埋めた絵: 頭・垂れた髪の裏
     moving = np.maximum(parts.hanging, parts.head if kind == "tilt" else 0)
-    plate = _fill(image, moving)
     head_w = parts.head[..., None]
     # 動かない体: 動く所を少し広げて除く(輪郭の線が体として残ると、元の輪郭が薄く残った)
     grown = _feather(cv2.dilate((moving > 0.08).astype(np.uint8), np.ones((15, 15), np.uint8)), 3.0)
@@ -474,33 +472,38 @@ def render(
     # 動く所のふち(ぼかした所)も体に残さない(輪郭の線が半分残った)
     solid_moving = _feather(cv2.dilate((moving > 0.08).astype(np.uint8), np.ones((5, 5), np.uint8)), 1.0)
     body_weight = np.clip(parts.person - np.maximum(solid_moving, grown * edge), 0, 1)[..., None]
-    result = []
     blur = 1 if anime else 3
-    for f in range(frames):
-        index = int(round(f * steps / frames)) % steps
+    hair_sigma = (0.45 if anime else 0.22) * hw
+
+    def layers(k: int) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """時刻 k の、動く部位ごとの (元の絵のどこから取るか x, y, 部位の重み)。下から順(垂れた髪 → 頭)。"""
+        out = []
+        if has_hair:
+            dx, dy = _hair_field(parts, offsets[:, k], chain_x, levels, sigma=hair_sigma)
+            out.append((xs - dx, ys - dy, parts.hanging))
+        if kind == "tilt":
+            rad = math.radians(float(angle[k]))
+            cx, cy = parts.pivot
+            c, s = math.cos(rad), math.sin(rad)
+            out.append((cx + c * (xs - cx) + s * (ys - cy), cy - s * (xs - cx) + c * (ys - cy), parts.head))
+        return out
+
+    samples_at = [
+        [(int(round(f * steps / frames)) + round((b - blur // 2) * steps / frames / 3)) % steps for b in range(blur)]
+        for f in range(frames)
+    ]
+    # 埋めた絵は、動く部位をまるごと消して作る(見えるようになる細い所だけを消すと、まわりに残った髪から
+    # また髪が描かれた。NovelAI のインペイントでも、髪の続きを描いてしまった。実機で確認)
+    plate = _fill(image, moving)
+    result = []
+    for ks in samples_at:
         samples = []
-        for b in range(blur):
-            # リアル寄りは、1コマの時間の中の3か所を重ねて少しぶらす
-            k = (index + round((b - blur // 2) * steps / frames / 3)) % steps
-            canvas = plate.astype(np.float32)
-            body = body_weight
-            canvas = image * body + canvas * (1 - body)
-            if has_hair:
-                dx, dy = _hair_field(parts, offsets[:, k], chain_x, levels, sigma=(0.45 if anime else 0.22) * hw)
-                mx, my = xs - dx, ys - dy
-                hair_img = _remap(image, mx, my).astype(np.float32)
-                alpha = _remap(parts.hanging, mx, my)[..., None]
-                canvas = hair_img * alpha + canvas * (1 - alpha)
-            if kind == "tilt":
-                rad = math.radians(float(angle[k]))
-                cx, cy = parts.pivot
-                c, s = math.cos(rad), math.sin(rad)
-                mx = cx + c * (xs - cx) + s * (ys - cy)
-                my = cy - s * (xs - cx) + c * (ys - cy)
-                head_img = _remap(image, mx, my).astype(np.float32)
-                alpha = _remap(parts.head, mx, my)[..., None]
-                canvas = head_img * alpha + canvas * (1 - alpha)
-            else:
+        for k in ks:
+            canvas = image * body_weight + plate.astype(np.float32) * (1 - body_weight)
+            for mx, my, weight in layers(k):
+                alpha = _remap(weight, mx, my)[..., None]
+                canvas = _remap(image, mx, my).astype(np.float32) * alpha + canvas * (1 - alpha)
+            if kind != "tilt":
                 canvas = image * head_w + canvas * (1 - head_w)
             samples.append(canvas)
         result.append(np.mean(samples, axis=0))
