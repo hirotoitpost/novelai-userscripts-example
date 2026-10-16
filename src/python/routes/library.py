@@ -116,7 +116,10 @@ def _attachment(name: str, extension: str, fallback: str) -> str:
 def get_file(path: str, download: bool = False) -> FileResponse:
     full = _served_path(path)
     return FileResponse(
-        full, media_type="image/png", filename=full.name if download else None
+        full,
+        # 動くページ(漫画のうごイラ)はアニメ WebP。ほかは PNG
+        media_type="image/webp" if full.suffix.lower() == ".webp" else "image/png",
+        filename=full.name if download else None,
     )
 
 
@@ -693,6 +696,8 @@ def list_books(
 
 class BookDetail(Book):
     pages: list[str]
+    # pages と同じ順の、動くページ(うごイラを嵌め込んだページ)のアニメ WebP。動かないページは None
+    animated: list[str | None] = []
     text: str
 
 
@@ -719,7 +724,11 @@ def get_book(story_id: int) -> dict[str, Any]:
     if book is None or story is None:
         raise HTTPException(status_code=404, detail="story not found")
     _, pages = _book_pages(story, {story_id: [r["image_path"] for r in v1_rows]})
-    return {**book.model_dump(), "pages": pages, "text": _book_text(story)}
+    animated = [
+        webp if p.endswith(".png") and (_PROJECT_ROOT / (webp := p[:-4] + ".webp")).is_file() else None
+        for p in pages
+    ]
+    return {**book.model_dump(), "pages": pages, "animated": animated, "text": _book_text(story)}
 
 
 @router.get("/books/{story_id}/download")
@@ -963,6 +972,11 @@ def delete_book(story_id: int) -> None:
             detail="この物語は処理中です。終わってから削除してください。",
         )
     # 合成したページ・完成画像(漫画v2は outputs/manga/v2、v1 の完成画像は outputs/manga)も預ける
-    composed = [file for folder in (_OUTPUTS / "manga" / "v2", _OUTPUTS / "manga") for file in folder.glob(f"story{story_id}_*.png")]
+    composed = [
+        file
+        for folder in (_OUTPUTS / "manga" / "v2", _OUTPUTS / "manga")
+        for pattern in (f"story{story_id}_*.png", f"story{story_id}_*.webp")
+        for file in folder.glob(pattern)
+    ]
     if trash.book(story_id, composed) is None:
         raise HTTPException(status_code=404, detail="story not found")

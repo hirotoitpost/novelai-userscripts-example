@@ -68,8 +68,15 @@ type ShelfEntry =
   | { kind: 'books'; books: Book[] }
   | { kind: 'series'; id: number; title: string; authors: Author[]; books: Book[] }
 
+/** ビューアで見せるページの絵。動くページはアニメ WebP(PDF・画像の書き出しは静止画のまま) */
+function pageImage(book: BookDetail, page: number): string {
+  return book.animated?.[page] ?? book.pages[page]
+}
+
 interface BookDetail extends Book {
   pages: string[]
+  // pages と同じ順の、動くページ(うごイラを嵌め込んだページ)のアニメ WebP。動かないページは null
+  animated?: (string | null)[]
   text: string
 }
 
@@ -632,7 +639,7 @@ function Reader({
   useEffect(() => {
     if (!book || page + 1 >= book.pages.length) return
     const img = new Image()
-    img.src = fileUrl(book.pages[page + 1])
+    img.src = fileUrl(pageImage(book, page + 1))
   }, [book, page])
 
   async function download(format: 'pdf' | 'zip' | 'txt') {
@@ -858,7 +865,7 @@ function Reader({
                   if (Math.abs(dx) > SWIPE_THRESHOLD) goTo(dx > 0 ? page + 1 : page - 1)
                 }}
               >
-                <img key={book.pages[page]} src={fileUrl(book.pages[page])} alt={`${page + 1}ページ`} />
+                <img key={pageImage(book, page)} src={fileUrl(pageImage(book, page))} alt={`${page + 1}ページ`} />
                 <button type="button" className="reader-zone reader-zone--next" onClick={() => goTo(page + 1)}
                   aria-label="次のページ" disabled={page >= pageCount - 1} />
                 <button type="button" className="reader-zone reader-zone--prev" onClick={() => goTo(page - 1)}
@@ -875,7 +882,7 @@ function Reader({
               </div>
               {fullscreen && (
                 <FullscreenViewer
-                  src={fileUrl(book.pages[page])}
+                  src={fileUrl(pageImage(book, page))}
                   alt={`${book.title} ${page + 1}ページ`}
                   counter={`${page + 1} / ${pageCount}`}
                   rtl

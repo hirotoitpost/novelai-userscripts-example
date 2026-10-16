@@ -543,8 +543,9 @@ def _composed_targets() -> list[Path]:
     finally:
         conn.close()
     targets = []
-    for path in folder.glob("*.png"):
-        match = re.fullmatch(r"story(\d+)_(?:page\d+|final)_([0-9a-f]+)\.png", path.name)
+    # 動くページ(うごイラを嵌め込んだページ)のアニメ WebP も、同じ版のページと一緒に扱う
+    for path in [*folder.glob("*.png"), *folder.glob("*.webp")]:
+        match = re.fullmatch(r"story(\d+)_(?:page\d+|final)_([0-9a-f]+)\.(?:png|webp)", path.name)
         if match and (int(match.group(1)) not in current or current[int(match.group(1))] != match.group(2)):
             targets.append(path)
     return sorted(targets)

@@ -1115,6 +1115,7 @@ class MangaV2Template(BaseModel):
 
 
 class MangaV2Panel(BaseModel):
+    id: int
     scene_id: int
     scene_index: int
     image_path: str
@@ -1306,6 +1307,15 @@ class MangaV2ComposeResponse(BaseModel):
     page_widths: list[int] = Field(default_factory=list)
     # pages と同じ順の、各ページに置いた要素
     elements: list[list[MangaV2Element]]
+    # pages と同じ順の、動くページのアニメ WebP(動くコマが無いページは None)
+    animated_pages: list[Optional[str]] = Field(default_factory=list)
+
+
+class MangaV2UgoiraLink(BaseModel):
+    """シーンのコマを動かすうごイラ。project_id が None なら動かさない(静止画に戻す)。"""
+
+    scene_id: int
+    project_id: Optional[int] = None
 
 
 class MangaV2ScaleRequest(BaseModel):

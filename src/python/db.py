@@ -612,6 +612,8 @@ _STORIES_EXTRA_COLUMNS = {
     # 漫画v2のページごとのコマ割り(取り込んだ作品から写したもの)。JSON [[[x0, y0, x1, y1], ...], ...]
     # (ページに対する割合、読む順)。あればテンプレートの代わりに使う。
     "manga_v2_page_layouts": "TEXT",
+    # 漫画v2で動かすコマ(うごイラを嵌め込むシーン)。JSON {シーンID: うごイラのID}
+    "manga_v2_ugoira": "TEXT",
     # シリーズの巻。series_id が NULL なら単巻。(series_id, volume_no) は一意。
     "series_id": "INTEGER REFERENCES series(id) ON DELETE SET NULL",
     "volume_no": "INTEGER",
@@ -706,6 +708,21 @@ def set_manga_v2_sfx_fonts(conn: sqlite3.Connection, story_id: int, fonts: dict[
     conn.execute(
         "UPDATE stories SET manga_v2_sfx_fonts = ? WHERE id = ?",
         (json.dumps(fonts, ensure_ascii=False) if fonts else None, story_id),
+    )
+    conn.commit()
+
+
+def get_manga_v2_ugoira(conn: sqlite3.Connection, story_id: int) -> dict[int, int]:
+    """動かすコマ。{シーンID: うごイラのID}"""
+    row = conn.execute("SELECT manga_v2_ugoira FROM stories WHERE id = ?", (story_id,)).fetchone()
+    raw = json.loads(row["manga_v2_ugoira"]) if row and row["manga_v2_ugoira"] else {}
+    return {int(scene_id): int(project_id) for scene_id, project_id in raw.items()}
+
+
+def set_manga_v2_ugoira(conn: sqlite3.Connection, story_id: int, links: dict[int, int]) -> None:
+    conn.execute(
+        "UPDATE stories SET manga_v2_ugoira = ? WHERE id = ?",
+        (json.dumps({str(k): v for k, v in links.items()}) if links else None, story_id),
     )
     conn.commit()
 
