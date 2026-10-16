@@ -206,3 +206,19 @@
   opacity: 0.7;
   cursor: progress;
 }
+
+/* 拡大表示: はみ出す分はスクロール */
+.ugo-rig-scroll {
+  max-width: 100%;
+  max-height: 75vh;
+  overflow: auto;
+}
+
+.ugo-rig-canvas.is-zoomed {
+  max-width: none;
+}
+
+.ugo-rig-canvas.is-zoomed img {
+  max-width: none;
+  width: 100%;
+}

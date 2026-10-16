@@ -83,6 +83,9 @@ class RigRequest(BaseModel):
     style: Literal["anime", "real"] = "anime"
     amount: float = Field(1.0, ge=0.3, le=2.0)
     period: int | None = Field(None, ge=600, le=10000)
+    # 動いて見える所の裏の埋め方: lama(この PC で)か novelai(胴体だけを切り出して描く。Opus・1MP 以内なら Anlas 0。
+    # 髪が残ったらシードを変えて描き直し、3回とも残ったら lama)
+    plate: Literal["lama", "novelai"] = "lama"
 
 
 class FramesRequest(BaseModel):
@@ -471,7 +474,7 @@ async def delete_project(project_id: int) -> None:
 
 
 @router.post("/rig")
-async def start_rig(req: RigRequest) -> dict[str, Any]:
+async def start_rig(req: RigRequest, client: ClientDep) -> dict[str, Any]:
     """
     E. 人物・髪・頭を分け(人物の切り分け・点で指す切り出し)、骨格(RTMPose)から首の位置を取り、髪はばねの鎖で、
     頭は首を中心に動かす。動いて見えるようになった裏は LaMa で埋める。この PC で作る(NovelAI は使わない)。
@@ -485,7 +488,7 @@ async def start_rig(req: RigRequest) -> dict[str, Any]:
     job_id = uuid4().hex
     job = _Job(total=4)
     _jobs[job_id] = job
-    job.task = asyncio.create_task(_run_rig(job, req, item))
+    job.task = asyncio.create_task(_run_rig(job, req, item, getattr(client, "api_key", None)))
     return _job_response(job_id, job)
 
 
@@ -543,21 +546,82 @@ def _load_hair(project_id: int, name: str = _RIG_HAIR) -> Any:
         return np.asarray(image.convert("L"), np.float32) / 255.0
 
 
-async def _render_rig(job: _Job, project_id: int, source: Any, parts: Any, settings: dict[str, Any]) -> list[dict[str, Any]]:
+async def _novelai_plate(job: _Job, source: Any, parts: Any, settings: dict[str, Any], api_key: str | None) -> tuple[Any, str]:
+    """
+    髪の裏を NovelAI で描く: 頭を除いた胴体だけを切り出し、髪と頭の所を「頭なし・髪なし」で描かせて、LaMa で埋めた絵に重ねる。
+    描いた胴体に髪の色が残っていたら、シードを変えて描き直す。3回とも残ったら LaMa のまま。
+    """
+    from novelai.types import GenerateImageParams
+
+    from ..models import GenerateImageRequest
+    from .image import _build_kwargs, _job_client
+
+    job.message = "髪の裏を埋めています(LaMa)"
+    base = await asyncio.to_thread(ugoira_rig.base_plate, source, parts, settings["kind"])
+    nai = settings.get("nai") or {}
+    req = await asyncio.to_thread(
+        ugoira_rig.torso_request, source, parts, nai.get("prompt") or settings.get("prompt") or "", nai.get("negative_prompt") or ""
+    )
+    if req is None:
+        return base, "裏: LaMa(描かせる所がありません)"
+    client = _job_client(api_key)
+    try:
+        first = int(nai.get("seed") or 1)
+        for attempt in range(_PLATE_TRIES):
+            job.message = f"髪の裏を NovelAI で描いています({attempt + 1}/{_PLATE_TRIES})"
+            seed = (first + attempt * 7919) % 4294967295
+            fields: dict[str, Any] = {
+                "prompt": req.prompt,
+                "negative_prompt": req.negative,
+                "quality": False,
+                "uc_preset": "none",
+                "size": list(req.image.size),
+                "steps": min(int(nai.get("steps") or 28), 28),
+                "seed": seed,
+                "inpaint": {"image": _png_b64(req.image), "mask": _png_b64(req.mask), "strength": 1.0, "seed": seed},
+            }
+            for key in ("model", "scale", "sampler", "noise_schedule"):
+                if nai.get(key):
+                    fields[key] = nai[key]
+            try:
+                gen = GenerateImageRequest(**fields)
+            except ValueError:
+                gen = GenerateImageRequest(**{k: v for k, v in fields.items() if k not in ("model", "sampler", "noise_schedule")})
+            drawn = (await client.image.generate(GenerateImageParams(**_build_kwargs(gen))))[0]
+            left = await asyncio.to_thread(ugoira_rig.hair_left, source, parts, req, drawn)
+            if left <= ugoira_rig.HAIR_LEFT_LIMIT:
+                return await asyncio.to_thread(ugoira_rig.merge_torso, base, req, drawn), f"裏: NovelAI({attempt + 1}回目)"
+        return base, "裏: LaMa(NovelAI では髪が残ったため)"
+    finally:
+        await client.close()
+
+
+# NovelAI で髪の裏を描き直す回数
+_PLATE_TRIES = 3
+
+
+async def _render_rig(
+    job: _Job, project_id: int, source: Any, parts: Any, settings: dict[str, Any], api_key: str | None = None
+) -> tuple[list[dict[str, Any]], str]:
+    plate, note = None, "裏: LaMa"
+    if settings.get("plate") == "novelai":
+        plate, note = await _novelai_plate(job, source, parts, settings, api_key)
     job.message = "動かしています(裏を埋めるモデルは、はじめての時に取ってきます)"
     rendered = await asyncio.to_thread(
-        ugoira_rig.render, source, parts, settings["kind"], settings["style"], settings.get("period"), settings.get("amount", 1.0)
+        ugoira_rig.render, source, parts, settings["kind"], settings["style"], settings.get("period"), settings.get("amount", 1.0), plate
     )
     name = ugoira_rig.RIGS[settings["kind"]][0]
-    return [
+    frames = [
         {"path": ugoira.save_frame(project_id, index, image), "delay": delay, "tags": f"({name})"}
         for index, (image, delay) in enumerate(rendered)
     ]
+    return frames, note
 
 
-async def _run_rig(job: _Job, req: RigRequest, item: Any) -> None:
+async def _run_rig(job: _Job, req: RigRequest, item: Any, api_key: str | None = None) -> None:
     from PIL import Image
 
+    from ..nai_metadata import generation_settings
     from .image import _guard_image
     from .library import _served_path
 
@@ -575,8 +639,11 @@ async def _run_rig(job: _Job, req: RigRequest, item: Any) -> None:
             f"{name}(部位・{ugoira_rig.STYLES[req.style]}・{item.label or item.key})", item.key, "rig"
         )
         job.project_id = project_id
-        settings = {**req.model_dump(), "prompt": item.prompt or "", "template": parts.template.name}
-        frames = await _render_rig(job, project_id, source, parts, settings)
+        # 髪の裏を NovelAI で描くときの元の生成の設定(絵に埋め込まれたもの。無ければプロンプトだけ)
+        embedded = generation_settings(data) or {}
+        nai = {k: embedded.get(k) for k in ("prompt", "negative_prompt", "seed", "steps", "model", "scale", "sampler", "noise_schedule")}
+        settings = {**req.model_dump(), "prompt": item.prompt or "", "template": parts.template.name, "nai": nai}
+        frames, note = await _render_rig(job, project_id, source, parts, settings, api_key)
         ugoira._store_frames(project_id, frames)
         # 半自動で直せるよう、元の絵・髪の範囲・設定を残す
         folder = ugoira.frame_dir(project_id)
@@ -585,7 +652,7 @@ async def _run_rig(job: _Job, req: RigRequest, item: Any) -> None:
         _save_hair(project_id, parts.hair)
         (folder / _RIG_SETTINGS).write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
         job.progress = 4
-        job.message = f"できました({len(frames)}コマ・構図: {parts.template.label})"
+        job.message = f"できました({len(frames)}コマ・構図: {parts.template.label}・{note})"
         job.status = "done"
     except HTTPException as exc:
         job.status, job.message = "error", str(exc.detail)
@@ -614,7 +681,7 @@ def _rig_state(project_id: int) -> dict[str, Any]:
         "view": f"{base}/{_RIG_VIEW}",
         "version": int((folder / _RIG_VIEW).stat().st_mtime_ns),
         "can_undo": (folder / _RIG_HAIR_PREV).is_file(),
-        "settings": {k: settings.get(k) for k in ("kind", "style", "amount", "period", "template")},
+        "settings": {k: settings.get(k) for k in ("kind", "style", "amount", "period", "template", "plate")},
     }
 
 
@@ -680,18 +747,27 @@ def reset_rig(project_id: int) -> dict[str, Any]:
     return _rig_state(project_id)
 
 
+class RigRedoRequest(BaseModel):
+    # 裏の埋め方を変えて作り直す(無ければ作ったときのまま)
+    plate: Literal["lama", "novelai"] | None = None
+
+
 @router.post("/{project_id}/rig/redo")
-async def redo_rig(project_id: int) -> dict[str, Any]:
+async def redo_rig(project_id: int, client: ClientDep, req: RigRedoRequest | None = None) -> dict[str, Any]:
     """いまの髪の範囲で、このうごイラのコマを作り直す(漫画へのつながりはそのまま)。"""
     project = _rig_project(project_id)
+    if req is not None and req.plate is not None:
+        path = ugoira.frame_dir(project_id) / _RIG_SETTINGS
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**settings, "plate": req.plate}, ensure_ascii=False), encoding="utf-8")
     job_id = uuid4().hex
     job = _Job(total=4, project_id=project_id)
     _jobs[job_id] = job
-    job.task = asyncio.create_task(_run_rig_redo(job, project))
+    job.task = asyncio.create_task(_run_rig_redo(job, project, getattr(client, "api_key", None)))
     return _job_response(job_id, job)
 
 
-async def _run_rig_redo(job: _Job, project: dict[str, Any]) -> None:
+async def _run_rig_redo(job: _Job, project: dict[str, Any], api_key: str | None = None) -> None:
     from PIL import Image
 
     try:
@@ -701,13 +777,13 @@ async def _run_rig_redo(job: _Job, project: dict[str, Any]) -> None:
         with Image.open(folder / _RIG_SOURCE) as opened:
             source = opened.convert("RGB")
         parts = await _rig_parts(job, source, settings.get("prompt") or "", _load_hair(project_id))
-        frames = await _render_rig(job, project_id, source, parts, settings)
+        frames, note = await _render_rig(job, project_id, source, parts, settings, api_key)
         old = {f["path"] for f in project["frames"]}
         ugoira._store_frames(project_id, frames)
         for path in old - {f["path"] for f in frames}:
             (ugoira._PROJECT_ROOT / path).unlink(missing_ok=True)
         job.progress = 4
-        job.message = f"作り直しました({len(frames)}コマ)"
+        job.message = f"作り直しました({len(frames)}コマ・{note})"
         job.status = "done"
     except HTTPException as exc:
         job.status, job.message = "error", str(exc.detail)

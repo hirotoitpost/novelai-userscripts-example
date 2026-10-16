@@ -78,6 +78,8 @@ export default function Ugoira() {
   const [rigKind, setRigKind] = useState('hair')
   const [rigStyle, setRigStyle] = useState('anime')
   const [rigAmount, setRigAmount] = useState(1)
+  // 髪の裏を NovelAI で描く(胴体だけを切り出して。髪が残ったら LaMa)
+  const [rigNovelai, setRigNovelai] = useState(false)
   const [editing, setEditing] = useState<Motion | null>(null)
   const [draft, setDraft] = useState({ name: '', region: 'eyes', lines: '' })
   const timer = useRef<number | null>(null)
@@ -160,7 +162,7 @@ export default function Ugoira() {
     try {
       const started = await call<Job>('/rig', {
         method: 'POST',
-        body: JSON.stringify({ key: sourceKey, kind: rigKind, style: rigStyle, amount: rigAmount }),
+        body: JSON.stringify({ key: sourceKey, kind: rigKind, style: rigStyle, amount: rigAmount, plate: rigNovelai ? 'novelai' : 'lama' }),
       })
       setJob(started)
       follow(started.id)
@@ -384,6 +386,12 @@ export default function Ugoira() {
                     <option value={1}>ふつう</option>
                     <option value={1.5}>大きく</option>
                   </select>
+                </label>
+              </div>
+              <div className="ugo-row">
+                <label>
+                  <input type="checkbox" checked={rigNovelai} disabled={running} onChange={e => setRigNovelai(e.target.checked)} />
+                  {' '}髪の裏を NovelAI で描く(頭を除いた胴体だけを描き直す。Opus なら Anlas 0。髪が残ったら、この PC の埋め方に戻す)
                 </label>
               </div>
               <p className="pub-meta">

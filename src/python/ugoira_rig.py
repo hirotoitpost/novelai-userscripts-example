@@ -374,6 +374,110 @@ def edit_hair(hair: np.ndarray, region: np.ndarray, mode: str) -> np.ndarray:
     raise RigError("直し方は add か remove です。")
 
 
+# ---- 髪の裏を NovelAI で描く(胴体だけを切り出して) ----
+
+# 胴体を描くときに外すタグ(頭・顔・髪・表情・視線・風)。頭が絵に入っていると、髪の続きを描いてしまった(実機で確認)
+_TORSO_DROP = re.compile(
+    r"(wind|hair|bangs|\beyes?\b|face|smile|blush|mouth|looking|head|expression|\bears?\b|lips|eyelashes|tilt|portrait)", re.I
+)
+_TORSO_DROP_EXACT = {"1girl", "1boy", "solo", "upper body", "cowboy shot"}
+_MONO_TAGS = {"monochrome", "greyscale", "grayscale", "screentone", "manga style"}
+TORSO_TAGS = "head out of frame, close-up, torso"
+TORSO_NEGATIVE = "hair, long hair, strands of hair, head, face, neck"
+# 描いた胴体のうち、元が髪だった所に、髪の色がこれより多く残っていたら描き直す
+HAIR_LEFT_LIMIT = 0.15
+
+
+@dataclass
+class TorsoRequest:
+    """胴体だけを切り出して、髪の所を描かせる頼み方。"""
+
+    top: int  # 切り出した上の端(元の絵の画素)
+    hole: np.ndarray  # 切り出した所の中の、描かせる所(True)
+    # 描いた絵を重ねる所(髪と頭を少し広げた所)。描かせる所は広く取る(手がかりの髪を残さない)が、重ねるのは髪の裏だけ
+    # (広いまま重ねると、描き直された肩の輪郭が元の輪郭とずれて筋に見えた。実機で確認)
+    merge: np.ndarray
+    image: Image.Image  # 描かせる所を、まわりのならした色で塗った胴体(拡大済み)
+    mask: Image.Image
+    prompt: str
+    negative: str
+
+
+def torso_request(source: Image.Image, parts: Parts, prompt: str, negative: str) -> TorsoRequest | None:
+    """
+    首の付け根の少し下から下(頭が入らない所)を切り出し、髪と頭の所(広げたもの)を描かせる所にする。描かせる所は、
+    まわりのならした色で塗っておく(LaMa のにじみは髪の手がかりになった)。描かせる所が無ければ None。
+    """
+    from .ugoira import fit_size
+
+    image = np.asarray(source.convert("RGB"))
+    height, width = image.shape[:2]
+    x0, y0, x1, y1 = parts.head_box
+    # 首の付け根の少し下から下。あごから下(首を入れる)にすると、髪を描きやすくなり、肩に筋が出た(実機で確認)
+    top = int(min(height - 64, parts.pivot[1] + 0.05 * (y1 - y0)))
+    hole_full = cv2.dilate((np.maximum(parts.hair, parts.head) > 0.08).astype(np.uint8), np.ones((45, 45), np.uint8)) > 0
+    hole = hole_full[top:]
+    if not hole.any():
+        return None
+    merge = (cv2.dilate((np.maximum(parts.hair, parts.head) > 0.08).astype(np.uint8), np.ones((15, 15), np.uint8)) > 0)[top:]
+    crop = image[top:]
+    filled = crop.copy()
+    blurred = cv2.blur(np.where(hole[..., None], 0, crop).astype(np.float32), (61, 61))
+    weight = cv2.blur((~hole).astype(np.float32), (61, 61))[..., None]
+    filled[hole] = (blurred / np.maximum(weight, 1e-3)).astype(np.uint8)[hole]
+    ch, cw = crop.shape[:2]
+    gw, gh = fit_size((cw * 2, ch * 2))
+    big = cv2.resize(filled, (gw, gh), interpolation=cv2.INTER_CUBIC)
+    big_hole = cv2.resize(hole.astype(np.uint8) * 255, (gw, gh), interpolation=cv2.INTER_NEAREST)
+    tags = [t.strip() for t in (prompt or "").split(",") if t.strip()]
+    kept = [t for t in tags if not _TORSO_DROP.search(t) and t.lower() not in _TORSO_DROP_EXACT]
+    # 絵に色があるのにプロンプトがモノクロのとき(V5 はモノクロにならないことがある)は、モノクロのタグを外す
+    if float(cv2.cvtColor(image, cv2.COLOR_RGB2HSV)[..., 1].mean()) > 40:
+        kept = [t for t in kept if t.lower() not in _MONO_TAGS]
+    return TorsoRequest(
+        top=top,
+        hole=hole,
+        merge=merge,
+        image=Image.fromarray(big),
+        mask=Image.fromarray(big_hole).convert("RGB"),
+        prompt=", ".join([TORSO_TAGS, *kept]),
+        negative=", ".join(p for p in (negative, TORSO_NEGATIVE) if p),
+    )
+
+
+def hair_left(source: Image.Image, parts: Parts, req: TorsoRequest, drawn: Image.Image) -> float:
+    """描いた胴体のうち、元が髪だった所に、髪の色が残っている割合(0〜1)。"""
+    lab = _lab(source)
+    hair = parts.hair > 0.5
+    color = np.median(lab[hair], axis=0)
+    spread = float(np.percentile(np.linalg.norm(lab[hair] - color, axis=1), 80))
+    ch, cw = req.hole.shape
+    small = drawn.convert("RGB").resize((cw, ch), Image.Resampling.LANCZOS)
+    region = hair[req.top :] & req.hole
+    if not region.any():
+        return 0.0
+    close = np.linalg.norm(_lab(small) - color, axis=2) < max(18.0, 1.5 * spread)
+    return float(close[region].mean())
+
+
+def merge_torso(plate: np.ndarray, req: TorsoRequest, drawn: Image.Image) -> np.ndarray:
+    """描いた胴体を、裏を埋めた絵の、描かせた所にだけ重ねる(明るさ・色は元に合わせる)。"""
+    from .ugoira import composite
+
+    ch, cw = req.hole.shape
+    small = drawn.convert("RGB").resize((cw, ch), Image.Resampling.LANCZOS)
+    soft = Image.fromarray(cv2.GaussianBlur(req.merge.astype(np.uint8) * 255, (0, 0), 3))
+    out = plate.copy()
+    out[req.top :] = np.asarray(composite(Image.fromarray(plate[req.top :]), small, soft))
+    return out
+
+
+def base_plate(source: Image.Image, parts: Parts, kind: str) -> np.ndarray:
+    """動く部位をまるごと消して、LaMa で埋めた絵(render の既定の裏)。"""
+    moving = np.maximum(parts.hanging, parts.head if kind == "tilt" else 0)
+    return _fill(np.asarray(source.convert("RGB")), moving)
+
+
 # ---- ばね(髪の鎖・頭の動き) ----
 
 
@@ -453,8 +557,9 @@ def render(
     style: str = "anime",
     period_ms: int | None = None,
     amount: float = 1.0,
+    plate: np.ndarray | None = None,
 ) -> list[tuple[Image.Image, int]]:
-    """1周分のコマと表示時間(ミリ秒)。最初のコマは元の絵と同じ。"""
+    """1周分のコマと表示時間(ミリ秒)。最初のコマは元の絵と同じ。plate は動いて見える所の裏(無ければ LaMa で埋める)。"""
     if kind not in RIGS:
         raise RigError(f"動きは {', '.join(RIGS)} のどれかです。")
     if style not in STYLES:
@@ -560,7 +665,7 @@ def render(
     ]
     # 埋めた絵は、動く部位をまるごと消して作る(見えるようになる細い所だけを消すと、まわりに残った髪から
     # また髪が描かれた。NovelAI のインペイントでも、髪の続きを描いてしまった。実機で確認)
-    plate = _fill(image, moving)
+    plate = _fill(image, moving) if plate is None else plate
     result = []
     for ks in samples_at:
         samples = []

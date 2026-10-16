@@ -138,7 +138,10 @@ def test_rig_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_models
 
     monkeypatch.setattr(rig, "split_parts", split)
     (tmp_path / "outputs" / "history").mkdir(parents=True)
-    _striped().save(tmp_path / "outputs" / "history" / "src.png")
+    # 髪の所は一色(濃い茶色)。描いた胴体に髪が残ったかを、色で確かめるため
+    picture = np.asarray(_striped()).copy()
+    picture[parts.hair > 0.5] = (60, 40, 30)
+    Image.fromarray(picture).save(tmp_path / "outputs" / "history" / "src.png")
     conn = db.get_connection()
     try:
         row = db.record_generation(
@@ -147,8 +150,29 @@ def test_rig_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_models
         )
     finally:
         conn.close()
+    from python.client import get_client
+    from python.routes import image as image_routes
+
+    drawn_colors: list[tuple[int, int, int]] = []
+
+    class FakeImage:
+        async def generate(self, params):
+            # 描いた胴体: 決めた色の一色(髪の色なら「髪が残った」になる)
+            drawn_colors.append(params.seed)
+            return [Image.new("RGB", params.size, fake_color[0])]
+
+    class FakeClient:
+        api_key = "test"
+        image = FakeImage()
+
+        async def close(self):
+            pass
+
+    fake_color = [(0, 160, 0)]
+    monkeypatch.setattr(image_routes, "_job_client", lambda api_key: FakeClient())
     app = FastAPI()
     app.include_router(ugoira_routes.router)
+    app.dependency_overrides[get_client] = lambda: FakeClient()
     with TestClient(app) as client:
         info = client.get("/api/ugoira/motions").json()
         assert {r["kind"] for r in info["rigs"]} == {"hair", "tilt"} and set(info["styles"]) == {"anime", "real"}
@@ -205,6 +229,22 @@ def test_rig_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_models
         assert job["status"] == "done", job
         redone = client.get(f"/api/ugoira/{pid}").json()
         assert len(redone["frames"]) == 24 and not any(p.exists() for p in old)
+        # 裏を NovelAI で描いて作り直す: 髪が残らなければ1回で使う。残り続けたら3回で LaMa に戻す
+        def redo(body):
+            job = client.post(f"/api/ugoira/{pid}/rig/redo", json=body).json()
+            for _ in range(200):
+                job = client.get(f"/api/ugoira/jobs/{job['id']}").json()
+                if job["status"] != "running":
+                    return job
+                time.sleep(0.05)
+
+        job = redo({"plate": "novelai"})
+        assert job["status"] == "done" and "NovelAI(1回目)" in job["message"], job
+        assert client.get(f"/api/ugoira/{pid}/rig").json()["settings"]["plate"] == "novelai"
+        fake_color[0] = (60, 40, 30)
+        drawn_colors.clear()
+        job = redo(None)
+        assert job["status"] == "done" and "LaMa" in job["message"] and len(drawn_colors) == 3, job
         # ふつうのうごイラは、髪の範囲を直せない
         other = ugoira.create_project("x", "k", "partial")
         assert client.get(f"/api/ugoira/{other}/rig").status_code == 409

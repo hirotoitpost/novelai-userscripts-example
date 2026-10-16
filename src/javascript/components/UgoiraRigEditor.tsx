@@ -8,6 +8,7 @@ interface RigState {
   version: number
   can_undo: boolean
   detail?: boolean
+  settings?: { plate?: 'lama' | 'novelai' | null }
 }
 
 interface Props {
@@ -42,6 +43,9 @@ export default function UgoiraRigEditor({ projectId, running, onRedo }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [edited, setEdited] = useState(false)
+  // 表示の倍率(細かい所をタップしやすく。はみ出す分はスクロール)
+  const [zoom, setZoom] = useState(1)
+  const [plate, setPlate] = useState<'lama' | 'novelai'>('lama')
   const image = useRef<HTMLImageElement>(null)
 
   const load = useCallback(() => {
@@ -51,6 +55,7 @@ export default function UgoiraRigEditor({ projectId, running, onRedo }: Props) {
       .catch(() => setState(null))
   }, [projectId])
   useEffect(() => { load(); setEdited(false) }, [load])
+  useEffect(() => { if (state?.settings?.plate) setPlate(state.settings.plate) }, [state?.settings?.plate])
 
   async function run(action: () => Promise<RigState>, changes = true) {
     setBusy(true)
@@ -80,7 +85,7 @@ export default function UgoiraRigEditor({ projectId, running, onRedo }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const job = await post(`/${projectId}/rig/redo`)
+      const job = await post(`/${projectId}/rig/redo`, { plate })
       if (job.id) onRedo(job.id)
       setEdited(false)
     } catch (e) {
@@ -109,13 +114,27 @@ export default function UgoiraRigEditor({ projectId, running, onRedo }: Props) {
             <option value="on">高精細(AI 拡大。1回10秒ほど)</option>
           </select>
         </label>
+        <label>表示{' '}
+          <select value={zoom} onChange={e => setZoom(Number(e.target.value))}>
+            {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n === 1 ? '全体' : `${n}倍(スクロール)`}</option>)}
+          </select>
+        </label>
       </div>
-      <div className={`ugo-rig-canvas${disabled ? ' is-busy' : ''}`}>
-        <img ref={image} src={fileUrl(state.source)} alt="元の絵(タップして髪の範囲を直す)" onClick={tap} />
-        <img className="ugo-rig-overlay" src={`${fileUrl(state.view)}&v=${state.version}`} alt="" aria-hidden="true" />
+      <div className="ugo-rig-scroll">
+        <div className={`ugo-rig-canvas${disabled ? ' is-busy' : ''}${zoom > 1 ? ' is-zoomed' : ''}`}
+          style={zoom > 1 ? { width: `${zoom * 100}%` } : undefined}>
+          <img ref={image} src={fileUrl(state.source)} alt="元の絵(タップして髪の範囲を直す)" onClick={tap} />
+          <img className="ugo-rig-overlay" src={`${fileUrl(state.view)}&v=${state.version}`} alt="" aria-hidden="true" />
+        </div>
       </div>
       {busy && <p className="pub-meta" role="status">切り出しています…</p>}
       {error && <p className="pub-error" role="alert">{error}</p>}
+      <div className="ugo-row">
+        <label>
+          <input type="checkbox" checked={plate === 'novelai'} disabled={disabled} onChange={e => setPlate(e.target.checked ? 'novelai' : 'lama')} />
+          {' '}髪の裏を NovelAI で描いて作り直す
+        </label>
+      </div>
       <div className="ugo-row">
         <button type="button" disabled={disabled || !state.can_undo} onClick={() => void run(() => post(`/${projectId}/rig/undo`))}>一つ前に戻す</button>
         <button type="button" disabled={disabled} onClick={() => void run(() => post(`/${projectId}/rig/reset`))}>自動の範囲に戻す</button>
