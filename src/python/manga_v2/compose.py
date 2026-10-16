@@ -73,6 +73,9 @@ class PanelContent:
     cast: list[CastMember] = field(default_factory=list)
     # 寄りのコマで写すキャラ(そのコマで話す人。二人なら二人とも入るように寄る)
     focus: list[int] = field(default_factory=list)
+    # 動くコマ(うごイラ)の、いま貼るコマの絵。頭の検出・話し手の見分け・寄りの切り抜きは image_path(元の絵)で
+    # 決め、貼る絵だけこれに替える(コマごとに吹き出しの位置が揺れないように)
+    picture_path: Path | None = None
 
 
 @dataclass
@@ -496,6 +499,9 @@ def _draw_panel(
             image = src.convert("RGB")
         source_ids = identify_heads(image, source_heads, content.cast) if content.speakers else []
         focus_indexes = [source_ids.index(f) for f in content.focus if f in source_ids]
+        if content.picture_path is not None and content.picture_path.is_file():
+            with Image.open(content.picture_path) as frame:
+                image = frame.convert("RGB").resize(image.size, Image.Resampling.LANCZOS)
         picture, scale, left, top = _cover(image, width, height, content.zoom_step, source_heads, focus_indexes)
         page.paste(picture, (x0, y0))
         for index, (hx0, hy0, hx1, hy1) in enumerate(source_heads):
@@ -679,31 +685,50 @@ def compose_page(
     return page, elements
 
 
+@dataclass
+class PagePlan:
+    """1ページの割り付け。コマの枠(spec)と、そのページに入るコマの範囲(panels[start:end])。"""
+
+    spec: PageSpec
+    start: int
+    end: int
+
+
+def plan_pages(
+    template_id: str, count: int, layouts: Sequence[PageLayout] | None = None
+) -> list[PagePlan]:
+    """
+    シーン順のコマ count 個をテンプレートのコマ数ずつページに割り付ける。最後のページのコマが
+    足りないときは、空きゴマを残さないよう少ないコマ数のテンプレートに切り替える。
+    layouts(取り込んだ作品から写したページごとのコマ割り)があれば、先頭のページから順にそれを使い、
+    使い切った後のコマはテンプレートで続ける。
+    """
+    plans = []
+    start = 0
+    for layout in layouts or []:
+        if start >= count:
+            break
+        end = min(start + layout_size(layout), count)
+        plans.append(PagePlan(layout_page(layout), start, end))
+        start = end
+    per_page = len(panel_rects(template_id))
+    for i in range(start, count, per_page):
+        end = min(i + per_page, count)
+        plans.append(PagePlan(template_page(fill_template(template_id, end - i)), i, end))
+    return plans
+
+
 def compose_pages(
     template_id: str,
     panels: list[PanelContent],
     style: LetteringStyle,
     layouts: Sequence[PageLayout] | None = None,
 ) -> list[tuple[Image.Image, list[Element]]]:
-    """
-    シーン順のコマをテンプレートのコマ数ずつページに割り付ける。最後のページのコマが
-    足りないときは、空きゴマを残さないよう少ないコマ数のテンプレートに切り替える。
-    layouts(取り込んだ作品から写したページごとのコマ割り)があれば、先頭のページから順にそれを使い、
-    使い切った後のコマはテンプレートで続ける。
-    """
-    pages = []
-    rest = panels
-    for layout in layouts or []:
-        if not rest:
-            break
-        size = layout_size(layout)
-        chunk, rest = rest[:size], rest[size:]
-        pages.append(compose_page(layout_page(layout), chunk, style))
-    per_page = len(panel_rects(template_id))
-    for i in range(0, len(rest), per_page):
-        chunk = rest[i : i + per_page]
-        pages.append(compose_page(template_page(fill_template(template_id, len(chunk))), chunk, style))
-    return pages
+    """コマをページに割り付けて(plan_pages)、ページごとに合成する。"""
+    return [
+        compose_page(plan.spec, panels[plan.start : plan.end], style)
+        for plan in plan_pages(template_id, len(panels), layouts)
+    ]
 
 
 def compose_panel(content: PanelContent, style: LetteringStyle) -> Image.Image:

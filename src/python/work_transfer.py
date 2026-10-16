@@ -34,7 +34,8 @@ VERSION = 1
 MAX_ZIP_BYTES = 1024 * 1024 * 1024
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # 書き出さない物語の列(この PC だけの意味のもの)
-_STORY_SKIP = {"id", "series_id", "volume_no", "final_image_path", "manga_v2_sfx_stamps"}
+# 動かすコマ(manga_v2_ugoira)は、この PC のうごイラを指すので書き出さない
+_STORY_SKIP = {"id", "series_id", "volume_no", "final_image_path", "manga_v2_sfx_stamps", "manga_v2_ugoira"}
 _SCALE_PREFIX = "scale:"
 
 

@@ -357,7 +357,11 @@ def _frames_images(project: dict[str, Any], max_side: int | None) -> list[tuple[
 
 def export(project: dict[str, Any], fmt: str, max_side: int | None = None) -> tuple[bytes, str, str]:
     """(中身, ファイルの拡張子, MIME)。fmt は zip(Pixiv のうごイラ用)・gif・webp。"""
-    frames = _frames_images(project, max_side)
+    return encode(_frames_images(project, max_side), fmt)
+
+
+def encode(frames: list[tuple[Image.Image, int]], fmt: str) -> tuple[bytes, str, str]:
+    """(絵, 表示時間ミリ秒) の並びを書き出す。export と、漫画の動くページの書き出しで共用する。"""
     if not frames:
         raise UgoiraError("コマがありません。")
     buf = io.BytesIO()

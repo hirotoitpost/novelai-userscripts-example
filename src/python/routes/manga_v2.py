@@ -39,6 +39,8 @@ from ..db import (
     get_manga_v2_overrides,
     get_manga_v2_page_layouts,
     get_manga_v2_sfx_fonts,
+    get_manga_v2_ugoira,
+    set_manga_v2_ugoira,
     get_manga_v2_sfx_stamps,
     set_manga_v2_page_layouts,
     adult_stamp_sources,
@@ -71,12 +73,16 @@ from ..db import (
 from ..manga_v2.compose import (
     LetteringStyle,
     PanelContent,
+    PagePlan,
+    compose_page,
     compose_pages,
     compose_panel,
     concat_pages,
     page_png,
+    plan_pages,
     split_dense_panels,
 )
+from ..manga_v2.animate import merge_timeline
 from ..manga_v2.fonts import CATALOG, CATALOG_BY_ID, LICENSE_NAME, download_font
 from ..manga_v2.stamps import (
     STAMP_DIR,
@@ -121,6 +127,7 @@ from ..models import (
     MangaV2MakeRequest,
     MangaV2PageLayoutsRequest,
     MangaV2ComposeResponse,
+    MangaV2UgoiraLink,
     MangaV2DownloadRequest,
     MangaV2Font,
     MangaV2OverrideRequest,
@@ -142,6 +149,7 @@ from ..character_sheet import (
     join_tags,
 )
 from .. import minor_guard
+from .. import ugoira
 from ..script_lines import script_sfx
 from ..novelai_image_v5 import DIALOGUE_RE, CharacterReferenceInput, generate_image_v5, reference_image_b64
 from .llm import stream_llm_text, strip_think_tags
@@ -1271,8 +1279,11 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
     """コマの絵をテンプレートに嵌め込み、セリフを吹き出しで描いてページにする。"""
     contents, style, _ = _compose_inputs(story_id, req)
     layouts = _page_layouts(story_id)
-    composed = compose_pages(req.template, _split(contents, req.max_lines_per_panel, layouts), style, layouts)
+    split = _split(contents, req.max_lines_per_panel, layouts)
+    plans = plan_pages(req.template, len(split), layouts)
+    composed = [compose_page(plan.spec, split[plan.start : plan.end], style) for plan in plans]
     pages = [page for page, _ in composed]
+    tracks = _ugoira_tracks(story_id)
 
     _PAGE_DIR.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex[:8]
@@ -1281,6 +1292,15 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
         filename = f"story{story_id}_page{index}_{token}.png"
         (_PAGE_DIR / filename).write_bytes(page_png(page))
         page_paths.append(f"outputs/manga/v2/{filename}")
+    animated_paths: list[str | None] = []
+    for index, plan in enumerate(plans):
+        frames = _animate_page(plan, split, style, tracks)
+        if frames is None:
+            animated_paths.append(None)
+            continue
+        filename = f"story{story_id}_page{index}_{token}.webp"
+        (_PAGE_DIR / filename).write_bytes(ugoira.encode(frames, "webp")[0])
+        animated_paths.append(f"outputs/manga/v2/{filename}")
     final_name = f"story{story_id}_final_{token}.png"
     (_PAGE_DIR / final_name).write_bytes(concat_pages(pages))
     final_path = f"outputs/manga/v2/{final_name}"
@@ -1314,7 +1334,145 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
             ]
             for _, elements in composed
         ],
+        "animated_pages": animated_paths,
     }
+
+
+# ---- 動くコマ(うごイラを嵌め込む) ----
+
+
+def _ugoira_tracks(story_id: int) -> dict[str, list[dict[str, Any]]]:
+    """PanelContent.key(シーンID) → 嵌め込むうごイラのコマ [{path, delay}]。消えたうごイラ・コマの無いものは飛ばす。"""
+    conn = get_connection()
+    try:
+        links = get_manga_v2_ugoira(conn, story_id)
+    finally:
+        conn.close()
+    tracks = {}
+    for scene_id, project_id in links.items():
+        project = ugoira.get_project(project_id)
+        frames = [f for f in (project or {}).get("frames") or [] if (_PROJECT_ROOT / f["path"]).is_file()]
+        if frames:
+            tracks[str(scene_id)] = frames
+    return tracks
+
+
+def _animate_page(
+    plan: PagePlan, split: list[PanelContent], style: Any, tracks: dict[str, list[dict[str, Any]]]
+) -> list[tuple[Image.Image, int]] | None:
+    """
+    動くコマがあるページを、ページのコマ(merge_timeline の区切り)ごとに合成し直す。吹き出し・描き文字・ほかのコマは
+    そのまま、動くコマの絵だけを替える。動くコマが無ければ None。
+    """
+    chunk = split[plan.start : plan.end]
+    keys = list(dict.fromkeys(c.key for c in chunk if c.key in tracks and c.image_path is not None))
+    if not keys:
+        return None
+    steps = merge_timeline([[int(f["delay"]) for f in tracks[key]] for key in keys])
+    cache: dict[tuple[int, ...], Image.Image] = {}
+    frames = []
+    for indexes, duration in steps:
+        if indexes not in cache:
+            current = {key: _PROJECT_ROOT / tracks[key][i]["path"] for key, i in zip(keys, indexes)}
+            contents = [replace(c, picture_path=current[c.key]) if c.key in current else c for c in chunk]
+            cache[indexes] = compose_page(plan.spec, contents, style)[0]
+        frames.append((cache[indexes], duration))
+    return frames
+
+
+def _ugoira_links(story_id: int) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        if get_story(conn, story_id) is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        links = get_manga_v2_ugoira(conn, story_id)
+        panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
+    finally:
+        conn.close()
+    result = []
+    for scene_id, project_id in sorted(links.items()):
+        project = ugoira.get_project(project_id)
+        panel = panels.get(scene_id)
+        result.append({
+            "scene_id": scene_id,
+            "project_id": project_id,
+            "name": project["name"] if project else None,
+            "frames": len(project["frames"]) if project else 0,
+            # うごイラが消えた・別の絵から作った・コマを描き直した後に作っていない
+            "missing": project is None,
+            "other_source": bool(project and panel and project["source_key"] != f"panel:{panel['id']}"),
+            "stale": bool(project and panel and project["created_at"] < panel["created_at"]),
+        })
+    return result
+
+
+@router.get("/{story_id}/ugoira")
+async def get_ugoira_links(story_id: int) -> list[dict[str, Any]]:
+    """シーンごとの、コマを動かすうごイラ。"""
+    return _ugoira_links(story_id)
+
+
+@router.put("/{story_id}/ugoira")
+async def put_ugoira_link(story_id: int, req: MangaV2UgoiraLink) -> list[dict[str, Any]]:
+    """シーンのコマを動かすうごイラを決める(project_id が null なら外す)。次に合成したときから動く。"""
+    conn = get_connection()
+    try:
+        scenes = {s["id"] for s in list_story_scenes(conn, story_id)}
+        if req.scene_id not in scenes:
+            raise HTTPException(status_code=404, detail="scene not found")
+        if req.project_id is not None and ugoira.get_project(req.project_id) is None:
+            raise HTTPException(status_code=404, detail="うごイラが見つかりません。")
+        links = get_manga_v2_ugoira(conn, story_id)
+        if req.project_id is None:
+            links.pop(req.scene_id, None)
+        else:
+            links[req.scene_id] = req.project_id
+        set_manga_v2_ugoira(conn, story_id, links)
+    finally:
+        conn.close()
+    return _ugoira_links(story_id)
+
+
+def _animated_page_file(story_id: int, page: int) -> Path:
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    final = (story or {}).get("final_image_path") or ""
+    match = re.fullmatch(rf"outputs/manga/v2/story{story_id}_final_([0-9a-f]+)\.png", final)
+    path = _PAGE_DIR / f"story{story_id}_page{page}_{match.group(1)}.webp" if match else None
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="このページは動きません(動くコマを決めてから合成してください)。")
+    return path
+
+
+@router.get("/{story_id}/animated/{page}")
+def download_animated_page(story_id: int, page: int, fmt: str = "webp", max_side: int | None = None) -> Response:
+    """
+    最後に合成した動くページを書き出す。fmt は webp・gif・zip(Pixiv のうごイラ用)。max_side で長い辺を縮める。
+    Pixiv のうごイラは1投稿に1つなので、動くページは1ページずつ書き出す。
+    """
+    if max_side is not None and not 100 <= max_side <= 4000:
+        raise HTTPException(status_code=400, detail="長い辺は 100〜4000 にしてください。")
+    path = _animated_page_file(story_id, page)
+    if fmt == "webp" and max_side is None:
+        body, ext, mime = path.read_bytes(), "webp", "image/webp"
+    else:
+        frames = []
+        with Image.open(path) as image:
+            for index in range(getattr(image, "n_frames", 1)):
+                image.seek(index)
+                frame = image.convert("RGB")
+                if max_side and max(frame.size) > max_side:
+                    frame.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+                frames.append((frame, int(image.info.get("duration") or 100)))
+        try:
+            body, ext, mime = ugoira.encode(frames, fmt)
+        except ugoira.UgoiraError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    name = f"story{story_id}_page{page + 1}.{ext}"
+    return Response(body, media_type=mime, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
 
 # ---- ダウンロード ----

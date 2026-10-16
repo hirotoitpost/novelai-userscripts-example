@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
 import { SceneCharacter } from './StoryCharacters'
@@ -32,6 +33,7 @@ interface TemplateOption {
 }
 
 interface Panel {
+  id: number
   scene_id: number
   scene_index: number
   image_path: string
@@ -57,7 +59,30 @@ interface ComposeResult {
   // ページごとの幅(見開きは横2ページ分)
   page_widths?: number[]
   elements: MangaV2Element[][]
+  // pages と同じ順の、動くページのアニメ WebP(動かないページは null)
+  animated_pages?: (string | null)[]
 }
+
+/** うごイラ(/api/ugoira)の一覧の項目 */
+interface UgoiraProject {
+  id: number
+  name: string
+  source_key: string
+  frames: unknown[]
+}
+
+/** シーンのコマを動かすうごイラ(/api/manga-v2/{id}/ugoira) */
+interface UgoiraLink {
+  scene_id: number
+  project_id: number
+  name: string | null
+  frames: number
+  missing: boolean
+  other_source: boolean
+  stale: boolean
+}
+
+type AnimatedFormat = 'webp' | 'gif' | 'zip'
 
 interface Props {
   apiOrigin: string
@@ -152,6 +177,10 @@ export default function MangaV2Studio({
   const [sceneFrom, setSceneFrom] = useState(1)
   const [sceneTo, setSceneTo] = useState(4)
   // 効果音の編集中の値(scene_id → 入力文字列)
+  const [ugoiraProjects, setUgoiraProjects] = useState<UgoiraProject[]>([])
+  const [ugoiraLinks, setUgoiraLinks] = useState<UgoiraLink[]>([])
+  const [animatedFormat, setAnimatedFormat] = useLocalStorage<AnimatedFormat>('nai_manga_v2_animated_format', 'webp')
+  const [animatedMaxSide, setAnimatedMaxSide] = useLocalStorage('nai_manga_v2_animated_max_side', '')
   const [sfxDrafts, setSfxDrafts] = useState<Record<number, string>>({})
   const [narrationDrafts, setNarrationDrafts] = useState<Record<number, string>>({})
 
@@ -174,8 +203,17 @@ export default function MangaV2Studio({
       .catch(() => {})
   }
 
+  function loadUgoira() {
+    fetch(`${apiOrigin}/api/ugoira`).then(r => (r.ok ? r.json() : [])).then(setUgoiraProjects).catch(() => {})
+    fetch(`${apiOrigin}/api/manga-v2/${storyId}/ugoira`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(setUgoiraLinks)
+      .catch(() => {})
+  }
+
   useEffect(() => {
     loadPanels()
+    loadUgoira()
     setComposed(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiOrigin, storyId])
@@ -370,6 +408,27 @@ export default function MangaV2Studio({
     max_lines_per_panel: maxLines,
     text_scale: textScale / 100,
     sfx_scale: sfxScale / 100,
+  }
+
+  /** シーンのコマを動かすうごイラを決める(null で外す)。次に合成したときから動く */
+  async function linkUgoira(scene: MangaV2Scene, projectId: number | null) {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/ugoira`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene_id: scene.id, project_id: projectId }),
+    })
+    if (!res.ok) {
+      alert(await readErrorDetail(res))
+      return
+    }
+    setUgoiraLinks(await res.json())
+  }
+
+  function animatedUrl(page: number) {
+    const params = new URLSearchParams({ fmt: animatedFormat })
+    const side = Number(animatedMaxSide)
+    if (side > 0) params.set('max_side', String(side))
+    return `${apiOrigin}/api/manga-v2/${storyId}/animated/${page}?${params}`
   }
 
   async function requestCompose(signal: AbortSignal) {
@@ -671,6 +730,10 @@ export default function MangaV2Studio({
       <ul className="mv2-grid">
         {targetScenes.map(scene => {
           const panel = panelByScene.get(scene.id)
+          const link = ugoiraLinks.find(l => l.scene_id === scene.id)
+          // このコマから作ったうごイラを先に、ほかのうごイラは後ろに
+          const ownUgoira = panel ? ugoiraProjects.filter(p => p.source_key === `panel:${panel.id}`) : []
+          const otherUgoira = ugoiraProjects.filter(p => !ownUgoira.includes(p))
           return (
             <li key={scene.id} className="mv2-card">
               {panel ? (
@@ -712,6 +775,39 @@ export default function MangaV2Studio({
                     onBlur={() => saveNarrationDraft(scene)}
                   />
                 </label>
+                {panel && (
+                  <div className="mv2-sfx mv2-move">
+                    <label>
+                      このコマを動かす
+                      <select
+                        value={link?.project_id ?? ''}
+                        disabled={busy}
+                        onChange={e => void linkUgoira(scene, e.target.value ? Number(e.target.value) : null)}
+                      >
+                        <option value="">動かさない</option>
+                        {link?.missing && <option value={link.project_id}>(消えたうごイラ)</option>}
+                        {ownUgoira.length > 0 && (
+                          <optgroup label="このコマから作ったうごイラ">
+                            {ownUgoira.map(p => <option key={p.id} value={p.id}>{p.name}({p.frames.length}コマ)</option>)}
+                          </optgroup>
+                        )}
+                        {otherUgoira.length > 0 && (
+                          <optgroup label="ほかの絵から作ったうごイラ">
+                            {otherUgoira.map(p => <option key={p.id} value={p.id}>{p.name}({p.frames.length}コマ)</option>)}
+                          </optgroup>
+                        )}
+                      </select>
+                    </label>
+                    {link?.missing && <span className="mv2-move-warn">うごイラが消えています。外すか選び直してください。</span>}
+                    {link?.other_source && <span className="mv2-move-warn">ほかの絵から作ったうごイラです(絵がずれることがあります)。</span>}
+                    {link?.stale && !link.other_source && (
+                      <span className="mv2-move-warn">うごイラを作った後にコマを描き直しています。</span>
+                    )}
+                    <Link className="mv2-open" to={`/ugoira?key=${encodeURIComponent(`panel:${panel.id}`)}`}>
+                      このコマからうごイラを作る
+                    </Link>
+                  </div>
+                )}
                 <div className="mv2-card-actions">
                   <button type="button" onClick={() => redrawPanel(scene)} disabled={busy}>
                     {panel ? '描き直す' : '描く'}
@@ -749,7 +845,7 @@ export default function MangaV2Studio({
                 className={index === editPage ? 'mv2-mode-active' : 'story-secondary'}
                 onClick={() => setEditPage(index)}
               >
-                P{index + 1}
+                P{index + 1}{composed.animated_pages?.[index] ? '(動く)' : ''}
               </button>
             ))}
           </div>
@@ -771,6 +867,11 @@ export default function MangaV2Studio({
             <a className="mv2-open" href={fileUrl(composed.pages[editPage])} target="_blank" rel="noreferrer">
               このページを開く
             </a>
+            {composed.animated_pages?.[editPage] && (
+              <a className="mv2-open" href={fileUrl(composed.animated_pages?.[editPage] ?? '')} target="_blank" rel="noreferrer">
+                動くページを開く
+              </a>
+            )}
             {(composed.elements[editPage] ?? []).some(e => e.moved) && (
               <button
                 type="button"
@@ -781,6 +882,46 @@ export default function MangaV2Studio({
                 このページの手動配置を戻す
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {composed?.animated_pages?.some(Boolean) && (
+        <div className="mv2-download">
+          <h4>動くページの書き出し</h4>
+          <p className="story-muted">
+            動くページ(うごイラを嵌め込んだページ)を、ページごとに書き出します。Pixiv のうごイラは1投稿に1つなので、
+            動くページは1ページずつ投稿してください(PDF・画像のダウンロードは、うごイラの最初のコマの静止画です)。
+          </p>
+          <div className="story-row">
+            <span>形式</span>
+            {([['webp', 'アニメ WebP'], ['gif', 'GIF'], ['zip', 'Pixiv うごイラ(ZIP)']] as const).map(([value, label]) => (
+              <label key={value} className="mv2-check">
+                <input
+                  type="radio"
+                  name="mv2-animated-format"
+                  checked={animatedFormat === value}
+                  onChange={() => setAnimatedFormat(value)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <div className="story-row">
+            <label>
+              長い辺{' '}
+              <select value={animatedMaxSide} onChange={e => setAnimatedMaxSide(e.target.value)}>
+                <option value="">そのまま(1700)</option>
+                {['1200', '1000', '800', '600'].map(v => <option key={v} value={v}>{v}px まで縮める</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="story-actions">
+            {(composed?.animated_pages ?? []).map((path, index) => path && (
+              <a key={path} className="mv2-open" href={animatedUrl(index)} download>
+                P{index + 1} を書き出す
+              </a>
+            ))}
           </div>
         </div>
       )}
