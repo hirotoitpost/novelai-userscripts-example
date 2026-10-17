@@ -33,17 +33,20 @@ interface Props {
   imageKey: string
   region: () => Region | null
   zoomed: boolean
+  /** 全画面の操作の表示が出ているか。隠れているときはメニューも隠す(作っている途中・結果・エラーの表示は残す) */
+  visible: boolean
   /** できた画像を開く */
   onOpen: (key: string) => void
 }
 
-export default function RegionRedrawTool({ token, imageKey, region, zoomed, onOpen }: Props) {
+export default function RegionRedrawTool({ token, imageKey, region, zoomed, visible, onOpen }: Props) {
   const [mode, setMode] = useLocalStorage<Mode>('nai_region_redraw_mode', 'normal')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<Result | null>(null)
 
-  if (!zoomed && !busy && !result && !error) return null
+  const menu = zoomed && visible && !busy
+  if (!menu && !busy && !result && !error) return null
 
   const run = async () => {
     const box = region()
@@ -65,7 +68,7 @@ export default function RegionRedrawTool({ token, imageKey, region, zoomed, onOp
 
   return (
     <div className="region-tool">
-      {zoomed && !busy && (
+      {menu && (
         <>
           <div className="region-tool-modes" role="group" aria-label="高解像度にする方法">
             {MODES.map(m => (
