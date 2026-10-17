@@ -14,9 +14,10 @@ interface Props {
   onClose: () => void
   /**
    * 下に出す道具(ギャラリーの「この範囲を高解像度に」など)。region() は、いま画面に見えている範囲を
-   * 元の画像のピクセルで返す([x, y, 幅, 高さ]。ズームしていなければ null)。
+   * 元の画像のピクセルで返す([x, y, 幅, 高さ]。ズームしていなければ null)。controls は、閉じるボタンなどの操作の
+   * 表示が出ているか(しばらく操作が無いと隠れる。道具のメニューも合わせて隠し、絵を見やすくする)。
    */
-  tool?: (region: () => Region | null, zoomed: boolean) => ReactNode
+  tool?: (region: () => Region | null, zoomed: boolean, controls: boolean) => ReactNode
 }
 
 /** 元の画像のピクセルでの範囲 [x, y, 幅, 高さ] */
@@ -446,7 +447,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
         )}
         <button type="button" className="fsv-close" onClick={onClose}>全画面を終わる ✕</button>
       </div>
-      {tool && <div className="fsv-tool">{tool(region, zoomed)}</div>}
+      {tool && <div className="fsv-tool">{tool(region, zoomed, controls)}</div>}
       {/* 画面読み上げ・キーボード向けの前後のボタン(見た目には出さない) */}
       <div className="fsv-sr">
         <button type="button" onClick={() => onPrev?.()} disabled={!onPrev}>前へ</button>
