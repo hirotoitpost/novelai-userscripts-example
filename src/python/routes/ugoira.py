@@ -290,6 +290,8 @@ class VideoRequest(BaseModel):
     seed: int | None = Field(None, ge=0, le=4294967295)
     # 作ったあと、コマのあいだに中割り(C)を足す枚数(16fps → 32fps。コマが多いので 1 まで)
     interpolate: int = Field(0, ge=0, le=1)
+    # 受け取ったコマを整える(明るさをそろえる・繰り返しの継ぎ目を閉じる・4コマごとのちらつきをならす。video_smooth.py)
+    smooth: bool = True
 
 
 @router.get("/video/status")
@@ -363,6 +365,11 @@ async def _run_video(job: _Job, req: VideoRequest, item: Any) -> None:
         if req.kind == "loop" and len(images) > 2:
             # 最後のコマは最初のコマと同じ絵(元の絵)。繰り返すと同じ絵が2回続いて止まって見えるので外す
             images = images[:-1]
+        if req.smooth:
+            from .. import video_smooth
+
+            job.message = "コマを整えています(明るさ・継ぎ目・ちらつき)"
+            images = await asyncio.to_thread(video_smooth.smooth, images, req.kind == "loop")
         label = "繰り返し" if req.kind == "loop" else "動画"
         project_id = ugoira.create_project(f"{req.motion[:24]}({label}・{item.label or item.key})", item.key, "video")
         job.project_id = project_id

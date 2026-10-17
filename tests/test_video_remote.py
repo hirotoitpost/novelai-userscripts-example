@@ -78,7 +78,7 @@ def test_workflows_use_known_placeholders(kind: str) -> None:
     classes = {node["class_type"] for node in workflow.values()}
     assert (
         "WanFirstLastFrameToVideo" if kind == "loop" else "WanImageToVideo"
-    ) in classes and "SaveImage" in classes
+    ) in classes and "SaveWEBM" in classes
 
 
 def _png(color: str, size: tuple[int, int]) -> bytes:
@@ -174,7 +174,9 @@ def _fake_comfy(
                     lossless=True,
                 )
                 return httpx.Response(200, content=buf.getvalue())
-            return httpx.Response(200, content=_png("blue", (64, 96)))
+            # コマごとに色を変える(同時に受け取っても、順番が保たれるか確かめる)
+            index = int(request.url.params["filename"][2:7])
+            return httpx.Response(200, content=_png(("red", "green", "blue")[index], (64, 96)))
         return httpx.Response(404)
 
     monkeypatch.setenv("VIDEO_GEN_BASE_URL", "https://comfy.example")
@@ -211,6 +213,7 @@ def test_generate_fills_workflow_and_returns_frames(
     )
     # 受け取ったコマは元の絵の大きさに戻す
     assert len(frames) == 3 and all(f.size == (832, 1216) for f in frames)
+    assert [f.getpixel((0, 0)) for f in frames] == [(255, 0, 0), (0, 128, 0), (0, 0, 255)]
     wan = next(
         n
         for n in seen["prompt"].values()
@@ -290,3 +293,22 @@ def test_waiting_gives_up_after_retries_and_on_auth_errors(
             )
         )
     assert not any("やり直しています" in m for m in messages)
+
+
+def test_video_output_is_split_into_frames(tmp_path) -> None:
+    import cv2
+    import numpy as np
+
+    # 動画の保存ノード(SaveWEBM など)の出力は、OpenCV で読んでコマに分ける
+    path = tmp_path / "v.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter.fourcc(*"mp4v"), 16, (64, 96))
+    for value in (0, 128, 255):
+        writer.write(np.full((96, 64, 3), value, np.uint8))
+    writer.release()
+    frames = video_remote._frames_from(path.read_bytes(), "nai_ugoira/x_00001_.mp4")
+    assert len(frames) == 3 and frames[0].size == (64, 96)
+    assert [round(float(np.asarray(f)[48, 32].mean()) / 64) for f in frames] == [0, 2, 4]
+    with pytest.raises(video_remote.VideoRemoteError):
+        video_remote._frames_from(b"not a video", "x.webm")
+    history = {"outputs": {"14": {"videos": [{"filename": "x.webm", "subfolder": "", "type": "output"}]}}}
+    assert [f["filename"] for f in video_remote._output_files(history)] == ["x.webm"]

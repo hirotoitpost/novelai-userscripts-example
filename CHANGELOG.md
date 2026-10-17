@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   「自由に動かす」、長さ 2・3・5 秒(16fps)、中割りで 32fps。作ったうごイラは、中割り・書き出し・漫画への嵌め込みがそのまま
   使える。Colab のノートブック `notebooks/comfyui_wan_colab.ipynb`、GCP の Spot VM の起動スクリプト `scripts/gcp/comfyui_setup.sh`
   (使っていない時間が続くと VM を止める)、ワークフロー `assets/comfyui/`。API は `POST /api/ugoira/video`、
-  `GET /api/ugoira/video/status`。手順と費用は `docs/video_remote_jp.md`
+  `GET /api/ugoira/video/status`。手順と費用は `docs/video_remote_jp.md`。受け取ったコマは、この PC で整える(明るさを最初のコマに
+  そろえる・繰り返しの継ぎ目を中割りで閉じる・4コマごとのちらつきを動きに合わせてならす。`video_smooth.py`)。ComfyUI からは VP9 の WebM で
+  受け取る(PNG 33枚の 19MB が約 0.6MB になり、受け取りが約 3 分 → 8 秒)。Colab の L4 で試した記録は `docs/trials/2026-10-17_ugoira-video.md`
 - **うごイラ: 部位ごとに動かす(E)** — 人物・髪・頭を分け(人物の切り分け、点で指す切り出し MobileSAM)、骨格(RTMPose)から
   首の位置を取り、髪はばねでつないだ鎖で風や頭の動きに遅れて揺らし、頭は首を中心に回す。動いて見えるようになった裏は
   LaMa で埋める。髪の表現は アニメ調(束ごと・2コマずつ止める)と リアル寄り(細かい毛筋・毎コマ・少しぶれる)。構図

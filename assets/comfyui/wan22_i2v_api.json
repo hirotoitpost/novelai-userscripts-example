@@ -1,5 +1,5 @@
 {
-  "_comment": "Wan 2.2 14B 画像から動画(最初の絵から)。ComfyUI の API 形式。{{image}} {{prompt}} {{negative}} {{seed}} {{width}} {{height}} {{length}} {{prefix}} は video_remote.py が値にする。モデルは Comfy-Org/Wan_2.2_ComfyUI_Repackaged(docs/video_remote_jp.md)。",
+  "_comment": "Wan 2.2 14B 画像から動画(最初の絵から)。ComfyUI の API 形式。{{image}} {{prompt}} {{negative}} {{seed}} {{width}} {{height}} {{length}} {{prefix}} は video_remote.py が値にする。モデルは Comfy-Org/Wan_2.2_ComfyUI_Repackaged(docs/video_remote_jp.md)。出力は VP9 の WebM 1つ(PNG 33枚の 19MB が約 0.6MB になる。トンネルが 約110KB/s しか出なかったため。docs/trials/2026-10-17_ugoira-video.md)。",
   "1": {
     "class_type": "UNETLoader",
     "inputs": {
@@ -173,9 +173,12 @@
     }
   },
   "14": {
-    "class_type": "SaveImage",
+    "class_type": "SaveWEBM",
     "inputs": {
       "filename_prefix": "{{prefix}}",
+      "codec": "vp9",
+      "fps": 16.0,
+      "crf": 18.0,
       "images": [
         "13",
         0

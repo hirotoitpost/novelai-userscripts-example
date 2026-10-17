@@ -368,7 +368,7 @@ def test_video_in_betweens_wrap_only_when_looping(
 
     monkeypatch.setattr(video_remote, "generate", fake_generate)
     job = _wait(test_client, test_client.post(
-        "/api/ugoira/video", json={"key": key, "motion": "she blinks", "seconds": 2, "kind": kind, "interpolate": 1},
+        "/api/ugoira/video", json={"key": key, "motion": "she blinks", "seconds": 2, "kind": kind, "interpolate": 1, "smooth": False},
     ).json()["id"])
     assert job["status"] == "done", job
     # 進み具合は総数まで届く(loop は最後のコマを外した数で数える)

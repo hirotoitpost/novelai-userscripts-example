@@ -9,12 +9,13 @@ scripts/comfy_auth_proxy.py を前に置き、VIDEO_GEN_TOKEN を Bearer で送�
   1. POST /upload/image   元の絵を送る(ComfyUI の input フォルダに入る)
   2. POST /prompt         ワークフロー(API 形式の JSON)を送る。{{image}} などの置き換え用の文字を、送る前に値にする
   3. GET  /history/{id}   終わるまで待つ(数分かかる)
-  4. GET  /view           出てきた絵(1コマずつの PNG か、アニメ WebP・GIF)を受け取り、コマに分ける
+  4. GET  /view           出てきた動画(WebM・MP4)か絵(1コマずつの PNG、アニメ WebP・GIF)を受け取り、コマに分ける
 
 ワークフローは assets/comfyui/ に置く(Wan 2.2 の画像から動画・最初と最後を同じ絵にして繰り返す)。ComfyUI の画面で
 「Export (API)」した JSON の値を {{prompt}} などに書き換えれば、別のモデル・別の作り方にも差し替えられる。
 
-通信量: 送るのは元の絵1枚(GCP・Colab への受信は無料)、受け取るのはコマ(832×480 の PNG 49枚で約30MB)。
+通信量: 送るのは元の絵1枚(GCP・Colab への受信は無料)、受け取るのは動画1つ。既定のワークフローは VP9 の WebM で出す
+(512×752・33コマで約 0.6MB。PNG だと 19MB で、Colab の cloudflared のトンネルが 約110KB/s しか出ず 3分かかった)。
 """
 
 from __future__ import annotations
@@ -49,6 +50,9 @@ POLL = 3.0
 # 待っているあいだの問い合わせ・コマの受け取りで、一時的な失敗をやり直す回数と、間隔の単位(秒。回ごとに伸ばし、30 秒まで)
 RETRIES = 8
 RETRY_WAIT = 5.0
+# コマを同時に受け取る数(1枚ずつ PNG を出すワークフローのとき)
+DOWNLOADS = 6
+_VIDEO_SUFFIXES = {".webm", ".mp4", ".mkv", ".mov"}
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 DEFAULT_NEGATIVE = (
     "flicker, jitter, static, frozen, blurry, distorted, deformed, bad anatomy, extra fingers, fused fingers, "
@@ -225,19 +229,48 @@ async def status() -> dict[str, Any]:
     }
 
 
-def _frames_from(data: bytes) -> list[Image.Image]:
-    """受け取った絵をコマに分ける(PNG は1枚、アニメ WebP・GIF はコマごと)。"""
+def _frames_from(data: bytes, filename: str = "") -> list[Image.Image]:
+    """受け取った絵をコマに分ける(PNG は1枚、アニメ WebP・GIF はコマごと、動画 WebM・MP4 は OpenCV で読む)。"""
+    if Path(filename).suffix.lower() in _VIDEO_SUFFIXES:
+        return _video_frames(data, Path(filename).suffix)
     with Image.open(io.BytesIO(data)) as opened:
         return [frame.convert("RGB") for frame in ImageSequence.Iterator(opened)]
 
 
+def _video_frames(data: bytes, suffix: str) -> list[Image.Image]:
+    import tempfile
+
+    import cv2
+
+    # OpenCV の動画の読み込みは、ファイルからしか読めない
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / f"video{suffix}"
+        path.write_bytes(data)
+        capture = cv2.VideoCapture(str(path))
+        frames: list[Image.Image] = []
+        try:
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+        finally:
+            capture.release()
+    if not frames:
+        raise VideoRemoteError("受け取った動画を読めませんでした。")
+    return frames
+
+
 def _output_files(history: dict[str, Any]) -> list[dict[str, Any]]:
-    """履歴の出力から、受け取る絵を出す順に並べる(ノードの番号順。SaveImage は images、動画の保存ノードは gifs)。"""
+    """
+    履歴の出力から、受け取る絵を出す順に並べる(ノードの番号順。SaveImage・SaveWEBM は images、ほかの動画の保存ノードは
+    gifs・videos)。
+    """
     files: list[dict[str, Any]] = []
     outputs = history.get("outputs") or {}
     for node_id in sorted(outputs, key=lambda k: (len(k), k)):
         node = outputs[node_id] or {}
-        for key in ("images", "gifs"):
+        for key in ("images", "gifs", "videos"):
             for item in node.get(key) or []:
                 if item.get("type", "output") == "output" and item.get("filename"):
                     files.append(item)
@@ -357,20 +390,29 @@ async def generate(
             raise VideoRemoteError(
                 "ComfyUI から絵が出てきませんでした(ワークフローに SaveImage などの保存ノードがあるか確かめてください)。"
             )
-        frames: list[Image.Image] = []
-        for index, item in enumerate(files):
-            await report(f"コマを受け取っています({index + 1}/{len(files)})")
+        # トンネル越しに1枚ずつ順に取ると、1枚 約5秒かかった(L4・Colab、33枚で3分。実機で確認)。何枚かずつ同時に取る
+        received = 0
+        limit = asyncio.Semaphore(DOWNLOADS)
+
+        async def fetch(item: dict[str, Any]) -> list[Image.Image]:
+            nonlocal received
             params = {
                 "filename": item["filename"],
                 "subfolder": item.get("subfolder", ""),
                 "type": "output",
             }
-            response = await _get_retrying(
-                client, "/view", "コマを受け取る", report, params=params
-            )
+            async with limit:
+                response = await _get_retrying(
+                    client, "/view", "コマを受け取る", report, params=params
+                )
             if response.status_code >= 400:
                 raise VideoRemoteError(f"コマを受け取る: HTTP {response.status_code}")
-            frames.extend(_frames_from(response.content))
+            received += 1
+            await report(f"コマを受け取っています({received}/{len(files)})")
+            return _frames_from(response.content, item["filename"])
+
+        await report(f"コマを受け取っています(0/{len(files)})")
+        frames = [f for got in await asyncio.gather(*(fetch(i) for i in files)) for f in got]
     # 元の絵の大きさに戻す(漫画のコマへの嵌め込み・ほかのうごイラと大きさをそろえる)
     return [
         f.resize(source.size, Image.Resampling.LANCZOS) if f.size != source.size else f
