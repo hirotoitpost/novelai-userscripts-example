@@ -88,9 +88,15 @@ def _png(color: str, size: tuple[int, int]) -> bytes:
 
 
 def _fake_comfy(
-    monkeypatch: pytest.MonkeyPatch, *, fail: bool = False, animated: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail: bool = False,
+    animated: bool = False,
+    flaky: list | None = None,
 ) -> dict:
+    """flaky: 進み具合の問い合わせで、はじめに返す一時的な失敗(httpx.Response か、送出する例外)を順に。"""
     seen: dict = {"history_calls": 0, "auth": []}
+    flaky = list(flaky or [])
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["auth"].append(request.headers.get("Authorization"))
@@ -106,6 +112,11 @@ def _fake_comfy(
                 200, json={"prompt_id": "p1", "number": 1, "node_errors": {}}
             )
         if path == "/history/p1":
+            if flaky:
+                failure = flaky.pop(0)
+                if isinstance(failure, Exception):
+                    raise failure
+                return failure
             seen["history_calls"] += 1
             if seen["history_calls"] == 1:
                 return httpx.Response(200, json={})
@@ -169,6 +180,7 @@ def _fake_comfy(
     monkeypatch.setenv("VIDEO_GEN_BASE_URL", "https://comfy.example")
     monkeypatch.setenv("VIDEO_GEN_TOKEN", "secret-token-1234567")
     monkeypatch.setattr(video_remote, "POLL", 0.0)
+    monkeypatch.setattr(video_remote, "RETRY_WAIT", 0.0)
     monkeypatch.setattr(
         video_remote,
         "_client",
@@ -238,3 +250,43 @@ def test_status_without_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     assert asyncio.run(video_remote.status())["configured"] is False
     with pytest.raises(video_remote.VideoRemoteError, match="VIDEO_GEN_BASE_URL"):
         asyncio.run(video_remote.generate(Image.new("RGB", (64, 96)), "x", seconds=2))
+
+
+def test_waiting_survives_brief_tunnel_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # cloudflared が一時的に 502 を返す・接続が切れる。GPU 側では作り続けているので、やり直して受け取る
+    _fake_comfy(
+        monkeypatch,
+        flaky=[
+            httpx.Response(502, text="Bad gateway"),
+            httpx.ConnectError("reset"),
+            httpx.Response(530),
+        ],
+    )
+    messages: list[str] = []
+    frames = asyncio.run(
+        video_remote.generate(
+            Image.new("RGB", (64, 96)), "x", seconds=2, on_progress=messages.append
+        )
+    )
+    assert len(frames) == 3
+    assert sum("やり直しています" in m for m in messages) == 3
+
+
+def test_waiting_gives_up_after_retries_and_on_auth_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_comfy(monkeypatch, flaky=[httpx.Response(502)] * (video_remote.RETRIES + 1))
+    with pytest.raises(video_remote.VideoRemoteError, match="HTTP 502"):
+        asyncio.run(video_remote.generate(Image.new("RGB", (64, 96)), "x", seconds=2))
+    # 合言葉の誤りは、やり直しても変わらないのですぐ止める
+    _fake_comfy(monkeypatch, flaky=[httpx.Response(401)])
+    messages: list[str] = []
+    with pytest.raises(video_remote.VideoRemoteError, match="VIDEO_GEN_TOKEN"):
+        asyncio.run(
+            video_remote.generate(
+                Image.new("RGB", (64, 96)), "x", seconds=2, on_progress=messages.append
+            )
+        )
+    assert not any("やり直しています" in m for m in messages)

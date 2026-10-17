@@ -314,12 +314,21 @@ async def start_video(req: VideoRequest) -> dict[str, Any]:
     item = next((i for i in _gallery_images() if i.key == req.key), None)
     if item is None:
         raise HTTPException(status_code=404, detail="画像が見つかりません。")
-    count = video_remote.frame_count(req.seconds)
     job_id = uuid4().hex
-    job = _Job(total=count * (1 + req.interpolate))
+    job = _Job(total=_video_total(video_remote.frame_count(req.seconds), req))
     _jobs[job_id] = job
     job.task = asyncio.create_task(_run_video(job, req, item))
     return _job_response(job_id, job)
+
+
+def _video_total(received: int, req: VideoRequest) -> int:
+    """
+    進み具合の総数: 保存するコマ(loop は最後のコマを外す)と、足す中割り(loop は最後から最初へも足すので、コマの数と同じ
+    あいだ。i2v は戻らないので1つ少ない)。
+    """
+    frames = received - 1 if req.kind == "loop" and received > 2 else received
+    gaps = frames if req.kind == "loop" else frames - 1
+    return frames + req.interpolate * max(0, gaps)
 
 
 async def _run_video(job: _Job, req: VideoRequest, item: Any) -> None:
@@ -349,6 +358,8 @@ async def _run_video(job: _Job, req: VideoRequest, item: Any) -> None:
             source, prompt, kind=req.kind, seconds=req.seconds, seed=int(seed),
             negative=app_settings.get("video.negative"), on_progress=report,
         )
+        # 受け取ったコマの数(ワークフローを差し替えると、頼んだ数と違うことがある)で総数を合わせ直す
+        job.total = _video_total(len(images), req)
         if req.kind == "loop" and len(images) > 2:
             # 最後のコマは最初のコマと同じ絵(元の絵)。繰り返すと同じ絵が2回続いて止まって見えるので外す
             images = images[:-1]
@@ -364,7 +375,8 @@ async def _run_video(job: _Job, req: VideoRequest, item: Any) -> None:
         ugoira._store_frames(project_id, frames)
         count = len(frames)
         if req.interpolate and count >= 2:
-            frames = await _add_between(job, project_id, frames, images, req.interpolate, True)
+            # 最後から最初へのあいだは、繰り返す(loop)ときだけ補う。自由に動かす(i2v)は戻らないので、混ざった絵ができる
+            frames = await _add_between(job, project_id, frames, images, req.interpolate, req.kind == "loop")
             ugoira._store_frames(project_id, frames)
         job.message = f"できました({count}コマ)" if len(frames) == count else f"できました({count}コマ + 中割り → {len(frames)}コマ)"
         job.status = "done"

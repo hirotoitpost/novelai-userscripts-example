@@ -46,6 +46,9 @@ _MULTIPLE = 16
 # 待つ時間の上限(L4 で 5 秒・480p は 10〜20 分ほど)と、確かめる間隔
 TIMEOUT = 45 * 60
 POLL = 3.0
+# 待っているあいだの問い合わせ・コマの受け取りで、一時的な失敗をやり直す回数と、間隔の単位(秒。回ごとに伸ばし、30 秒まで)
+RETRIES = 8
+RETRY_WAIT = 5.0
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 DEFAULT_NEGATIVE = (
     "flicker, jitter, static, frozen, blurry, distorted, deformed, bad anatomy, extra fingers, fused fingers, "
@@ -143,6 +146,40 @@ def _client() -> httpx.AsyncClient:
         timeout=httpx.Timeout(120, connect=15),
         follow_redirects=True,
     )
+
+
+def _transient(response: httpx.Response) -> bool:
+    """トンネル(cloudflared など)や中継が一時的に返すエラー。GPU 側では作り続けているので、待ってからやり直す。"""
+    return response.status_code in (408, 429) or 500 <= response.status_code < 600
+
+
+async def _get_retrying(
+    client: httpx.AsyncClient,
+    path: str,
+    what: str,
+    report: Callable[[str], Awaitable[None]],
+    **kwargs: Any,
+) -> httpx.Response:
+    """
+    GET する。接続切れ・タイムアウト・5xx は、RETRIES 回まで間を空けてやり直す(合言葉の誤り 401・403 などは、
+    やり直しても変わらないのですぐ返す)。待っているあいだに1回失敗しただけで、作りかけの動画を捨てないように。
+    """
+    for attempt in range(RETRIES + 1):
+        try:
+            response = await client.get(path, **kwargs)
+        except httpx.TransportError as exc:
+            if attempt == RETRIES:
+                raise VideoRemoteError(
+                    f"{what}: つながらなくなりました({exc})。"
+                ) from exc
+        else:
+            if not _transient(response) or attempt == RETRIES:
+                return response
+        await report(
+            f"接続が途切れました。待ってからやり直しています({attempt + 1}/{RETRIES})"
+        )
+        await asyncio.sleep(min(RETRY_WAIT * (attempt + 1), 30.0))
+    raise AssertionError("ここには来ない")
 
 
 def _check(response: httpx.Response, what: str) -> Any:
@@ -290,7 +327,13 @@ async def generate(
             )
             await asyncio.sleep(POLL)
             entry = (
-                _check(await client.get(f"/history/{prompt_id}"), "進み具合") or {}
+                _check(
+                    await _get_retrying(
+                        client, f"/history/{prompt_id}", "進み具合", report
+                    ),
+                    "進み具合",
+                )
+                or {}
             ).get(prompt_id)
             if not entry:
                 continue
@@ -322,7 +365,9 @@ async def generate(
                 "subfolder": item.get("subfolder", ""),
                 "type": "output",
             }
-            response = await client.get("/view", params=params)
+            response = await _get_retrying(
+                client, "/view", "コマを受け取る", report, params=params
+            )
             if response.status_code >= 400:
                 raise VideoRemoteError(f"コマを受け取る: HTTP {response.status_code}")
             frames.extend(_frames_from(response.content))

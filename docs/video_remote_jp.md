@@ -60,6 +60,10 @@ VIDEO_GEN_TOKEN=…                                         # 合言葉(GPU の�
 
 Colab の URL は起動のたびに変わるので、そのたびに `.env` を書き換えます。
 
+**Colab の利用規約を確かめてください。** Colab は、ノートブックを外からの通信を受けるサーバーとして使う形(トンネルで外へ出す
+など)に制限を設けていることがあります(特に無料枠)。Pro で使う場合も、使う前に今の規約・FAQ を読んでください。気になる
+ときは GCP(B)を使います。
+
 ## B. GCP の Spot VM で動かす(たくさん作るとき)
 
 使うときだけ VM を起動し、`idle-minutes` の分数(既定 30)頼まれなかったら VM が自分で止まります。
@@ -88,6 +92,12 @@ gcloud compute instances create comfy-wan \
 - 次に使うときは `gcloud compute instances start comfy-wan --zone=asia-northeast1-a`
 - GPU のクォータは初めは 0 です。「IAM と管理 → 割り当て」で、使うリージョンの GPU を申請します
 - URL を固定したいときは、メタデータに `tunnel=none` を入れ、Tailscale などで VM の 8189 番につなぎます(合言葉は要ります)
+- 版を固定するときは、メタデータに `comfy-ref`(ComfyUI のタグ。例 `v0.3.60`)・`cloudflared-version` を入れます。ComfyUI の版が
+  変わると、ワークフローのノードの入力名が合わなくなることがあるので、**動いた版を書いておく** のがおすすめです(シリアルポートの
+  出力に、入れた版が出ます)。入れ直すのは初回の起動だけなので、版を変えるときは VM を作り直します
+- 自動停止は、画像を送る・動画を頼む・進み具合を聞くなどの問い合わせを「使った」と数えます。画面の「確かめ直す」
+  (`/system_stats`)は数えません
+- 合言葉は VM の中の root だけが読めるファイル(`/opt/comfy/proxy.env`)に置き、systemd の `EnvironmentFile` で渡します
 
 ## 費用の目安
 

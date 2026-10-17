@@ -348,3 +348,32 @@ def test_video_makes_frames_from_the_remote_model(client, tmp_path: Path, monkey
     # 動きの文を先に、元の絵のプロンプトをあとに。シードは元の絵のもの
     assert asked["prompt"] == "she blinks. 1girl, yellow eyes, smile" and asked["seed"] == 7 and asked["kind"] == "loop"
     assert Image.open(tmp_path / project["frames"][0]["path"]).size == ugoira.fit_size((400, 600))
+
+
+
+@pytest.mark.parametrize(("kind", "expected"), [("loop", 3 + 3), ("i2v", 4 + 3)])
+def test_video_in_betweens_wrap_only_when_looping(
+    client, monkeypatch: pytest.MonkeyPatch, kind: str, expected: int
+) -> None:
+    from python import frame_interpolation, video_remote
+
+    test_client, key, _ = client
+    monkeypatch.setenv("VIDEO_GEN_BASE_URL", "https://comfy.example")
+    monkeypatch.setattr(frame_interpolation, "between", lambda a, b, t: Image.blend(a, b.resize(a.size), t))
+    # 最後のコマを最初と違う絵にする(同じ絵だと、戻るところの中割りは「ほとんど同じ」で飛ばされ、違いが出ない)
+    colors = ("white", "gray", "black", "silver")
+
+    async def fake_generate(source, prompt, **kwargs):
+        return [Image.new("RGB", source.size, c) for c in colors]
+
+    monkeypatch.setattr(video_remote, "generate", fake_generate)
+    job = _wait(test_client, test_client.post(
+        "/api/ugoira/video", json={"key": key, "motion": "she blinks", "seconds": 2, "kind": kind, "interpolate": 1},
+    ).json()["id"])
+    assert job["status"] == "done", job
+    # 進み具合は総数まで届く(loop は最後のコマを外した数で数える)
+    assert job["progress"] == job["total"] == expected
+    frames = test_client.get(f"/api/ugoira/{job['project_id']}").json()["frames"]
+    assert len(frames) == expected
+    # i2v は最後から最初へ戻らないので、最後に中割りを足さない。loop は最後から最初へも足す
+    assert (frames[-1]["tags"] == "(中割り)") is (kind == "loop")

@@ -6,6 +6,9 @@ ComfyUI 自体には認証が無い。cloudflared のトンネルなどで外に
 VIDEO_GEN_TOKEN に同じトークンを書く。
 
 最後に通した時刻を --activity-file に書く(GCP で、使っていない時間が続いたら VM を止める scripts/gcp/idle_shutdown.sh が読む)。
+接続の確認(/system_stats)は数えない。
+
+合言葉は --token か、環境変数 COMFY_TOKEN で渡す(systemd では EnvironmentFile にして、ps に出ないようにする)。
 
   python comfy_auth_proxy.py --token <トークン> --listen 0.0.0.0:8189 --upstream http://127.0.0.1:8188
 
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import os
 import time
 from pathlib import Path
 
@@ -35,6 +39,9 @@ _HOP = {
     "content-length",
 }
 
+# 使ったうちに数えない問い合わせ
+_NOT_ACTIVITY = {"/system_stats"}
+
 
 def make_app(token: str, upstream: str, activity_file: Path | None) -> web.Application:
     expected = f"Bearer {token}".encode()
@@ -43,7 +50,8 @@ def make_app(token: str, upstream: str, activity_file: Path | None) -> web.Appli
         given = request.headers.get("Authorization", "").encode()
         if not hmac.compare_digest(given, expected):
             return web.json_response({"error": "unauthorized"}, status=401)
-        if activity_file is not None:
+        # 接続の確認(画面の「確かめ直す」)は、使ったうちに数えない(自動停止までの時間が延びないように)
+        if activity_file is not None and request.rel_url.path not in _NOT_ACTIVITY:
             activity_file.write_text(str(time.time()))
         headers = {
             k: v
@@ -84,9 +92,11 @@ def make_app(token: str, upstream: str, activity_file: Path | None) -> web.Appli
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument(
-        "--token", required=True, help="合言葉(アプリの VIDEO_GEN_TOKEN と同じもの)"
+        "--token",
+        default=os.environ.get("COMFY_TOKEN", ""),
+        help="合言葉(アプリの VIDEO_GEN_TOKEN と同じもの。無ければ環境変数 COMFY_TOKEN)",
     )
     parser.add_argument("--listen", default="127.0.0.1:8189")
     parser.add_argument("--upstream", default="http://127.0.0.1:8188")
