@@ -174,7 +174,9 @@ def _fake_comfy(
                     lossless=True,
                 )
                 return httpx.Response(200, content=buf.getvalue())
-            return httpx.Response(200, content=_png("blue", (64, 96)))
+            # コマごとに色を変える(同時に受け取っても、順番が保たれるか確かめる)
+            index = int(request.url.params["filename"][2:7])
+            return httpx.Response(200, content=_png(("red", "green", "blue")[index], (64, 96)))
         return httpx.Response(404)
 
     monkeypatch.setenv("VIDEO_GEN_BASE_URL", "https://comfy.example")
@@ -211,6 +213,7 @@ def test_generate_fills_workflow_and_returns_frames(
     )
     # 受け取ったコマは元の絵の大きさに戻す
     assert len(frames) == 3 and all(f.size == (832, 1216) for f in frames)
+    assert [f.getpixel((0, 0)) for f in frames] == [(255, 0, 0), (0, 128, 0), (0, 0, 255)]
     wan = next(
         n
         for n in seen["prompt"].values()

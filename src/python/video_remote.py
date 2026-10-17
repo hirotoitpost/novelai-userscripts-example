@@ -49,6 +49,8 @@ POLL = 3.0
 # 待っているあいだの問い合わせ・コマの受け取りで、一時的な失敗をやり直す回数と、間隔の単位(秒。回ごとに伸ばし、30 秒まで)
 RETRIES = 8
 RETRY_WAIT = 5.0
+# コマを同時に受け取る数
+DOWNLOADS = 6
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 DEFAULT_NEGATIVE = (
     "flicker, jitter, static, frozen, blurry, distorted, deformed, bad anatomy, extra fingers, fused fingers, "
@@ -357,20 +359,29 @@ async def generate(
             raise VideoRemoteError(
                 "ComfyUI から絵が出てきませんでした(ワークフローに SaveImage などの保存ノードがあるか確かめてください)。"
             )
-        frames: list[Image.Image] = []
-        for index, item in enumerate(files):
-            await report(f"コマを受け取っています({index + 1}/{len(files)})")
+        # トンネル越しに1枚ずつ順に取ると、1枚 約5秒かかった(L4・Colab、33枚で3分。実機で確認)。何枚かずつ同時に取る
+        received = 0
+        limit = asyncio.Semaphore(DOWNLOADS)
+
+        async def fetch(item: dict[str, Any]) -> list[Image.Image]:
+            nonlocal received
             params = {
                 "filename": item["filename"],
                 "subfolder": item.get("subfolder", ""),
                 "type": "output",
             }
-            response = await _get_retrying(
-                client, "/view", "コマを受け取る", report, params=params
-            )
+            async with limit:
+                response = await _get_retrying(
+                    client, "/view", "コマを受け取る", report, params=params
+                )
             if response.status_code >= 400:
                 raise VideoRemoteError(f"コマを受け取る: HTTP {response.status_code}")
-            frames.extend(_frames_from(response.content))
+            received += 1
+            await report(f"コマを受け取っています({received}/{len(files)})")
+            return _frames_from(response.content)
+
+        await report(f"コマを受け取っています(0/{len(files)})")
+        frames = [f for got in await asyncio.gather(*(fetch(i) for i in files)) for f in got]
     # 元の絵の大きさに戻す(漫画のコマへの嵌め込み・ほかのうごイラと大きさをそろえる)
     return [
         f.resize(source.size, Image.Resampling.LANCZOS) if f.size != source.size else f

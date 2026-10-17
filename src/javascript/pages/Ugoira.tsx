@@ -87,6 +87,7 @@ export default function Ugoira() {
   const [videoKind, setVideoKind] = useState<'loop' | 'i2v'>('loop')
   const [videoSeconds, setVideoSeconds] = useState(3)
   const [videoBetween, setVideoBetween] = useState(0)
+  const [videoSmooth, setVideoSmooth] = useState(true)
   const [editing, setEditing] = useState<Motion | null>(null)
   const [draft, setDraft] = useState({ name: '', region: 'eyes', lines: '' })
   const timer = useRef<number | null>(null)
@@ -190,7 +191,7 @@ export default function Ugoira() {
     try {
       const started = await call<Job>('/video', {
         method: 'POST',
-        body: JSON.stringify({ key: sourceKey, motion: videoMotion, kind: videoKind, seconds: videoSeconds, interpolate: videoBetween }),
+        body: JSON.stringify({ key: sourceKey, motion: videoMotion, kind: videoKind, seconds: videoSeconds, interpolate: videoBetween, smooth: videoSmooth }),
       })
       setJob(started)
       follow(started.id)
@@ -465,6 +466,10 @@ export default function Ugoira() {
                     <option value={0}>足さない(16fps)</option>
                     <option value={1}>あいだに1枚(32fps・この PC で)</option>
                   </select>
+                </label>
+                <label title="明るさを最初のコマにそろえ、繰り返しの継ぎ目を中割りで閉じ、4コマごとのちらつきをならします(この PC で)">
+                  <input type="checkbox" checked={videoSmooth} disabled={running} onChange={e => setVideoSmooth(e.target.checked)} />
+                  {' '}コマを整える(継ぎ目・ちらつき)
                 </label>
               </div>
               <button
