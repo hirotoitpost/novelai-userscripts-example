@@ -84,7 +84,9 @@ export default function Ugoira() {
   // F. 動画モデル(リモートの GPU の ComfyUI)
   const [videoStatus, setVideoStatus] = useState<VideoStatus | null>(null)
   const [videoMotion, setVideoMotion] = useState('she blinks slowly, her hair sways gently in the wind, subtle breathing')
-  const [videoKind, setVideoKind] = useState<'loop' | 'i2v'>('loop')
+  const [videoKind, setVideoKind] = useState<'loop' | 'i2v' | 'end'>('loop')
+  // 「最後の絵へ動かす」の最後の絵(作ったうごイラのコマ)
+  const [videoEnd, setVideoEnd] = useState<{ projectId: number; index: number; path: string } | null>(null)
   const [videoSeconds, setVideoSeconds] = useState(3)
   const [videoBetween, setVideoBetween] = useState(0)
   const [videoSmooth, setVideoSmooth] = useState(true)
@@ -191,7 +193,10 @@ export default function Ugoira() {
     try {
       const started = await call<Job>('/video', {
         method: 'POST',
-        body: JSON.stringify({ key: sourceKey, motion: videoMotion, kind: videoKind, seconds: videoSeconds, interpolate: videoBetween, smooth: videoSmooth }),
+        body: JSON.stringify({
+          key: sourceKey, motion: videoMotion, kind: videoKind, seconds: videoSeconds, interpolate: videoBetween, smooth: videoSmooth,
+          ...(videoKind === 'end' && videoEnd ? { end_project_id: videoEnd.projectId, end_index: videoEnd.index } : {}),
+        }),
       })
       setJob(started)
       follow(started.id)
@@ -456,6 +461,10 @@ export default function Ugoira() {
                   <input type="radio" name="ugo-video-kind" checked={videoKind === 'i2v'} disabled={running} onChange={() => setVideoKind('i2v')} />
                   {' '}自由に動かす(戻らない)
                 </label>
+                <label title="最後の絵は、作ったうごイラのコマの「動画の最後の絵に」で選びます(A で顔だけ描き直したコマなど)。最後が決まっていると、途中も元の絵柄のまま描かれます">
+                  <input type="radio" name="ugo-video-kind" checked={videoKind === 'end'} disabled={running || !videoEnd} onChange={() => setVideoKind('end')} />
+                  {' '}最後の絵へ動かす(絵柄が変わりにくい)
+                </label>
                 <label>長さ{' '}
                   <select value={videoSeconds} disabled={running} onChange={e => setVideoSeconds(Number(e.target.value))}>
                     {[2, 3, 5].map(n => <option key={n} value={n}>{n}秒({n * 16 + 1}コマ)</option>)}
@@ -472,10 +481,22 @@ export default function Ugoira() {
                   {' '}コマを整える(継ぎ目・ちらつき)
                 </label>
               </div>
+              {videoEnd ? (
+                <div className="ugo-row">
+                  <img className="ugo-end-thumb" src={fileUrl(videoEnd.path)} alt="最後の絵" />
+                  <span className="pub-meta">最後の絵: うごイラ #{videoEnd.projectId} の {videoEnd.index + 1} コマ目</span>
+                  <button type="button" disabled={running} onClick={() => { setVideoEnd(null); if (videoKind === 'end') setVideoKind('loop') }}>外す</button>
+                </div>
+              ) : (
+                <p className="pub-meta">
+                  「最後の絵へ動かす」は、作ったうごイラのコマの「動画の最後の絵に」で最後の絵を選ぶと使えます。たとえば A(部分だけ
+                  描き直す)の「笑顔に変わる」で顔だけ描き直したコマを選ぶと、元の絵柄のまま、その表情へ動きます。
+                </p>
+              )}
               <button
                 type="button"
                 className="ugo-primary"
-                disabled={running || !videoStatus?.reachable || !videoMotion.trim()}
+                disabled={running || !videoStatus?.reachable || !videoMotion.trim() || (videoKind === 'end' && !videoEnd)}
                 onClick={() => void startVideo()}
               >
                 {running ? '作っています…' : '動画モデルでうごイラを作る'}
@@ -503,6 +524,10 @@ export default function Ugoira() {
                       <button type="button" onClick={() => move(index, 1)} disabled={index === frames.length - 1} aria-label="後ろへ">↓</button>
                       <button type="button" onClick={() => setFrames(prev => [...prev.slice(0, index + 1), { ...frame }, ...prev.slice(index + 1)])}
                         title="同じコマを、すぐ後ろにもう1枚入れます">複製</button>
+                      {/* 並びを保存する前は、コマの番号がサーバーの並びとずれるので選べない */}
+                      <button type="button" disabled={!sourceKey || dirty}
+                        onClick={() => { setVideoEnd({ projectId: project.id, index, path: frame.path }); setVideoKind('end') }}
+                        title="動画モデル(F)の「最後の絵へ動かす」で、このコマを最後の絵にします">動画の最後の絵に</button>
                       <button type="button" disabled={frames.length <= 1} onClick={() => setFrames(prev => prev.filter((_, i) => i !== index))}>外す</button>
                     </div>
                   </div>

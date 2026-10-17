@@ -234,3 +234,10 @@
   width: 100%;
   box-sizing: border-box;
 }
+
+/* F. 最後の絵へ動かす: 選んだ最後の絵の小さな見本 */
+.ugo-end-thumb {
+  width: 64px;
+  height: auto;
+  border-radius: 4px;
+}

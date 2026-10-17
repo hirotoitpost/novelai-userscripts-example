@@ -377,3 +377,33 @@ def test_video_in_betweens_wrap_only_when_looping(
     assert len(frames) == expected
     # i2v は最後から最初へ戻らないので、最後に中割りを足さない。loop は最後から最初へも足す
     assert (frames[-1]["tags"] == "(中割り)") is (kind == "loop")
+
+
+def test_video_moves_to_a_chosen_end_frame(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import video_remote
+
+    test_client, key, _ = client
+    monkeypatch.setenv("VIDEO_GEN_BASE_URL", "https://comfy.example")
+    # 最後の絵にするコマ(A で顔だけ描き直したコマのつもり)
+    chosen = ugoira.create_project("笑顔に変わる", key, "partial")
+    ugoira._store_frames(chosen, [
+        {"path": ugoira.save_frame(chosen, i, Image.new("RGB", (100, 150), c)), "delay": 100, "tags": ""} for i, c in enumerate(("white", "red"))
+    ])
+    asked: dict = {}
+
+    async def fake_generate(source, prompt, **kwargs):
+        asked.update(source=source, **kwargs)
+        return [Image.new("RGB", source.size, c) for c in ("white", "gray", "red")]
+
+    monkeypatch.setattr(video_remote, "generate", fake_generate)
+    body = {"key": key, "motion": "she smiles", "seconds": 2, "kind": "end", "smooth": False}
+    # 最後の絵を選んでいない・無いコマは、始めない
+    assert test_client.post("/api/ugoira/video", json=body).status_code == 422
+    assert test_client.post("/api/ugoira/video", json={**body, "end_project_id": chosen, "end_index": 5}).status_code == 404
+    job = _wait(test_client, test_client.post("/api/ugoira/video", json={**body, "end_project_id": chosen, "end_index": 1}).json()["id"])
+    assert job["status"] == "done", job
+    # 最後の絵は、元の絵と同じ大きさにして渡す
+    assert asked["kind"] == "end" and asked["end"].size == asked["source"].size and asked["end"].getpixel((0, 0)) == (255, 0, 0)
+    # 戻らないので、最後のコマも外さない
+    project = test_client.get(f"/api/ugoira/{job['project_id']}").json()
+    assert len(project["frames"]) == 3 and "最後の絵へ" in project["name"]
