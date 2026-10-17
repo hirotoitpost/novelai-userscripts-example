@@ -36,8 +36,10 @@ from PIL import Image, ImageSequence
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOW_DIR = _PROJECT_ROOT / "assets" / "comfyui"
-# 作り方ごとのワークフロー。loop は最初と最後を元の絵にして、うごイラとして繰り返しても継ぎ目が出ないようにする
-WORKFLOWS = {"i2v": "wan22_i2v_api.json", "loop": "wan22_loop_api.json"}
+# 作り方ごとのワークフロー。loop は最初と最後を元の絵にして、うごイラとして繰り返しても継ぎ目が出ないようにする。
+# end は最初を元の絵、最後を別の絵(NovelAI で描き直したコマなど)にする。最後が決まっていると、途中も元の絵柄のまま
+# 描かれる(自由に動かす i2v は、終わりに近づくほど線の陰影が減り、髪の色が変わった。docs/trials/2026-10-17_ugoira-video.md)
+WORKFLOWS = {"i2v": "wan22_i2v_api.json", "loop": "wan22_loop_api.json", "end": "wan22_end_api.json"}
 # Wan の動画は 16fps。コマ数は 4n+1(1秒 16コマ + 最初の1コマ)
 FPS = 16
 SECONDS = (2, 3, 5)
@@ -277,6 +279,24 @@ def _output_files(history: dict[str, Any]) -> list[dict[str, Any]]:
     return files
 
 
+async def _upload(client: httpx.AsyncClient, image: Image.Image, size: tuple[int, int], what: str) -> str:
+    """絵を動画の大きさにして ComfyUI の input フォルダへ送り、ワークフローの LoadImage に書く名前を返す。"""
+    buf = io.BytesIO()
+    image.convert("RGB").resize(size, Image.Resampling.LANCZOS).save(buf, "PNG")
+    name = f"nai_ugoira_{uuid4().hex[:12]}.png"
+    uploaded = _check(
+        await client.post(
+            "/upload/image",
+            files={"image": (name, buf.getvalue(), "image/png")},
+            data={"overwrite": "true"},
+        ),
+        what,
+    )
+    return "/".join(
+        p for p in ((uploaded or {}).get("subfolder"), (uploaded or {}).get("name", name)) if p
+    )
+
+
 async def generate(
     source: Image.Image,
     prompt: str,
@@ -285,13 +305,16 @@ async def generate(
     seconds: int = 3,
     seed: int = 1,
     negative: str | None = None,
+    end: Image.Image | None = None,
     on_progress: Callable[[str], Awaitable[None] | None] | None = None,
 ) -> list[Image.Image]:
-    """元の絵から動画を作らせて、コマ(元の絵の大きさに戻したもの)を返す。"""
+    """元の絵から動画を作らせて、コマ(元の絵の大きさに戻したもの)を返す。kind が end なら、end を最後の絵にする。"""
     if seconds not in SECONDS:
         raise VideoRemoteError(
             f"長さは {', '.join(map(str, SECONDS))} 秒から選んでください。"
         )
+    if (kind == "end") != (end is not None):
+        raise VideoRemoteError("最後の絵は、作り方が「最後の絵へ動かす」のときだけ渡します。")
 
     async def report(message: str) -> None:
         if on_progress is not None:
@@ -303,28 +326,8 @@ async def generate(
     workflow = load_workflow(kind)
     async with _client() as client:
         await report("リモートの GPU へ元の絵を送っています")
-        buf = io.BytesIO()
-        source.convert("RGB").resize((width, height), Image.Resampling.LANCZOS).save(
-            buf, "PNG"
-        )
-        name = f"nai_ugoira_{uuid4().hex[:12]}.png"
-        uploaded = _check(
-            await client.post(
-                "/upload/image",
-                files={"image": (name, buf.getvalue(), "image/png")},
-                data={"overwrite": "true"},
-            ),
-            "元の絵を送る",
-        )
-        image_name = "/".join(
-            p
-            for p in (
-                (uploaded or {}).get("subfolder"),
-                (uploaded or {}).get("name", name),
-            )
-            if p
-        )
-        values = {
+        image_name = await _upload(client, source, (width, height), "元の絵を送る")
+        values: dict[str, Any] = {
             "image": image_name,
             "prompt": prompt,
             "negative": negative or DEFAULT_NEGATIVE,
@@ -334,6 +337,8 @@ async def generate(
             "length": frame_count(seconds),
             "prefix": f"nai_ugoira/{uuid4().hex[:8]}",
         }
+        if end is not None:
+            values["end_image"] = await _upload(client, end, (width, height), "最後の絵を送る")
         queued = _check(
             await client.post(
                 "/prompt",

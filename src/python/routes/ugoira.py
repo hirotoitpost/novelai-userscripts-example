@@ -15,6 +15,7 @@
   POST   /{id}/rig/redo           E の半自動: いまの髪の範囲で、コマを作り直す
   GET    /video/status            F の接続先(リモートの GPU の ComfyUI)につながるか
   POST   /video                   F. 動画モデル(Wan 2.2)で動かす。リモートの GPU(Colab・GCP)の ComfyUI に作らせる
+                                    (繰り返す・自由に動かす・最後の絵へ動かす)
   GET    /jobs/{id}               進み具合
   GET    /                        作ったうごイラの一覧
   GET    /{id}                    1つ
@@ -31,6 +32,7 @@ import base64
 import io
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 from uuid import uuid4
@@ -284,8 +286,12 @@ class VideoRequest(BaseModel):
     key: str = Field(min_length=1, description="ギャラリーの画像のキー")
     # 動きの説明(英語の自然な文が効く。例: she blinks slowly and her hair sways in the wind)。元の絵のプロンプトをあとに足す
     motion: str = Field(min_length=1, max_length=500)
-    # loop: 最初と最後を元の絵にして、繰り返しても継ぎ目が出ないようにする。i2v: 元の絵から始めて、自由に動かす
-    kind: Literal["loop", "i2v"] = "loop"
+    # loop: 最初と最後を元の絵にして、繰り返しても継ぎ目が出ないようにする。i2v: 元の絵から始めて、自由に動かす。
+    # end: 元の絵から、最後の絵(作ったうごイラのコマ。A で顔だけ描き直したコマなど)へ動かす(途中も元の絵柄のまま描かれる)
+    kind: Literal["loop", "i2v", "end"] = "loop"
+    # end のときの最後の絵: うごイラの番号と、何コマ目か(0 から)
+    end_project_id: int | None = None
+    end_index: int | None = Field(None, ge=0)
     seconds: Literal[2, 3, 5] = 3
     seed: int | None = Field(None, ge=0, le=4294967295)
     # 作ったあと、コマのあいだに中割り(C)を足す枚数(16fps → 32fps。コマが多いので 1 まで)
@@ -316,11 +322,26 @@ async def start_video(req: VideoRequest) -> dict[str, Any]:
     item = next((i for i in _gallery_images() if i.key == req.key), None)
     if item is None:
         raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    if req.kind == "end":
+        _end_frame_path(req)
     job_id = uuid4().hex
     job = _Job(total=_video_total(video_remote.frame_count(req.seconds), req))
     _jobs[job_id] = job
     job.task = asyncio.create_task(_run_video(job, req, item))
     return _job_response(job_id, job)
+
+
+def _end_frame_path(req: VideoRequest) -> Path:
+    """「最後の絵へ動かす」の最後の絵(うごイラのコマ)のファイル。"""
+    if req.end_project_id is None or req.end_index is None:
+        raise HTTPException(status_code=422, detail="最後の絵を選んでください(うごイラのコマの「動画の最後の絵に」)。")
+    project = ugoira.get_project(req.end_project_id)
+    if project is None or req.end_index >= len(project["frames"]):
+        raise HTTPException(status_code=404, detail="最後の絵にするコマが見つかりません。")
+    path = ugoira._PROJECT_ROOT / project["frames"][req.end_index]["path"]
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="最後の絵にするコマのファイルが見つかりません。")
+    return path
 
 
 def _video_total(received: int, req: VideoRequest) -> int:
@@ -353,12 +374,20 @@ async def _run_video(job: _Job, req: VideoRequest, item: Any) -> None:
         await asyncio.to_thread(_guard_image, data, item.prompt, original, item.key)
         size = ugoira.fit_size(original.size)
         source = original.resize(size, Image.Resampling.LANCZOS) if size != original.size else original
+        end = None
+        if req.kind == "end":
+            end_data = _end_frame_path(req).read_bytes()
+            with Image.open(io.BytesIO(end_data)) as opened:
+                end = opened.convert("RGB")
+            # 最後の絵も外のマシンへ送るので、同じ判定を通す(元の絵のプロンプトで)
+            await asyncio.to_thread(_guard_image, end_data, item.prompt, end, item.key)
+            end = end.resize(source.size, Image.Resampling.LANCZOS) if end.size != source.size else end
         settings = generation_settings(data) or {}
         prompt = video_remote.video_prompt(req.motion, settings.get("prompt") or item.prompt or "")
         seed = next((s for s in (req.seed, settings.get("seed"), item.seed) if s is not None), 1)
         images = await video_remote.generate(
             source, prompt, kind=req.kind, seconds=req.seconds, seed=int(seed),
-            negative=app_settings.get("video.negative"), on_progress=report,
+            negative=app_settings.get("video.negative"), end=end, on_progress=report,
         )
         # 受け取ったコマの数(ワークフローを差し替えると、頼んだ数と違うことがある)で総数を合わせ直す
         job.total = _video_total(len(images), req)
@@ -370,7 +399,7 @@ async def _run_video(job: _Job, req: VideoRequest, item: Any) -> None:
 
             job.message = "コマを整えています(明るさ・継ぎ目・ちらつき)"
             images = await asyncio.to_thread(video_smooth.smooth, images, req.kind == "loop")
-        label = "繰り返し" if req.kind == "loop" else "動画"
+        label = {"loop": "繰り返し", "end": "最後の絵へ"}.get(req.kind, "動画")
         project_id = ugoira.create_project(f"{req.motion[:24]}({label}・{item.label or item.key})", item.key, "video")
         job.project_id = project_id
         delay = round(1000 / video_remote.FPS)

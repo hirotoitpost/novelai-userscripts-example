@@ -65,7 +65,8 @@ def test_workflows_use_known_placeholders(kind: str) -> None:
     workflow = video_remote.load_workflow(kind)
     assert "_comment" not in workflow
     used = set(re.findall(r"\{\{(\w+)\}\}", json.dumps(workflow)))
-    assert used == PLACEHOLDERS
+    # end は最後の絵も受け取る
+    assert used == PLACEHOLDERS | ({"end_image"} if kind == "end" else set())
     # 入力のつながりの先(["ノード", 出力])はすべてある
     for node in workflow.values():
         for value in node["inputs"].values():
@@ -77,7 +78,7 @@ def test_workflows_use_known_placeholders(kind: str) -> None:
                 assert value[0] in workflow
     classes = {node["class_type"] for node in workflow.values()}
     assert (
-        "WanFirstLastFrameToVideo" if kind == "loop" else "WanImageToVideo"
+        "WanImageToVideo" if kind == "i2v" else "WanFirstLastFrameToVideo"
     ) in classes and "SaveWEBM" in classes
 
 
@@ -103,6 +104,7 @@ def _fake_comfy(
         path = request.url.path
         if path == "/upload/image":
             assert b"nai_ugoira_" in request.content
+            seen["uploads"] = seen.get("uploads", 0) + 1
             return httpx.Response(
                 200, json={"name": "nai_ugoira_x.png", "subfolder": "", "type": "input"}
             )
@@ -312,3 +314,22 @@ def test_video_output_is_split_into_frames(tmp_path) -> None:
         video_remote._frames_from(b"not a video", "x.webm")
     history = {"outputs": {"14": {"videos": [{"filename": "x.webm", "subfolder": "", "type": "output"}]}}}
     assert [f["filename"] for f in video_remote._output_files(history)] == ["x.webm"]
+
+
+def test_generate_sends_the_end_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_comfy(monkeypatch)
+    source = Image.new("RGB", (832, 1216), "white")
+    frames = asyncio.run(
+        video_remote.generate(source, "she smiles", kind="end", seconds=2, end=Image.new("RGB", (832, 1216), "gray"))
+    )
+    assert len(frames) == 3 and seen["uploads"] == 2
+    wan = next(n for n in seen["prompt"].values() if n["class_type"] == "WanFirstLastFrameToVideo")["inputs"]
+    # 最初と最後は、別々の LoadImage から
+    assert wan["start_image"] != wan["end_image"]
+    loads = [n["inputs"]["image"] for n in seen["prompt"].values() if n["class_type"] == "LoadImage"]
+    assert loads == ["nai_ugoira_x.png", "nai_ugoira_x.png"]
+    # 最後の絵は end のときだけ
+    with pytest.raises(video_remote.VideoRemoteError):
+        asyncio.run(video_remote.generate(source, "x", kind="end", seconds=2))
+    with pytest.raises(video_remote.VideoRemoteError):
+        asyncio.run(video_remote.generate(source, "x", kind="loop", seconds=2, end=source))
