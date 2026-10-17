@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **うごイラ: 動画モデルで動かす(F)** — 元の絵から、動画モデル Wan 2.2(14B、画像から動画)で動画を作り、コマにする。
+  動画モデルは Colab・GCP の GPU で動かす ComfyUI に作らせる(接続先は `.env` の `VIDEO_GEN_BASE_URL`。合言葉を確かめる中継
+  `scripts/comfy_auth_proxy.py` を前に置き、`VIDEO_GEN_TOKEN` を Bearer で送る)。「繰り返す」(最初と最後を元の絵にする)と
+  「自由に動かす」、長さ 2・3・5 秒(16fps)、中割りで 32fps。作ったうごイラは、中割り・書き出し・漫画への嵌め込みがそのまま
+  使える。Colab のノートブック `notebooks/comfyui_wan_colab.ipynb`、GCP の Spot VM の起動スクリプト `scripts/gcp/comfyui_setup.sh`
+  (使っていない時間が続くと VM を止める)、ワークフロー `assets/comfyui/`。API は `POST /api/ugoira/video`、
+  `GET /api/ugoira/video/status`。手順と費用は `docs/video_remote_jp.md`
 - **うごイラ: 部位ごとに動かす(E)** — 人物・髪・頭を分け(人物の切り分け、点で指す切り出し MobileSAM)、骨格(RTMPose)から
   首の位置を取り、髪はばねでつないだ鎖で風や頭の動きに遅れて揺らし、頭は首を中心に回す。動いて見えるようになった裏は
   LaMa で埋める。髪の表現は アニメ調(束ごと・2コマずつ止める)と リアル寄り(細かい毛筋・毎コマ・少しぶれる)。構図

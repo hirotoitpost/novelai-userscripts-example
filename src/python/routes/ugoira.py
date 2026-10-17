@@ -13,6 +13,8 @@
   POST   /{id}/rig/edit           E の半自動: タップした所のまわりを拡大して切り出し、髪の範囲に足す・引く
   POST   /{id}/rig/undo|reset     E の半自動: 一つ前に戻す・自動の範囲に戻す
   POST   /{id}/rig/redo           E の半自動: いまの髪の範囲で、コマを作り直す
+  GET    /video/status            F の接続先(リモートの GPU の ComfyUI)につながるか
+  POST   /video                   F. 動画モデル(Wan 2.2)で動かす。リモートの GPU(Colab・GCP)の ComfyUI に作らせる
   GET    /jobs/{id}               進み具合
   GET    /                        作ったうごイラの一覧
   GET    /{id}                    1つ
@@ -266,6 +268,115 @@ async def _run_partial(job: _Job, req: PartialRequest, item: Any, motion: dict[s
         if req.interpolate and len(frames) >= 2:
             images = [Image.open(ugoira._PROJECT_ROOT / f["path"]).convert("RGB") for f in frames]
             frames = await _add_between(job, project_id, frames, images, req.interpolate, True)
+            ugoira._store_frames(project_id, frames)
+        job.message = f"できました({count}コマ)" if len(frames) == count else f"できました({count}コマ + 中割り → {len(frames)}コマ)"
+        job.status = "done"
+    except HTTPException as exc:
+        job.status, job.message = "error", str(exc.detail)
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        job.status, job.message = "error", str(exc)
+
+
+# ---- F. 動画モデルで動かす(リモートの GPU) ----
+
+
+class VideoRequest(BaseModel):
+    key: str = Field(min_length=1, description="ギャラリーの画像のキー")
+    # 動きの説明(英語の自然な文が効く。例: she blinks slowly and her hair sways in the wind)。元の絵のプロンプトをあとに足す
+    motion: str = Field(min_length=1, max_length=500)
+    # loop: 最初と最後を元の絵にして、繰り返しても継ぎ目が出ないようにする。i2v: 元の絵から始めて、自由に動かす
+    kind: Literal["loop", "i2v"] = "loop"
+    seconds: Literal[2, 3, 5] = 3
+    seed: int | None = Field(None, ge=0, le=4294967295)
+    # 作ったあと、コマのあいだに中割り(C)を足す枚数(16fps → 32fps。コマが多いので 1 まで)
+    interpolate: int = Field(0, ge=0, le=1)
+
+
+@router.get("/video/status")
+async def get_video_status() -> dict[str, Any]:
+    """F の接続先(.env の VIDEO_GEN_BASE_URL)が設定されているか・つながるか。"""
+    from .. import video_remote
+
+    return await video_remote.status()
+
+
+@router.post("/video")
+async def start_video(req: VideoRequest) -> dict[str, Any]:
+    """
+    F. 元の絵から、リモートの GPU(Colab・GCP)の ComfyUI で動画モデル(Wan 2.2)に動画を作らせ、コマにする
+    (video_remote.py)。NovelAI は使わない。体ごと・髪・表情が同時に、なめらかに動く代わりに、細部は元の絵から少し変わる。
+    """
+    from .. import video_remote
+    from .library import _gallery_images
+
+    if not video_remote.base_url():
+        raise HTTPException(status_code=503, detail="動画モデルの接続先が設定されていません(.env の VIDEO_GEN_BASE_URL)。docs/video_remote_jp.md を見てください。")
+    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="画像が見つかりません。")
+    job_id = uuid4().hex
+    job = _Job(total=_video_total(video_remote.frame_count(req.seconds), req))
+    _jobs[job_id] = job
+    job.task = asyncio.create_task(_run_video(job, req, item))
+    return _job_response(job_id, job)
+
+
+def _video_total(received: int, req: VideoRequest) -> int:
+    """
+    進み具合の総数: 保存するコマ(loop は最後のコマを外す)と、足す中割り(loop は最後から最初へも足すので、コマの数と同じ
+    あいだ。i2v は戻らないので1つ少ない)。
+    """
+    frames = received - 1 if req.kind == "loop" and received > 2 else received
+    gaps = frames if req.kind == "loop" else frames - 1
+    return frames + req.interpolate * max(0, gaps)
+
+
+async def _run_video(job: _Job, req: VideoRequest, item: Any) -> None:
+    from PIL import Image
+
+    from .. import app_settings, video_remote
+    from ..nai_metadata import generation_settings
+    from .image import _guard_image
+    from .library import _served_path
+
+    async def report(message: str) -> None:
+        job.message = message
+
+    try:
+        data = _served_path(item.path).read_bytes()
+        with Image.open(io.BytesIO(data)) as opened:
+            original = opened.convert("RGB")
+        job.message = "画像を確かめています"
+        # 未成年キャラの安全対策(ほかの作り方と同じ判定)。外のマシンへ送る前に確かめる
+        await asyncio.to_thread(_guard_image, data, item.prompt, original, item.key)
+        size = ugoira.fit_size(original.size)
+        source = original.resize(size, Image.Resampling.LANCZOS) if size != original.size else original
+        settings = generation_settings(data) or {}
+        prompt = video_remote.video_prompt(req.motion, settings.get("prompt") or item.prompt or "")
+        seed = next((s for s in (req.seed, settings.get("seed"), item.seed) if s is not None), 1)
+        images = await video_remote.generate(
+            source, prompt, kind=req.kind, seconds=req.seconds, seed=int(seed),
+            negative=app_settings.get("video.negative"), on_progress=report,
+        )
+        # 受け取ったコマの数(ワークフローを差し替えると、頼んだ数と違うことがある)で総数を合わせ直す
+        job.total = _video_total(len(images), req)
+        if req.kind == "loop" and len(images) > 2:
+            # 最後のコマは最初のコマと同じ絵(元の絵)。繰り返すと同じ絵が2回続いて止まって見えるので外す
+            images = images[:-1]
+        label = "繰り返し" if req.kind == "loop" else "動画"
+        project_id = ugoira.create_project(f"{req.motion[:24]}({label}・{item.label or item.key})", item.key, "video")
+        job.project_id = project_id
+        delay = round(1000 / video_remote.FPS)
+        frames = []
+        job.message = "コマを保存しています"
+        for index, image in enumerate(images):
+            frames.append({"path": ugoira.save_frame(project_id, index, image), "delay": delay, "tags": "(動画)"})
+            job.progress = index + 1
+        ugoira._store_frames(project_id, frames)
+        count = len(frames)
+        if req.interpolate and count >= 2:
+            # 最後から最初へのあいだは、繰り返す(loop)ときだけ補う。自由に動かす(i2v)は戻らないので、混ざった絵ができる
+            frames = await _add_between(job, project_id, frames, images, req.interpolate, req.kind == "loop")
             ugoira._store_frames(project_id, frames)
         job.message = f"できました({count}コマ)" if len(frames) == count else f"できました({count}コマ + 中割り → {len(frames)}コマ)"
         job.status = "done"

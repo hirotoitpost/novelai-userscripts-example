@@ -222,3 +222,15 @@
   max-width: none;
   width: 100%;
 }
+
+/* F. 動画モデル: 動きの説明は1行より長くなるので、幅いっぱいに */
+.ugo-block {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.4rem 0;
+}
+
+.ugo-block textarea {
+  width: 100%;
+  box-sizing: border-box;
+}

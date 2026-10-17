@@ -87,6 +87,15 @@ SETTINGS: tuple[Setting, ...] = (
         0.5,
         0.99,
     ),
+    Setting(
+        "video.negative",
+        "うごイラ(動画モデル)",
+        "動画のネガティブ",
+        "うごイラの「動画モデルで動かす」(リモートの GPU の Wan 2.2)で使うネガティブ。ちらつき・崩れを抑える言葉を入れる。",
+        "text",
+        "flicker, jitter, static, frozen, blurry, distorted, deformed, bad anatomy, extra fingers, fused fingers, "
+        "morphing face, worst quality, low quality, jpeg artifacts, text, watermark, subtitles",
+    ),
 )
 
 _BY_KEY = {s.key: s for s in SETTINGS}
