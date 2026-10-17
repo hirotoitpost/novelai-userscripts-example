@@ -323,7 +323,8 @@ _ZOOM_CACHE_MAX = 32
 
 
 def zoom_segment(
-    image: Image.Image, point: tuple[float, float], detail: bool = False, cache_key: Any = None
+    image: Image.Image, point: tuple[float, float], detail: bool = False, cache_key: Any = None,
+    prefer: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     point のまわりの区画を4倍に拡大して切り出し、元の大きさに縮めて元の絵の座標に戻した重み(0〜1)。
@@ -357,8 +358,19 @@ def zoom_segment(
     candidates = [m for m, _ in point_segment.segment(features, [local]) if m[min(int(local[1]), m.shape[0] - 1), min(int(local[0]), m.shape[1] - 1)]]
     if not candidates:
         return np.zeros((height, width), np.float32)
-    # いちばん小さい候補(タップした1本・1つ)
-    chosen = min(candidates, key=lambda m: int(m.sum()))
+    if prefer is None:
+        # 足すとき: いちばん小さい候補(タップした1本・1つ)
+        chosen = min(candidates, key=lambda m: int(m.sum()))
+    else:
+        # 外すとき: タップした赤い塊をまるごと外す(いちばん小さい候補では、塊の一部しか外れなかった。いちばん重なる候補では、
+        # 隣の髪の束まで外れた。実機で確認)
+        local_prefer = cv2.resize(
+            (prefer[top : top + tile.height, left : left + tile.width] > 0.5).astype(np.uint8),
+            (candidates[0].shape[1], candidates[0].shape[0]), interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+        # 候補のうち、中身の多くがいまの範囲のもの(はみ出しが少ない)で、いちばん大きいもの。無ければいちばん小さいもの
+        inside_prefer = [m for m in candidates if (m & local_prefer).sum() >= 0.7 * m.sum()]
+        chosen = max(inside_prefer, key=lambda m: int(m.sum())) if inside_prefer else min(candidates, key=lambda m: int(m.sum()))
     soft = cv2.resize(chosen.astype(np.float32), (tile.width, tile.height), interpolation=cv2.INTER_AREA)
     out = np.zeros((height, width), np.float32)
     out[top : top + tile.height, left : left + tile.width] = soft
@@ -421,10 +433,7 @@ def torso_request(source: Image.Image, parts: Parts, prompt: str, negative: str)
         return None
     merge = (cv2.dilate((np.maximum(parts.hair, parts.head) > 0.08).astype(np.uint8), np.ones((15, 15), np.uint8)) > 0)[top:]
     crop = image[top:]
-    filled = crop.copy()
-    blurred = cv2.blur(np.where(hole[..., None], 0, crop).astype(np.float32), (61, 61))
-    weight = cv2.blur((~hole).astype(np.float32), (61, 61))[..., None]
-    filled[hole] = (blurred / np.maximum(weight, 1e-3)).astype(np.uint8)[hole]
+    filled = _flat_fill(crop, hole)
     ch, cw = crop.shape[:2]
     gw, gh = fit_size((cw * 2, ch * 2))
     big = cv2.resize(filled, (gw, gh), interpolation=cv2.INTER_CUBIC)
@@ -443,6 +452,26 @@ def torso_request(source: Image.Image, parts: Parts, prompt: str, negative: str)
         prompt=", ".join([TORSO_TAGS, *kept]),
         negative=", ".join(p for p in (negative, TORSO_NEGATIVE) if p),
     )
+
+
+def _flat_fill(image: np.ndarray, hole: np.ndarray) -> np.ndarray:
+    """
+    hole の所を、まわりのならした色で塗る。近くに色が無い所(広い穴の真ん中)は、もっと広い範囲の色で、それでも無ければ
+    穴の外の平均の色で塗る(近くだけで割ると、穴の真ん中が黒くなり、髪の手がかりになった。実機で確認)。
+    """
+    out = image.astype(np.float32)
+    known = (~hole).astype(np.float32)
+    source = np.where(hole[..., None], 0, image).astype(np.float32)
+    todo = hole.copy()
+    for size in (61, 201, 601):
+        weight = cv2.blur(known, (size, size))
+        color = cv2.blur(source, (size, size)) / np.maximum(weight, 1e-6)[..., None]
+        ready = todo & (weight > 0.05)
+        out[ready] = color[ready]
+        todo &= ~ready
+    if todo.any():
+        out[todo] = image[~hole].mean(axis=0) if (~hole).any() else 128
+    return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def hair_left(source: Image.Image, parts: Parts, req: TorsoRequest, drawn: Image.Image) -> float:
@@ -472,10 +501,30 @@ def merge_torso(plate: np.ndarray, req: TorsoRequest, drawn: Image.Image) -> np.
     return out
 
 
+def refill_above(plate: np.ndarray, parts: Parts, kind: str, top: int) -> np.ndarray:
+    """
+    NovelAI で描いた胴体を重ねたあと、切り出しより上(首の横)の裏を、きれいになった胴体を手がかりに LaMa で埋め直す
+    (最初に LaMa で埋めたときは、まわりに髪の色の服が残っていて、うすい灰色になった)。
+    """
+    moving = np.maximum(parts.hanging, parts.head if kind == "tilt" else 0)
+    upper = moving.copy()
+    upper[top:] = 0
+    # 頭そのもの(顔)は描き直さない。首の横の、頭でない所だけ
+    upper = np.clip(upper - parts.head, 0, 1) if kind != "tilt" else np.where(parts.head > 0.5, 0, upper)
+    if not (upper > 0.08).any():
+        return plate
+    return _fill(plate, upper)
+
+
 def base_plate(source: Image.Image, parts: Parts, kind: str) -> np.ndarray:
     """動く部位をまるごと消して、LaMa で埋めた絵(render の既定の裏)。"""
     moving = np.maximum(parts.hanging, parts.head if kind == "tilt" else 0)
     return _fill(np.asarray(source.convert("RGB")), moving)
+
+
+# 首をかしげるとき、垂れた髪の毛先の角度(頭に対する割合)と、毛先の遅れ(1周に対する割合)
+_TILT_HAIR_TIP = 0.35
+_TILT_HAIR_LAG = 0.06
 
 
 # ---- ばね(髪の鎖・頭の動き) ----
@@ -649,7 +698,16 @@ def render(
     def layers(k: int) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """時刻 k の、動く部位ごとの (元の絵のどこから取るか x, y, 部位の重み)。下から順(垂れた髪 → 頭)。"""
         out = []
-        if has_hair:
+        if has_hair and kind == "tilt":
+            # 首をかしげるとき: 垂れた髪も首の付け根を中心に回す(平らにずらすと、肩に斜めに掛かった毛筋が引き伸ばされて
+            # 筋に見えた)。根元は頭と同じ角度、毛先ほど角度が小さく、少し遅れて付いてくる
+            depth = np.clip((ys[:, :1] - levels[0]) / max(float(levels[-1] - levels[0]), 1.0), 0.0, 1.0)
+            lag = np.round(depth * _TILT_HAIR_LAG * steps).astype(int)
+            row_angle = np.radians(angle[(k - lag) % steps] * (1.0 - (1.0 - _TILT_HAIR_TIP) * depth))
+            cx, cy = parts.pivot
+            c, s = np.cos(row_angle), np.sin(row_angle)
+            out.append((cx + c * (xs - cx) + s * (ys - cy), cy - s * (xs - cx) + c * (ys - cy), parts.hanging))
+        elif has_hair:
             dx, dy = _hair_field(parts, offsets[:, k], chain_x, levels, sigma=hair_sigma)
             out.append((xs - dx, ys - dy, parts.hanging))
         if kind == "tilt":

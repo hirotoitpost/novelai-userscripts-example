@@ -701,7 +701,10 @@ async def _novelai_plate(job: _Job, source: Any, parts: Any, settings: dict[str,
             drawn = (await client.image.generate(GenerateImageParams(**_build_kwargs(gen))))[0]
             left = await asyncio.to_thread(ugoira_rig.hair_left, source, parts, req, drawn)
             if left <= ugoira_rig.HAIR_LEFT_LIMIT:
-                return await asyncio.to_thread(ugoira_rig.merge_torso, base, req, drawn), f"裏: NovelAI({attempt + 1}回目)"
+                merged = await asyncio.to_thread(ugoira_rig.merge_torso, base, req, drawn)
+                job.message = "首の横の裏を埋め直しています"
+                merged = await asyncio.to_thread(ugoira_rig.refill_above, merged, parts, settings["kind"], req.top)
+                return merged, f"裏: NovelAI({attempt + 1}回目)"
         return base, "裏: LaMa(NovelAI では髪が残ったため)"
     finally:
         await client.close()
@@ -826,11 +829,14 @@ def edit_rig(project_id: int, req: RigEditRequest) -> dict[str, Any]:
     if req.x >= source.width or req.y >= source.height:
         raise HTTPException(status_code=422, detail="絵の外です。")
     detail = req.detail if req.detail is not None else source.width * source.height < ugoira_rig.DETAIL_AUTO_PIXELS
-    region = ugoira_rig.zoom_segment(source, (req.x, req.y), detail, cache_key=("rig", project_id))
+    hair = _load_hair(project_id)
+    region = ugoira_rig.zoom_segment(
+        source, (req.x, req.y), detail, cache_key=("rig", project_id), prefer=hair if req.mode == "remove" else None
+    )
     if not region.any():
         raise HTTPException(status_code=422, detail="そこからは範囲が切り出せませんでした。少しずらしてタップしてください。")
     shutil.copyfile(folder / _RIG_HAIR, folder / _RIG_HAIR_PREV)
-    _save_hair(project_id, ugoira_rig.edit_hair(_load_hair(project_id), region, req.mode))
+    _save_hair(project_id, ugoira_rig.edit_hair(hair, region, req.mode))
     return {**_rig_state(project_id), "detail": detail}
 
 
