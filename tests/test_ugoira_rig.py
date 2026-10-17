@@ -194,7 +194,7 @@ def test_rig_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_models
         assert state["source"].endswith("rig_source.png") and not state["can_undo"]
         taps: list[tuple] = []
 
-        def zoom(image, point, detail, cache_key=None):
+        def zoom(image, point, detail, cache_key=None, prefer=None):
             taps.append((point, detail))
             region = np.zeros((image.height, image.width), np.float32)
             region[int(point[1]) - 10 : int(point[1]) + 10, int(point[0]) - 10 : int(point[0]) + 10] = 1.0
