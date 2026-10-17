@@ -322,3 +322,29 @@ def test_in_between_keeps_unchanged_areas(monkeypatch: pytest.MonkeyPatch) -> No
     middle = np.asarray(frame_interpolation.between(a, b, 0.5))
     # 変わった所はモデルの絵、離れた所は a のまま
     assert middle[110, 120, 0] < 100 and (middle[:40, :40] == 120).all()
+
+
+def test_video_makes_frames_from_the_remote_model(client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import video_remote
+
+    test_client, key, _ = client
+    # 接続先が無ければ始めない
+    monkeypatch.delenv("VIDEO_GEN_BASE_URL", raising=False)
+    assert test_client.post("/api/ugoira/video", json={"key": key, "motion": "she blinks"}).status_code == 503
+    monkeypatch.setenv("VIDEO_GEN_BASE_URL", "https://comfy.example")
+    asked: dict = {}
+
+    async def fake_generate(source, prompt, **kwargs):
+        asked.update(prompt=prompt, **kwargs)
+        # loop は最後のコマが最初と同じ絵(外す)
+        return [Image.new("RGB", source.size, c) for c in ("white", "gray", "black", "white")]
+
+    monkeypatch.setattr(video_remote, "generate", fake_generate)
+    job = _wait(test_client, test_client.post("/api/ugoira/video", json={"key": key, "motion": "she blinks", "seconds": 2}).json()["id"])
+    assert job["status"] == "done", job
+    project = test_client.get(f"/api/ugoira/{job['project_id']}").json()
+    assert project["method"] == "video" and len(project["frames"]) == 3
+    assert {f["delay"] for f in project["frames"]} == {62}
+    # 動きの文を先に、元の絵のプロンプトをあとに。シードは元の絵のもの
+    assert asked["prompt"] == "she blinks. 1girl, yellow eyes, smile" and asked["seed"] == 7 and asked["kind"] == "loop"
+    assert Image.open(tmp_path / project["frames"][0]["path"]).size == ugoira.fit_size((400, 600))

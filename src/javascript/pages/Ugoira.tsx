@@ -15,6 +15,7 @@ interface Motion { id: number; name: string; region: string; frames: string[]; d
 interface Frame { path: string; delay: number; tags: string }
 interface Warp { kind: string; name: string; period: number }
 interface Project { id: number; name: string; source_key: string | null; method: string; frames: Frame[]; created_at: string }
+interface VideoStatus { configured: boolean; reachable: boolean; message: string; gpu?: string; vram_free_gb?: number | null }
 interface Job { id: string; status: 'running' | 'done' | 'error'; message: string; progress: number; total: number; project_id: number | null }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -80,6 +81,12 @@ export default function Ugoira() {
   const [rigAmount, setRigAmount] = useState(1)
   // 髪の裏を NovelAI で描く(胴体だけを切り出して。髪が残ったら LaMa)
   const [rigNovelai, setRigNovelai] = useState(false)
+  // F. 動画モデル(リモートの GPU の ComfyUI)
+  const [videoStatus, setVideoStatus] = useState<VideoStatus | null>(null)
+  const [videoMotion, setVideoMotion] = useState('she blinks slowly, her hair sways gently in the wind, subtle breathing')
+  const [videoKind, setVideoKind] = useState<'loop' | 'i2v'>('loop')
+  const [videoSeconds, setVideoSeconds] = useState(3)
+  const [videoBetween, setVideoBetween] = useState(0)
   const [editing, setEditing] = useState<Motion | null>(null)
   const [draft, setDraft] = useState({ name: '', region: 'eyes', lines: '' })
   const timer = useRef<number | null>(null)
@@ -104,6 +111,11 @@ export default function Ugoira() {
       })
       .catch(e => setError(String(e)))
   }, [])
+  const loadVideoStatus = useCallback(() => {
+    setVideoStatus(null)
+    call<VideoStatus>('/video/status').then(setVideoStatus).catch(e => setVideoStatus({ configured: false, reachable: false, message: String(e) }))
+  }, [])
+  useEffect(() => { if (sourceKey) loadVideoStatus() }, [sourceKey, loadVideoStatus])
   const loadProjects = useCallback(() => { call<Project[]>('').then(setProjects).catch(() => {}) }, [])
   useEffect(() => { loadMotions(); loadProjects() }, [loadMotions, loadProjects])
   useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current) }, [])
@@ -163,6 +175,22 @@ export default function Ugoira() {
       const started = await call<Job>('/rig', {
         method: 'POST',
         body: JSON.stringify({ key: sourceKey, kind: rigKind, style: rigStyle, amount: rigAmount, plate: rigNovelai ? 'novelai' : 'lama' }),
+      })
+      setJob(started)
+      follow(started.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** F. 動画モデルで動かす(リモートの GPU の ComfyUI。Wan 2.2) */
+  async function startVideo() {
+    if (!sourceKey) return
+    setError(null)
+    try {
+      const started = await call<Job>('/video', {
+        method: 'POST',
+        body: JSON.stringify({ key: sourceKey, motion: videoMotion, kind: videoKind, seconds: videoSeconds, interpolate: videoBetween }),
       })
       setJob(started)
       follow(started.id)
@@ -400,6 +428,52 @@ export default function Ugoira() {
               </p>
               <button type="button" className="ugo-primary" disabled={running || rigs.length === 0} onClick={() => void startRig()}>
                 {running ? '作っています…' : '部位ごとにうごイラを作る'}
+              </button>
+
+              <h3>動画モデルで動かす(リモートの GPU)</h3>
+              <p className="pub-hint">
+                Colab や GCP の GPU で動かす ComfyUI に、動画モデル(Wan 2.2)で元の絵から動画を作らせます(F)。体・髪・表情が
+                いっしょに、なめらかに動きます。代わりに、細部は元の絵から少し変わることがあります。NovelAI は使いません。
+                5秒で 10〜20 分ほどかかります(L4)。接続のしかたは docs/video_remote_jp.md にあります。
+              </p>
+              <div className="ugo-row" role="status">
+                <span className="pub-meta">
+                  接続先: {videoStatus ? videoStatus.message : '確かめています…'}
+                  {videoStatus?.vram_free_gb != null && `・空きメモリ ${videoStatus.vram_free_gb}GB`}
+                </span>
+                <button type="button" disabled={running} onClick={loadVideoStatus}>確かめ直す</button>
+              </div>
+              <label className="ugo-block">動き(英語の文が効きます){' '}
+                <textarea rows={2} value={videoMotion} disabled={running} maxLength={500} onChange={e => setVideoMotion(e.target.value)} />
+              </label>
+              <div className="ugo-row">
+                <label>
+                  <input type="radio" name="ugo-video-kind" checked={videoKind === 'loop'} disabled={running} onChange={() => setVideoKind('loop')} />
+                  {' '}繰り返す(最後に元の絵へ戻る。うごイラ向き)
+                </label>
+                <label>
+                  <input type="radio" name="ugo-video-kind" checked={videoKind === 'i2v'} disabled={running} onChange={() => setVideoKind('i2v')} />
+                  {' '}自由に動かす(戻らない)
+                </label>
+                <label>長さ{' '}
+                  <select value={videoSeconds} disabled={running} onChange={e => setVideoSeconds(Number(e.target.value))}>
+                    {[2, 3, 5].map(n => <option key={n} value={n}>{n}秒({n * 16 + 1}コマ)</option>)}
+                  </select>
+                </label>
+                <label>中割り{' '}
+                  <select value={videoBetween} disabled={running} onChange={e => setVideoBetween(Number(e.target.value))}>
+                    <option value={0}>足さない(16fps)</option>
+                    <option value={1}>あいだに1枚(32fps・この PC で)</option>
+                  </select>
+                </label>
+              </div>
+              <button
+                type="button"
+                className="ugo-primary"
+                disabled={running || !videoStatus?.reachable || !videoMotion.trim()}
+                onClick={() => void startVideo()}
+              >
+                {running ? '作っています…' : '動画モデルでうごイラを作る'}
               </button>
             </>
           )}
