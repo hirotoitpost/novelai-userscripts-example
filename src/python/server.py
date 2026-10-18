@@ -20,6 +20,7 @@ from .routes.trash import router as trash_router
 from .routes.ugoira import router as ugoira_router
 from .routes.gallery_manga import router as gallery_manga_router
 from .routes.quick_manga import router as quick_manga_router
+from .routes.story_arcs import router as story_arcs_router
 from .routes.image import router as image_router
 from .routes.llm import router as llm_router
 from .routes.manga_draft import router as manga_draft_router
@@ -95,6 +96,7 @@ app.include_router(trash_router)
 app.include_router(ugoira_router)
 app.include_router(gallery_manga_router)
 app.include_router(quick_manga_router)
+app.include_router(story_arcs_router)
 app.include_router(image_router)
 app.include_router(llm_router)
 app.include_router(manga_draft_router)

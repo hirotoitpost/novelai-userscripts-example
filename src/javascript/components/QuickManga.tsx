@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { DEFAULT_GENRE } from '../genres'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import type { Character } from './StoryCharacters'
 import CastPresets from './CastPresets'
+import StoryArcPicker from './StoryArcPicker'
 
 /**
  * おまかせ漫画: テーマ1行(とジャンル)から、登場人物 → 大枠シナリオ → 台本 → 漫画まで一気に作る(/api/quick-manga)。
@@ -48,6 +49,11 @@ interface Props {
 
 export default function QuickManga({ token, characters, genres, task, onCharactersChanged }: Props) {
   const [theme, setTheme] = useState('')
+  // 補足(話の方向など)。話の流れのセットの段階を選ぶと、セットの説明とこの巻の後の流れが入る
+  const [notes, setNotes] = useState('')
+  // シリーズの続き(次の巻)にする
+  const [seriesId, setSeriesId] = useState<number | null>(null)
+  const [seriesList, setSeriesList] = useState<{ id: number; title: string; volumes: unknown[] }[]>([])
   const [genre, setGenre] = useLocalStorage('nai_quick_genre', DEFAULT_GENRE)
   const [episodes, setEpisodes] = useLocalStorage('nai_quick_episodes', 2)
   // ページごとにコマ数を変える(1話=1ページ。コマ数は内容に合わせて大枠で決める)
@@ -65,6 +71,10 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
   const [thinking, setThinking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [made, setMade] = useState<{ storyId: number; message: string; title: string | null } | null>(null)
+
+  useEffect(() => {
+    apiFetch<{ id: number; title: string; volumes: unknown[] }[]>(token, '/api/series').then(setSeriesList).catch(() => {})
+  }, [token])
 
   const suggest = async () => {
     setThinking(true)
@@ -109,7 +119,7 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
     try {
       const job = await apiFetch<QuickJob>(token, '/api/quick-manga', {
         theme: theme.trim(), genre: genre.trim() || DEFAULT_GENRE, episodes, character_ids: castIds, cast_count: castCount,
-        dynamic_panels: dynamicPanels,
+        dynamic_panels: dynamicPanels, notes: notes.trim(), series_id: seriesId,
         color, stop_after_script: scriptOnly, use_character_reference: useReference,
         review_script: review, check_panels: checkPanels, redraw_states: redrawStates,
       })
@@ -145,6 +155,18 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
       <label className="md-field">
         <span>テーマ</span>
         <input value={theme} maxLength={500} onChange={e => setTheme(e.target.value)} placeholder="例: カフェの新メニュー開発で、新人の奇抜な試作品に先輩が振り回される" />
+      </label>
+      <StoryArcPicker token={token} onUse={(beat, arcNote) => { setTheme(beat); setNotes(arcNote) }} />
+      <label className="md-field">
+        <span>補足(話の方向など。任意)</span>
+        <textarea rows={2} value={notes} maxLength={1000} onChange={e => setNotes(e.target.value)} />
+      </label>
+      <label className="md-field">
+        <span>シリーズの続きにする(シリーズの設定と既刊のあらすじを渡し、次の巻にします)</span>
+        <select value={seriesId ?? ''} onChange={e => setSeriesId(e.target.value ? Number(e.target.value) : null)}>
+          <option value="">(単巻で作る)</option>
+          {seriesList.map(s => <option key={s.id} value={s.id}>{s.title}(既刊 {s.volumes.length} 巻)</option>)}
+        </select>
       </label>
       <div className="md-quick-themes">
         <button type="button" className="md-small" onClick={() => void suggest()} disabled={thinking || task.busy}>

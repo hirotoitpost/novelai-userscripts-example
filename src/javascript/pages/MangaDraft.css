@@ -373,8 +373,10 @@
   .md-line input {
     grid-column: 1 / -1;
   }
-}
-
+}
+
+
+
 /* おまかせで作る */
 .md-quick {
   border-color: #7b5cf6;
@@ -432,4 +434,17 @@
 .cast-preset-remove {
   padding-left: 0;
   opacity: 0.7;
+}
+
+/* 話の流れのセット: 段階の一覧と編集 */
+.md-arc-beats {
+  margin: 0.3rem 0;
+  padding-left: 1.4rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.md-arc-editor {
+  display: grid;
+  gap: 0.4rem;
 }

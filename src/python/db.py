@@ -582,6 +582,22 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 話の流れのセット(夏休み など、アニメでよくある巻ごとの流れ)。初めて表を作るときだけ、既定のセットを入れる
+    first_arcs = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'story_arcs'").fetchone() is None
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS story_arcs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            beats TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    if first_arcs:
+        for arc in DEFAULT_STORY_ARCS:
+            save_story_arc(conn, None, arc["name"], arc["description"], arc["beats"])
     conn.commit()
     _migrate_generation_history(conn)
     _migrate_stories(conn)
@@ -2866,6 +2882,64 @@ def add_manga_genre(conn: sqlite3.Connection, name: str) -> bool:
 def delete_manga_genre(conn: sqlite3.Connection, name: str) -> bool:
     """ジャンルを候補から消す(取り込みへの割り当てはそのまま残る)。消したら True。"""
     cur = conn.execute("DELETE FROM manga_genres WHERE name = ?", (name,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+# ---- 話の流れのセット ----
+
+# 既定のセット。beats は巻ごとの流れ(1つが1巻)。description には、セットの後に続く流れなども書く
+DEFAULT_STORY_ARCS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "夏休み(日本アニメの定番)",
+        "description": "仲間と過ごす夏休みの定番の流れ。少しずつ仲良くなり、最後は夏の終わりを惜しむ。この後は受験シーズンに入る。",
+        "beats": [
+            "星座観測。夜空を見ながら語り合い、仲良くなる。最後に、次はプールに行く計画を立てる",
+            "プールに着ていく水着が要るので、メンバーでショッピングに行く",
+            "プール当日。みんなでワイワイ楽しむ。すっかり仲良くなっている。最後に、次は花火大会の計画を立てる",
+            "花火大会当日。屋台を回り、花火を見る。「夏ももう終わりか」と感傷に浸り、来年も来ようと話す",
+        ],
+    },
+)
+
+
+def _arc_row(row: Any) -> dict[str, Any]:
+    arc = dict(row)
+    arc["beats"] = json.loads(arc["beats"] or "[]")
+    return arc
+
+
+def list_story_arcs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """話の流れのセット(足した順)。"""
+    return [_arc_row(row) for row in conn.execute("SELECT * FROM story_arcs ORDER BY id")]
+
+
+def get_story_arc(conn: sqlite3.Connection, arc_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM story_arcs WHERE id = ?", (arc_id,)).fetchone()
+    return _arc_row(row) if row else None
+
+
+def save_story_arc(
+    conn: sqlite3.Connection, arc_id: int | None, name: str, description: str, beats: list[str]
+) -> dict[str, Any]:
+    """セットを足す(arc_id が None)か書き換える。名前が重なれば sqlite3.IntegrityError。"""
+    beats_json = json.dumps([b.strip() for b in beats if b.strip()], ensure_ascii=False)
+    if arc_id is None:
+        row = conn.execute(
+            "INSERT INTO story_arcs (name, description, beats, created_at) VALUES (?, ?, ?, ?) RETURNING *",
+            (name, description, beats_json, datetime.now(timezone.utc).isoformat()),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "UPDATE story_arcs SET name = ?, description = ?, beats = ? WHERE id = ? RETURNING *",
+            (name, description, beats_json, arc_id),
+        ).fetchone()
+    conn.commit()
+    return _arc_row(row) if row else {}
+
+
+def delete_story_arc(conn: sqlite3.Connection, arc_id: int) -> bool:
+    cur = conn.execute("DELETE FROM story_arcs WHERE id = ?", (arc_id,))
     conn.commit()
     return cur.rowcount > 0
 
