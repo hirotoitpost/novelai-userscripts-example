@@ -189,8 +189,14 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
         job.message = f"漫画ができました: {outline['title']}({len(result['pages'])}ページ・{count}コマ){checked}" + (f"。{job.guard_note}" if getattr(job, "guard_note", "") else "")
         job.status = "done"
     except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        import logging
+
+        from .story import error_text
+
         job.status = "error"
-        job.detail = str(exc)
+        # メッセージが空の例外(通信のタイムアウトなど)でも、何で止まったか分かるように
+        job.detail = error_text(exc)
+        logging.getLogger(__name__).exception("おまかせ漫画が止まりました(物語 %s)", job.story_id)
 
 
 @router.get("/themes")
