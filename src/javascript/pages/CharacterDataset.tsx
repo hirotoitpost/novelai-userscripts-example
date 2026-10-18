@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import BackButton from '../components/BackButton'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import {
@@ -55,7 +56,7 @@ const SHEET_CLASSES: SheetEditorClasses = {
 
 export default function CharacterDataset() {
   const { token } = useAuth()
-  const navigate = useNavigate()
+  const location = useLocation()
 
   const [characters, setCharacters] = useState<Character[]>([])
   const [characterId, setCharacterId] = useLocalStorage<number | null>('nai_chards_character', null)
@@ -66,8 +67,9 @@ export default function CharacterDataset() {
     const fromLink = Number(searchParams.get('character'))
     if (!fromLink) return
     setCharacterId(fromLink)
-    setSearchParams({}, { replace: true })
-  }, [searchParams, setCharacterId, setSearchParams])
+    // キャラ一覧から来たときの「戻る」(state)は残す
+    setSearchParams({}, { replace: true, state: location.state })
+  }, [searchParams, setCharacterId, setSearchParams, location.state])
   const [defaults, setDefaults] = useState<Variations>({ framings: [], poses: [], outfits: [], expressions: [], locations: [] })
   const [selected, setSelected] = useLocalStorage<Variations>('nai_chards_selected', {
     framings: [], poses: [], outfits: [], expressions: [], locations: [],
@@ -354,7 +356,7 @@ export default function CharacterDataset() {
   return (
     <div className="lora-root">
       <header className="lora-header">
-        <button type="button" className="lora-back" onClick={() => navigate('/')}>← ホーム</button>
+        <BackButton className="lora-back" />
         <span className="lora-header-title">キャラ別データセット</span>
       </header>
 

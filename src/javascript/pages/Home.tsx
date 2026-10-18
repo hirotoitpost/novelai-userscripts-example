@@ -177,6 +177,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/characters')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/characters')}
+          >
+            <div className="home-card-icon">🪪</div>
+            <h2>キャラ一覧</h2>
+            <p>登録したキャラをカードで一覧します。参照画像の拡大、データセット・生成したデータ・出ている作品へ移れます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/character-dataset')}
             role="button"
             tabIndex={0}

@@ -1,6 +1,7 @@
 import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import BackButton from '../components/BackButton'
 import { useAuth } from '../context/AuthContext'
 import { decodeStoryDocument } from '../novelaiDocument'
 import MangaImageSettings, {
@@ -747,9 +748,7 @@ export default function Story() {
   return (
     <div className="story-root">
       <div className="story-inner">
-        <button type="button" className="story-back" onClick={() => navigate('/')}>
-          ← ホームへ
-        </button>
+        <BackButton className="story-back" label="← ホームへ" />
         <button type="button" className="story-back" onClick={() => navigate('/story-library')}>
           📚 物語を読む
         </button>
