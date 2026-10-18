@@ -125,7 +125,9 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
             job.progress = index
             job.message = f"台本を書いています {index + 1}/{len(outline['episodes'])}話: {outline['title']}"
             panels = await generate_episode(
-                api_key, outline, index, cast, notes=req.notes, previous_panels=episodes[-1] if episodes else None,
+                api_key, outline, index, cast, notes=req.notes,
+                # ページごとにコマ数を変えるときは全ページで1つの話なので、それまでのページを全部渡す(繰り返さないように)
+                previous_panels=[p for e in episodes for p in e] if counts else (episodes[-1] if episodes else None),
                 count=counts[index] if counts else None,
             )
             if req.review_script:

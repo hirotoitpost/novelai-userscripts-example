@@ -90,6 +90,9 @@ def _content_rule() -> str:
 
 # ---- 大枠シナリオ ----
 
+# ページごとにコマ数を変える漫画で、台本に渡す「これまでのページのセリフ」の上限(長すぎると指示が埋もれる)
+_MAX_EARLIER_LINES = 60
+
 _OUTLINE_SYSTEM = """あなたは漫画の構成作家です。指定のテーマ・ジャンル・登場人物で、短編漫画の大枠シナリオ案を{options}つ考えます。
 JSONだけを返してください(前置きや```は不要):
 {{"outlines":[{{"title":"作品タイトル","logline":"一文のあらすじ","episodes":["第1話の内容","第2話の内容"]}}]}}
@@ -104,6 +107,7 @@ _OUTLINE_DYNAMIC_SYSTEM = """あなたは漫画の構成作家です。指定の
 JSONだけを返してください(前置きや```は不要):
 {{"outlines":[{{"title":"作品タイトル","logline":"一文のあらすじ","episodes":[{{"content":"1ページ目の内容","panels":4}},{{"content":"2ページ目の内容","panels":5}}]}}]}}
 - episodes はちょうど{episodes}個で、1つが漫画の1ページ。全体で1つの流れ(導入・展開・山場・結末)になるようにする
+- 各ページは前のページの続きから始め、ページごとに新しい出来事を1つ以上入れる。前のページと同じ出来事・提案を繰り返さない
 - panels はそのページのコマ数で、{min_panels}〜{max_panels}の整数。内容に合わせて決める: 見せ場・感情の山・オチは少ないコマで
   大きく見せ、会話のやりとりや小さな出来事が続くページはコマを多くする。全ページ同じ数にはしない
 - 各ページの内容は、誰が何をしてどうなるかが分かるように60文字程度で書く
@@ -260,12 +264,27 @@ def episode_prompts(
     user.append(f"作品: {outline['title']}({outline.get('logline', '')})")
     user.append("全体の流れ:")
     user.extend(f"{i + 1}. {e}" for i, e in enumerate(episodes))
+    paged = bool(count and not structure)
     if previous_panels:
-        # 直前の話のセリフを渡して、流れと口調をつなげる
-        recent = [f"{line['speaker']}「{line['text']}」" for p in previous_panels[-4:] for line in p.get("lines", [])]
-        if recent:
-            user.append("直前の話のセリフ: " + " / ".join(recent))
+        if paged:
+            # ページごとにコマ数を変える漫画は全ページで1つの話。直前の4コマだけだと、6コマのページの前半が見えず、
+            # 前のページの出来事・セリフをもう一度描いた(花火大会の案と却下が2ページ続いた。2026-10 実機)。
+            # それまでのページのセリフを全部渡し、繰り返さないようにする
+            said = [f"{line['speaker']}「{line['text']}」" for p in previous_panels for line in p.get("lines", [])]
+            if said:
+                user.append("これまでのページのセリフ(順に): " + " / ".join(said[-_MAX_EARLIER_LINES:]))
+        else:
+            # 直前の話のセリフを渡して、流れと口調をつなげる
+            recent = [f"{line['speaker']}「{line['text']}」" for p in previous_panels[-4:] for line in p.get("lines", [])]
+            if recent:
+                user.append("直前の話のセリフ: " + " / ".join(recent))
     user.append(f"この話(第{episode_index + 1}話): {episodes[episode_index]}")
+    if paged and episode_index > 0:
+        user.append(
+            "このページは前のページの続きから始める。これまでのページで出た出来事・提案・セリフは繰り返さず"
+            "(同じ言い回しも使わない)、このページの内容だけを描いて話を先へ進める。場所や時間の説明(narration)も、"
+            "場面が変わらなければ書かない"
+        )
     if structure:
         user.append(_STRUCTURE_RULES)
         user.extend(f"{i + 1}コマ目: {line}" for i, line in enumerate(structure))

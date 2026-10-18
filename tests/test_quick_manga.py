@@ -125,6 +125,7 @@ def _fake_writer(monkeypatch: pytest.MonkeyPatch) -> dict:
 
     async def fake_episode(api_key, outline, index, cast, *, notes="", previous_panels=None, structure=None, count=None):
         seen.setdefault("counts", []).append(count)
+        seen.setdefault("previous", []).append(len(previous_panels or []))
         return [{"characters": [cast[0].name], "actions": {}, "lines": [{"speaker": cast[0].name, "kind": "speech", "text": f"{index}話"}],
                  "narration": "", "sfx": [], "prompt_tags": "office", "fixes": []} for _ in range(count or 4)]
 
@@ -219,6 +220,8 @@ def test_quick_manga_can_change_the_panel_count_per_page(client: TestClient, mon
     assert job["status"] == "done", job
     # 大枠でページごとのコマ数を決め(既定 3〜6)、台本はそのコマ数で書く
     assert seen["panel_range"] == (3, 6) and seen["counts"] == [3, 6, 4, 3, 6]
+    # 台本には、それまでのページを全部渡す(繰り返さないように)
+    assert seen["previous"] == [0, 3, 9, 13, 16]
     conn = db.get_connection()
     try:
         layouts = db.get_manga_v2_page_layouts(conn, job["story_id"])
@@ -238,4 +241,6 @@ def test_quick_manga_can_change_the_panel_count_per_page(client: TestClient, mon
     finally:
         conn.close()
     assert seen["panel_range"] is None and seen["counts"] == [None, None]
+    # コマ数を変えないときは、これまでどおり直前の話だけ
+    assert seen["previous"] == [0, 4]
     assert client.post("/api/quick-manga", json={"theme": "x", "episodes": 11}, headers={"Authorization": "Bearer t"}).status_code == 422

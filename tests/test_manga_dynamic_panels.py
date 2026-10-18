@@ -63,3 +63,24 @@ def test_page_script_follows_the_count_and_only_the_last_page_ends() -> None:
     # コマ数を渡さなければ、これまでどおり4コマでオチ
     plain, _ = episode_prompts(outline, 0, cast)
     assert "4コマ目にオチ" in plain
+
+
+def test_page_script_sees_all_earlier_lines_and_is_told_not_to_repeat() -> None:
+    cast = [DraftCharacter(id=1, name="会長", profile=""), DraftCharacter(id=2, name="怜", profile="")]
+    outline = {"title": "夏期講習", "logline": "", "episodes": ["休憩", "花火大会の案", "ホタルの案"]}
+
+    def panel(speaker: str, text: str) -> dict:
+        return {"lines": [{"speaker": speaker, "text": text}]}
+
+    # 1ページ目の最初のセリフ(直前の4コマより前)も渡す
+    earlier = [panel("会長", "花火大会に行こう!"), panel("怜", "混雑するし無理")] + [panel("会長", f"…{i}") for i in range(5)]
+    _, user = episode_prompts(outline, 2, cast, previous_panels=earlier, count=4)
+    assert "花火大会に行こう!" in user and "繰り返さず" in user
+    # 1ページ目には、繰り返さないの決まりは要らない
+    _, first = episode_prompts(outline, 0, cast, count=4)
+    assert "繰り返さず" not in first
+    # コマ数を変えない(4コマずつの)漫画は、これまでどおり直前の4コマだけ
+    _, plain = episode_prompts(outline, 2, cast, previous_panels=earlier)
+    assert "花火大会に行こう!" not in plain and "…4" in plain and "繰り返さず" not in plain
+    system, _ = outline_prompts("夏期講習", "日常", cast, 3, panel_range=(3, 6))
+    assert "前のページと同じ出来事・提案を繰り返さない" in system
