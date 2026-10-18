@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 import re
 import time
@@ -266,6 +267,12 @@ def _job_response(job: _Job) -> dict[str, Any]:
     }
 
 
+def error_text(exc: BaseException) -> str:
+    """ジョブの失敗の説明。メッセージが空の例外(通信のタイムアウトなど)は、種類の名前にする。"""
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
 def _start_job(story_id: int, kind: str, runner: Callable[[_Job], Awaitable[None]]) -> _Job:
     running = _jobs.get(story_id)
     if running is not None and running.status == "running":
@@ -286,7 +293,9 @@ def _start_job(story_id: int, kind: str, runner: Callable[[_Job], Awaitable[None
             raise
         except Exception as exc:  # noqa: BLE001 ジョブの失敗は状態として持たせる
             job.status = "error"
-            job.detail = str(exc)
+            # 通信の例外などはメッセージが空のことがある(何で止まったか分からなかった)ので、種類も出し、ログに残す
+            job.detail = error_text(exc)
+            logging.getLogger(__name__).exception("物語 %s の処理(%s)が止まりました", story_id, kind)
         finally:
             job.ended_at = time.time()
             # キャンセル中でも通知だけは送り切る(スマホを見ていない間に終わることが多い)
@@ -697,7 +706,7 @@ async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
         )
         for row, scene in zip(list_story_scenes(conn, story["id"]), req.scenes):
             if scene.character_ids:
-                set_scene_characters(conn, row["id"], scene.character_ids, scene.character_actions)
+                set_scene_characters(conn, row["id"], scene.character_ids, scene.character_actions, scene.character_outfits)
             if scene.narration:
                 update_scene_narration(conn, row["id"], scene.narration)
             # 効果音は未設定(None)だとAI提案の対象になるので、台本で無しなら空にしておく
@@ -2411,7 +2420,7 @@ async def put_scene_characters(scene_id: int, req: SetSceneCharactersRequest) ->
     """シーンに登場するキャラを設定し直す(抽出結果の手直し用)。"""
     conn = get_connection()
     try:
-        set_scene_characters(conn, scene_id, req.character_ids, req.actions)
+        set_scene_characters(conn, scene_id, req.character_ids, req.actions, req.outfits)
     finally:
         conn.close()
 

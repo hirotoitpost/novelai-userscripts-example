@@ -235,7 +235,7 @@ async def generate_outlines(
 # ---- 1話分の台本 ----
 
 _EPISODE_SYSTEM = """あなたは漫画の脚本家です。渡された1話分の内容を、ちょうど{count}コマの台本にします。JSONだけを返してください(前置きや```は不要):
-{"panels":[{"characters":["登場する人物名"],"actions":{"人物名":"その人の表情・動作の英語タグ"},"lines":[{"speaker":"人物名","kind":"speech","text":"セリフ"}],"narration":"","sfx":["効果音"],"prompt_tags":"英語のdanbooruタグ"}]}
+{"panels":[{"characters":["登場する人物名"],"actions":{"人物名":"その人の表情・動作の英語タグ"},"outfits":{"人物名":"その場面の服装の英語タグ"},"lines":[{"speaker":"人物名","kind":"speech","text":"セリフ"}],"narration":"","sfx":["効果音"],"prompt_tags":"英語のdanbooruタグ"}]}
 - panels はちょうど{count}つ。{arc}
 - {lines_rule}
 - speaker は登場人物名のどれか。kind は声に出すなら speech、心の声なら thought
@@ -243,6 +243,7 @@ _EPISODE_SYSTEM = """あなたは漫画の脚本家です。渡された1話分�
 - sfx はカタカナの擬音・擬態語を0〜1個
 - prompt_tags はそのコマ全体の絵: 人数(1girl, 1boy など)、場所、時間帯、構図、二人の位置関係(facing each other など)を英語のdanbooruタグで。人物の髪型・服装は書かない(別に指定する)
 - actions は characters の人物ごとの表情・動作・視線を英語のdanbooruタグで(例: "blush, looking away, hand on own cheek")。表情や仕草は prompt_tags ではなく必ずここに書く(全体に書くと全員に付いてしまう)
+- outfits は、ふだんの服装と違う服を着ている人物だけ(水着 swimsuit・浴衣 yukata・私服 casual clothes・体操服 gym uniform・パジャマ pajamas など)、その服装を英語のdanbooruタグで。場面の服装は prompt_tags ではなく必ずここに書く(人物ごとのふだんの服装に負けて描かれない)。ふだんの服装のままの人は書かない
 - characters はそのコマに描く人物(声だけの人は入れない)。人物がいないコマは空で、prompt_tags に no humans{content_rule}"""
 
 
@@ -401,11 +402,21 @@ def parse_episode(data: Any, characters: list[DraftCharacter], count: int = PANE
             for name, tags in raw_actions.items()
             if str(name).strip() in drawn and _clean_tags(tags)
         }
+        raw_outfits = raw.get("outfits")
+        if not isinstance(raw_outfits, dict):
+            raw_outfits = {}
+        # その場面の服装(水着・浴衣など)。描く人物の分だけ
+        outfits = {
+            str(name).strip(): _clean_tags(tags)
+            for name, tags in raw_outfits.items()
+            if str(name).strip() in drawn and _clean_tags(tags)
+        }
         prompt_tags, fixes = reconcile_people(_clean_tags(raw.get("prompt_tags") or ""), len(drawn))
         panels.append(
             {
                 "characters": drawn,
                 "actions": actions,
+                "outfits": outfits,
                 "lines": lines,
                 "narration": str(raw.get("narration") or "").strip()[:_MAX_NARRATION_CHARS],
                 "sfx": sfx,
@@ -480,6 +491,12 @@ def panel_to_scene(panel: dict[str, Any], characters: list[DraftCharacter], titl
         "character_actions": {
             by_name[n].id: _clean_tags(tags)
             for n, tags in (panel.get("actions") or {}).items()
+            if n in by_name and n in (panel.get("characters") or []) and _clean_tags(tags)
+        },
+        # その場面の服装(ふだんの服装の代わりに使う)
+        "character_outfits": {
+            by_name[n].id: _clean_tags(tags)
+            for n, tags in (panel.get("outfits") or {}).items()
             if n in by_name and n in (panel.get("characters") or []) and _clean_tags(tags)
         },
         "narration": (panel.get("narration") or "").strip() or None,

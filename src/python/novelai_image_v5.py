@@ -17,6 +17,7 @@ V5のコマ割り機能に専用APIパラメータは無く、通常の /ai/gene
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
@@ -283,6 +284,30 @@ def _apply_character_reference(parameters: dict[str, Any], refs: list[CharacterR
     parameters["director_reference_information_extracted"] = [1.0 for _ in refs]
 
 
+# 一時的な失敗(通信の切断・タイムアウト・混雑の 429・サーバーの 5xx)をやり直す回数と、間隔の単位(秒。回ごとに伸ばす)。
+# 漫画は数十コマを続けて描くので、1回の失敗で全体が止まっていた(メッセージの空の例外で、原因も残らなかった。2026-10 実機)
+_RETRIES = 3
+_RETRY_WAIT = 10.0
+
+
+async def _post_retrying(http_client: httpx.AsyncClient, body: dict[str, Any], key: str) -> httpx.Response:
+    for attempt in range(_RETRIES + 1):
+        try:
+            response = await http_client.post(
+                f"{_IMAGE_API_ADDRESS}/ai/generate-image", json=body, headers={"Authorization": f"Bearer {key}"}
+            )
+        except httpx.TransportError as exc:
+            if attempt == _RETRIES:
+                raise RuntimeError(f"NovelAI V5 image API に届きませんでした({type(exc).__name__}: {exc})") from exc
+            logger.warning("NovelAI image API への通信に失敗(%s)。やり直します(%d/%d)", type(exc).__name__, attempt + 1, _RETRIES)
+        else:
+            if not (response.status_code == 429 or response.status_code >= 500) or attempt == _RETRIES:
+                return response
+            logger.warning("NovelAI image API が %d を返しました。やり直します(%d/%d)", response.status_code, attempt + 1, _RETRIES)
+        await asyncio.sleep(_RETRY_WAIT * (attempt + 1))
+    raise AssertionError("ここには来ない")
+
+
 async def generate_image_v5(
     api_key: str,
     prompt: str,
@@ -333,9 +358,7 @@ async def generate_image_v5(
     content = b""
     async with httpx.AsyncClient(timeout=180) as http_client:
         for index, key in enumerate(keys):
-            response = await http_client.post(
-                f"{_IMAGE_API_ADDRESS}/ai/generate-image", json=body, headers={"Authorization": f"Bearer {key}"}
-            )
+            response = await _post_retrying(http_client, body, key)
             # 画面のログインのトークンが期限切れなどで 401 なら、.env の永続トークンで1回だけ呼び直す
             if response.status_code == 401 and index + 1 < len(keys):
                 logger.warning("NovelAI image API が 401 を返したので、.env の永続 API トークンで呼び直します")

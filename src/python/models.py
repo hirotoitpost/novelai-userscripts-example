@@ -545,6 +545,8 @@ class ScriptSceneInput(BaseModel):
     # キャラID → そのコマでのそのキャラの表情・動作(英語タグ)。キャラごとのプロンプトに入るので、
     # 仕草や表情が別のキャラに移らない。prompt_tags には人数・場所・時間帯・構図など全体のことだけを書く
     character_actions: dict[int, str] = Field(default_factory=dict)
+    # キャラID → そのコマでの服装(英語タグ)。あれば、キャラシートのふだんの服装の代わりに使う(水着・浴衣など)
+    character_outfits: dict[int, str] = Field(default_factory=dict)
     narration: Optional[str] = Field(None, max_length=80)
     sfx: Optional[list[str]] = Field(None, max_length=8)
 
@@ -717,6 +719,8 @@ class MangaDraftPanel(BaseModel):
     characters: list[str] = Field(default_factory=list)
     # 呼び名 → そのコマでのそのキャラの表情・動作(英語タグ)
     actions: dict[str, str] = Field(default_factory=dict)
+    # 呼び名 → そのコマでの服装(水着・浴衣など、ふだんと違うときだけ。キャラシートのふだんの服装の代わりに使う)
+    outfits: dict[str, str] = Field(default_factory=dict)
     lines: list[MangaDraftLine] = Field(default_factory=list, max_length=8)
     narration: str = Field("", max_length=80)
     sfx: list[str] = Field(default_factory=list, max_length=8)
@@ -971,6 +975,8 @@ class SetSceneCharactersRequest(BaseModel):
     character_ids: list[int]
     # キャラID → そのシーンでの表情・動作(英語タグ)。省略すると、残るキャラの動作はそのまま
     actions: Optional[dict[int, str]] = None
+    # キャラID → そのシーンでの服装(英語タグ。空ならふだんの服装)。省略すると、残るキャラの服装はそのまま
+    outfits: Optional[dict[int, str]] = None
 
 
 class StorySceneResponse(BaseModel):

@@ -671,6 +671,9 @@ def _migrate_scene_characters(conn: sqlite3.Connection) -> None:
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(scene_characters)")}
     if "action_tags" not in existing:
         conn.execute("ALTER TABLE scene_characters ADD COLUMN action_tags TEXT")
+    # outfit_tags: そのコマでのそのキャラの服装(水着・浴衣など)。あれば、キャラシートのふだんの服装の代わりに使う
+    if "outfit_tags" not in existing:
+        conn.execute("ALTER TABLE scene_characters ADD COLUMN outfit_tags TEXT")
     conn.commit()
 
 
@@ -1862,22 +1865,29 @@ def delete_character(conn: sqlite3.Connection, character_id: int) -> None:
 
 
 def set_scene_characters(
-    conn: sqlite3.Connection, scene_id: int, character_ids: list[int], actions: dict[int, str] | None = None
+    conn: sqlite3.Connection,
+    scene_id: int,
+    character_ids: list[int],
+    actions: dict[int, str] | None = None,
+    outfits: dict[int, str] | None = None,
 ) -> None:
     """
-    シーンに出るキャラを設定し直す。actions はキャラごとの表情・動作(英語タグ)。actions を渡さなければ、
-    残るキャラの動作はそのまま残す(登場人物の付け替えで、書いた動作が消えないように)。
+    シーンに出るキャラを設定し直す。actions はキャラごとの表情・動作、outfits はその場面の服装(英語タグ)。
+    渡さなければ、残るキャラの動作・服装はそのまま残す(登場人物の付け替えで、書いたものが消えないように)。
     """
-    kept = {
-        row["character_id"]: row["action_tags"]
-        for row in conn.execute("SELECT character_id, action_tags FROM scene_characters WHERE scene_id = ?", (scene_id,))
-    }
+    rows = conn.execute(
+        "SELECT character_id, action_tags, outfit_tags FROM scene_characters WHERE scene_id = ?", (scene_id,)
+    ).fetchall()
+    kept_actions = {row["character_id"]: row["action_tags"] for row in rows}
+    kept_outfits = {row["character_id"]: row["outfit_tags"] for row in rows}
     if actions is not None:
-        kept = {character_id: (actions.get(character_id) or "").strip() or None for character_id in character_ids}
+        kept_actions = {character_id: (actions.get(character_id) or "").strip() or None for character_id in character_ids}
+    if outfits is not None:
+        kept_outfits = {character_id: (outfits.get(character_id) or "").strip() or None for character_id in character_ids}
     conn.execute("DELETE FROM scene_characters WHERE scene_id = ?", (scene_id,))
     conn.executemany(
-        "INSERT OR IGNORE INTO scene_characters (scene_id, character_id, action_tags) VALUES (?, ?, ?)",
-        [(scene_id, character_id, kept.get(character_id)) for character_id in character_ids],
+        "INSERT OR IGNORE INTO scene_characters (scene_id, character_id, action_tags, outfit_tags) VALUES (?, ?, ?, ?)",
+        [(scene_id, character_id, kept_actions.get(character_id), kept_outfits.get(character_id)) for character_id in character_ids],
     )
     conn.commit()
 
@@ -1886,7 +1896,7 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     """物語内の scene_id → 登場キャラの一覧。"""
     rows = conn.execute(
         """
-        SELECT sc.scene_id, sc.action_tags AS scene_action_tags, c.*
+        SELECT sc.scene_id, sc.action_tags AS scene_action_tags, sc.outfit_tags AS scene_outfit_tags, c.*
         FROM scene_characters sc
         JOIN characters c ON c.id = sc.character_id
         JOIN story_scenes s ON s.id = sc.scene_id
@@ -1902,6 +1912,10 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
         del character["scene_id"]
         # そのシーンでのこのキャラの表情・動作(キャラシートの列と名前がぶつからないよう別名で取り出す)
         character["action_tags"] = character.pop("scene_action_tags")
+        # その場面の服装(水着・浴衣など)があれば、ふだんの服装の代わりに使う(コマの生成・確かめ・描き直しのどれにも効く)
+        outfit = character.pop("scene_outfit_tags")
+        if outfit:
+            character["outfit_tags"] = outfit
         result.setdefault(row["scene_id"], []).append(character)
     return result
 
