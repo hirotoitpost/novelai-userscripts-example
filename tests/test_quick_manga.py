@@ -244,3 +244,40 @@ def test_quick_manga_can_change_the_panel_count_per_page(client: TestClient, mon
     # コマ数を変えないときは、これまでどおり直前の話だけ
     assert seen["previous"] == [0, 4]
     assert client.post("/api/quick-manga", json={"theme": "x", "episodes": 11}, headers={"Authorization": "Bearer t"}).status_code == 422
+
+
+def test_quick_manga_continues_a_series(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import manga_draft
+
+    seen = _fake_writer(monkeypatch)
+    captured: dict = {}
+    original = manga_draft.generate_outlines
+
+    async def outlines(*args, **kwargs):
+        captured.update(previous=kwargs.get("previous"), notes=kwargs.get("notes"))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(manga_draft, "generate_outlines", outlines)
+    conn = db.get_connection()
+    try:
+        chosen = db.save_character(conn, "白石 陽菜", "1girl", "会長")
+        first = db.create_story(conn, "生徒会室の小さな奇跡", 4)
+        series = db.create_series(conn, "生徒会", memory="女子高の生徒会の4人")
+        db.set_story_series(conn, first["id"], series["id"], 1)
+        db.set_story_recap(conn, first["id"], "文化祭の前日、なくしたメモを探す")
+    finally:
+        conn.close()
+    body = {"theme": "星座観測", "character_ids": [chosen["id"]], "series_id": series["id"], "notes": "夏休み", "references": False, "episodes": 2}
+    job = _wait(client, client.post("/api/quick-manga", json=body, headers={"Authorization": "Bearer t"}).json()["id"])
+    assert job["status"] == "done", job
+    # シリーズの設定を補足に、既刊のあらすじを「これまでの巻」として大枠に渡す
+    assert captured["previous"] == ["1巻: 文化祭の前日、なくしたメモを探す"]
+    assert captured["notes"] == "女子高の生徒会の4人\n夏休み" and seen["cast"] == ["陽菜"]
+    conn = db.get_connection()
+    try:
+        story = db.get_story(conn, job["story_id"])
+    finally:
+        conn.close()
+    # 次の巻として保存し、次の巻のためのあらすじも残す
+    assert story["series_id"] == series["id"] and story["volume_no"] == 2
+    assert story["recap"] == "1話 → 2話"

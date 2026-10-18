@@ -611,6 +611,8 @@ class QuickMangaRequest(BaseModel):
     dynamic_panels: bool = False
     min_panels: int = Field(3, ge=1, le=6)
     max_panels: int = Field(6, ge=1, le=6)
+    # シリーズの続き(次の巻)にする。シリーズの設定と既刊のあらすじを大枠に渡す
+    series_id: Optional[int] = None
     notes: str = Field("", max_length=1000)
     # 使うキャラ。空なら、テーマに合う登場人物を cast_count 人考えて、キャラシートを作る
     character_ids: list[int] = Field(default_factory=list, max_length=4)

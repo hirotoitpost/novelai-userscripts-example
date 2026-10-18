@@ -21,6 +21,7 @@ from ..db import (
     list_story_scenes,
     save_character,
     set_manga_v2_page_layouts,
+    set_story_recap,
     update_character_sheet,
 )
 from ..manga_v2.layout import dynamic_layout
@@ -105,7 +106,7 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
     from ..manga_draft import draft_characters, generate_episode, generate_outlines
     from ..models import MangaDraftCreateRequest, MangaDraftPanel, MangaV2ComposeRequest, MangaV2PanelsRequest
     from ..panel_check import review_script
-    from .manga_draft import post_create
+    from .manga_draft import _series_context, post_create
     from .manga_v2 import _check_and_redraw, _redraw_states, _run_panels, check_summary_text, compose, redraw_summary_text
 
     try:
@@ -113,8 +114,11 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
         cast = draft_characters(characters)
         job.message = "大枠シナリオを考えています"
         panel_range = (min(req.min_panels, req.max_panels), max(req.min_panels, req.max_panels)) if req.dynamic_panels else None
+        # シリーズの続きなら、シリーズの設定を補足に、既刊のあらすじを「これまでの巻」として渡す
+        memory, recaps, _ = _series_context(req.series_id)
+        notes = "\n".join(part for part in (memory.strip(), req.notes.strip()) if part)
         outlines = await generate_outlines(
-            api_key, req.theme, req.genre, cast, req.episodes, notes=req.notes, panel_range=panel_range
+            api_key, req.theme, req.genre, cast, req.episodes, notes=notes, previous=recaps or None, panel_range=panel_range
         )
         outline = outlines[0]
         counts: list[int] | None = outline.get("panel_counts")
@@ -125,7 +129,7 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
             job.progress = index
             job.message = f"台本を書いています {index + 1}/{len(outline['episodes'])}話: {outline['title']}"
             panels = await generate_episode(
-                api_key, outline, index, cast, notes=req.notes,
+                api_key, outline, index, cast, notes=notes,
                 # ページごとにコマ数を変えるときは全ページで1つの話なので、それまでのページを全部渡す(繰り返さないように)
                 previous_panels=[p for e in episodes for p in e] if counts else (episodes[-1] if episodes else None),
                 count=counts[index] if counts else None,
@@ -140,9 +144,18 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
                 character_ids=[c["id"] for c in characters],
                 episodes=[[MangaDraftPanel.model_validate(p) for p in episode] for episode in episodes],
                 panels_per_page=4,
+                series_id=req.series_id,
             )
         )
         job.story_id = story.id
+        if req.series_id is not None:
+            # 次の巻の大枠に渡すあらすじ(大枠の一文とページごとの内容から。文章モデルは使わない)
+            recap = f"{outline['logline']} " + " → ".join(outline["episodes"])
+            conn = get_connection()
+            try:
+                set_story_recap(conn, story.id, recap.strip()[:1500])
+            finally:
+                conn.close()
         if counts:
             # ページごとのコマ割りを、そのページのコマ数に合わせる(取り込んだ作品のコマ割りと同じ仕組みで合成する)
             conn = get_connection()
