@@ -1,5 +1,5 @@
 {
-  "_comment": "コンテンツガードのはじめの値。DB(content_guard_rules)に無い項目だけをここから入れる。「既定に戻す」もこの値に戻す。ふだんの編集は API(/api/content-guard)か開発管理者のページで行う。",
+  "_comment": "コンテンツガードのはじめの値。DB(content_guard_rules)に無い項目だけをここから入れる。「既定に戻す」もこの値に戻す。ふだんの編集は API(/api/content-guard)か開発管理者のページで行う。既定値を変えたときは前の値を previous に残す(DB の値が前の既定値のまま=画面で変えていなければ、新しい既定値に入れ替える)。",
   "rules": [
     {
       "key": "safety.undefined_age",
@@ -67,7 +67,8 @@
       "label": "全年齢のネガティブ",
       "description": "全年齢のデータセット生成、キャラシートの読み込み(画像生成ページ)、参照画像の候補で、ネガティブに必ず足す。",
       "kind": "text",
-      "value": "nsfw, nude, underwear, swimsuit, cleavage"
+      "value": "nsfw, nude, underwear",
+      "previous": ["nsfw, nude, underwear, swimsuit, cleavage"]
     },
     {
       "key": "dataset.r18_positive",
@@ -169,7 +170,8 @@
       "label": "漫画の下書きの決まり(LLM への指示)",
       "description": "漫画の下書きの大枠シナリオと台本の指示文に入れる決まり。",
       "kind": "text",
-      "value": "全年齢向け。露出・性的な描写はしない"
+      "value": "全年齢向け(一般誌・少年誌の水準)。性的な描写はしない。水着・体操服・パジャマなど、日常や行事で自然な服装は描いてよい",
+      "previous": ["全年齢向け。露出・性的な描写はしない"]
     },
     {
       "key": "draft.default_negative",
@@ -177,7 +179,10 @@
       "label": "漫画の下書きの画面のネガティブ(初期値)",
       "description": "漫画の下書きの画面で、コマ生成のネガティブの欄にはじめに入る値(画面でその都度書き換えられる)。",
       "kind": "text",
-      "value": "lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, watermark, signature, nsfw, nude, cleavage, underwear, sexually suggestive"
+      "value": "lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, watermark, signature, nsfw, nude, underwear, sexually suggestive",
+      "previous": [
+        "lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, watermark, signature, nsfw, nude, cleavage, underwear, sexually suggestive"
+      ]
     },
     {
       "key": "similar.excluded_words",
@@ -187,9 +192,16 @@
       "kind": "words",
       "match": "word",
       "value": [
-        "breasts", "breast", "nipples", "cleavage", "navel", "thighs", "thigh", "ass", "butt", "hips", "crotch",
-        "pussy", "penis", "nude", "naked", "underwear", "panties", "bra", "lingerie", "swimsuit", "bikini",
-        "topless", "bottomless", "sweat", "wet"
+        "breasts", "breast", "nipples", "cleavage", "ass", "butt", "crotch",
+        "pussy", "penis", "nude", "naked", "underwear", "panties", "bra", "lingerie",
+        "topless", "bottomless"
+      ],
+      "previous": [
+        [
+          "breasts", "breast", "nipples", "cleavage", "navel", "thighs", "thigh", "ass", "butt", "hips", "crotch",
+          "pussy", "penis", "nude", "naked", "underwear", "panties", "bra", "lingerie", "swimsuit", "bikini",
+          "topless", "bottomless", "sweat", "wet"
+        ]
       ]
     },
     {
