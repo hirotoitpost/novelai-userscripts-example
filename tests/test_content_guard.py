@@ -76,7 +76,7 @@ def test_default_behaviour_is_unchanged(client: TestClient) -> None:
     assert blocked_tags("maid outfit, mermaid", ["maid"], include_core=False) == ["maid"]
     assert minor_tags("JK, student council, young woman") == ["jk", "student", "young"]
     assert minor_tags("lolita fashion, petite, adult") == []
-    assert sheet_negative(CHARACTER).endswith("short hair, nsfw, nude, underwear, swimsuit, cleavage")
+    assert sheet_negative(CHARACTER).endswith("short hair, nsfw, nude, underwear")
     assert "child, loli, shota, young, teenage" in sheet_negative(CHARACTER, r18=True)
     assert sheet_prompt(CHARACTER, r18=True) == "1girl, black hair, adult, mature female, blouse"
     # 場面のタグ
@@ -105,7 +105,9 @@ def test_default_behaviour_is_unchanged(client: TestClient) -> None:
     assert not content_guard.tags_adult("1girl, underwear") and not content_guard.tags_adult(None)
     assert content_guard.count("library.adult_text", "全裸の全裸で絶頂、イクっ") == 4
     # 似た漫画
-    assert not _is_safe("large breasts") and not _is_safe("wet hair") and not _is_safe("sex")
+    assert not _is_safe("large breasts") and not _is_safe("sex")
+    # 濡れた髪・汗は、雨やプール・運動の場面で普通に使う(一般誌の水準)
+    assert _is_safe("wet hair") and _is_safe("sweat")
     assert _is_safe("sweatdrop") and _is_safe("black thighhighs")
     # LLM への指示
     prompt = _adult_tags_system_prompt(2)
@@ -114,8 +116,10 @@ def test_default_behaviour_is_unchanged(client: TestClient) -> None:
         "- never use tags implying minors (child, loli, shota, school uniform, student, classroom) and do not add"
         in prompt
     )
-    assert _content_rule() == "\n- 全年齢向け。露出・性的な描写はしない"
-    assert _OUTLINE_SYSTEM.format(options=3, episodes=4, content_rule=_content_rule()).endswith("性的な描写はしない")
+    assert _content_rule() == (
+        "\n- 全年齢向け(一般誌・少年誌の水準)。性的な描写はしない。水着・体操服・パジャマなど、日常や行事で自然な服装は描いてよい"
+    )
+    assert _OUTLINE_SYSTEM.format(options=3, episodes=4, content_rule=_content_rule()).endswith("自然な服装は描いてよい")
     assert "- 全年齢向けの日常の話に出せる人物にする\n- look:" in _naming_system()
     assert content_guard.words("stamps.adult_tags") == {"R-18", "R18", "R-18G"}
 
@@ -178,7 +182,7 @@ def test_reset(client: TestClient) -> None:
     assert content_guard.get("general.safe_negative") == "nsfw"
     rules = client.post("/api/content-guard/reset").json()["rules"]
     assert not any(r["modified"] for r in rules)
-    assert content_guard.get("general.safe_negative") == "nsfw, nude, underwear, swimsuit, cleavage"
+    assert content_guard.get("general.safe_negative") == "nsfw, nude, underwear"
 
 
 def test_check(client: TestClient) -> None:
@@ -191,3 +195,34 @@ def test_check(client: TestClient) -> None:
         "scene_tags": "1girl, nude, bed",
         "scene_tags_adult": "nsfw, 1girl, nude, bed",
     }
+
+
+def test_previous_defaults_are_upgraded_but_edits_are_kept(client: TestClient) -> None:
+    import json
+
+    # 前の既定値のまま(画面で変えていない)の項目と、画面で変えた項目がある DB
+    conn = db.get_connection()
+    try:
+        content_guard.get("general.safe_negative")
+        conn.execute(
+            "UPDATE content_guard_rules SET value = ? WHERE key = 'general.safe_negative'",
+            (json.dumps("nsfw, nude, underwear, swimsuit, cleavage"),),
+        )
+        conn.execute(
+            "UPDATE content_guard_rules SET value = ? WHERE key = 'draft.content_rule'",
+            (json.dumps("全年齢向け。自分で書いた決まり"),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    content_guard.reset_cache()
+    # 前の既定値のままなら新しい既定値に、画面で変えた値はそのまま
+    assert content_guard.get("general.safe_negative") == "nsfw, nude, underwear"
+    assert content_guard.get("draft.content_rule") == "全年齢向け。自分で書いた決まり"
+    # 入れ替えた値は DB にも書く(次からは入れ替え済み)
+    conn = db.get_connection()
+    try:
+        stored = conn.execute("SELECT value FROM content_guard_rules WHERE key = 'general.safe_negative'").fetchone()["value"]
+    finally:
+        conn.close()
+    assert json.loads(stored) == "nsfw, nude, underwear"

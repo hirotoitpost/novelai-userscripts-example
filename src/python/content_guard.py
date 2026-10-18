@@ -69,6 +69,13 @@ def _rules() -> dict[str, Rule]:
     }
 
 
+@lru_cache(maxsize=1)
+def _previous_defaults() -> dict[str, list[Any]]:
+    """項目ごとの前の既定値(content_guard_defaults.json の previous)。"""
+    data = json.loads(_DEFAULTS_FILE.read_text(encoding="utf-8"))
+    return {r["key"]: list(r["previous"]) for r in data["rules"] if r.get("previous")}
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -101,7 +108,12 @@ def _load() -> _Loaded:
                     updated[row["key"]] = row["updated_at"]
                 except json.JSONDecodeError:
                     continue
-            # DB に無い項目(はじめての起動・あとから増えた項目)は、はじめの値を入れる
+            # 既定値を変えた項目: DB の値が前の既定値のまま(画面で変えていない)なら、新しい既定値に入れ替える。
+            # 画面で変えた値はそのまま残す
+            for key, old_values in _previous_defaults().items():
+                if key in values and values[key] in old_values and values[key] != rules[key].default:
+                    del values[key]
+            # DB に無い項目(はじめての起動・あとから増えた項目・前の既定値のままだった項目)は、はじめの値を入れる
             missing = [rule for key, rule in rules.items() if key not in values]
             for rule in missing:
                 now = _now()
