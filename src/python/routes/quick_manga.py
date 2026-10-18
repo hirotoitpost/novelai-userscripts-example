@@ -14,7 +14,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from novelai import AsyncNovelAI
 
 from ..client import get_client
-from ..db import get_character, get_connection, list_characters, list_story_scenes, save_character, update_character_sheet
+from ..db import (
+    get_character,
+    get_connection,
+    list_characters,
+    list_story_scenes,
+    save_character,
+    set_manga_v2_page_layouts,
+    update_character_sheet,
+)
+from ..manga_v2.layout import dynamic_layout
 from ..models import QuickMangaRequest
 from ..quick_manga import propose_cast, suggest_themes, unique_name
 
@@ -103,8 +112,12 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
         characters = await _prepare_characters(req, api_key, job)
         cast = draft_characters(characters)
         job.message = "大枠シナリオを考えています"
-        outlines = await generate_outlines(api_key, req.theme, req.genre, cast, req.episodes, notes=req.notes)
+        panel_range = (min(req.min_panels, req.max_panels), max(req.min_panels, req.max_panels)) if req.dynamic_panels else None
+        outlines = await generate_outlines(
+            api_key, req.theme, req.genre, cast, req.episodes, notes=req.notes, panel_range=panel_range
+        )
         outline = outlines[0]
+        counts: list[int] | None = outline.get("panel_counts")
         job.title = outline["title"]
         episodes: list[list[dict[str, Any]]] = []
         job.total = len(outline["episodes"])
@@ -112,7 +125,8 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
             job.progress = index
             job.message = f"台本を書いています {index + 1}/{len(outline['episodes'])}話: {outline['title']}"
             panels = await generate_episode(
-                api_key, outline, index, cast, notes=req.notes, previous_panels=episodes[-1] if episodes else None
+                api_key, outline, index, cast, notes=req.notes, previous_panels=episodes[-1] if episodes else None,
+                count=counts[index] if counts else None,
             )
             if req.review_script:
                 job.message = f"台本を見直しています {index + 1}/{len(outline['episodes'])}話(絵に要る物・状態を足す)"
@@ -127,6 +141,13 @@ async def _make(req: QuickMangaRequest, api_key: str, job: _QuickJob) -> None:
             )
         )
         job.story_id = story.id
+        if counts:
+            # ページごとのコマ割りを、そのページのコマ数に合わせる(取り込んだ作品のコマ割りと同じ仕組みで合成する)
+            conn = get_connection()
+            try:
+                set_manga_v2_page_layouts(conn, story.id, [dynamic_layout(len(e), i) for i, e in enumerate(episodes)])
+            finally:
+                conn.close()
         count = sum(len(e) for e in episodes)
         if req.stop_after_script:
             job.message = f"台本ができました: {outline['title']}({len(episodes)}話・{count}コマ。コマの絵はまだ生成していません)"

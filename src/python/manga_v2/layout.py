@@ -62,11 +62,15 @@ def fill_template(template_id: str, n_panels: int) -> str:
 
 def panel_rects(template_id: str) -> list[Rect]:
     """テンプレートのコマをページ上のピクセル座標にする。内側の辺だけ余白の半分ずつ削る。"""
-    template = TEMPLATES[template_id]
+    return _content_rects(TEMPLATES[template_id].panels)
+
+
+def _content_rects(panels: Sequence[tuple[float, float, float, float]]) -> list[Rect]:
+    """本文領域を単位正方形としたコマを、ページ上のピクセル座標にする。内側の辺だけ余白の半分ずつ削る。"""
     content_w = PAGE_WIDTH - PAGE_MARGIN * 2
     content_h = PAGE_HEIGHT - PAGE_MARGIN * 2
     rects: list[Rect] = []
-    for x0, y0, x1, y1 in template.panels:
+    for x0, y0, x1, y1 in panels:
         rects.append(
             (
                 PAGE_MARGIN + round(x0 * content_w) + (GUTTER_X // 2 if x0 > 0 else 0),
@@ -76,6 +80,57 @@ def panel_rects(template_id: str) -> list[Rect]:
             )
         )
     return rects
+
+
+# ---- コマ数に合わせたコマ割り(ページごとにコマ数を変える漫画) ----
+
+# コマ数 → コマ割りの候補(本文領域を単位正方形とした (x0, y0, x1, y1)。読む順: 右上から左へ、上から下へ)。
+# 同じコマ数が続いても単調にならないよう、ページごとに候補を順に使う(dynamic_layout の variant)。
+# 1コマ目(導入)か最後のコマ(オチ)を大きくする型を混ぜる。
+_COUNT_LAYOUTS: dict[int, tuple[tuple[tuple[float, float, float, float], ...], ...]] = {
+    1: (((0.0, 0.0, 1.0, 1.0),),),
+    2: (
+        ((0.0, 0.0, 1.0, 0.5), (0.0, 0.5, 1.0, 1.0)),
+        ((0.0, 0.0, 1.0, 0.38), (0.0, 0.38, 1.0, 1.0)),
+    ),
+    3: (
+        ((0.0, 0.0, 1.0, 0.55), (0.5, 0.55, 1.0, 1.0), (0.0, 0.55, 0.5, 1.0)),
+        ((0.5, 0.0, 1.0, 0.45), (0.0, 0.0, 0.5, 0.45), (0.0, 0.45, 1.0, 1.0)),
+        ((0.0, 0.0, 1.0, 0.3), (0.0, 0.3, 1.0, 0.6), (0.0, 0.6, 1.0, 1.0)),
+    ),
+    4: (
+        ((0.5, 0.0, 1.0, 0.5), (0.0, 0.0, 0.5, 0.5), (0.5, 0.5, 1.0, 1.0), (0.0, 0.5, 0.5, 1.0)),
+        ((0.0, 0.0, 1.0, 0.4), (0.5, 0.4, 1.0, 0.7), (0.0, 0.4, 0.5, 0.7), (0.0, 0.7, 1.0, 1.0)),
+        ((0.4, 0.0, 1.0, 0.3), (0.0, 0.0, 0.4, 0.3), (0.0, 0.3, 1.0, 0.6), (0.0, 0.6, 1.0, 1.0)),
+    ),
+    5: (
+        ((0.0, 0.0, 1.0, 0.3), (0.5, 0.3, 1.0, 0.6), (0.0, 0.3, 0.5, 0.6), (0.5, 0.6, 1.0, 1.0), (0.0, 0.6, 0.5, 1.0)),
+        ((0.45, 0.0, 1.0, 0.3), (0.0, 0.0, 0.45, 0.3), (0.55, 0.3, 1.0, 0.6), (0.0, 0.3, 0.55, 0.6), (0.0, 0.6, 1.0, 1.0)),
+    ),
+    6: (
+        tuple((x, y / 3, x + 0.5, (y + 1) / 3) for y in range(3) for x in (0.5, 0.0)),
+        ((0.0, 0.0, 1.0, 0.25), (0.5, 0.25, 1.0, 0.5), (0.0, 0.25, 0.5, 0.5), (0.5, 0.5, 1.0, 0.75), (0.0, 0.5, 0.5, 0.75),
+         (0.0, 0.75, 1.0, 1.0)),
+    ),
+}
+# ページごとに変えられるコマ数の範囲
+MIN_DYNAMIC_PANELS = 1
+MAX_DYNAMIC_PANELS = max(_COUNT_LAYOUTS)
+
+
+def dynamic_layout(count: int, variant: int = 0) -> list[list[float]]:
+    """
+    コマ数 count のページのコマ割り(取り込みと同じ古い形: ページの幅・高さに対する割合の (x0, y0, x1, y1) を読む順に)。
+    variant で候補を変える(ページの番号を渡すと、同じコマ数が続いても型が変わる)。
+    """
+    if not MIN_DYNAMIC_PANELS <= count <= MAX_DYNAMIC_PANELS:
+        raise ValueError(f"コマ数は {MIN_DYNAMIC_PANELS}〜{MAX_DYNAMIC_PANELS} にしてください({count})。")
+    options = _COUNT_LAYOUTS[count]
+    rects = _content_rects(options[variant % len(options)])
+    return [
+        [round(x0 / PAGE_WIDTH, 4), round(y0 / PAGE_HEIGHT, 4), round(x1 / PAGE_WIDTH, 4), round(y1 / PAGE_HEIGHT, 4)]
+        for x0, y0, x1, y1 in rects
+    ]
 
 
 # ---- コマの形とページ ----

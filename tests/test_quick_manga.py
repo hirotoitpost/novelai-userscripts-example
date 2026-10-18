@@ -89,7 +89,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _wait(client: TestClient, job_id: str) -> dict:
-    for _ in range(200):
+    # 全部のテストを続けて流すと遅くなり、10秒では足りないことがあった
+    for _ in range(600):
         job = client.get(f"/api/quick-manga/jobs/{job_id}").json()
         if job["status"] != "running":
             return job
@@ -113,13 +114,19 @@ def _fake_writer(monkeypatch: pytest.MonkeyPatch) -> dict:
             return {"themes": ["会社で…"]}
         raise AssertionError(system[:40])
 
-    async def fake_outlines(api_key, theme, genre, cast, episodes, *, notes="", previous=None, structure=None):
+    async def fake_outlines(api_key, theme, genre, cast, episodes, *, notes="", previous=None, structure=None, panel_range=None):
         seen["cast"] = [c.name for c in cast]
-        return [{"title": "正体バレ", "logline": "", "episodes": ["一話", "二話"][:episodes]}]
+        seen["panel_range"] = panel_range
+        outline = {"title": "正体バレ", "logline": "", "episodes": [f"{i + 1}話" for i in range(episodes)]}
+        if panel_range:
+            # ページごとのコマ数(範囲の両端と真ん中を順に)
+            outline["panel_counts"] = [(panel_range[0], panel_range[1], 4)[i % 3] for i in range(episodes)]
+        return [outline]
 
-    async def fake_episode(api_key, outline, index, cast, *, notes="", previous_panels=None, structure=None):
+    async def fake_episode(api_key, outline, index, cast, *, notes="", previous_panels=None, structure=None, count=None):
+        seen.setdefault("counts", []).append(count)
         return [{"characters": [cast[0].name], "actions": {}, "lines": [{"speaker": cast[0].name, "kind": "speech", "text": f"{index}話"}],
-                 "narration": "", "sfx": [], "prompt_tags": "office", "fixes": []} for _ in range(4)]
+                 "narration": "", "sfx": [], "prompt_tags": "office", "fixes": []} for _ in range(count or 4)]
 
     async def fake_reference(api_key, character, count=None):
         seen.setdefault("references", []).append((character["name"], count))
@@ -203,3 +210,32 @@ def test_theme_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     assert res == {"themes": ["会社で…"], "trends": {"narou": ["社会人"], "anilist": ["Office"], "errors": []}}
     plain = client.get("/api/quick-manga/themes", params={"genre": "ラブコメ", "trends": "false"}, headers={"Authorization": "Bearer t"}).json()
     assert plain["trends"]["narou"] == []
+
+
+def test_quick_manga_can_change_the_panel_count_per_page(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_writer(monkeypatch)
+    body = {"theme": "生徒会の日常", "episodes": 5, "dynamic_panels": True, "references": False}
+    job = _wait(client, client.post("/api/quick-manga", json=body, headers={"Authorization": "Bearer t"}).json()["id"])
+    assert job["status"] == "done", job
+    # 大枠でページごとのコマ数を決め(既定 3〜6)、台本はそのコマ数で書く
+    assert seen["panel_range"] == (3, 6) and seen["counts"] == [3, 6, 4, 3, 6]
+    conn = db.get_connection()
+    try:
+        layouts = db.get_manga_v2_page_layouts(conn, job["story_id"])
+        scenes = db.list_story_scenes(conn, job["story_id"])
+    finally:
+        conn.close()
+    # コマ割りも、ページごとのコマ数に合わせる
+    assert [len(layout) for layout in layouts] == [3, 6, 4, 3, 6] and len(scenes) == 22
+    assert seen["panels"][3] == 22
+    # 10ページまで。ふだん(コマ数を変えない)は、コマ割りを保存しない
+    seen.clear()
+    plain = _wait(client, client.post("/api/quick-manga", json={"theme": "x", "episodes": 2, "references": False},
+                                     headers={"Authorization": "Bearer t"}).json()["id"])
+    conn = db.get_connection()
+    try:
+        assert db.get_manga_v2_page_layouts(conn, plain["story_id"]) == []
+    finally:
+        conn.close()
+    assert seen["panel_range"] is None and seen["counts"] == [None, None]
+    assert client.post("/api/quick-manga", json={"theme": "x", "episodes": 11}, headers={"Authorization": "Bearer t"}).status_code == 422

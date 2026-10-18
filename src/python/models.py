@@ -605,8 +605,12 @@ class QuickMangaRequest(BaseModel):
 
     theme: str = Field(min_length=1, max_length=500)
     genre: str = Field("日常コメディ", max_length=100)
-    # 話数(1話=4コマ。1ページ=4コマ)
-    episodes: int = Field(2, ge=1, le=4)
+    # 話数(1話=4コマ。1ページ=4コマ)。dynamic_panels なら 1話=1ページ(ページ数)
+    episodes: int = Field(2, ge=1, le=10)
+    # ページごとにコマ数を変える(min_panels〜max_panels。内容に合わせて大枠を作るときに決める)。コマ割りもコマ数に合わせる
+    dynamic_panels: bool = False
+    min_panels: int = Field(3, ge=1, le=6)
+    max_panels: int = Field(6, ge=1, le=6)
     notes: str = Field("", max_length=1000)
     # 使うキャラ。空なら、テーマに合う登場人物を cast_count 人考えて、キャラシートを作る
     character_ids: list[int] = Field(default_factory=list, max_length=4)
