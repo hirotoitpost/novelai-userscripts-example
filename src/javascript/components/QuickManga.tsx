@@ -50,6 +50,8 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
   const [theme, setTheme] = useState('')
   const [genre, setGenre] = useLocalStorage('nai_quick_genre', DEFAULT_GENRE)
   const [episodes, setEpisodes] = useLocalStorage('nai_quick_episodes', 2)
+  // ページごとにコマ数を変える(1話=1ページ。コマ数は内容に合わせて大枠で決める)
+  const [dynamicPanels, setDynamicPanels] = useLocalStorage('nai_quick_dynamic_panels', false)
   const [castIds, setCastIds] = useState<number[]>([])
   const [castCount, setCastCount] = useLocalStorage('nai_quick_cast_count', 2)
   const [color, setColor] = useLocalStorage('nai_quick_color', true)
@@ -107,6 +109,7 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
     try {
       const job = await apiFetch<QuickJob>(token, '/api/quick-manga', {
         theme: theme.trim(), genre: genre.trim() || DEFAULT_GENRE, episodes, character_ids: castIds, cast_count: castCount,
+        dynamic_panels: dynamicPanels,
         color, stop_after_script: scriptOnly, use_character_reference: useReference,
         review_script: review, check_panels: checkPanels, redraw_states: redrawStates,
       })
@@ -131,8 +134,12 @@ export default function QuickManga({ token, characters, genres, task, onCharacte
           <datalist id="md-quick-genres">{genres.map(g => <option key={g} value={g} />)}</datalist>
         </label>
         <label className="md-field md-field--narrow">
-          <span>話数(1話=4コマ)</span>
-          <input type="number" min={1} max={4} value={episodes} onChange={e => setEpisodes(Math.min(4, Math.max(1, Number(e.target.value) || 1)))} />
+          <span>{dynamicPanels ? 'ページ数' : '話数(1話=4コマ)'}</span>
+          <input type="number" min={1} max={10} value={episodes} onChange={e => setEpisodes(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} />
+        </label>
+        <label className="md-check" title="1話=1ページにして、ページごとのコマ数(3〜6)を話の内容に合わせて決めます。見せ場は少ないコマで大きく、会話の多い場面はコマを多くします。コマ割りもコマ数に合わせます">
+          <input type="checkbox" checked={dynamicPanels} onChange={e => setDynamicPanels(e.target.checked)} />
+          {' '}コマ数をページごとに変える(3〜6コマ)
         </label>
       </div>
       <label className="md-field">

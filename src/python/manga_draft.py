@@ -99,6 +99,18 @@ JSONだけを返してください(前置きや```は不要):
 - 登場人物の性格・口調・呼び方を守る。登場人物は指定された人だけを中心にする{content_rule}"""
 
 
+# ページごとにコマ数を変えるとき(1話=1ページ)の大枠の指示
+_OUTLINE_DYNAMIC_SYSTEM = """あなたは漫画の構成作家です。指定のテーマ・ジャンル・登場人物で、短編漫画の大枠シナリオ案を{options}つ考えます。
+JSONだけを返してください(前置きや```は不要):
+{{"outlines":[{{"title":"作品タイトル","logline":"一文のあらすじ","episodes":[{{"content":"1ページ目の内容","panels":4}},{{"content":"2ページ目の内容","panels":5}}]}}]}}
+- episodes はちょうど{episodes}個で、1つが漫画の1ページ。全体で1つの流れ(導入・展開・山場・結末)になるようにする
+- panels はそのページのコマ数で、{min_panels}〜{max_panels}の整数。内容に合わせて決める: 見せ場・感情の山・オチは少ないコマで
+  大きく見せ、会話のやりとりや小さな出来事が続くページはコマを多くする。全ページ同じ数にはしない
+- 各ページの内容は、誰が何をしてどうなるかが分かるように60文字程度で書く
+- {options}つの案は雰囲気や切り口をはっきり変える
+- 登場人物の性格・口調・呼び方を守る。登場人物は指定された人だけを中心にする{content_rule}"""
+
+
 # 取り込んだ作品の構成を渡すときの但し書き。市販の作品も入るので、筋書き・設定・セリフの文面は使わせない
 _STRUCTURE_NOTE = (
     "参考にするコマ運び(別の作品から読み取った、各コマの構図・人数・セリフの量と型・場面・所作・役割。"
@@ -127,8 +139,15 @@ def outline_prompts(
     previous: list[str] | None = None,
     options: int = 3,
     structure: list[list[str]] | None = None,
+    panel_range: tuple[int, int] | None = None,
 ) -> tuple[str, str]:
-    system = _OUTLINE_SYSTEM.format(options=options, episodes=episodes, content_rule=_content_rule())
+    """panel_range があれば、1話=1ページで、ページごとのコマ数もその範囲で決めさせる。"""
+    if panel_range:
+        system = _OUTLINE_DYNAMIC_SYSTEM.format(
+            options=options, episodes=episodes, min_panels=panel_range[0], max_panels=panel_range[1], content_rule=_content_rule()
+        )
+    else:
+        system = _OUTLINE_SYSTEM.format(options=options, episodes=episodes, content_rule=_content_rule())
     user = [f"テーマ: {theme}", f"ジャンル: {genre}", "登場人物:", _cast_block(characters)]
     if notes.strip():
         user.append(f"補足: {notes.strip()}")
@@ -141,8 +160,11 @@ def outline_prompts(
     return system, "\n".join(user)
 
 
-def parse_outlines(data: Any, episodes: int) -> list[dict[str, Any]]:
-    """大枠案を検める。話数が足りない案は捨て、多すぎる分は切る。"""
+def parse_outlines(data: Any, episodes: int, panel_range: tuple[int, int] | None = None) -> list[dict[str, Any]]:
+    """
+    大枠案を検める。話数が足りない案は捨て、多すぎる分は切る。panel_range があれば、話ごとのコマ数を
+    panel_counts に入れる(範囲の外は範囲に収め、無ければ範囲の真ん中)。
+    """
     outlines: list[dict[str, Any]] = []
     for item in (data or {}).get("outlines") or []:
         if not isinstance(item, dict):
@@ -151,11 +173,34 @@ def parse_outlines(data: Any, episodes: int) -> list[dict[str, Any]]:
         logline = item.get("logline") or next(
             (v for k, v in item.items() if k.startswith("log") and isinstance(v, str)), ""
         )
-        eps = [str(e).strip() for e in item.get("episodes") or item.get("beats") or [] if str(e).strip()]
+        eps: list[str] = []
+        counts: list[int] = []
+        for raw in item.get("episodes") or item.get("beats") or []:
+            # コマ数つきの形 {"content": ..., "panels": N} も、文字列だけの形も受け取る
+            text = str((raw.get("content") or raw.get("text") or "") if isinstance(raw, dict) else raw).strip()
+            if not text:
+                continue
+            eps.append(text)
+            counts.append(_panel_count(raw.get("panels") if isinstance(raw, dict) else None, panel_range))
         title = str(item.get("title") or "").strip()
         if title and len(eps) >= episodes:
-            outlines.append({"title": title, "logline": str(logline).strip(), "episodes": eps[:episodes]})
+            outline: dict[str, Any] = {"title": title, "logline": str(logline).strip(), "episodes": eps[:episodes]}
+            if panel_range:
+                outline["panel_counts"] = counts[:episodes]
+            outlines.append(outline)
     return outlines
+
+
+def _panel_count(value: Any, panel_range: tuple[int, int] | None) -> int:
+    """大枠のコマ数を範囲に収める(数でなければ範囲の真ん中)。"""
+    if not panel_range:
+        return PANELS_PER_EPISODE
+    low, high = panel_range
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return (low + high) // 2
+    return min(max(count, low), high)
 
 
 async def generate_outlines(
@@ -168,11 +213,16 @@ async def generate_outlines(
     notes: str = "",
     previous: list[str] | None = None,
     structure: list[list[str]] | None = None,
+    panel_range: tuple[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     system, user = outline_prompts(
-        theme, genre, characters, episodes, notes=notes, previous=previous, structure=structure
+        theme, genre, characters, episodes, notes=notes, previous=previous, structure=structure, panel_range=panel_range
     )
-    outlines = parse_outlines(await _ask_json(api_key, system, user, max_tokens=4000, temperature=0.9), episodes)
+    # 話数が多いと案3つ分の応答が長くなる(10話で 4000 トークンを超えるおそれ)
+    max_tokens = 4000 + max(0, episodes - 4) * 400
+    outlines = parse_outlines(
+        await _ask_json(api_key, system, user, max_tokens=max_tokens, temperature=0.9), episodes, panel_range
+    )
     if not outlines:
         raise RuntimeError("使える大枠シナリオ案がありませんでした。もう一度試してください。")
     return outlines
@@ -200,7 +250,9 @@ def episode_prompts(
     notes: str = "",
     previous_panels: list[dict[str, Any]] | None = None,
     structure: list[str] | None = None,
+    count: int | None = None,
 ) -> tuple[str, str]:
+    """count は、構成を使わないときのコマ数(無ければ既定の4)。"""
     episodes = outline["episodes"]
     user = ["登場人物:", _cast_block(characters)]
     if notes.strip():
@@ -217,20 +269,29 @@ def episode_prompts(
     if structure:
         user.append(_STRUCTURE_RULES)
         user.extend(f"{i + 1}コマ目: {line}" for i, line in enumerate(structure))
-    return episode_system(len(structure) if structure else PANELS_PER_EPISODE, bool(structure)), "\n".join(user)
+    arc = None
+    if count and not structure:
+        # ページごとにコマ数を変える漫画は、全ページで1つの話。ページごとにオチを付けると4コマ漫画の連続になる
+        arc = (
+            "このページの内容を、最後のコマで話の結末まで描く"
+            if episode_index == len(episodes) - 1
+            else "このページの内容を描き、最後のコマは次のページへつながる引き(オチは付けない)"
+        )
+    return episode_system(len(structure) if structure else count or PANELS_PER_EPISODE, bool(structure), arc), "\n".join(user)
 
 
-def episode_system(count: int, structured: bool = False) -> str:
+def episode_system(count: int, structured: bool = False, arc: str | None = None) -> str:
     """
     1話分の台本の指示。コマ数は既定の4、取り込んだ作品の構成を使うときはそのページのコマ数。
-    構成を使うとき(structured)は、セリフの数と長さを構成に合わせる。
+    構成を使うとき(structured)は、セリフの数と長さを構成に合わせる。arc は話の運び(無ければコマ数から決める)。
     """
     lines_rule = (
         "1コマのセリフは構成に書いてある数(多くても4個)、長さも構成に合わせる(1つ40文字以内)。説明ではなく会話で見せる"
         if structured
         else "1コマのセリフは0〜2個、1つ20文字以内。説明ではなく会話で見せる"
     )
-    arc = "起承転結で、4コマ目にオチ" if count == PANELS_PER_EPISODE else "話に山場をつくり、最後のコマにオチ"
+    if arc is None:
+        arc = "起承転結で、4コマ目にオチ" if count == PANELS_PER_EPISODE else "話に山場をつくり、最後のコマにオチ"
     # JSON の例の { } とぶつからないよう、format ではなく置き換えで埋める
     return (
         _EPISODE_SYSTEM.replace("{count}", str(count))
@@ -347,15 +408,18 @@ async def generate_episode(
     notes: str = "",
     previous_panels: list[dict[str, Any]] | None = None,
     structure: list[str] | None = None,
+    count: int | None = None,
 ) -> list[dict[str, Any]]:
+    """count は、構成を使わないときのコマ数(無ければ既定の4。ページごとにコマ数を変える漫画で使う)。"""
     system, user = episode_prompts(
-        outline, episode_index, characters, notes=notes, previous_panels=previous_panels, structure=structure
+        outline, episode_index, characters, notes=notes, previous_panels=previous_panels, structure=structure, count=count
     )
+    expected = len(structure) if structure else count or PANELS_PER_EPISODE
     last_error = ""
     for _ in range(_MAX_ATTEMPTS):
-        data = await _ask_json(api_key, system, user, max_tokens=3000, temperature=0.7)
+        data = await _ask_json(api_key, system, user, max_tokens=3000 + max(0, expected - 4) * 500, temperature=0.7)
         try:
-            return parse_episode(data, characters, len(structure) if structure else PANELS_PER_EPISODE)
+            return parse_episode(data, characters, expected)
         except ValueError as exc:
             last_error = str(exc)
     raise RuntimeError(f"第{episode_index + 1}話の台本を作れませんでした: {last_error}")
