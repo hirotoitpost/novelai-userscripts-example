@@ -1,5 +1,6 @@
 import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import BackButton, { useBackLabel } from '../components/BackButton'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import PublishDialog, { publishedMessage, PublishTarget } from '../components/PublishDialog'
 import {
@@ -131,6 +132,7 @@ function bookSummary(book: Book): string {
 
 export default function Bookshelf() {
   const navigate = useNavigate()
+  const backLabel = useBackLabel()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const openId = Number(searchParams.get('book')) || null
@@ -296,7 +298,8 @@ export default function Bookshelf() {
   function closeBook() {
     // 本棚から開いたなら履歴を1つ戻す(「戻る」と同じ)。ギャラリー等から直接開いたときに戻ると
     // 本棚ではなく前のページへ行ってしまうので、その場合は本を閉じた本棚に置き換える。
-    if ((location.state as { fromShelf?: boolean } | null)?.fromShelf) navigate(-1)
+    // キャラ一覧など別のページから本を開いたときは、閉じたらそのページへ戻る
+    if ((location.state as { fromShelf?: boolean } | null)?.fromShelf || backLabel) navigate(-1)
     else setSearchParams({}, { replace: true })
   }
 
@@ -358,7 +361,7 @@ export default function Bookshelf() {
   return (
     <div className="shelf-root">
       <header className="shelf-header">
-        <button type="button" className="shelf-back" onClick={() => navigate('/')}>← ホーム</button>
+        <BackButton className="shelf-back" />
         <h1>本棚</h1>
         <span className="shelf-count">{books.length} 冊</span>
         <button type="button" className={`shelf-back shelf-select-toggle${selecting ? ' is-active' : ''}`}

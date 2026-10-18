@@ -261,6 +261,8 @@ class GalleryImage(BaseModel):
     adult: bool = False
     adult_auto: bool = False
     adult_manual: bool | None = None
+    # キャラ別データセットの画像なら、そのキャラ
+    character_id: int | None = None
 
 
 class GalleryResponse(BaseModel):
@@ -292,7 +294,7 @@ def _dataset_images() -> list[GalleryImage]:
         characters = list_characters(conn)
     finally:
         conn.close()
-    names = {_safe_name(c.get("trigger_word") or c["name"]): c["name"] for c in characters}
+    names = {_safe_name(c.get("trigger_word") or c["name"]): (c["name"], c["id"]) for c in characters}
     if not _OUTPUTS.is_dir():
         return []
 
@@ -300,7 +302,7 @@ def _dataset_images() -> list[GalleryImage]:
     for root in _OUTPUTS.iterdir():
         if not root.is_dir() or root.name.startswith(".") or root.name in ("history", "manga"):
             continue
-        for folder, character_name in names.items():
+        for folder, (character_name, character_id) in names.items():
             for sub in _DATASET_SUBDIRS:
                 directory = root / folder / sub
                 if not directory.is_dir():
@@ -323,6 +325,7 @@ def _dataset_images() -> list[GalleryImage]:
                             height=height,
                             prompt=caption.read_text(encoding="utf-8").strip() if caption.is_file() else "",
                             label=f"{character_name} / {sub}",
+                            character_id=character_id,
                         )
                     )
     return items
@@ -404,6 +407,23 @@ def _gallery_images() -> list[GalleryImage]:
         )
     # ファイルが消えているもの(手で消した等)は出さない
     return [item for item in items if (_PROJECT_ROOT / item.path).is_file()]
+
+
+@router.get("/character-datasets")
+def get_character_dataset_counts() -> dict[str, int]:
+    """キャラごとの、キャラ別データセットの画像の枚数(キャラ一覧のページで使う)。キーはキャラID。"""
+    counts: dict[str, int] = {}
+    for item in _dataset_images():
+        if item.character_id is not None:
+            counts[str(item.character_id)] = counts.get(str(item.character_id), 0) + 1
+    return counts
+
+
+@router.get("/character-datasets/{character_id}", response_model=list[GalleryImage])
+def get_character_dataset(character_id: int) -> list[GalleryImage]:
+    """そのキャラのキャラ別データセットの画像(新しい順。成人向けの印はギャラリーと同じ)。"""
+    items = [i for i in _gallery_images() if i.source == "dataset" and i.character_id == character_id]
+    return sorted(items, key=lambda i: (i.created_at, i.key), reverse=True)
 
 
 @router.get("/images", response_model=GalleryResponse)

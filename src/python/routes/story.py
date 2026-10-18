@@ -2080,6 +2080,21 @@ async def get_characters() -> list[dict[str, Any]]:
         conn.close()
 
 
+@router.get("/character-works")
+async def get_character_works() -> dict[str, list[dict[str, Any]]]:
+    """
+    キャラごとの、出ている作品(物語)の一覧(キャラ一覧のページで使う)。キーはキャラID。シリーズの巻なら、
+    シリーズの題と巻の番号も付ける。注意: /{story_id} より前に登録する。
+    """
+    from ..db import character_works
+
+    conn = get_connection()
+    try:
+        return {str(character_id): works for character_id, works in character_works(conn).items()}
+    finally:
+        conn.close()
+
+
 @router.post("/characters", response_model=CharacterResponse)
 async def create_character(req: CharacterSaveRequest) -> dict[str, Any]:
     """キャラを登録/更新する。同じ名前なら上書き(容姿タグが空なら既存値を残す)。"""

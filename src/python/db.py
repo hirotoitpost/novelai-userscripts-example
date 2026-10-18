@@ -1769,6 +1769,28 @@ def save_character(
     return dict(row)
 
 
+def character_works(conn: sqlite3.Connection) -> dict[int, list[dict[str, Any]]]:
+    """キャラID → そのキャラが出ている物語(新しい順)。シーンの数と、シリーズの巻なら題と巻の番号も。"""
+    rows = conn.execute(
+        """
+        SELECT sc.character_id, st.id AS story_id,
+               COALESCE(NULLIF(st.title, ''), NULLIF(st.premise, ''), '(無題 #' || st.id || ')') AS title,
+               COUNT(*) AS scenes, st.created_at, st.volume_no, se.id AS series_id, se.title AS series_title
+        FROM scene_characters sc
+        JOIN story_scenes s ON s.id = sc.scene_id
+        JOIN stories st ON st.id = s.story_id
+        LEFT JOIN series se ON se.id = st.series_id
+        GROUP BY sc.character_id, st.id
+        ORDER BY st.created_at DESC
+        """
+    ).fetchall()
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        work = dict(row)
+        result.setdefault(work.pop("character_id"), []).append(work)
+    return result
+
+
 def character_usage(conn: sqlite3.Connection, character_id: int) -> dict[str, Any]:
     """そのキャラを割り当てている物語とシーンの数(削除前の確認用)。"""
     row = conn.execute(

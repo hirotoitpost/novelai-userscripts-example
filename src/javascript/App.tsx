@@ -17,6 +17,7 @@ import LoraDataset from './pages/LoraDataset'
 import MangaDraft from './pages/MangaDraft'
 import MangaImport from './pages/MangaImport'
 import CharacterDataset from './pages/CharacterDataset'
+import Characters from './pages/Characters'
 import Chunks from './pages/Chunks'
 import Admin from './pages/Admin'
 import DbStatus from './pages/DbStatus'
@@ -66,6 +67,10 @@ function AppRoutes() {
       <Route
         path="/character-dataset"
         element={<ProtectedRoute><CharacterDataset /></ProtectedRoute>}
+      />
+      <Route
+        path="/characters"
+        element={<ProtectedRoute><Characters /></ProtectedRoute>}
       />
       <Route
         path="/chunks"
