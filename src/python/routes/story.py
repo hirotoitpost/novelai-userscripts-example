@@ -16,7 +16,6 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import Annotated, Any, AsyncGenerator, Awaitable, Callable
 from urllib.parse import quote
 from uuid import uuid4
@@ -119,6 +118,7 @@ from .. import guard_password, minor_guard, trash
 from ..guard_password import guard_token
 from ..script_lines import script_names
 from .llm import sse_event, strip_think_tags, stream_llm_text
+from ..db import user_files
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
@@ -129,7 +129,8 @@ router = APIRouter(prefix="/api/story", tags=["story"])
 # (routes/chunks.py の promptmacros 取得と同じ制約)。
 _IMAGE_API = "https://image.novelai.net"
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 _MANGA_DIR = _PROJECT_ROOT / "outputs" / "manga"
 
 # ローカルLLM(qwen3-vl:2b)に自由形式で書式(【シーンN】等)を指示しても、実機で

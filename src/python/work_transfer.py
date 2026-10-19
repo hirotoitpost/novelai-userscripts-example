@@ -28,11 +28,13 @@ from uuid import uuid4
 
 from . import minor_guard
 from .character_transfer import SHEET_KEYS, TransferError
+from .db import user_files
 
 FORMAT = "novelai-userscripts-example/work"
 VERSION = 1
 MAX_ZIP_BYTES = 1024 * 1024 * 1024
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 # 書き出さない物語の列(この PC だけの意味のもの)
 # 動かすコマ(manga_v2_ugoira)は、この PC のうごイラを指すので書き出さない
 _STORY_SKIP = {"id", "series_id", "volume_no", "final_image_path", "manga_v2_sfx_stamps", "manga_v2_ugoira"}

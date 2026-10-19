@@ -56,11 +56,13 @@ from ..models import (
     MangaImportSfxRequest,
     MangaImportUpdateRequest,
 )
+from ..db import user_files
 
 router = APIRouter(prefix="/api/manga-import", tags=["manga-import"])
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 # 取り込んだページは公開しない場所(data/)に置く。市販の作品も入るため outputs/ とは分ける
 _IMPORT_DIR = _PROJECT_ROOT / "data" / "imports"
 

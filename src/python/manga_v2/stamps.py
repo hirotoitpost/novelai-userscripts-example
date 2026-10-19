@@ -13,7 +13,6 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
 
 import httpx
 import numpy as np
@@ -21,8 +20,10 @@ from PIL import Image
 from scipy import ndimage
 
 from .. import content_guard
+from ..db import user_files
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 STAMP_DIR = _PROJECT_ROOT / "data" / "stamps"
 
 # 透明な部分がこの割合以上ある画像だけを素材シートとみなす(表紙や使い方の説明ページを除く)

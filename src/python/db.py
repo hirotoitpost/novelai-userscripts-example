@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import sqlite3
 from collections.abc import Iterator
@@ -8,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 from uuid import uuid4
 
 from .client import app_mode
@@ -16,6 +17,7 @@ from .client import app_mode
 # single の DB。multi では全体の DB(招待・利用者・ログインのセッション。sessions.py)になり、利用者のデータは
 # 利用者ごとの DB(user_db_path)に置く(docs/multi_user_plan_jp.md のステップ 3)
 _DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "app.db"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 今のリクエストの利用者(multi。sessions.SessionMiddleware が入れる)。切り離した処理(asyncio のタスク・
 # スレッド)にも、作ったときの値が引き継がれる
@@ -47,6 +49,59 @@ def db_path() -> Path:
     if user_id is None:
         raise NoUserError("利用者が決まっていないので、データを開けません(APP_MODE=multi)")
     return user_db_path(user_id)
+
+
+def user_root() -> Path:
+    """
+    今の利用者のファイル(画像・取り込んだ作品・スタンプ など)を置くフォルダ。DB に入っている相対パス
+    (outputs/manga/... など)はここからのもの。single はプロジェクトのフォルダ、multi はその人の DB のとなり
+    (data/users/{id}/)。multi で利用者が決まっていなければ NoUserError(共有の場所へ書かない)。
+    モデル・フォント・証明書など、サーバー全体で使うものはここではなくプロジェクトのフォルダに置く。
+    """
+    if app_mode() != "multi":
+        return _PROJECT_ROOT
+    return db_path().parent
+
+
+class UserPath(os.PathLike[str]):
+    """
+    使うたびに、今の利用者のフォルダ(user_root)の下を指すパス。各モジュールの _PROJECT_ROOT や、そこから
+    つないだフォルダの定数(_PROJECT_ROOT / "outputs" / "manga" など)をこれにすると、使う側を書き換えずに
+    利用者ごとのフォルダを読み書きできる(テストで本物の Path に差し替えるのもそのまま)。Path のメソッド
+    (mkdir・glob・is_file・resolve など)は、その時点の本物の Path に任せる。
+    """
+
+    def __init__(self, *parts: str | os.PathLike[str]) -> None:
+        self._parts = parts
+
+    def real(self) -> Path:
+        return user_root().joinpath(*self._parts)
+
+    def __truediv__(self, other: str | os.PathLike[str]) -> UserPath:
+        return UserPath(*self._parts, other)
+
+    def __fspath__(self) -> str:
+        return str(self.real())
+
+    def __str__(self) -> str:
+        return str(self.real())
+
+    def __repr__(self) -> str:
+        return f"UserPath({'/'.join(map(str, self._parts))!r})"
+
+    def __eq__(self, other: object) -> bool:
+        return self.real() == (other.real() if isinstance(other, UserPath) else other)
+
+    def __hash__(self) -> int:
+        return hash(self.real())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.real(), name)
+
+
+def user_files() -> Path:
+    """今の利用者のフォルダを指す UserPath(型は Path として扱う)。"""
+    return cast(Path, UserPath())
 
 
 @contextmanager
