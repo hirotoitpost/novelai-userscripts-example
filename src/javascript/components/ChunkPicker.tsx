@@ -58,7 +58,7 @@ function ChunkCategory({
  * 復号鍵が未設定ならメール・パスワード入力欄を出し、鍵を計算してから続けて取り込む。
  */
 function OfficialImport({ onImported }: { onImported: () => Promise<unknown> }) {
-  const { encryptionKey, computeKey, forgetKey, sync, loading, error } = useChunkSync()
+  const { encryptionKey, keyInSession, computeKey, forgetKey, sync, loading, error } = useChunkSync()
   const [formOpen, setFormOpen] = useState(false)
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
@@ -86,13 +86,13 @@ function OfficialImport({ onImported }: { onImported: () => Promise<unknown> }) 
         <button
           type="button"
           className="ig-preset-btn"
-          onClick={() => (encryptionKey ? runImport() : setFormOpen(!formOpen))}
+          onClick={() => (encryptionKey || keyInSession ? runImport() : setFormOpen(!formOpen))}
           disabled={loading}
           title="NovelAI に保存されているプロンプトチャンクを取得してローカルに保存します"
         >
           {loading ? '読み込み中…' : '⇩ 公式から読み込み'}
         </button>
-        {encryptionKey && (
+        {encryptionKey && !keyInSession && (
           <button
             type="button"
             className="ig-icon-btn"
@@ -105,7 +105,7 @@ function OfficialImport({ onImported }: { onImported: () => Promise<unknown> }) 
         )}
       </div>
 
-      {formOpen && !encryptionKey && (
+      {formOpen && !encryptionKey && !keyInSession && (
         <form
           className="ig-chunk-key-form"
           onSubmit={e => { e.preventDefault(); submitKey() }}

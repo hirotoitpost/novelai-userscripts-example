@@ -1,17 +1,20 @@
 import { useCallback, useState } from 'react'
-import { useAuth } from '../context/AuthContext'
+import { SESSION_TOKEN, useAuth } from '../context/AuthContext'
 
 const KEY_STORAGE = 'nai_encryption_key'
 
 /**
  * NovelAI 公式のプロンプトチャンクをローカルDBへ取り込む(同期する)ための状態と操作。
- * 復号鍵はメール+パスワードからバックエンドで計算し、鍵だけを localStorage に保存する。
+ * single: 復号鍵はメール+パスワードからバックエンドで計算し、鍵だけを localStorage に保存する。
+ * multi: 鍵はログインのときにサーバーが作ってセッションに持つ(ブラウザには置かない。keyInSession が true)。
  */
 export function useChunkSync() {
-  const { token } = useAuth()
-  const [encryptionKey, setEncryptionKey] = useState<string | null>(() =>
-    localStorage.getItem(KEY_STORAGE)
+  const { token, mode, hasEncryptionKey } = useAuth()
+  const keyInSession = mode === 'multi'
+  const [storedKey, setEncryptionKey] = useState<string | null>(() =>
+    keyInSession ? null : localStorage.getItem(KEY_STORAGE)
   )
+  const encryptionKey = keyInSession ? (hasEncryptionKey ? SESSION_TOKEN : null) : storedKey
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
 
@@ -52,14 +55,17 @@ export function useChunkSync() {
       setError('ログインしていないため読み込めません')
       return null
     }
-    if (!key) return null
+    if (!key) {
+      if (keyInSession) setError('復号の鍵がありません。ログインし直してください')
+      return null
+    }
     setError(null)
     setLoading(true)
     try {
-      const res = await fetch(
-        `/api/chunks/promptmacros?encryption_key=${encodeURIComponent(key)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      )
+      // 鍵は URL に入れない(アクセスログなどに残るため)。multi ではサーバーがセッションの鍵を使う
+      const res = await fetch('/api/chunks/promptmacros', {
+        headers: { Authorization: `Bearer ${token}`, ...(keyInSession ? {} : { 'X-NAI-Encryption-Key': key }) },
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? 'チャンクの取得に失敗しました')
       return Array.isArray(data) ? data.length : 0
@@ -69,7 +75,7 @@ export function useChunkSync() {
     } finally {
       setLoading(false)
     }
-  }, [token, encryptionKey])
+  }, [token, encryptionKey, keyInSession])
 
-  return { encryptionKey, computeKey, forgetKey, sync, loading, error, setError }
+  return { encryptionKey, keyInSession, computeKey, forgetKey, sync, loading, error, setError }
 }

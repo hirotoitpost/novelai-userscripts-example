@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .client import app_mode, close_client, init_client
-from .sessions import SessionMiddleware, check_config
+from .sessions import SessionMiddleware, allowed_origins, check_config
 from .llm_client import close_llm_clients, init_llm_clients
 from .routes.admin import router as admin_router
 from .routes.auth import router as auth_router
@@ -93,8 +93,7 @@ class _CorsByMode:
     def __init__(self, app: ASGIApp) -> None:
         common = {"allow_credentials": True, "allow_methods": ["*"], "allow_headers": ["*"]}
         self.single = CORSMiddleware(app, allow_origins=["*"], **common)
-        allowed = [o.strip() for o in os.environ.get("APP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
-        self.multi = CORSMiddleware(app, allow_origins=allowed, **common)
+        self.multi = CORSMiddleware(app, allow_origins=allowed_origins(), **common)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await (self.multi if app_mode() == "multi" else self.single)(scope, receive, send)

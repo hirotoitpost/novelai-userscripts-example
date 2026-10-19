@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   サーバーに持ち、画面には HttpOnly・SameSite=Strict の Cookie だけを渡す。メールアドレスは保存しない(HMAC で見分ける)。
   `/api/` は multi ではログインが要り、その人のトークンで NovelAI を呼ぶ。永続トークンを登録すれば期限切れの 401 も起きない。
   multi の CORS は `APP_ALLOWED_ORIGINS` の配信元だけ。鍵は `.env` の `APP_MASTER_KEY`。画面の対応は次の PR(計画のステップ 2a)
+- **複数ユーザーのログイン(`APP_MODE=multi`、画面)** — 開いたときにサーバーの運営形態を確かめ、multi では NovelAI の
+  トークンも keystore の復号鍵もブラウザに置かない(前の残りも消す)。ログイン画面はメールアドレスでのログインだけ。
+  ホームで NovelAI の永続 API トークンを登録・削除できる。開発中に :8000 へ直接送る呼び出しにも Cookie を付ける
+  (`.env` の `APP_ALLOWED_ORIGINS` に画面の配信元を書く)。single でも keystore の鍵は URL に入れずヘッダーで送る
+  (計画のステップ 2b)
 
 ### Planned
 

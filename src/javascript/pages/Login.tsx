@@ -5,7 +5,7 @@ import { getRecaptchaToken } from '../recaptcha'
 import './Login.css'
 
 export default function Login() {
-  const { login } = useAuth()
+  const { login, mode } = useAuth()
   const navigate = useNavigate()
 
   // reCAPTCHA を使うのはこの画面だけ。ここではバッジを出す(ほかの画面では index.html で隠している)
@@ -38,7 +38,7 @@ export default function Login() {
       setError('トークンの形式が正しくありません(JWT形式ではありません)。前後の引用符や空白が混ざっていないか確認してください')
       return
     }
-    login(cleaned)
+    void login(cleaned)
     navigate('/')
   }
 
@@ -65,7 +65,7 @@ export default function Login() {
         setError(data.detail ?? 'ログインに失敗しました')
         return
       }
-      login(data.access_token)
+      await login(data.access_token)
       navigate('/')
     } catch {
       setError('サーバーに接続できませんでした')
@@ -124,19 +124,27 @@ export default function Login() {
           </button>
         </form>
 
-        <p className="login-note">
-          API トークンは NovelAI アカウント設定の「Get Persistent API Token」から取得できます。
-        </p>
+        {mode === 'multi' ? (
+          <p className="login-note">
+            招待されたメールアドレスでログインしてください。ログイン後、ホームから NovelAI の永続 API トークンを
+            登録できます(登録すると、ログインの期限が切れても続けて使えます)。
+          </p>
+        ) : (
+          <p className="login-note">
+            API トークンは NovelAI アカウント設定の「Get Persistent API Token」から取得できます。
+          </p>
+        )}
 
-        <button
+        {/* multi では利用者をメールアドレスで見分けるので、トークンだけのログインはできない */}
+        {mode !== 'multi' && <button
           type="button"
           className="login-token-toggle"
           onClick={() => setShowTokenLogin(v => !v)}
         >
           {showTokenLogin ? '閉じる' : 'アクセストークンで直接ログイン'}
-        </button>
+        </button>}
 
-        {showTokenLogin && (
+        {mode !== 'multi' && showTokenLogin && (
           <form className="login-form" onSubmit={handleTokenLogin}>
             <div className="login-field">
               <label htmlFor="token">アクセストークン</label>

@@ -31,7 +31,7 @@ export default function Chunks() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const {
-    encryptionKey, computeKey: computeEncryptionKey, forgetKey, sync, loading, error,
+    encryptionKey, keyInSession, computeKey: computeEncryptionKey, forgetKey, sync, loading, error,
   } = useChunkSync()
 
   const [chunks, setChunks] = useState<DbChunk[]>([])
@@ -210,12 +210,14 @@ export default function Chunks() {
           <h2>公式からの同期(任意)</h2>
           {encryptionKey ? (
             <div className="chunks-key-set">
-              <span>✓ 復号鍵 設定済み</span>
-              <button type="button" onClick={forgetKey}>削除</button>
+              <span>✓ 復号鍵 設定済み{keyInSession && '(ログイン中だけサーバーが持つ)'}</span>
+              {!keyInSession && <button type="button" onClick={forgetKey}>削除</button>}
               <button type="button" onClick={syncFromNovelAI} disabled={loading}>
                 {loading ? '同期中...' : 'チャンクを同期'}
               </button>
             </div>
+          ) : keyInSession ? (
+            <p>復号の鍵がありません。ログアウトして、ログインし直してください(ログインのときに作ります)。</p>
           ) : (
             <div className="chunks-key-form">
               <p>

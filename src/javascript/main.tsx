@@ -1,3 +1,4 @@
+import './backendOrigin'  // multi の開発中に :8000 へ送る fetch に Cookie を付ける仕掛けを、最初に入れる
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'

@@ -2,7 +2,7 @@ import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BackButton from '../components/BackButton'
-import { useAuth } from '../context/AuthContext'
+import { SESSION_TOKEN, useAuth } from '../context/AuthContext'
 import { decodeStoryDocument } from '../novelaiDocument'
 import MangaImageSettings, {
   DEFAULT_MANGA_IMAGE_SETTINGS,
@@ -206,7 +206,9 @@ function DownloadableImage({ path, className, alt }: { path: string; className: 
 
 export default function Story() {
   const navigate = useNavigate()
-  const { token } = useAuth()
+  const { token, mode, hasEncryptionKey } = useAuth()
+  // multi: keystore の復号鍵はログインのときにサーバーが作ってセッションに持つ(ブラウザには置かない)
+  const keyInSession = mode === 'multi'
 
   const [premise, setPremise] = useState('')
   const [nScenes, setNScenes] = useState(4)
@@ -235,9 +237,10 @@ export default function Story() {
 
   const [remoteEmail, setRemoteEmail] = useState('')
   const [remotePassword, setRemotePassword] = useState('')
-  const [encryptionKey, setEncryptionKey] = useState<string | null>(() =>
-    localStorage.getItem(ENCRYPTION_KEY_STORAGE)
+  const [storedKey, setEncryptionKey] = useState<string | null>(() =>
+    keyInSession ? null : localStorage.getItem(ENCRYPTION_KEY_STORAGE)
   )
+  const encryptionKey = keyInSession ? (hasEncryptionKey ? SESSION_TOKEN : null) : storedKey
   const [remoteStories, setRemoteStories] = useState<RemoteStory[] | null>(null)
   const [remoteLoading, setRemoteLoading] = useState(false)
   const [remoteError, setRemoteError] = useState<string | null>(null)
@@ -537,10 +540,10 @@ export default function Story() {
     setRemoteError(null)
     setRemoteLoading(true)
     try {
-      const res = await fetch(
-        `${API_ORIGIN}/api/story/remote?encryption_key=${encodeURIComponent(encryptionKey)}`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      )
+      // 鍵は URL に入れない(アクセスログなどに残るため)。multi ではサーバーがセッションの鍵を使う
+      const res = await fetch(`${API_ORIGIN}/api/story/remote`, {
+        headers: { Authorization: `Bearer ${token}`, ...(keyInSession ? {} : { 'X-NAI-Encryption-Key': encryptionKey }) },
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? '物語の取得に失敗しました')
       const decoded: RemoteStory[] = (data as RemoteStoryResponse[]).map(r => ({
@@ -828,12 +831,16 @@ export default function Story() {
               <div className="story-remote">
                 {encryptionKey ? (
                   <div className="story-row">
-                    <span>✓ 復号鍵 設定済み</span>
-                    <button type="button" onClick={forgetRemoteKey}>削除</button>
+                    <span>✓ 復号鍵 設定済み{keyInSession && '(ログイン中だけサーバーが持つ)'}</span>
+                    {!keyInSession && <button type="button" onClick={forgetRemoteKey}>削除</button>}
                     <button type="button" onClick={fetchRemoteStories} disabled={remoteLoading || !token}>
                       {remoteLoading ? '取得中...' : '公式サイトの物語一覧を取得'}
                     </button>
                   </div>
+                ) : keyInSession ? (
+                  <p className="story-intro">
+                    復号の鍵がありません。ログアウトして、ログインし直してください(ログインのときに作ります)。
+                  </p>
                 ) : (
                   <div className="story-row">
                     <input

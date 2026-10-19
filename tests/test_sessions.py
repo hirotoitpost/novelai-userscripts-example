@@ -173,3 +173,24 @@ def test_cors_only_allows_listed_origins_in_multi(multi: list[str]) -> None:
     client = TestClient(server.app, base_url="http://localhost:8000")
     preflight = {"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"}
     assert "access-control-allow-origin" not in client.options("/api/auth/login", headers=preflight).headers
+
+
+def test_allowed_origins_may_write(app: FastAPI, multi: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    # 開発中は画面(:5173)からバックエンド(:8000)へ直接送る呼び出しがある
+    monkeypatch.setenv("APP_ALLOWED_ORIGINS", "http://localhost:5173/, http://novelai.lan:5173")
+    sessions.add_invite(EMAIL)
+    client = _client(app)
+    _login(client)
+    assert client.post("/api/echo", headers={"Origin": "http://localhost:5173"}).status_code == 200
+    assert client.post("/api/echo", headers={"Origin": "http://novelai.lan:5173"}).status_code == 200
+    assert client.post("/api/echo", headers={"Origin": "http://localhost:3000"}).status_code == 403
+
+
+def test_single_reads_the_key_from_a_header(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 画面は鍵を URL に入れずヘッダーで送る
+    monkeypatch.delenv("APP_MODE", raising=False)
+    client = _client(app)
+    key = base64.b64encode(KEY).decode()
+    headers = {"Authorization": "Bearer mine", "X-NAI-Encryption-Key": key}
+    assert client.get("/api/keystore", headers=headers).json() == {"token": "mine", "key": KEY.decode()}
+    assert client.get("/api/keystore", headers={"Authorization": "Bearer mine"}).status_code == 422

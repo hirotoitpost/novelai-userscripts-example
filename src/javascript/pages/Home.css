@@ -140,6 +140,47 @@
   font-size: 1rem;
 }
 
+/* ===== 永続 API トークン(APP_MODE=multi。components/ApiTokenSettings.tsx) ===== */
+.home-api-token {
+  margin-top: 1.2rem;
+  padding: 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: 640px;
+}
+
+.home-api-token h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.home-welcome .home-api-token p {
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+}
+
+.home-api-token-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.home-api-token-row input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+}
+
+.home-welcome .home-api-token .home-api-token-error {
+  color: #f87171;
+}
+
 /* ===== Cards ===== */
 .home-cards {
   display: grid;
