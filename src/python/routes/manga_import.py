@@ -79,7 +79,7 @@ class _ImportJob:
     story_id: int | None = None
 
 
-_jobs: PerUser[_ImportJob] = PerUser()  # 取り込みの ID ごと(multi では利用者ごと。db.PerUser)
+_jobs: PerUser[int, _ImportJob] = PerUser()  # 取り込みの ID ごと(multi では利用者ごと。db.PerUser)
 
 
 def _page_dir(import_id: int) -> Path:

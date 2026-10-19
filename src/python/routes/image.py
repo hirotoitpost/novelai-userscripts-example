@@ -32,6 +32,7 @@ from novelai.types import (
 from ..client import get_client
 from ..sdk_compat import allow_uc_preset_none
 from ..db import (
+    PerUser,
     delete_image_preset,
     get_connection,
     list_image_presets,
@@ -517,7 +518,7 @@ class _EnhanceJob:
     task: Any = field(default=None, repr=False)
 
 
-_enhance_jobs: dict[str, _EnhanceJob] = {}
+_enhance_jobs: PerUser[str, _EnhanceJob] = PerUser()  # 利用者ごと(db.PerUser)
 
 
 def _enhance_response(job_id: str, job: _EnhanceJob) -> dict[str, Any]:

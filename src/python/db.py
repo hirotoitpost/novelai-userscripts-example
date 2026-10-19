@@ -23,6 +23,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # スレッド)にも、作ったときの値が引き継がれる
 _current_user: ContextVar[int | None] = ContextVar("current_user", default=None)
 
+K = TypeVar("K")
 V = TypeVar("V")
 
 
@@ -114,37 +115,38 @@ def as_user(user_id: int | None) -> Iterator[None]:
         _current_user.reset(token)
 
 
-class PerUser(Generic[V]):
+class PerUser(Generic[K, V]):
     """
-    DB の ID(物語の ID など)をキーにした、メモリの中の一覧(動いているジョブなど)。multi では利用者ごとに DB が
-    分かれて ID がぶつかるので、中では (今の利用者, ID) をキーにする。見えるのは今の利用者のものだけ
-    (single では利用者が None なので、今までどおり全部)。
+    メモリの中の一覧(動いているジョブなど)を、利用者ごとに分ける入れ物。中では (今の利用者, キー) をキーにする。
+    DB の ID(物語の ID など)をキーにするものは、multi では利用者ごとに DB が分かれて ID がぶつかるので要る。
+    ランダムな ID(ジョブの ID)をキーにするものも、ID を知ったほかの人から見えないようにする。見えるのは今の利用者の
+    ものだけ(single では利用者が None なので、今までどおり全部)。
     """
 
     def __init__(self) -> None:
-        self._items: dict[tuple[int | None, int], V] = {}
+        self._items: dict[tuple[int | None, K], V] = {}
 
-    def _key(self, item_id: int) -> tuple[int | None, int]:
-        return (_current_user.get(), item_id)
+    def _key(self, key: K) -> tuple[int | None, K]:
+        return (_current_user.get(), key)
 
-    def get(self, item_id: int) -> V | None:
-        return self._items.get(self._key(item_id))
+    def get(self, key: K) -> V | None:
+        return self._items.get(self._key(key))
 
-    def __getitem__(self, item_id: int) -> V:
-        return self._items[self._key(item_id)]
+    def __getitem__(self, key: K) -> V:
+        return self._items[self._key(key)]
 
-    def __setitem__(self, item_id: int, value: V) -> None:
-        self._items[self._key(item_id)] = value
+    def __setitem__(self, key: K, value: V) -> None:
+        self._items[self._key(key)] = value
 
-    def __contains__(self, item_id: object) -> bool:
-        return isinstance(item_id, int) and self._key(item_id) in self._items
+    def __contains__(self, key: object) -> bool:
+        return (_current_user.get(), key) in self._items
 
-    def pop(self, item_id: int, default: V | None = None) -> V | None:
-        return self._items.pop(self._key(item_id), default)
+    def pop(self, key: K, default: V | None = None) -> V | None:
+        return self._items.pop(self._key(key), default)
 
-    def items(self) -> list[tuple[int, V]]:
+    def items(self) -> list[tuple[K, V]]:
         user = _current_user.get()
-        return [(item_id, value) for (owner, item_id), value in self._items.items() if owner == user]
+        return [(key, value) for (owner, key), value in self._items.items() if owner == user]
 
     def values(self) -> list[V]:
         return [value for _, value in self.items()]

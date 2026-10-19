@@ -15,6 +15,7 @@ from novelai import AsyncNovelAI
 
 from ..client import get_client
 from ..db import (
+    PerUser,
     get_character,
     get_connection,
     list_characters,
@@ -49,7 +50,7 @@ class _QuickJob:
     task: asyncio.Task | None = field(default=None, repr=False)
 
 
-_jobs: dict[str, _QuickJob] = {}
+_jobs: PerUser[str, _QuickJob] = PerUser()  # 利用者ごと(db.PerUser)
 
 
 def _job_response(job_id: str, job: _QuickJob) -> dict[str, Any]:

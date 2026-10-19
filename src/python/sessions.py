@@ -233,6 +233,50 @@ def create_session(email: str, access_token: str, encryption_key: bytes | None) 
     return cookie
 
 
+def user_id_of(email: str) -> int | None:
+    """招待されていて、一度ログインした利用者の ID(MCP サーバーなど、サーバーの PC の中で使う)。"""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT u.id FROM users u JOIN user_invites i ON i.email_hash = u.email_hash WHERE u.email_hash = ?",
+            (email_hash(email),),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def api_token_of(user_id: int) -> str | None:
+    """その人が画面で登録した永続トークン(無ければ None)。"""
+    with _conn() as conn:
+        row = conn.execute("SELECT wrapped_key, novelai_api_token FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None or not row["novelai_api_token"]:
+        return None
+    return _decrypt(_unwrap(row["wrapped_key"]), row["novelai_api_token"]).decode()
+
+
+def create_service_session(user_id: int, access_token: str, *, days: int = 1) -> str:
+    """
+    サーバーの PC の中のプロセス(MCP サーバー)が、その人としてバックエンドを呼ぶためのセッション。ログインの画面を
+    通らないので、keystore の鍵は持たない。期限は短くする(切れたら作り直す)。Cookie の値を返す。
+    """
+    now = _now()
+    cookie = secrets.token_urlsafe(32)
+    with _conn() as conn:
+        row = conn.execute("SELECT wrapped_key FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise KeyError(user_id)
+        conn.execute(
+            "INSERT INTO user_sessions (id, user_id, access_token, encryption_key, created_at, expires_at)"
+            " VALUES (?, ?, ?, NULL, ?, ?)",
+            (
+                _session_id(cookie),
+                user_id,
+                _encrypt(_unwrap(row["wrapped_key"]), access_token.encode()),
+                now.isoformat(),
+                (now + timedelta(days=days)).isoformat(),
+            ),
+        )
+    return cookie
+
+
 def get_session(cookie: str | None) -> Session | None:
     """Cookie の値からセッションを引く。ない・期限切れ・招待を取り消された なら None。"""
     if not cookie:

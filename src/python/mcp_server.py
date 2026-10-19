@@ -4,6 +4,7 @@
 
 FastAPIバックエンドとは独立したプロセスとして動く。DB操作は db.py を直接呼び出し、
 画像生成だけ NovelAI へ実際に接続する（.env の NOVELAI_API_TOKEN を使用）。
+APP_MODE=multi では、.env の APP_MCP_USER の利用者として動く(その人の DB・フォルダ・永続トークン。mcp_identity.py)。
 
 起動方法:
     uv run python -m python.mcp_server
@@ -15,7 +16,6 @@ stdio transportで起動するよう登録する。
 from __future__ import annotations
 
 import base64
-import os
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -27,6 +27,8 @@ from mcp.types import ImageContent, TextContent
 from novelai import AsyncNovelAI
 from novelai.types import GenerateImageParams
 
+from . import mcp_identity
+from .db import user_files
 from .mcp_manga import register_manga_tools
 from .db import (
     create_custom_chunk,
@@ -44,8 +46,10 @@ from .db import (
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_PROJECT_ROOT / ".env", override=True)
+# multi では APP_MCP_USER の利用者として動く(DB とフォルダはその人のもの)
+mcp_identity.setup()
 
-_HISTORY_DIR = _PROJECT_ROOT / "outputs" / "history"
+_HISTORY_DIR = user_files() / "outputs" / "history"  # 今の利用者のフォルダ(db.UserPath)
 
 mcp = MCPServer(
     name="novelai-word-selection",
@@ -60,10 +64,8 @@ register_manga_tools(mcp)
 
 
 def _get_novelai_client() -> AsyncNovelAI:
-    token = os.environ.get("NOVELAI_API_TOKEN") or os.environ.get("NOVELAI_API_KEY")
-    if not token:
-        raise RuntimeError("NOVELAI_API_TOKEN が .env に設定されていません")
-    return AsyncNovelAI(api_key=token)
+    # single は .env のトークン、multi は APP_MCP_USER の人の永続トークン
+    return AsyncNovelAI(api_key=mcp_identity.novelai_token())
 
 
 @mcp.tool()

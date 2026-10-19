@@ -26,7 +26,12 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ImageContent, TextContent
 from PIL import Image
 
+from . import mcp_identity
+from .db import user_files
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# バックエンドが返す outputs/ のパスの基準(multi では MCP サーバーの利用者のフォルダ。db.UserPath)
+_USER_ROOT = user_files()
 # バックエンドは既定で http、dev-ctl.ps1 -Https なら LAN 用の証明書(scripts/make_lan_cert.py)で https で動く
 _CA_FILE = _PROJECT_ROOT / "data" / "certs" / "ca.crt"
 _SCHEME_FILE = _PROJECT_ROOT / "data" / "run" / "backend.scheme"
@@ -60,7 +65,12 @@ def _verify() -> str | bool:
 async def _call(method: str, path: str, body: Any = None, timeout: float = 120) -> Any:
     async with httpx.AsyncClient(base_url=_backend(), timeout=timeout, verify=_verify()) as client:
         try:
-            response = await client.request(method, path, json=body)
+            # multi では MCP サーバーの利用者のセッションで呼ぶ(期限が切れていたら作り直して 1 回だけやり直す)
+            response = await client.request(method, path, json=body, cookies=mcp_identity.backend_cookies())
+            if response.status_code == 401 and mcp_identity.user_id() is not None:
+                response = await client.request(
+                    method, path, json=body, cookies=mcp_identity.backend_cookies(renew=True)
+                )
         except httpx.ConnectError as exc:
             raise RuntimeError(f"バックエンド({_backend()})に接続できません。起動しているか確認してください。") from exc
     if response.status_code >= 400:
@@ -84,8 +94,8 @@ def _image_content(path: Path, max_size: int) -> ImageContent:
 
 def _project_file(relative: str) -> Path:
     """バックエンドが返す outputs/ 配下のパスを実ファイルにする(それ以外は拒否)。"""
-    path = (_PROJECT_ROOT / relative).resolve()
-    path.relative_to((_PROJECT_ROOT / "outputs").resolve())
+    path = (_USER_ROOT / relative).resolve()
+    path.relative_to((_USER_ROOT / "outputs").resolve())
     if not path.is_file():
         raise ValueError(f"ファイルが見つかりません: {relative}")
     return path

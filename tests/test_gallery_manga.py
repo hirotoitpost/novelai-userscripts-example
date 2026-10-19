@@ -122,7 +122,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _run(client: TestClient, body: dict) -> dict:
     res = client.post("/api/gallery-manga", json=body, headers={"Authorization": "Bearer t"})
     assert res.status_code == 200, res.text
-    for _ in range(200):
+    # 最大 30 秒(全体のテストで PC が混んでいると、10 秒では終わらないことがあった)
+    for _ in range(600):
         job = client.get(f"/api/gallery-manga/jobs/{res.json()['id']}").json()
         if job["status"] != "running":
             return job

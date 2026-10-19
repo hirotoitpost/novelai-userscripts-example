@@ -41,6 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from novelai import AsyncNovelAI
 from pydantic import BaseModel, Field
 
+from ..db import PerUser
 from .. import ugoira, ugoira_rig, ugoira_warp
 from ..client import get_client
 
@@ -152,7 +153,7 @@ class _Job:
     task: Any = field(default=None, repr=False)
 
 
-_jobs: dict[str, _Job] = {}
+_jobs: PerUser[str, _Job] = PerUser()  # 利用者ごと(db.PerUser)
 
 
 def _job_response(job_id: str, job: _Job) -> dict[str, Any]:
