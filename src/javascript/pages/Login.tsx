@@ -47,18 +47,22 @@ export default function Login() {
     setError(null)
     setLoading(true)
     try {
-      let recaptcha: string
-      try {
-        recaptcha = await getRecaptchaToken('login')
-      } catch {
-        setError('reCAPTCHA の読み込みに失敗しました。ページを再読み込みしてください')
-        return
+      // multi でアクセストークンを貼ったときは、reCAPTCHA を使わない(サーバーが keystore で本人かを確かめる)
+      const accessToken = mode === 'multi' ? tokenInput.trim().replace(/^["']|["']$/g, '') : ''
+      let recaptcha = ''
+      if (!accessToken) {
+        try {
+          recaptcha = await getRecaptchaToken('login')
+        } catch {
+          setError('reCAPTCHA の読み込みに失敗しました。ページを再読み込みしてください')
+          return
+        }
       }
 
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, recaptcha }),
+        body: JSON.stringify({ email, password, recaptcha, ...(accessToken ? { access_token: accessToken } : {}) }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -111,6 +115,26 @@ export default function Login() {
               disabled={loading}
             />
           </div>
+
+          {mode === 'multi' && (
+            <div className="login-field">
+              <label htmlFor="access-token">アクセストークン</label>
+              <input
+                id="access-token"
+                type="password"
+                value={tokenInput}
+                onChange={e => setTokenInput(e.target.value)}
+                placeholder="novelai.net で取ったトークン(eyJ…)"
+                autoComplete="off"
+                disabled={loading}
+              />
+              <p className="login-note">
+                このアプリからは NovelAI の reCAPTCHA を通せないため、novelai.net にログインしたブラウザの開発者ツールで
+                アクセストークンをコピーして貼ってください。メールアドレスとパスワードで、本人のトークンかを確かめます
+                (パスワードは保存しません)。永続トークン(pst-)はここでは使えません。
+              </p>
+            </div>
+          )}
 
           {notice && !error && <p className="login-error">{notice}</p>}
           {error && <p className="login-error">{error}</p>}

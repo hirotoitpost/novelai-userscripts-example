@@ -7,7 +7,7 @@ from fastapi.exceptions import HTTPException
 from pydantic import BaseModel
 
 from .. import sessions
-from ..auth_utils import get_encryption_key, login_with_credentials
+from ..auth_utils import get_encryption_key, login_with_credentials, verify_token_owner
 from ..client import app_mode, operator_token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -16,7 +16,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginRequest(BaseModel):
     email: str
     password: str
-    recaptcha: str
+    recaptcha: str = ""
+    # multi: novelai.net で取ったアクセストークン。あれば reCAPTCHA の代わりに keystore で本人かを確かめる
+    access_token: str | None = None
 
 
 class LoginResponse(BaseModel):
@@ -49,6 +51,13 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Logi
     # 招待されていない人のために NovelAI へログインしない(reCAPTCHA もパスワードも使わずに断る)
     if multi and not sessions.is_invited(req.email):
         raise HTTPException(status_code=403, detail="このメールアドレスは招待されていません")
+    if multi and req.access_token and req.access_token.strip():
+        token = req.access_token.strip().strip("\"'")
+        try:
+            key = await verify_token_owner(req.email, req.password, token)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
+        return _start_session(req.email, token, key, request, response)
     try:
         token = await login_with_credentials(req.email, req.password, req.recaptcha)
     except ValueError as exc:
@@ -59,8 +68,12 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Logi
         return LoginResponse(access_token=token)
     # keystore の復号鍵はここで作ってセッションに持つ(あとでパスワードを入れ直さなくてよいように)
     key = await asyncio.to_thread(get_encryption_key, req.email, req.password)
+    return _start_session(req.email, token, key, request, response)
+
+
+def _start_session(email: str, token: str, key: bytes, request: Request, response: Response) -> LoginResponse:
     try:
-        cookie = sessions.create_session(req.email, token, key)
+        cookie = sessions.create_session(email, token, key)
     except sessions.NotInvited:
         raise HTTPException(status_code=403, detail="このメールアドレスは招待されていません")
     response.set_cookie(

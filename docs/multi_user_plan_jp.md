@@ -117,7 +117,21 @@
   別の配信元なので、multi のときだけ `backendOrigin.ts` で `credentials: 'include'` を付けて Cookie を送る。
   バックエンドでは `.env` の `APP_ALLOWED_ORIGINS` にその配信元(`http://localhost:5173` など)を書く
   (CORS と、書き込みの Origin の確認の両方で使う)。バックエンドが画面も配る形(Docker)では同じ配信元なので要らない。
-- ログインの画面: multi ではトークンの貼り付けを出さない。ログアウトは `POST /api/auth/logout`。
+- ログインの画面: multi ではトークンだけのログインは出さない。ログアウトは `POST /api/auth/logout`。
+
+#### 2c: reCAPTCHA を使わないログイン(実装済み)
+
+- 実機で確かめたところ、メールアドレス+パスワードのログインは通らなかった(2026-10-19。`Login failed (400):
+  Please refresh NovelAI.net`)。このアプリが借りている reCAPTCHA の鍵は novelai.net でしか使えないので、
+  localhost でも LAN のアドレスでも NovelAI に断られる(single でトークンの貼り付けや `.env` の永続トークンを
+  使っていたのはこのため)。
+- multi のログインは、メールアドレス・パスワードに、novelai.net で取ったアクセストークンを添える。サーバーは
+  そのトークンで keystore を読み、メールアドレス+パスワードから作った鍵で開けるかを見る(`auth_utils.py` の
+  `verify_token_owner`)。keystore はその鍵でしか開けないので、開ければトークン・メールアドレス・パスワードが
+  そろって本人のもの。開けた鍵はそのままセッションに持つ。
+- 確かめられないもの: 永続トークン(pst-。keystore を読めない)、keystore が空のアカウント(novelai.net で物語を
+  1 つ保存すればできる)。
+- トークンを添えないときは、今までどおり reCAPTCHA でログインを試す。
 - ホームに永続トークンの登録・置き換え・削除(`components/ApiTokenSettings.tsx`。multi のときだけ)。
 - keystore の 2 つの機能: multi では鍵の入力欄を出さず、セッションの鍵を使う。single でも、鍵は URL のクエリ
   ではなく `X-NAI-Encryption-Key` ヘッダーで送る(サーバーは前の画面のためにクエリも受け付ける)。
