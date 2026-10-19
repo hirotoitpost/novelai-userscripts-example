@@ -18,12 +18,13 @@
 |---|---|---|
 | `src/python/client.py` の `api_keys_with_fallback` | 画面のトークンが 401 になると、`.env` の `NOVELAI_API_TOKEN` で再試行する | **他の人のリクエストが、運営者の NovelAI アカウントと Anlas で処理される**(最も危険) |
 | `src/python/client.py` の `get_client` | Authorization ヘッダーがないと、`.env` のトークンで作った共通のクライアントを使う | ログインしていない人でも生成できてしまう |
-| `src/python/db.py` | `data/app.db` という 1 つの SQLite に約 50 個のテーブル。どれも `user_id` を持たない | 全員のチャンク・物語・キャラ・履歴が混ざる |
+| `src/python/db.py` | `data/app.db` という 1 つの SQLite に約 45 個のテーブル。どれも `user_id` を持たない | 全員のチャンク・物語・キャラ・履歴が混ざる |
 | `outputs/`、`data/imports/` など | 画像の保存先が全員共通 | 他の人の画像が見える、上書きされる |
 | `src/python/guard_password.py`、`src/python/app_settings.py` | ガードのパスワードとアプリ設定がそれぞれ 1 つ | 1 人が変えると全員に効く |
 | `src/python/routes/admin.py` の `/api/admin/env` | LAN からなら `.env` を読み書きできる | ホスティングすると、秘密の書き換え口になる |
 | `src/python/mcp_server.py` | `.env` のトークンで NovelAI に接続する | 利用者を区別できない |
 | `src/javascript/context/AuthContext.tsx` | NovelAI のアクセストークンをそのまま localStorage に保存する | XSS があるとトークンが盗まれる |
+| `src/javascript/hooks/useChunkSync.ts`、`src/javascript/pages/Story.tsx` | keystore を復号する鍵(メール+パスワードから作る)を localStorage の `nai_encryption_key` に保存し、`/api/chunks/promptmacros?encryption_key=...` のように URL のクエリで送る | XSS で盗まれる。URL はアクセスログや中継に残りやすい。この鍵は永続トークンでは代わりにならない |
 | `src/python/server.py` | CORS が `allow_origins=["*"]` | 公開すると危ない |
 
 ## `.env` の項目の仕分け
@@ -31,9 +32,10 @@
 | 区分 | 項目 | 置き場所 |
 |---|---|---|
 | サーバー全体の設定 | `VLLM_*`、`VIDEO_GEN_*`、`HF_TOKEN`、`PUSH_CONTACT`、VAPID 鍵(`data/vapid_private.pem`) | `.env` / Secret Manager(運営者が用意) |
+| サーバー全体の設定(セルフホストのみ) | `PATH_ADD_UV`(開発用 PC の PATH の補い) | `.env` |
 | サーバー全体の設定(新規) | セッション署名鍵、トークン暗号化用のマスター鍵 | Secret Manager(`.env` はセルフホストのみ) |
 | 利用者ごとの情報 | `NOVELAI_API_TOKEN`(永続トークン `pst-...`)、ログインで得るアクセストークン | DB に暗号化して保存 |
-| テスト専用 | `NOVELAI_TEST_EMAIL`、`NOVELAI_TEST_PASSWORD` | GitHub Actions の Secrets |
+| テスト専用 | `NOVELAI_TEST_EMAIL`、`NOVELAI_TEST_PASSWORD`、`NOVELAI_SESSION_TOKEN`(使っているのは `scripts/inspect_promptmacros.py` などの調査用スクリプトだけ) | GitHub Actions の Secrets |
 
 ## ステップ(1 ステップ = 1 PR を想定)
 
@@ -52,6 +54,10 @@
 - `multi` のときは、`api_keys_with_fallback` が `.env` のトークンを足さないようにする。
 - `get_client` の共通クライアントも使わない(Authorization がなければ 401)。
 - 今の使い方は `single` のまま変わらない。
+- 注意: この切り替えは、画面のログインのトークンが期限切れで 401 になったとき(2026-10 実機: スマホから文章・画像の
+  生成がどちらも 401)に続けられるよう入れたもの。`multi` で止めると、ステップ 2 で利用者ごとの永続トークンを
+  登録できるようになるまでは、この 401 がまた起きる。`api_keys_with_fallback` の呼び出し元は 11 か所あるので、
+  切り替えの判断は関数の中の 1 か所で行う。
 
 ### ステップ 2: アプリ独自のログインとセッション
 
@@ -62,6 +68,12 @@
   SecretBox を使い、マスター鍵は Secret Manager に置く(利用者ごとのデータ鍵をマスター鍵で包む形)。
 - 利用者は画面から永続トークンを登録できるようにする。これが `.env` の `NOVELAI_API_TOKEN` の代わりになる。
 - `get_client` を「セッションの利用者 → 復号したトークン → クライアント」の流れに変える。
+- keystore の復号鍵は別に扱う。この鍵はメール+パスワードから作るもので、永続トークンでは代わりにならない。
+  使うのは公式のプロンプトのチャンクの取り込み(`routes/chunks.py`)と公式サイトの物語の一覧(`routes/story.py`)の
+  2 つだけ。
+  - URL のクエリで送るのをやめ、リクエストの本文で送る。
+  - localStorage に置くのをやめる。サーバーのセッションに結びつけて持つ(期限付き)か、その 2 つの機能を
+    使うたびにパスワードを入れてもらう。
 
 ### ステップ 3: データを利用者ごとに分ける
 
@@ -75,7 +87,7 @@
 
 - `/api/admin` の許可の基準を「LAN からのアクセスか」から「管理者ロールを持つか」に変える。
 - `multi` では `.env` の編集 API(`PUT /api/admin/env`)を無効にする。
-- 設定は pydantic-settings で読み、シークレットは Secret Manager から入れる。
+- 設定は pydantic-settings(新しく依存に加える)で読み、シークレットは Secret Manager から入れる。
 - CORS は、実際の配信元だけに絞る。
 
 ### ステップ 5: MCP サーバーとジョブ
