@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+
+- Inpainting UI
+- Character Reference UI
+- Vibe Transfer / ControlNet UI
+- Batch generation UI
+
+---
+
+## [0.9.0] - 2026-10-19
+
 ### Added
 
 - **キャラ一覧のページ(`/characters`)** — 登録したキャラをカードで並べる(参照画像・名前・成人/未成年・メモ・容姿と服装のタグ。
@@ -214,13 +225,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   結果を返していた(RapidOCR が直前の呼び出しの指定を覚えているため)。読むときの指定をいつも渡すようにした
 - **開発サーバーが勝手に止まる(取り込んだ作品が 0 件に見える)** — 自動更新をオフにしている間、自動更新用の接続要求
   (WebSocket)が来て途中で切れると、開発サーバーごと落ちていた。接続要求はすぐ閉じるようにした
-
-### Planned
-
-- Inpainting UI
-- Character Reference UI
-- Vibe Transfer / ControlNet UI
-- Batch generation UI
 
 ---
 
