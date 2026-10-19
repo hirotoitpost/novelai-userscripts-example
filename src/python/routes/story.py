@@ -250,7 +250,7 @@ class _Job:
 
 # 物語ごとに同時に1ジョブだけ。プロセス内メモリなので再起動で消えるが、
 # 途中結果はDBへ逐次書き込むので処理そのものは失われない。
-_jobs: PerUser[_Job] = PerUser()  # 物語の ID ごと(multi では利用者ごと。db.PerUser)
+_jobs: PerUser[int, _Job] = PerUser()  # 物語の ID ごと(multi では利用者ごと。db.PerUser)
 # 送信中の通知タスク(参照を持たないと途中で GC されることがある)
 _notify_tasks: set[asyncio.Task[None]] = set()
 

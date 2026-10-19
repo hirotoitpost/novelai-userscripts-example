@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from novelai import AsyncNovelAI
 
 from ..client import get_client
-from ..db import get_connection, list_story_scenes
+from ..db import PerUser, get_connection, list_story_scenes
 from ..gallery_manga import MAX_IMAGES, panel_scene, settings_tags, write_script
 from ..models import (
     GalleryMangaRequest,
@@ -45,7 +45,7 @@ class _GalleryJob:
     task: asyncio.Task | None = field(default=None, repr=False)
 
 
-_jobs: dict[str, _GalleryJob] = {}
+_jobs: PerUser[str, _GalleryJob] = PerUser()  # 利用者ごと(db.PerUser)
 
 
 def _job_response(job_id: str, job: _GalleryJob) -> dict[str, Any]:
