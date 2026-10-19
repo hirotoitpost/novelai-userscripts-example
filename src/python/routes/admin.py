@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .. import app_settings, db
+from ..client import app_mode
 from ..db import get_connection
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -648,6 +649,10 @@ async def post_cleanup(category: str, req: CleanupRequest | None = None) -> dict
     """
     from .. import trash
 
+    if app_mode() == "multi":
+        # 画像のフォルダはまだ全員で共有している(利用者ごとに分けるのはステップ 3b)。今の利用者の DB から
+        # 使われていないだけで、ほかの人の画像を片付けてしまうので止める
+        raise HTTPException(status_code=409, detail="複数ユーザー(APP_MODE=multi)では、まだ片付けられません")
     targets = _cleanup_targets(category)
     if req is not None and req.names is not None:
         wanted = set(req.names)

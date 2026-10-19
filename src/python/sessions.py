@@ -10,7 +10,7 @@
 - ブラウザにはセッションの合言葉だけを HttpOnly・SameSite=Strict の Cookie で渡す。DB にはその SHA-256 を置く。
 - /api/ へのリクエストは SessionMiddleware がセッションを確かめ、その人の NovelAI トークンを Authorization
   ヘッダーとして差し込む(ブラウザから来た Authorization は捨てる)。今ある各ルーターは、そのまま
-  Authorization を読めば利用者本人のトークンで動く。
+  Authorization を読めば利用者本人のトークンで動く。データはその人の DB(data/users/{id}/app.db)を開く(ステップ 3)。
 
 single(既定)では何もしない(今の動きのまま)。
 """
@@ -22,6 +22,7 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import sqlite3
 from base64 import b64decode
 from collections.abc import Iterator
@@ -133,7 +134,7 @@ def _now() -> datetime:
 
 @contextmanager
 def _conn() -> Iterator[sqlite3.Connection]:
-    conn = db.get_connection()
+    conn = db.get_system_connection()  # 招待・利用者・セッションは全体の DB
     try:
         yield conn
         conn.commit()
@@ -263,6 +264,48 @@ def set_api_token(user_id: int, token: str | None) -> None:
         conn.execute("UPDATE users SET novelai_api_token = ? WHERE id = ?", (cipher, user_id))
 
 
+# ---- 前のデータ(single のもの)を利用者に渡す ----
+
+
+class AdoptError(Exception):
+    """前のデータを渡せない(利用者がまだいない・もう渡してある など)。"""
+
+
+def adopt_legacy_data(email: str, *, force: bool = False) -> int:
+    """
+    single で使っていたデータ(data/app.db と data/trash)を、その利用者のデータとしてコピーする(ステップ 3)。
+    元のデータは消さない(single に戻せば今までどおり使える)。その人が一度ログインして、利用者ができている必要が
+    ある。すでにその人の DB があれば、force でなければ断る(上書きすると、その人が multi で作ったものが消える)。
+    渡した利用者の ID を返す。
+    """
+    with _conn() as conn:
+        row = conn.execute("SELECT id FROM users WHERE email_hash = ?", (email_hash(email),)).fetchone()
+    if row is None:
+        raise AdoptError("その人はまだログインしていません(一度ログインすると利用者ができます)")
+    user_id = int(row["id"])
+    target = db.user_db_path(user_id)
+    if target.exists() and not force:
+        raise AdoptError(f"その人のデータはもうあります({target})。上書きするなら --force")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 書き込み中でもそろった状態で写せるよう、sqlite のバックアップの仕組みでコピーする。ファイルを置き換えず
+    # 中身を書き換えるので、バックエンドがその人の DB を開いていても上書きできる(Windows はファイルを置き換えられない)
+    source = sqlite3.connect(db._DB_PATH)
+    copy = sqlite3.connect(target)
+    try:
+        source.backup(copy)
+        # 招待・利用者・セッションは全体の DB だけに置く(写しからは消す)
+        for table in ("user_sessions", "users", "user_invites"):
+            copy.execute(f"DELETE FROM {table}")  # noqa: S608 決まった名前だけ
+        copy.commit()
+    finally:
+        copy.close()
+        source.close()
+    legacy_trash = db._DB_PATH.parent / "trash"
+    if legacy_trash.is_dir():
+        shutil.copytree(legacy_trash, target.parent / "trash", dirs_exist_ok=True)
+    return user_id
+
+
 # ---- ミドルウェア ----
 
 
@@ -334,7 +377,9 @@ class SessionMiddleware:
         headers = [(k, v) for k, v in headers if k != b"authorization"]
         headers.append((b"authorization", f"Bearer {session.novelai_token}".encode()))
         scope = {**scope, "headers": headers, "state": {**scope.get("state", {}), "session": session}}
-        await self.app(scope, receive, send)
+        # このリクエスト(と、そこから切り離した処理)では、その人の DB を開く(db.get_connection)
+        with db.as_user(session.user_id):
+            await self.app(scope, receive, send)
 
 
 def current_session(request: Request) -> Session | None:

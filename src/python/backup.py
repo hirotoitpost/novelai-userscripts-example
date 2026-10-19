@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -34,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from . import db
-from .db import get_connection
+from .db import get_system_connection
 
 KEEP = 7
 AUTO_INTERVAL = timedelta(days=1)
@@ -43,6 +44,25 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DB_NAME = "data/app.db"
 # 入れないもの(リポジトリのルートからのパスの頭)
 _SKIP = ("data/models", "data/fonts", "data/eval", "data/backups", "data/run", "data/app.db")
+# multi の利用者ごとの DB(db.user_db_path)。全体の DB と同じく、壊れない写しを作ってから入れる
+_USER_DB = re.compile(r"data/users/\d+/app\.db")
+
+
+def _is_db(rel: str) -> bool:
+    return rel == DB_NAME or _USER_DB.fullmatch(rel) is not None
+
+
+def _db_files() -> list[str]:
+    """写す DB(全体の DB と、multi の利用者ごとの DB)。リポジトリのルートからのパス。"""
+    users = sorted(
+        path.relative_to(_PROJECT_ROOT).as_posix() for path in (_PROJECT_ROOT / "data" / "users").glob("*/app.db")
+    )
+    return [DB_NAME, *[rel for rel in users if _is_db(rel)]]
+
+
+def _db_path(rel: str) -> Path:
+    # 全体の DB は db._DB_PATH(テストで差し替える)、利用者の DB はそのとなりの users/ の下
+    return db._DB_PATH if rel == DB_NAME else db._DB_PATH.parent / Path(rel).relative_to("data")
 _DATASET_PREFIXES = ("outputs/training_data", "outputs/lora_dataset")
 _CHUNK = 1 << 20
 
@@ -55,7 +75,8 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    conn = get_connection()
+    # バックアップはサーバー全体のもの(運営者の設定)。multi でも全体の DB に 1 つだけ置く
+    conn = get_system_connection()
     try:
         row = conn.execute("SELECT value FROM backup_config WHERE id = 1").fetchone()
     finally:
@@ -65,7 +86,7 @@ def load_settings() -> Settings:
 
 
 def save_settings(settings: Settings) -> None:
-    conn = get_connection()
+    conn = get_system_connection()
     try:
         conn.execute(
             "INSERT INTO backup_config (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value",
@@ -107,7 +128,7 @@ def _targets(include_datasets: bool) -> list[Path]:
             if not path.is_file():
                 continue
             rel = path.relative_to(_PROJECT_ROOT).as_posix()
-            if rel.startswith(_SKIP) or rel.endswith((".db-wal", ".db-shm", ".part")):
+            if rel.startswith(_SKIP) or _is_db(rel) or rel.endswith((".db-wal", ".db-shm", ".part")):
                 continue
             if not include_datasets and rel.startswith(_DATASET_PREFIXES):
                 continue
@@ -182,22 +203,23 @@ def run_backup(settings: Settings, reason: str = "手動", progress: Progress | 
     # DB は書き込み中でも壊れない写しを作ってから入れる
     report("DB を写しています", 0, 1)
     with tempfile.TemporaryDirectory() as tmp:
-        copy = Path(tmp) / "app.db"
-        source = sqlite3.connect(db._DB_PATH)
-        try:
-            target = sqlite3.connect(copy)
+        for index, rel in enumerate(_db_files()):
+            copy = Path(tmp) / f"{index}.db"
+            source = sqlite3.connect(_db_path(rel))
             try:
-                source.backup(target)
+                target = sqlite3.connect(copy)
+                try:
+                    source.backup(target)
+                finally:
+                    target.close()
             finally:
-                target.close()
-        finally:
-            source.close()
-        digest = _hash_file(copy)
-        size = copy.stat().st_size
-        if _store(store, copy, digest):
-            added += 1
-            added_bytes += size
-        files[DB_NAME] = {"hash": digest, "size": size, "mtime": 0}
+                source.close()
+            digest = _hash_file(copy)
+            size = copy.stat().st_size
+            if _store(store, copy, digest):
+                added += 1
+                added_bytes += size
+            files[rel] = {"hash": digest, "size": size, "mtime": 0}
 
     targets = _targets(settings.include_datasets)
     for index, path in enumerate(targets, start=1):
@@ -268,7 +290,7 @@ def prune(store: Path, keep: int = KEEP) -> int:
 
 def restore(settings: Settings, name: str, progress: Progress | None = None) -> dict[str, Any]:
     """
-    選んだ回に戻す。先に今の状態を1回バックアップする。DB は SQLite のバックアップ機能で入れ替え(動いている
+    選んだ回に戻す。先に今の状態を1回バックアップする。DB(multi の利用者ごとの DB も)は SQLite のバックアップ機能で入れ替え(動いている
     バックエンドのままでよい)、ファイルは無い・中身が違うものだけ書き戻す(その回より後にできたファイルは残す)。
     """
     store = check_destination(settings.destination)
@@ -283,12 +305,14 @@ def restore(settings: Settings, name: str, progress: Progress | None = None) -> 
     missing = [rel for rel, f in data["files"].items() if not (store / "objects" / f["hash"][:2] / f["hash"]).is_file()]
     if missing:
         raise ValueError(f"バックアップの中身が欠けています({len(missing)}件。例: {missing[0]})")
-    db_entry = data["files"].get(DB_NAME)
-    if db_entry:
+    db_entries = [(rel, f) for rel, f in data["files"].items() if _is_db(rel)]
+    for rel, entry in db_entries:
         report("DB を戻しています", 0, 1)
-        source = sqlite3.connect(store / "objects" / db_entry["hash"][:2] / db_entry["hash"])
+        target_path = _db_path(rel)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        source = sqlite3.connect(store / "objects" / entry["hash"][:2] / entry["hash"])
         try:
-            target = sqlite3.connect(db._DB_PATH)
+            target = sqlite3.connect(target_path)
             try:
                 source.backup(target)
             finally:
@@ -296,7 +320,7 @@ def restore(settings: Settings, name: str, progress: Progress | None = None) -> 
         finally:
             source.close()
     written = 0
-    items = [(rel, f) for rel, f in data["files"].items() if rel != DB_NAME]
+    items = [(rel, f) for rel, f in data["files"].items() if not _is_db(rel)]
     for index, (rel, f) in enumerate(items, start=1):
         target_path = _PROJECT_ROOT / rel
         if target_path.is_file() and target_path.stat().st_size == f["size"] and _hash_file(target_path) == f["hash"]:

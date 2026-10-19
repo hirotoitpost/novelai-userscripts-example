@@ -3,20 +3,114 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, TypeVar
 from uuid import uuid4
 
+from .client import app_mode
+
+# single の DB。multi では全体の DB(招待・利用者・ログインのセッション。sessions.py)になり、利用者のデータは
+# 利用者ごとの DB(user_db_path)に置く(docs/multi_user_plan_jp.md のステップ 3)
 _DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "app.db"
 
+# 今のリクエストの利用者(multi。sessions.SessionMiddleware が入れる)。切り離した処理(asyncio のタスク・
+# スレッド)にも、作ったときの値が引き継がれる
+_current_user: ContextVar[int | None] = ContextVar("current_user", default=None)
 
-def get_connection() -> sqlite3.Connection:
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH)
+V = TypeVar("V")
+
+
+class NoUserError(RuntimeError):
+    """multi で、利用者が決まっていないのに利用者のデータを開こうとした。"""
+
+
+def user_db_path(user_id: int) -> Path:
+    return _DB_PATH.parent / "users" / str(int(user_id)) / "app.db"
+
+
+def current_user_id() -> int | None:
+    return _current_user.get()
+
+
+def db_path() -> Path:
+    """
+    今の利用者のデータの DB。single は _DB_PATH。multi で利用者が決まっていなければ NoUserError
+    (運営者の前のデータや、ほかの人のデータを誤って開かないように)。
+    """
+    if app_mode() != "multi":
+        return _DB_PATH
+    user_id = _current_user.get()
+    if user_id is None:
+        raise NoUserError("利用者が決まっていないので、データを開けません(APP_MODE=multi)")
+    return user_db_path(user_id)
+
+
+@contextmanager
+def as_user(user_id: int | None) -> Iterator[None]:
+    """この中では、その利用者のデータを開く(ミドルウェア・スクリプト・テストで使う)。"""
+    token = _current_user.set(user_id)
+    try:
+        yield
+    finally:
+        _current_user.reset(token)
+
+
+class PerUser(Generic[V]):
+    """
+    DB の ID(物語の ID など)をキーにした、メモリの中の一覧(動いているジョブなど)。multi では利用者ごとに DB が
+    分かれて ID がぶつかるので、中では (今の利用者, ID) をキーにする。見えるのは今の利用者のものだけ
+    (single では利用者が None なので、今までどおり全部)。
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[tuple[int | None, int], V] = {}
+
+    def _key(self, item_id: int) -> tuple[int | None, int]:
+        return (_current_user.get(), item_id)
+
+    def get(self, item_id: int) -> V | None:
+        return self._items.get(self._key(item_id))
+
+    def __getitem__(self, item_id: int) -> V:
+        return self._items[self._key(item_id)]
+
+    def __setitem__(self, item_id: int, value: V) -> None:
+        self._items[self._key(item_id)] = value
+
+    def __contains__(self, item_id: object) -> bool:
+        return isinstance(item_id, int) and self._key(item_id) in self._items
+
+    def pop(self, item_id: int, default: V | None = None) -> V | None:
+        return self._items.pop(self._key(item_id), default)
+
+    def items(self) -> list[tuple[int, V]]:
+        user = _current_user.get()
+        return [(item_id, value) for (owner, item_id), value in self._items.items() if owner == user]
+
+    def values(self) -> list[V]:
+        return [value for _, value in self.items()]
+
+
+def _connect(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     _init_schema(conn)
     return conn
+
+
+def get_connection() -> sqlite3.Connection:
+    """今の利用者のデータの DB を開く(db_path)。"""
+    return _connect(db_path())
+
+
+def get_system_connection() -> sqlite3.Connection:
+    """全体の DB を開く(招待・利用者・セッション。どの利用者のリクエストからでも同じ)。"""
+    return _connect(_DB_PATH)
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:

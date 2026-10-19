@@ -93,7 +93,7 @@ _cache: _Loaded | None = None
 
 def _load() -> _Loaded:
     global _cache
-    if _cache is None or _cache.path != db._DB_PATH:
+    if _cache is None or _cache.path != db.db_path():
         rules = _rules()
         conn = get_connection()
         try:
@@ -128,7 +128,7 @@ def _load() -> _Loaded:
                 conn.commit()
         finally:
             conn.close()
-        _cache = _Loaded(db._DB_PATH, values, updated, {})
+        _cache = _Loaded(db.db_path(), values, updated, {})
     return _cache
 
 

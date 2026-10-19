@@ -47,8 +47,8 @@ class TrashConflict(Exception):
 
 
 def _trash_dir() -> Path:
-    # DB を差し替えるテストでも、ごみ箱のファイルは同じフォルダの下に置く
-    return db._DB_PATH.parent / "trash"
+    # ごみ箱のファイルは DB と同じフォルダの下に置く(DB を差し替えるテスト・multi の利用者ごとの DB でも)
+    return db.db_path().parent / "trash"
 
 
 def _now() -> datetime:

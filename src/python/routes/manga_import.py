@@ -38,6 +38,7 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
 
 from ..db import (
+    PerUser,
     add_manga_genre,
     create_manga_import,
     delete_manga_import,
@@ -76,7 +77,7 @@ class _ImportJob:
     story_id: int | None = None
 
 
-_jobs: dict[int, _ImportJob] = {}
+_jobs: PerUser[_ImportJob] = PerUser()  # 取り込みの ID ごと(multi では利用者ごと。db.PerUser)
 
 
 def _page_dir(import_id: int) -> Path:

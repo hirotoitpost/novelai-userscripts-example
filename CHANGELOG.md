@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **multi のログインを reCAPTCHA なしで** — このアプリからは NovelAI の reCAPTCHA を通せず、メールアドレスでのログインが
   `Login failed (400)` になっていた。ログイン画面で novelai.net のアクセストークンを添え、サーバーがそのトークンで keystore を
   開けるか(メールアドレス+パスワードの鍵と合うか)で本人かを確かめる(計画のステップ 2c)
+- **利用者ごとの DB(`APP_MODE=multi`)** — multi では、データ(物語・キャラ・設定・ごみ箱 など)を利用者ごとの DB
+  (`data/users/{id}/app.db`)に置く。招待・利用者・セッションとバックアップの設定は全体の DB。運営者の前のデータは
+  `scripts/manage_users.py adopt <メールアドレス>` でコピーする(元は残す)。バックアップは利用者ごとの DB も壊れない写しで
+  入れる。画像のフォルダを分けるまで(次の PR)、multi では管理ページの「使っていない画像の片付け」を止める(計画のステップ 3a)
 
 ### Planned
 
