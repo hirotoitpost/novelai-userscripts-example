@@ -35,6 +35,8 @@ class SessionResponse(BaseModel):
     has_api_token: bool
     # multi: keystore の復号鍵をセッションに持っているか(公式のチャンク・物語の一覧に要る)
     has_encryption_key: bool = False
+    # multi: 開発管理者のページを使えるか。single: LAN の中なら誰でも使えるので True
+    is_admin: bool = False
 
 
 class ApiTokenRequest(BaseModel):
@@ -92,13 +94,16 @@ def _start_session(email: str, token: str, key: bytes, request: Request, respons
 async def get_session(request: Request) -> SessionResponse:
     """画面を開いたときに、運営形態とログインの状態を確かめる。"""
     if app_mode() != "multi":
-        return SessionResponse(mode="single", authenticated=False, has_api_token=operator_token() is not None)
+        return SessionResponse(
+            mode="single", authenticated=False, has_api_token=operator_token() is not None, is_admin=True
+        )
     session = sessions.get_session(request.cookies.get(sessions.COOKIE_NAME))
     return SessionResponse(
         mode="multi",
         authenticated=session is not None,
         has_api_token=session is not None and session.api_token is not None,
         has_encryption_key=session is not None and session.encryption_key is not None,
+        is_admin=session is not None and session.is_admin,
     )
 
 

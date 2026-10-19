@@ -11,6 +11,8 @@
   uv run python scripts/manage_users.py add someone@example.com --note "友人A"
   uv run python scripts/manage_users.py remove someone@example.com   # その人のセッションも消える(データは残る)
   uv run python scripts/manage_users.py list
+  uv run python scripts/manage_users.py admin someone@example.com          # 管理者にする(開発管理者のページを使える)
+  uv run python scripts/manage_users.py admin someone@example.com --remove # 管理者から外す
   uv run python scripts/manage_users.py adopt someone@example.com     # single のデータをその人に渡す(コピー)
   uv run python scripts/manage_users.py adopt someone@example.com --files-only   # ファイルだけ(DB は写さない)
 
@@ -44,6 +46,9 @@ def main() -> None:
     remove = sub.add_parser("remove", help="招待を取り消す")
     remove.add_argument("email")
     sub.add_parser("list", help="招待した人の一覧")
+    admin = sub.add_parser("admin", help="管理者にする(--remove で外す)")
+    admin.add_argument("email")
+    admin.add_argument("--remove", action="store_true", help="管理者から外す")
     adopt = sub.add_parser("adopt", help="single のデータをその人のデータとしてコピーする")
     adopt.add_argument("email")
     adopt.add_argument("--force", action="store_true", help="その人のデータがあっても上書きする")
@@ -58,6 +63,11 @@ def main() -> None:
             print("コピーしています(ファイルが多いと数分かかります)…")
             user_id = sessions.adopt_legacy_data(args.email, force=args.force, files_only=args.files_only)
             print(f"コピーしました(利用者 {user_id})。動いているバックエンドはそのまま使えます。")
+        elif args.command == "admin":
+            if not sessions.set_admin(args.email, not args.remove):
+                print("招待されていません(先に add で招待してください)。")
+            else:
+                print("管理者から外しました。" if args.remove else "管理者にしました(ログインし直さなくても効きます)。")
         elif args.command == "remove":
             print("取り消しました。" if sessions.remove_invite(args.email) else "招待されていません。")
         else:
@@ -66,7 +76,8 @@ def main() -> None:
                 print("招待した人はいません。")
             for row in rows:
                 login = f"最後のログイン {row['last_login_at']}" if row["user_id"] else "まだログインしていない"
-                print(f"{row['email_hash'][:12]}…  {row['note'] or '(メモなし)'}  招待 {row['created_at']}  {login}")
+                role = "  管理者" if row["is_admin"] else ""
+                print(f"{row['email_hash'][:12]}…  {row['note'] or '(メモなし)'}{role}  招待 {row['created_at']}  {login}")
     except (RuntimeError, sessions.AdoptError) as exc:  # APP_MASTER_KEY がない など
         sys.exit(str(exc))
 

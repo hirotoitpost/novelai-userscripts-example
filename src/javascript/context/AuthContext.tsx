@@ -17,6 +17,8 @@ interface AuthContextValue {
   hasApiToken: boolean
   /** multi: keystore の復号鍵をセッションに持っているか(公式のチャンク・物語の一覧に要る) */
   hasEncryptionKey: boolean
+  /** 開発管理者のページを使えるか(single は LAN の中なら誰でも使えるので true。multi は管理者だけ) */
+  isAdmin: boolean
   login: (token: string) => Promise<void>
   logout: () => void
   /** multi: サーバーのセッションの状態を読み直す(永続トークンを登録した後など) */
@@ -41,6 +43,7 @@ interface SessionInfo {
   authenticated: boolean
   has_api_token: boolean
   has_encryption_key: boolean
+  is_admin?: boolean
 }
 
 async function fetchSession(signal?: AbortSignal): Promise<SessionInfo> {
@@ -147,6 +150,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         mode,
         hasApiToken: mode === 'multi' && !!session?.has_api_token,
         hasEncryptionKey: mode === 'multi' && !!session?.has_encryption_key,
+        isAdmin: mode !== 'multi' || !!session?.is_admin,
         login,
         logout,
         refreshSession,

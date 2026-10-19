@@ -57,6 +57,7 @@ class Session:
     access_token: str  # ログインで得た NovelAI のアクセストークン(keystore を読むのに要る)
     api_token: str | None  # 画面で登録した永続トークン(pst-...)。期限が切れない
     encryption_key: bytes | None  # keystore の復号鍵(ログイン中だけ持つ)
+    is_admin: bool = False  # 開発管理者のページを使える(scripts/manage_users.py admin)
 
     @property
     def novelai_token(self) -> str:
@@ -155,6 +156,17 @@ def add_invite(email: str, note: str = "") -> None:
         )
 
 
+def set_admin(email: str, admin: bool) -> bool:
+    """管理者にする・外す。招待されていなければ False。"""
+    with _conn() as conn:
+        return (
+            conn.execute(
+                "UPDATE user_invites SET is_admin = ? WHERE email_hash = ?", (int(admin), email_hash(email))
+            ).rowcount
+            > 0
+        )
+
+
 def remove_invite(email: str) -> bool:
     """招待を取り消す。その人のセッションも消す(利用者のデータは残す)。"""
     h = email_hash(email)
@@ -169,7 +181,7 @@ def remove_invite(email: str) -> bool:
 def list_invites() -> list[dict[str, Any]]:
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT i.email_hash, i.note, i.created_at, u.id AS user_id, u.last_login_at"
+            "SELECT i.email_hash, i.note, i.created_at, i.is_admin, u.id AS user_id, u.last_login_at"
             " FROM user_invites i LEFT JOIN users u ON u.email_hash = i.email_hash ORDER BY i.created_at"
         ).fetchall()
     return [dict(r) for r in rows]
@@ -229,7 +241,7 @@ def get_session(cookie: str | None) -> Session | None:
     with _conn() as conn:
         row = conn.execute(
             "SELECT s.user_id, s.access_token, s.encryption_key, s.expires_at, u.wrapped_key,"
-            " u.novelai_api_token, (i.email_hash IS NOT NULL) AS invited"
+            " u.novelai_api_token, (i.email_hash IS NOT NULL) AS invited, COALESCE(i.is_admin, 0) AS is_admin"
             " FROM user_sessions s JOIN users u ON u.id = s.user_id"
             " LEFT JOIN user_invites i ON i.email_hash = u.email_hash WHERE s.id = ?",
             (sid,),
@@ -245,6 +257,7 @@ def get_session(cookie: str | None) -> Session | None:
         access_token=_decrypt(data_key, row["access_token"]).decode(),
         api_token=_decrypt(data_key, row["novelai_api_token"]).decode() if row["novelai_api_token"] else None,
         encryption_key=_decrypt(data_key, row["encryption_key"]) if row["encryption_key"] else None,
+        is_admin=bool(row["is_admin"]),
     )
 
 

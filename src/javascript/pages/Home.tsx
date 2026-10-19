@@ -14,7 +14,7 @@ const TIER_CLASSES: Record<number, string> = {
 }
 
 export default function Home() {
-  const { token, logout } = useAuth()
+  const { token, logout, isAdmin } = useAuth()
   const navigate = useNavigate()
 
   const [sub, setSub] = useState<SubscriptionResponse | null>(null)
@@ -229,7 +229,8 @@ export default function Home() {
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
 
-          <div
+          {/* multi では管理者だけ(サーバーも管理者以外は断る) */}
+          {isAdmin && <div
             className="home-card home-card--available home-card--link"
             onClick={() => navigate('/admin')}
             role="button"
@@ -240,7 +241,7 @@ export default function Home() {
             <h2>開発管理者</h2>
             <p>サーバーの状態とログ・動いている処理・設定(.env)・再起動やデータの管理・既定値やプリセット・コンテンツガード。LAN の中から開けます。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
-          </div>
+          </div>}
 
           <div
             className="home-card home-card--available home-card--link"
