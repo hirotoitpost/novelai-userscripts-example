@@ -322,6 +322,64 @@ def set_api_token(user_id: int, token: str | None) -> None:
         conn.execute("UPDATE users SET novelai_api_token = ? WHERE id = ?", (cipher, user_id))
 
 
+# ---- 監査ログ(ステップ 6) ----
+
+# 結果と一緒に残すリクエスト(管理の操作)。GET は .env を見たときだけ。よく呼ばれて中身を変えないもの(判定の
+# チェック・取り込みの下見)は残さない
+_AUDITED_PREFIXES = ("/api/admin/", "/api/content-guard/", "/api/lora-dataset/guards")
+_AUDITED_GETS = frozenset({"/api/admin/env"})
+_NOT_AUDITED = frozenset({"/api/content-guard/check", "/api/content-guard/import/preview"})
+
+
+def audit(
+    action: str,
+    *,
+    user_id: int | None = None,
+    actor: str = "",
+    target: str = "",
+    detail: dict[str, Any] | None = None,
+    ip: str = "",
+) -> None:
+    """
+    監査ログに 1 件残す(multi だけ。single は 1 人で使うので残さない)。メールアドレスは残さず、actor には
+    email_hash の頭など見分けのつく短いものを入れる。トークンやパスワードは detail に入れない。
+    """
+    if app_mode() != "multi":
+        return
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO audit_log (created_at, user_id, actor, action, target, detail, ip) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (_now().isoformat(), user_id, actor, action, target, json.dumps(detail or {}, ensure_ascii=False), ip),
+        )
+
+
+def actor_of(email: str) -> str:
+    """監査ログの actor に入れる、メールアドレスの代わり(招待の一覧と同じ email_hash の頭 12 文字)。"""
+    return email_hash(email)[:12]
+
+
+def list_audit(limit: int = 100) -> list[dict[str, Any]]:
+    with _conn() as conn:
+        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [{**dict(r), "detail": json.loads(r["detail"] or "{}")} for r in rows]
+
+
+def _audited(method: str, path: str) -> bool:
+    if path in _NOT_AUDITED:
+        return False
+    if method == "GET":
+        return path in _AUDITED_GETS
+    return method not in _SAFE_METHODS and path.startswith(_AUDITED_PREFIXES)
+
+
+def _client_ip(scope: dict[str, Any], headers: list[tuple[bytes, bytes]]) -> str:
+    forwarded = _header(headers, b"x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    client = scope.get("client")
+    return client[0] if client else ""
+
+
 # ---- 前のデータ(single のもの)を利用者に渡す ----
 
 
@@ -378,6 +436,74 @@ def _copy_legacy_db(target: Path) -> None:
     legacy_trash = db._DB_PATH.parent / "trash"
     if legacy_trash.is_dir():
         shutil.copytree(legacy_trash, target.parent / "trash", dirs_exist_ok=True)
+
+
+# ---- 利用者のデータの書き出し・削除(ステップ 6。運営者がスクリプトで行う) ----
+
+# もう縮まないもの(画像・動画・ZIP)は、縮めずに入れる(速い)
+_STORED_SUFFIXES = (".png", ".webp", ".jpg", ".jpeg", ".gif", ".mp4", ".webm", ".zip")
+
+
+def export_dir() -> Path:
+    """書き出した ZIP の置き場所(data/exports。バックアップには入れない)。"""
+    return db._DB_PATH.parent / "exports"
+
+
+def _user_folder(email: str) -> tuple[int, Path]:
+    user_id = user_id_of(email)
+    if user_id is None:
+        raise AdoptError("その人は、招待されていないか、まだ一度もログインしていません")
+    return user_id, db.user_db_path(user_id).parent
+
+
+def export_user(email: str) -> Path:
+    """
+    その人のデータ(DB とファイル)を 1 つの ZIP に書き出す。DB は書き込み中でも壊れない写しを入れる。
+    ログインの情報(招待・セッション・暗号化したトークン)は入れない(全体の DB にあるので)。ZIP の場所を返す。
+    """
+    import tempfile
+    import zipfile
+
+    user_id, folder = _user_folder(email)
+    if not folder.is_dir():
+        raise AdoptError("その人のデータはまだありません")
+    out_dir = export_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / f"user-{user_id}-{_now().strftime('%Y%m%d-%H%M%S')}.zip"
+    with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(target, "w") as archive:
+        snapshot = Path(tmp) / "app.db"
+        source = sqlite3.connect(folder / "app.db")
+        try:
+            copy = sqlite3.connect(snapshot)
+            try:
+                source.backup(copy)
+            finally:
+                copy.close()
+        finally:
+            source.close()
+        archive.write(snapshot, "app.db", compress_type=zipfile.ZIP_DEFLATED)
+        for path in sorted(folder.rglob("*")):
+            if not path.is_file() or path.name.startswith("app.db"):
+                continue
+            compress = zipfile.ZIP_STORED if path.suffix.lower() in _STORED_SUFFIXES else zipfile.ZIP_DEFLATED
+            archive.write(path, path.relative_to(folder).as_posix(), compress_type=compress)
+    return target
+
+
+def delete_user(email: str) -> int:
+    """
+    その人を消す: 招待・利用者・セッション(全体の DB)と、その人のフォルダ(DB とファイル)。取り消せない。
+    バックアップに入っている分は残る。消した利用者の ID を返す。
+    """
+    user_id, folder = _user_folder(email)
+    h = email_hash(email)
+    with _conn() as conn:
+        conn.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.execute("DELETE FROM user_invites WHERE email_hash = ?", (h,))
+    if folder.is_dir():
+        shutil.rmtree(folder)
+    return user_id
 
 
 # ---- ミドルウェア ----
@@ -451,9 +577,28 @@ class SessionMiddleware:
         headers = [(k, v) for k, v in headers if k != b"authorization"]
         headers.append((b"authorization", f"Bearer {session.novelai_token}".encode()))
         scope = {**scope, "headers": headers, "state": {**scope.get("state", {}), "session": session}}
+        if _audited(method, scope["path"]):
+            send = self._recording(send, scope, headers, session)
         # このリクエスト(と、そこから切り離した処理)では、その人の DB を開く(db.get_connection)
         with db.as_user(session.user_id):
             await self.app(scope, receive, send)
+
+    @staticmethod
+    def _recording(send: Any, scope: dict[str, Any], headers: list[tuple[bytes, bytes]], session: Session) -> Any:
+        """応答の status を見て、監査ログに残す(断られたものも残す)。"""
+
+        async def wrapped(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                audit(
+                    "request",
+                    user_id=session.user_id,
+                    target=f"{scope.get('method', '')} {scope['path']}",
+                    detail={"status": message["status"], "admin": session.is_admin},
+                    ip=_client_ip(scope, headers),
+                )
+            await send(message)
+
+        return wrapped
 
 
 def current_session(request: Request) -> Session | None:

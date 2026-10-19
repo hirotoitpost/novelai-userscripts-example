@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 from .. import app_settings, db
 from ..client import app_mode
 from ..db import get_connection, user_files
-from ..sessions import require_admin
+from ..sessions import list_audit, require_admin
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # Docker のコンテナ(APP_IN_CONTAINER=1)では、開発中のサーバー(dev-ctl.ps1)の記録と混ざらないよう別のフォルダ
@@ -212,6 +212,12 @@ async def get_logs(name: str = "backend.err", lines: int = 200) -> dict[str, Any
 
 
 # ---- 動いている処理 ----
+
+
+@router.get("/audit")
+async def get_audit(limit: int = 200) -> dict[str, Any]:
+    """監査ログ(multi だけ残す。sessions.audit)。新しい順。"""
+    return {"enabled": app_mode() == "multi", "entries": list_audit(min(max(limit, 1), 1000))}
 
 
 @router.get("/jobs")

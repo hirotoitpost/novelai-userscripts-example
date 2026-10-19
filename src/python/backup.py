@@ -43,7 +43,7 @@ FOLDER = "novelai-backup"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DB_NAME = "data/app.db"
 # 入れないもの(リポジトリのルートからのパスの頭)
-_SKIP = ("data/models", "data/fonts", "data/eval", "data/backups", "data/run", "data/app.db")
+_SKIP = ("data/models", "data/fonts", "data/eval", "data/backups", "data/run", "data/app.db", "data/exports")
 # multi の利用者ごとの DB(db.user_db_path)。全体の DB と同じく、壊れない写しを作ってから入れる
 _USER_DB = re.compile(r"data/users/\d+/app\.db")
 
