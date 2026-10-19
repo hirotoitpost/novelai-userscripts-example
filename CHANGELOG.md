@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ホームで NovelAI の永続 API トークンを登録・削除できる。開発中に :8000 へ直接送る呼び出しにも Cookie を付ける
   (`.env` の `APP_ALLOWED_ORIGINS` に画面の配信元を書く)。single でも keystore の鍵は URL に入れずヘッダーで送る
   (計画のステップ 2b)
+- **multi のログインを reCAPTCHA なしで** — このアプリからは NovelAI の reCAPTCHA を通せず、メールアドレスでのログインが
+  `Login failed (400)` になっていた。ログイン画面で novelai.net のアクセストークンを添え、サーバーがそのトークンで keystore を
+  開けるか(メールアドレス+パスワードの鍵と合うか)で本人かを確かめる(計画のステップ 2c)
 
 ### Planned
 
