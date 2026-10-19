@@ -50,6 +50,29 @@ Key derivation algorithm is identical to NovelAI's official web client
 
 ---
 
+## Multi-user mode (`APP_MODE=multi`)
+
+`APP_MODE=single` (the default) is the flow above: one person, the browser holds the NovelAI token, and `.env` may hold a
+persistent token. `APP_MODE=multi` lets several invited people share one server. The full plan and the decisions behind it
+are in [multi_user_plan_jp.md](multi_user_plan_jp.md) (Japanese).
+
+| Piece | Where | What it does |
+|---|---|---|
+| Invites, users, sessions | `sessions.py`, system DB (`data/app.db`) | Only invited emails can log in. Emails are stored as an HMAC (`APP_MASTER_KEY`), never in plain text. |
+| Login | `routes/auth.py`, `auth_utils.verify_token_owner` | Email + password + a novelai.net access token. The server proves ownership by opening the NovelAI keystore with the key derived from the email and password (the borrowed reCAPTCHA key only works on novelai.net). |
+| Session | `SessionMiddleware` | An `HttpOnly`, `SameSite=Strict` cookie. Every `/api/` request needs it; the middleware drops any `Authorization` header from the browser and injects the user's own NovelAI token (persistent token if registered). Writes from other origins are refused. |
+| Secrets at rest | `users`, `user_sessions` | NovelAI tokens and the keystore key are encrypted with a per-user data key (PyNaCl `SecretBox`), which is wrapped by the master key. |
+| Per-user data | `db.get_connection`, `db.UserPath` | Each user has their own DB and folder (`data/users/{id}/`). The current user is a `ContextVar`, inherited by background tasks and threads; without a user, opening user data fails. Models, fonts and certificates stay shared. |
+| Content guard | `db.get_guard_connection` | One set of guard rules, password and profiles for everyone (system DB); only admins change it. |
+| Admins | `user_invites.is_admin`, `sessions.require_admin` | The admin page and guard changes are admin-only. `.env` cannot be edited from the page. |
+| MCP server | `mcp_identity.py` | Runs as `APP_MCP_USER`, with that user's DB, folder and persistent token. |
+| Limits | `usage.py` | Per-user daily counts and one-at-a-time for Ollama / vLLM and ComfyUI (admins exempt). |
+| Audit log | `audit_log`, `sessions.audit` | Logins (including refused ones), token changes, admin and guard changes, and CLI operations. No emails or tokens. |
+
+Operators manage people with `scripts/manage_users.py` (`add`, `remove`, `admin`, `adopt`, `export`, `delete`, `audit`).
+
+---
+
 ## Backend Structure
 
 ```
@@ -214,6 +237,6 @@ PIL.Image list
 ## Security Notes
 
 - **Passwords** are never logged, stored, or transmitted in plaintext. Key derivation runs server-side; only the derived key touches the wire.
-- **Access tokens** are stored in `localStorage`. For production use, consider `httpOnly` cookies instead.
+- **Access tokens**: in `single` they are stored in `localStorage`. In `multi` the browser holds only an `HttpOnly` session cookie; tokens stay on the server, encrypted (see *Multi-user mode*).
 - **Generated images** exist only in browser memory (base64 string in React state). They are not written to disk unless the user explicitly downloads them.
-- The backend CORS policy is currently open (`allow_origins=["*"]`). Restrict this for any non-local deployment.
+- The backend CORS policy is open (`allow_origins=["*"]`) in `single`, which is meant for one person on a local machine or LAN. In `multi` only the origins in `APP_ALLOWED_ORIGINS` (or the same origin) are allowed.

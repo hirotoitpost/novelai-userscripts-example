@@ -259,9 +259,21 @@
 - 削除: `scripts/manage_users.py delete <メールアドレス>`。招待・利用者・セッションとその人のフォルダを消す。取り消せない
   ので、先に書き出したかを聞き、メールアドレスを打ち直してもらう(`--yes` で聞かない)。バックアップに入っている分は残る。
 
-#### 6b: GPU の利用上限(次の PR)
+#### 6b: GPU の利用上限(実装済み)
 
-- 1 日の回数と、同時に 1 つまで。`docs/architecture.md` と `SECURITY.md` もここで更新する。
+- `usage.py`。対象は運営者の GPU を使う文章生成(Ollama / vLLM)と、外部の GPU を借りる動画の生成(ComfyUI。お金がかかる)。
+  手元の画像のモデル(拡大・タグの推定など)は `CPUExecutionProvider` で CPU で動くので、今は対象外(要るなら同じ仕組みで
+  足せる)。NovelAI の生成は各自の Anlas なので対象外。
+- 1 日の回数: `.env` の `APP_LIMIT_LLM_PER_DAY`(既定 500。Ollama / vLLM への通信 1 回ごと)・`APP_LIMIT_VIDEO_PER_DAY`
+  (既定 20。動画 1 本ごと)。0 で上限なし。全体の DB の `usage_counts` に、利用者・日付(サーバーの PC の日付)・種類ごとに数える。
+- 同時に 1 つ: 断らずに、同じ人の前の処理が終わるまで待たせる(1 つのジョブの中でまとめて呼ぶ処理もあるので)。流れてくる
+  応答は、読み終えて閉じるまで持つ。
+- 文章生成は、httpx の通信の層(`LimitedTransport`)で数える。openai のクライアント(`llm_client`)と、Ollama を直接呼ぶところ
+  (`routes/llm.py`・`manga_import.py`・`similarity.py`)のどちらも通る。上限のとき、直接呼ぶところには `LimitExceeded` を
+  そのまま投げ、openai のクライアントには 429 の応答(OpenAI と同じ形の本文、`x-should-retry: false`)を返す(例外だと
+  「接続エラー」に包まれてやり直されるため)。動画は `video_remote.generate` を 1 本ごとに数える。
+- 上限をかけない: single、利用者が決まっていないとき、管理者。リクエストの中で上限に達したら 429(`server.py`)。
+- `docs/architecture.md`・`SECURITY.md`・`docs/SECURITY_jp.md` に、複数ユーザーの節を足した。
 
 ## 進め方
 

@@ -44,6 +44,31 @@ The relay server runs entirely on the local machine and does not expose any data
 
 ---
 
+## Multi-user mode (`APP_MODE=multi`)
+
+When several invited people share one server:
+
+- **Who can log in**: only emails invited with `scripts/manage_users.py add`. Emails are stored as an HMAC derived from
+  `APP_MASTER_KEY`, not in plain text.
+- **Proof of identity**: login takes the NovelAI email, password and a novelai.net access token. The server checks that the
+  keystore of that token opens with the key derived from the email and password. Passwords are not stored.
+- **In the browser**: only an `HttpOnly`, `SameSite=Strict` session cookie. NovelAI tokens and the keystore key never reach the
+  browser; any `Authorization` header from the browser is dropped. Writes from other origins are refused, and CORS allows
+  only `APP_ALLOWED_ORIGINS`.
+- **On the server**: NovelAI tokens and the keystore key are encrypted with a per-user key (PyNaCl `SecretBox`), wrapped by
+  `APP_MASTER_KEY`. Keep the master key out of the repository (Secret Manager when hosted); losing or changing it makes
+  every invite and user unrecognisable.
+- **Separation**: each user has their own database and folder; code that opens user data without a known user fails rather
+  than falling back to shared data. The operator's `.env` token is never used for other people's requests.
+- **Admin**: the admin page, `.env` viewing and content-guard changes are admin-only; `.env` cannot be edited from the page.
+- **Audit log**: logins (including refused ones), token changes, admin and guard changes and CLI operations are recorded
+  without emails or tokens (`scripts/manage_users.py audit`, or the admin page).
+- **Limits**: per-user daily limits and one-at-a-time for the operator's GPU (Ollama / vLLM) and ComfyUI.
+- **Backups and deletion**: `scripts/manage_users.py delete` removes a user's data from the server; copies inside earlier
+  backups remain until they are pruned.
+
+---
+
 ## Code Inspection
 
 The following dangerous patterns were searched for and **not found** in `novelai-sdk`:

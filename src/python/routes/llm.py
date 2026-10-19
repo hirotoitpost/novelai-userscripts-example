@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncGenerator, cast
 
-import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
@@ -28,6 +27,7 @@ from ..llm_models import (
     ReverseTagsResponse,
     StoryDraftRequest,
 )
+from ..usage import llm_http_client
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
@@ -54,7 +54,7 @@ async def _stream_llm_ollama(
 
     async def run_once() -> str:
         raw: list[str] = []
-        async with httpx.AsyncClient(timeout=600) as client:
+        async with llm_http_client(timeout=600) as client:  # 利用者ごとの上限(usage.py)
             async with client.stream(
                 "POST",
                 f"{ollama_base}/api/chat",
@@ -185,7 +185,7 @@ async def stream_llm_text(
         }
         if json_schema is not None:
             body["format"] = json_schema
-        async with httpx.AsyncClient(timeout=600) as client:
+        async with llm_http_client(timeout=600) as client:  # 利用者ごとの上限(usage.py)
             async with client.stream("POST", f"{ollama_base}/api/chat", json=body) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():

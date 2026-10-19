@@ -23,6 +23,7 @@ import numpy as np
 from PIL.Image import Image
 
 from .llm_client import get_vision_base_url, get_vision_client, get_vision_model, is_ollama_vision
+from .usage import llm_http_client
 
 ScorerLiteral = Literal["color", "vlm"]
 
@@ -91,7 +92,7 @@ async def vlm_similarity(image: Image, reference: Image, retries: int = 3) -> fl
 async def _ask_vlm(ref_b64: str, img_b64: str) -> str:
     if is_ollama_vision():
         base = get_vision_base_url().rstrip("/").removesuffix("/v1")
-        async with httpx.AsyncClient(timeout=120) as http:
+        async with llm_http_client(timeout=120) as http:  # 利用者ごとの上限(usage.py)
             res = await http.post(
                 f"{base}/api/chat",
                 json={

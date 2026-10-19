@@ -5,6 +5,7 @@ import os
 
 from fastapi import HTTPException
 from openai import AsyncOpenAI
+from .usage import llm_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +31,15 @@ async def init_llm_clients() -> None:
     _vision_model = os.environ.get("VLLM_VISION_MODEL", "qwen3-vl:2b")
 
     if _text_base_url:
-        _text_client = AsyncOpenAI(base_url=_text_base_url, api_key="EMPTY")
+        # 利用者ごとの上限(multi。usage.py)をかけた通信で呼ぶ
+        _text_client = AsyncOpenAI(base_url=_text_base_url, api_key="EMPTY", http_client=llm_http_client(for_openai=True, timeout=600))
         backend = "Ollama" if _is_ollama_url(_text_base_url) else "vLLM"
         logger.info("%s text client initialized: %s (model: %s)", backend, _text_base_url, _text_model)
     else:
         logger.warning("VLLM_BASE_URL not set — /api/llm/* endpoints will return 503")
 
     if _vision_base_url:
-        _vision_client = AsyncOpenAI(base_url=_vision_base_url, api_key="EMPTY")
+        _vision_client = AsyncOpenAI(base_url=_vision_base_url, api_key="EMPTY", http_client=llm_http_client(for_openai=True, timeout=600))
         backend = "Ollama" if _is_ollama_url(_vision_base_url) else "vLLM"
         logger.info("%s vision client initialized: %s (model: %s)", backend, _vision_base_url, _vision_model)
     else:

@@ -42,6 +42,7 @@ from PIL import Image
 from .manga_elements import detect_elements
 from .manga_reading import describe_panel, line_features, ocr_engine, ocr_lock, order_in_panel, read_page
 from .manga_v2.detect import detect_heads
+from .usage import llm_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -615,7 +616,7 @@ async def classify_panel(crop: Image.Image) -> tuple[str, str]:
             **extra,
         }
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=10)) as client:
+            async with llm_http_client(timeout=httpx.Timeout(300, connect=10)) as client:  # 利用者ごとの上限(usage.py)
                 response = await client.post(f"{host}/api/chat", json=body)
             parsed = parse_role(response.json().get("message") or {})
         except Exception as exc:  # noqa: BLE001 読めなくても構成の他の項目は使える

@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .client import app_mode, close_client, init_client
 from .sessions import SessionMiddleware, allowed_origins, check_config
+from .usage import LimitExceeded
 from .llm_client import close_llm_clients, init_llm_clients
 from .routes.admin import router as admin_router
 from .routes.auth import router as auth_router
@@ -97,6 +99,12 @@ class _CorsByMode:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await (self.multi if app_mode() == "multi" else self.single)(scope, receive, send)
+
+
+@app.exception_handler(LimitExceeded)
+async def _limit_exceeded(request: Request, exc: LimitExceeded) -> JSONResponse:
+    """GPU の利用上限(multi。usage.py)に達した。"""
+    return JSONResponse(status_code=429, content={"detail": str(exc)})
 
 
 # 後に加えたものが外側。CORS(前置きの問い合わせに答える)→ ログインのセッション(multi)→ 各ルーター
