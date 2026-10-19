@@ -14,7 +14,6 @@ import json
 import re
 import time
 from collections import Counter
-from base64 import b64decode
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -72,6 +71,7 @@ from ..db import (
     update_story_status,
 )
 from ..keystore_crypto import decrypt_keystore, decrypt_object
+from ..sessions import keystore_credentials
 from ..manga_export import assemble_manga
 from ..notify import notify_job_finished
 from ..character_sheet import (
@@ -434,7 +434,8 @@ def _match_content_for_story(
 
 @router.get("/remote")
 async def list_remote_stories(
-    encryption_key: str = Query(..., description="POST /api/chunks/encryption-key で取得した base64 鍵"),
+    request: Request,
+    encryption_key: str | None = Query(None, description="POST /api/chunks/encryption-key で取得した base64 鍵(APP_MODE=multi ではセッションのものを使う)"),
     authorization: str | None = Header(None),
 ) -> list[dict[str, Any]]:
     """
@@ -444,14 +445,7 @@ async def list_remote_stories(
     デコードにはmsgpackrのJS実装が要るため、ここでは生の文字列のまま返して
     フロントエンド(novelaiDocument.ts)でプレーンテキストへ復元する。
     """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authorization ヘッダーが必要です")
-    token = authorization[7:]
-
-    try:
-        key = b64decode(encryption_key)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"encryption_key が不正です: {exc}")
+    token, key = keystore_credentials(request, encryption_key, authorization)
 
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(headers=headers, timeout=30) as client:

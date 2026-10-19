@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import httpx
 import numpy as np
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from novelai import AsyncNovelAI
 from novelai._utils.nai_meta import extract_image_metadata
@@ -42,6 +42,7 @@ from ..db import (
     upsert_prompt_chunks,
 )
 from ..keystore_crypto import decrypt_keystore, decrypt_object
+from ..sessions import keystore_credentials
 from ..models import (
     ConflictCheckRequest,
     EncryptionKeyRequest,
@@ -86,21 +87,15 @@ async def compute_encryption_key(req: EncryptionKeyRequest) -> EncryptionKeyResp
 
 @router.get("/promptmacros")
 async def get_prompt_macros(
-    encryption_key: str = Query(..., description="POST /encryption-key で取得した base64 鍵"),
+    request: Request,
+    encryption_key: str | None = Query(None, description="POST /encryption-key で取得した base64 鍵(APP_MODE=multi ではセッションのものを使う)"),
     authorization: str | None = Header(None),
 ) -> list[dict[str, Any]]:
     """
     NovelAI 公式のプロンプトチャンクを取得・復号し、ローカルDB(prompt_chunks)へ
     upsert してから返す。取得＝インポートであり、通常のアプリ利用には不要な任意操作。
     """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authorization ヘッダーが必要です")
-    token = authorization[7:]
-
-    try:
-        key = b64decode(encryption_key)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"encryption_key が不正です: {exc}")
+    token, key = keystore_credentials(request, encryption_key, authorization)
 
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(headers=headers, timeout=30) as client:

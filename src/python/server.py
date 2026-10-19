@@ -8,8 +8,10 @@ from typing import AsyncGenerator
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .client import close_client, init_client
+from .client import app_mode, close_client, init_client
+from .sessions import SessionMiddleware, check_config
 from .llm_client import close_llm_clients, init_llm_clients
 from .routes.admin import router as admin_router
 from .routes.auth import router as auth_router
@@ -65,6 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import asyncio
 
     await init_client()
+    check_config()
     await init_llm_clients()
     auto_backup = asyncio.create_task(_auto_backup_loop())
     yield
@@ -79,13 +82,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+
+class _CorsByMode:
+    """
+    single: どこからでも呼べる(今までどおり)。multi: ログインの Cookie を使うので、APP_ALLOWED_ORIGINS
+    (カンマ区切り)に書いた配信元だけ。書かなければ同じ配信元だけ(Vite の中継や、バックエンドが配る画面)。
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        common = {"allow_credentials": True, "allow_methods": ["*"], "allow_headers": ["*"]}
+        self.single = CORSMiddleware(app, allow_origins=["*"], **common)
+        allowed = [o.strip() for o in os.environ.get("APP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+        self.multi = CORSMiddleware(app, allow_origins=allowed, **common)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await (self.multi if app_mode() == "multi" else self.single)(scope, receive, send)
+
+
+# 後に加えたものが外側。CORS(前置きの問い合わせに答える)→ ログインのセッション(multi)→ 各ルーター
+app.add_middleware(SessionMiddleware)
+app.add_middleware(_CorsByMode)
 
 app.include_router(admin_router)
 app.include_router(auth_router)

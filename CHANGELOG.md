@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **運営形態の設定(`APP_MODE`)** — `.env` の `APP_MODE=single|multi`(既定は `single`。今の動きのまま)。`multi` では
   `.env` の `NOVELAI_API_TOKEN` を使わない: 画面のトークンが 401 でも運営者のトークンで再試行せず、ログインしていない
   リクエストは 401。`single`・`multi` 以外の値ではサーバーが起動しない。複数ユーザー対応の計画のステップ 1
+- **複数ユーザーのログインとセッション(`APP_MODE=multi`、バックエンド)** — 招待した人だけが NovelAI のメールアドレスで
+  ログインできる(招待は `scripts/manage_users.py`)。NovelAI のトークンと keystore の復号鍵は、利用者ごとの鍵で暗号化して
+  サーバーに持ち、画面には HttpOnly・SameSite=Strict の Cookie だけを渡す。メールアドレスは保存しない(HMAC で見分ける)。
+  `/api/` は multi ではログインが要り、その人のトークンで NovelAI を呼ぶ。永続トークンを登録すれば期限切れの 401 も起きない。
+  multi の CORS は `APP_ALLOWED_ORIGINS` の配信元だけ。鍵は `.env` の `APP_MASTER_KEY`。画面の対応は次の PR(計画のステップ 2a)
 
 ### Planned
 
