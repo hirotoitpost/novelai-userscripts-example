@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **複数ユーザー対応の計画(`docs/multi_user_plan_jp.md`)** — `.env` の利用者情報(NovelAI のトークンなど)を利用者ごと・安全な形式で
   扱うための計画。`.env` の項目の仕分け、今 1 人用になっている箇所(keystore の復号鍵の扱いを含む)、ステップごとの進め方(まず運営者のトークンへの切り替えを止める)
+- **運営形態の設定(`APP_MODE`)** — `.env` の `APP_MODE=single|multi`(既定は `single`。今の動きのまま)。`multi` では
+  `.env` の `NOVELAI_API_TOKEN` を使わない: 画面のトークンが 401 でも運営者のトークンで再試行せず、ログインしていない
+  リクエストは 401。`single`・`multi` 以外の値ではサーバーが起動しない。複数ユーザー対応の計画のステップ 1
 
 ### Planned
 
