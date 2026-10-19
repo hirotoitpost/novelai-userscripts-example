@@ -86,6 +86,15 @@ def _subkey(purpose: bytes) -> bytes:
     return hashlib.blake2b(b"", key=_master_key(), person=purpose, digest_size=32).digest()
 
 
+def allowed_origins() -> list[str]:
+    """
+    multi で、ほかの配信元から呼んでよいもの(.env の APP_ALLOWED_ORIGINS。カンマ区切り)。CORS と、書き込みの
+    Origin の確認の両方で使う。開発中は画面(:5173)からバックエンド(:8000)へ直接送る呼び出しがあるので、
+    http://localhost:5173 などを書く。
+    """
+    return [o.strip().rstrip("/") for o in os.environ.get("APP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
+
 def check_config() -> None:
     """起動時に呼ぶ。multi でマスター鍵がなければ止める。"""
     if app_mode() == "multi":
@@ -290,7 +299,8 @@ class SessionMiddleware:
     """
     multi のとき、/api/ へのリクエストにログインのセッションを求める(ログインの道は除く)。
     - Cookie がない・無効なら 401。
-    - 書き込みのリクエスト(GET 以外)で Origin がこのサーバーと違えば 403(よそのサイトからの操作を防ぐ)。
+    - 書き込みのリクエスト(GET 以外)で Origin がこのサーバーとも APP_ALLOWED_ORIGINS とも違えば 403
+      (よそのサイトからの操作を防ぐ)。
     - ブラウザから来た Authorization は捨て、その人の NovelAI トークンを差し込む。
       セッションは request.state.session で読める。
     """
@@ -307,7 +317,11 @@ class SessionMiddleware:
         if method not in _SAFE_METHODS:
             origin = _header(headers, b"origin")
             host = _header(headers, b"x-forwarded-host") or _header(headers, b"host") or ""
-            if origin and urlsplit(origin).netloc.lower() != host.lower():
+            if (
+                origin
+                and urlsplit(origin).netloc.lower() != host.lower()
+                and origin.rstrip("/") not in allowed_origins()
+            ):
                 await _reply(send, 403, "ほかのサイトからの操作は受け付けません")
                 return
         if scope["path"] in _PUBLIC_PATHS or method == "OPTIONS":
@@ -332,7 +346,8 @@ def keystore_credentials(request: Request, encryption_key: str | None, authoriza
     """
     keystore を読む 2 つの機能(公式のプロンプトのチャンクの取り込み・公式サイトの物語の一覧)で使う
     トークンと復号鍵。multi ではセッションに持っている(永続トークンでは keystore を読めないので、
-    ログインで得たアクセストークンを使う)。single では今までどおり Authorization と画面から渡された鍵。
+    ログインで得たアクセストークンを使う)。single では今までどおり Authorization と画面から渡された鍵
+    (X-NAI-Encryption-Key ヘッダー。前の画面のクエリ encryption_key も受け付ける)。
     """
     session = current_session(request)
     if session is not None:
@@ -341,6 +356,8 @@ def keystore_credentials(request: Request, encryption_key: str | None, authoriza
         return session.access_token, session.encryption_key
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Authorization ヘッダーが必要です")
+    # 画面は鍵を URL に入れずヘッダーで送る(アクセスログなどに残らないように)。クエリは前の画面のために残す
+    encryption_key = encryption_key or request.headers.get("x-nai-encryption-key")
     if not encryption_key:
         raise HTTPException(status_code=422, detail="encryption_key が必要です")
     try:

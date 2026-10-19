@@ -105,14 +105,22 @@
 注意: ステップ 3 までは、招待した人どうしでデータ(物語・キャラ・画像など)が共有される。ステップ 3 が
 終わるまでは、データを見られてもよい人だけを招待する。
 
-#### 2b: 画面(次の PR)
+#### 2b: 画面(実装済み)
 
-- 開いたときに `GET /api/auth/session` で運営形態を確かめ、multi ならトークンを localStorage に置かず、
-  Cookie のセッションでログインの状態を判断する。API の呼び出しは、トークンがないときは Authorization を
-  付けない(今は `Bearer ${token}` を 29 か所で組み立てている)。
-- ログインの画面: multi ではトークンの貼り付けを隠す。ログアウトは `POST /api/auth/logout`。
-- 永続トークンの登録・削除の画面。
-- keystore の 2 つの機能: multi では `POST /api/chunks/encryption-key` を呼ばず、鍵を localStorage に置かない。
+- `AuthContext.tsx`: 開いたときに `GET /api/auth/session` で運営形態を確かめる(聞けないときは single として動く)。
+  multi では NovelAI のトークンも keystore の鍵も localStorage に置かない(single のときの残りも消す)。
+  ログインの状態はサーバーのセッションで判断する。
+- 各画面の API の呼び出し(`Bearer ${token}` を 29 か所で組み立て、「トークンがあれば使える」という判断が 50 か所
+  以上)は書き換えない。multi では `token` に秘密ではない目印(`SESSION_TOKEN`)を入れ、サーバーは来た
+  Authorization を捨てて本人のトークンに差し替える(2a の `SessionMiddleware`)。
+- 開発中は、画面(:5173)から :8000 へ直接送る呼び出しが 101 か所ある(Vite の中継だと SSE が詰まるため)。
+  別の配信元なので、multi のときだけ `backendOrigin.ts` で `credentials: 'include'` を付けて Cookie を送る。
+  バックエンドでは `.env` の `APP_ALLOWED_ORIGINS` にその配信元(`http://localhost:5173` など)を書く
+  (CORS と、書き込みの Origin の確認の両方で使う)。バックエンドが画面も配る形(Docker)では同じ配信元なので要らない。
+- ログインの画面: multi ではトークンの貼り付けを出さない。ログアウトは `POST /api/auth/logout`。
+- ホームに永続トークンの登録・置き換え・削除(`components/ApiTokenSettings.tsx`。multi のときだけ)。
+- keystore の 2 つの機能: multi では鍵の入力欄を出さず、セッションの鍵を使う。single でも、鍵は URL のクエリ
+  ではなく `X-NAI-Encryption-Key` ヘッダーで送る(サーバーは前の画面のためにクエリも受け付ける)。
 
 ### ステップ 3: データを利用者ごとに分ける
 

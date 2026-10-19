@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch, SubscriptionResponse } from '../api'
+import ApiTokenSettings from '../components/ApiTokenSettings'
 import './Home.css'
 
 const TIER_NAMES: Record<number, string> = { 0: 'Free', 1: 'Tablet', 2: 'Scroll', 3: 'Opus' }
@@ -61,6 +62,7 @@ export default function Home() {
         <section className="home-welcome">
           <h1>ようこそ</h1>
           <p>NovelAI に正常にログインしました。</p>
+          <ApiTokenSettings />
         </section>
 
         <div className="home-cards">
