@@ -53,13 +53,14 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-type Tab = 'status' | 'jobs' | 'env' | 'ops' | 'defaults'
+type Tab = 'status' | 'jobs' | 'env' | 'ops' | 'defaults' | 'audit'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'status', label: '状態とログ' },
   { id: 'jobs', label: '処理と外部サービス' },
   { id: 'env', label: '設定(.env)' },
   { id: 'ops', label: '操作とデータ' },
   { id: 'defaults', label: '既定値・プリセット・ガード' },
+  { id: 'audit', label: '監査ログ' },
 ]
 
 type RestartTarget = 'all' | 'backend' | 'frontend'
@@ -177,10 +178,76 @@ export default function Admin() {
           {tab === 'env' && <EnvTab />}
           {tab === 'ops' && <OpsTab />}
           {tab === 'defaults' && <DefaultsTab />}
+          {tab === 'audit' && <AuditTab />}
         </main>
         {applied && <ApplyDialog applied={applied} onClose={() => setApplied(null)} />}
       </div>
     </AppliedContext.Provider>
+  )
+}
+
+// ════════ 監査ログ(複数ユーザーのとき) ════════
+
+interface AuditEntry {
+  id: number
+  created_at: string
+  user_id: number | null
+  actor: string
+  action: string
+  target: string
+  detail: Record<string, unknown>
+  ip: string
+}
+
+const AUDIT_ACTIONS: Record<string, string> = {
+  login: 'ログイン',
+  login_failed: 'ログインの失敗',
+  logout: 'ログアウト',
+  api_token_set: '永続トークンの登録',
+  api_token_deleted: '永続トークンの削除',
+  request: '管理の操作',
+  invite_added: '招待',
+  invite_removed: '招待の取り消し',
+  admin_added: '管理者にした',
+  admin_removed: '管理者から外した',
+  data_adopted: '前のデータの受け渡し',
+  data_exported: 'データの書き出し',
+  user_deleted: '利用者の削除',
+}
+
+function AuditTab() {
+  const log = usePolling(() => admin<{ enabled: boolean; entries: AuditEntry[] }>('/audit'), 10000)
+  return (
+    <section className="adm-section">
+      <h2>監査ログ</h2>
+      <p className="adm-hint">
+        ログイン・招待や管理者の変更・管理ページとコンテンツガードでの変更を残します(作品の中身は残しません)。
+        メールアドレスの代わりに、招待の一覧と同じ見分け用の文字(頭 12 文字)を出します。スクリプトでも見られます
+        (scripts/manage_users.py audit)。
+      </p>
+      {log.error && <p className="adm-error">{log.error}</p>}
+      {log.data && !log.data.enabled && <p className="adm-hint">複数ユーザー(APP_MODE=multi)のときだけ残します。</p>}
+      {log.data && log.data.enabled && log.data.entries.length === 0 && <p className="adm-hint">まだありません。</p>}
+      {log.data && log.data.entries.length > 0 && (
+        <table className="adm-table adm-table--rows">
+          <thead>
+            <tr><th>日時</th><th>操作</th><th>誰が</th><th>対象</th><th>中身</th><th>接続元</th></tr>
+          </thead>
+          <tbody>
+            {log.data.entries.map(e => (
+              <tr key={e.id}>
+                <td>{new Date(e.created_at).toLocaleString()}</td>
+                <td>{AUDIT_ACTIONS[e.action] ?? e.action}</td>
+                <td>{e.actor === 'cli' ? 'スクリプト' : e.actor || (e.user_id ? `利用者 ${e.user_id}` : '')}</td>
+                <td><code>{e.target}</code></td>
+                <td>{Object.entries(e.detail).map(([k, v]) => `${k}=${String(v)}`).join(' ')}</td>
+                <td>{e.ip}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   )
 }
 

@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MCP サーバーとジョブを利用者ごとに(`APP_MODE=multi`)** — multi では、MCP サーバーは `.env` の `APP_MCP_USER` の利用者として
   動く(その人の DB・フォルダ・永続トークン。漫画のツールはその人の短い期限のセッションでバックエンドを呼ぶ)。動いている
   ジョブ(ギャラリーの漫画化・画像の仕上げ・おまかせ漫画・うごイラ)も利用者ごとに分け、ほかの人からは見えない(計画のステップ 5)
+- **監査ログと、利用者のデータの書き出し・削除(`APP_MODE=multi`)** — ログイン(断ったものも)・ログアウト・永続トークンの登録、
+  管理ページとコンテンツガードでの変更、スクリプトでの招待などの操作を監査ログに残す(メールアドレス・トークンは残さない)。
+  管理ページの「監査ログ」タブと `scripts/manage_users.py audit` で見られる。`manage_users.py export` で利用者のデータを ZIP に
+  書き出し、`delete` で消す(計画のステップ 6a)
 
 ### Planned
 

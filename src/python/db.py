@@ -434,6 +434,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 監査ログ(multi。sessions.audit。全体の DB に置く): ログイン・招待や管理者の変更・管理の操作。作品の中身は残さない
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            user_id INTEGER,
+            actor TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL,
+            target TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT '{}',
+            ip TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
     # うごイラ(ugoira.py): 動き(描き直す範囲・コマごとのタグと表示時間)と、作ったもの(コマの並び。JSON)
     conn.execute(
         """

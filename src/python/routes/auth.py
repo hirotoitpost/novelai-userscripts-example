@@ -47,8 +47,39 @@ def _secure(request: Request) -> bool:
     return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
 
 
+def _ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(req: LoginRequest, request: Request, response: Response) -> LoginResponse:
+    """ログイン。multi では、通ったものも断ったものも監査ログに残す(メールアドレスは残さない)。"""
+    method = "token" if req.access_token and req.access_token.strip() else "recaptcha"
+    try:
+        result = await _login(req, request, response)
+    except HTTPException as exc:
+        sessions.audit(
+            "login_failed",
+            actor=sessions.actor_of(req.email) if app_mode() == "multi" else "",
+            detail={"status": exc.status_code, "reason": str(exc.detail)[:200], "method": method},
+            ip=_ip(request),
+        )
+        raise
+    if app_mode() == "multi":
+        sessions.audit(
+            "login",
+            user_id=sessions.user_id_of(req.email),
+            actor=sessions.actor_of(req.email),
+            detail={"method": method},
+            ip=_ip(request),
+        )
+    return result
+
+
+async def _login(req: LoginRequest, request: Request, response: Response) -> LoginResponse:
     multi = app_mode() == "multi"
     # 招待されていない人のために NovelAI へログインしない(reCAPTCHA もパスワードも使わずに断る)
     if multi and not sessions.is_invited(req.email):
@@ -109,6 +140,10 @@ async def get_session(request: Request) -> SessionResponse:
 
 @router.post("/logout", status_code=204)
 async def logout(request: Request, response: Response) -> None:
+    if app_mode() == "multi":
+        session = sessions.get_session(request.cookies.get(sessions.COOKIE_NAME))
+        if session is not None:
+            sessions.audit("logout", user_id=session.user_id, ip=_ip(request))
     sessions.delete_session(request.cookies.get(sessions.COOKIE_NAME))
     response.delete_cookie(sessions.COOKIE_NAME, path="/", httponly=True, secure=_secure(request), samesite="strict")
 
@@ -128,8 +163,11 @@ async def put_api_token(req: ApiTokenRequest, request: Request) -> None:
     if not token.startswith("pst-"):
         raise HTTPException(status_code=422, detail="永続トークン(pst- で始まるもの)を入れてください")
     sessions.set_api_token(session.user_id, token)
+    sessions.audit("api_token_set", user_id=session.user_id, ip=_ip(request))
 
 
 @router.delete("/api-token", status_code=204)
 async def delete_api_token(request: Request) -> None:
-    sessions.set_api_token(_require_session(request).user_id, None)
+    session = _require_session(request)
+    sessions.set_api_token(session.user_id, None)
+    sessions.audit("api_token_deleted", user_id=session.user_id, ip=_ip(request))
