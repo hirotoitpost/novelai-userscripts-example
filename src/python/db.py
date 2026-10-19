@@ -236,6 +236,41 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 複数ユーザー(APP_MODE=multi。sessions.py): 招待・利用者・ログインのセッション。メールアドレスは保存せず、
+    # サーバーの秘密鍵で変換した値(email_hash)で見分ける。トークンと keystore の鍵は利用者ごとの鍵で暗号化して持つ
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_invites (
+            email_hash TEXT PRIMARY KEY,
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_hash TEXT NOT NULL UNIQUE,
+            wrapped_key BLOB NOT NULL,
+            novelai_api_token BLOB,
+            created_at TEXT NOT NULL,
+            last_login_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            access_token BLOB NOT NULL,
+            encryption_key BLOB,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )
+        """
+    )
     # うごイラ(ugoira.py): 動き(描き直す範囲・コマごとのタグと表示時間)と、作ったもの(コマの並び。JSON)
     conn.execute(
         """
