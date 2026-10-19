@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 from .. import app_settings, db
 from ..client import app_mode
 from ..db import get_connection, user_files
-from ..sessions import current_session
+from ..sessions import require_admin
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # Docker のコンテナ(APP_IN_CONTAINER=1)では、開発中のサーバー(dev-ctl.ps1)の記録と混ざらないよう別のフォルダ
@@ -114,15 +114,6 @@ def require_lan(request: Request) -> None:
         raise denied
     if request.headers.get("sec-fetch-site") == "cross-site" and not origin:
         raise denied
-
-
-def require_admin(request: Request) -> None:
-    """multi では管理者だけ(single は LAN の中なら誰でも。今までどおり)。"""
-    if app_mode() != "multi":
-        return
-    session = current_session(request)
-    if session is None or not session.is_admin:
-        raise HTTPException(status_code=403, detail="開発管理者のページは、管理者だけが使えます。")
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_lan), Depends(require_admin)])

@@ -36,6 +36,7 @@ from ..dataset_variations import clean_value
 from ..dataset_variations import extract as extract_variation_tags
 from .. import guard_password
 from ..guard_password import guard_token
+from ..sessions import require_admin
 from ..db import (
     add_dataset_variations,
     delete_dataset_situation,
@@ -50,6 +51,7 @@ from ..db import (
     delete_guard_profile,
     get_character,
     get_connection,
+    get_guard_connection,
     get_guard_profile,
     list_dataset_variations,
     list_guard_profiles,
@@ -193,7 +195,7 @@ def _load_guard(profile_id: int | None) -> dict:
     """上乗せ分のガード。未指定なら空(基本のガードだけが効く)。"""
     if profile_id is None:
         return {"blocked_tags": [], "negative_tags": ""}
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         profile = get_guard_profile(conn, profile_id)
     finally:
@@ -244,14 +246,15 @@ async def get_core_guard() -> dict:
 
 @router.get("/guards", response_model=list[GuardProfileResponse])
 async def get_guard_profiles() -> list[dict]:
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         return list_guard_profiles(conn)
     finally:
         conn.close()
 
 
-@router.post("/guards", response_model=GuardProfileResponse)
+# ガードプロファイルは multi では運営者が全員分を決める(全体の DB。変えられるのは管理者だけ。ステップ 4b)
+@router.post("/guards", response_model=GuardProfileResponse, dependencies=[Depends(require_admin)])
 async def post_guard_profile(req: GuardProfileSaveRequest, token: str | None = Depends(guard_token)) -> dict:
     """
     ガードプロファイルを保存する(同名は上書き)。基本のガードと重複するタグは保存しない。上書きで禁止タグ・ネガティブの
@@ -264,7 +267,7 @@ async def post_guard_profile(req: GuardProfileSaveRequest, token: str | None = D
     for tag in (t.strip() for t in req.blocked_tags):
         if tag and tag.lower() not in core and tag.lower() not in {t.lower() for t in tags}:
             tags.append(tag)
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         current = next((p for p in list_guard_profiles(conn) if p["name"] == req.name.strip()), None)
         if _profile_direction(current, tags, req.negative_tags.strip())["direction"] == "looser":
@@ -274,11 +277,11 @@ async def post_guard_profile(req: GuardProfileSaveRequest, token: str | None = D
         conn.close()
 
 
-@router.delete("/guards/{profile_id}", status_code=204)
+@router.delete("/guards/{profile_id}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_guard_profile_endpoint(profile_id: int, token: str | None = Depends(guard_token)) -> None:
     """ガードプロファイルを消すのは守りを緩める変更なので、コンテンツガードのパスワードの合言葉が要る。"""
     guard_password.require_unlocked(token)
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         delete_guard_profile(conn, profile_id)
     finally:

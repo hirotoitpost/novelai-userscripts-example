@@ -417,6 +417,18 @@ def current_session(request: Request) -> Session | None:
     return getattr(request.state, "session", None)
 
 
+def require_admin(request: Request) -> None:
+    """
+    multi では管理者だけ(開発管理者のページ・コンテンツガードの設定の変更。ステップ 4)。single は何もしない
+    (開発管理者のページは LAN の中なら誰でも。今までどおり)。
+    """
+    if app_mode() != "multi":
+        return
+    session = current_session(request)
+    if session is None or not session.is_admin:
+        raise HTTPException(status_code=403, detail="管理者だけが使えます。")
+
+
 def keystore_credentials(request: Request, encryption_key: str | None, authorization: str | None) -> tuple[str, bytes]:
     """
     keystore を読む 2 つの機能(公式のプロンプトのチャンクの取り込み・公式サイトの物語の一覧)で使う

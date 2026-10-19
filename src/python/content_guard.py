@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import db
-from .db import get_connection
+from .db import get_guard_connection
 
 _DEFAULTS_FILE = Path(__file__).with_name("content_guard_defaults.json")
 _MAX_ITEMS = 500
@@ -93,9 +93,9 @@ _cache: _Loaded | None = None
 
 def _load() -> _Loaded:
     global _cache
-    if _cache is None or _cache.path != db.db_path():
+    if _cache is None or _cache.path != db._DB_PATH:
         rules = _rules()
-        conn = get_connection()
+        conn = get_guard_connection()
         try:
             rows = conn.execute("SELECT key, value, updated_at FROM content_guard_rules").fetchall()
             values: dict[str, Any] = {}
@@ -128,7 +128,7 @@ def _load() -> _Loaded:
                 conn.commit()
         finally:
             conn.close()
-        _cache = _Loaded(db.db_path(), values, updated, {})
+        _cache = _Loaded(db._DB_PATH, values, updated, {})
     return _cache
 
 
@@ -275,7 +275,7 @@ def coerce(rule: Rule, value: Any) -> Any:
 
 
 def _store(items: dict[str, Any]) -> None:
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         for key, value in items.items():
             conn.execute(

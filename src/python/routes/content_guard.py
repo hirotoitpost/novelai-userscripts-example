@@ -29,7 +29,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import content_guard, guard_password, minor_guard
-from ..db import get_connection, list_characters, list_guard_profiles, save_guard_profile
+from ..db import get_connection, get_guard_connection, list_characters, list_guard_profiles, save_guard_profile
+from ..sessions import require_admin
 from ..guard_password import guard_token
 
 router = APIRouter(prefix="/api/content-guard", tags=["content-guard"])
@@ -81,7 +82,11 @@ async def get_rule(key: str) -> dict[str, Any]:
         raise _not_found()
 
 
-@router.put("/rules/{key}")
+# multi では、コンテンツガードの設定は運営者が全員分を決める(全体の DB。ステップ 4b)。変えられるのは管理者だけ
+_ADMIN = [Depends(require_admin)]
+
+
+@router.put("/rules/{key}", dependencies=_ADMIN)
 async def put_rule(key: str, req: RuleUpdate, token: str | None = Depends(guard_token)) -> dict[str, Any]:
     try:
         value = content_guard.coerce(content_guard.rule_of(key), req.value)
@@ -94,7 +99,7 @@ async def put_rule(key: str, req: RuleUpdate, token: str | None = Depends(guard_
         raise HTTPException(status_code=422, detail=str(exc))
 
 
-@router.delete("/rules/{key}")
+@router.delete("/rules/{key}", dependencies=_ADMIN)
 async def delete_rule(key: str) -> dict[str, Any]:
     """はじめの値に戻す(項目そのものは消えない)。"""
     try:
@@ -103,7 +108,7 @@ async def delete_rule(key: str) -> dict[str, Any]:
         raise _not_found()
 
 
-@router.post("/reset")
+@router.post("/reset", dependencies=_ADMIN)
 async def post_reset() -> dict[str, Any]:
     return {"rules": content_guard.reset_all()}
 
@@ -117,7 +122,7 @@ async def post_check(req: CheckRequest) -> dict[str, Any]:
 
 
 def _profiles() -> list[dict[str, Any]]:
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         return list_guard_profiles(conn)
     finally:
@@ -192,7 +197,7 @@ async def preview_import(req: ImportRequest) -> dict[str, Any]:
     return _plan(req.data)
 
 
-@router.post("/import")
+@router.post("/import", dependencies=_ADMIN)
 async def import_rules(req: ImportRequest, token: str | None = Depends(guard_token)) -> dict[str, Any]:
     plan = _plan(req.data)
     rules = [r for r in plan["rules"] if r["direction"] not in ("invalid", "same") and (req.keys is None or r["key"] in req.keys)]
@@ -203,7 +208,7 @@ async def import_rules(req: ImportRequest, token: str | None = Depends(guard_tok
         guard_password.require_unlocked(token)
     for rule in rules:
         content_guard.set_value(rule["key"], rule["value"])
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         for profile in profiles:
             save_guard_profile(conn, profile["name"], profile["blocked_tags"], profile["negative_tags"])
@@ -220,12 +225,12 @@ async def get_password_state(token: str | None = Depends(guard_token)) -> dict[s
     return {"set": guard_password.is_set(), "unlocked": guard_password.token_valid(token), "min_length": guard_password.MIN_LENGTH}
 
 
-@router.post("/password/setup", status_code=204)
+@router.post("/password/setup", status_code=204, dependencies=_ADMIN)
 async def setup_password(req: PasswordSetup) -> None:
     guard_password.setup(req.password)
 
 
-@router.post("/password/change", status_code=204)
+@router.post("/password/change", status_code=204, dependencies=_ADMIN)
 async def change_password(req: PasswordChange) -> None:
     guard_password.change(req.current, req.new)
 
