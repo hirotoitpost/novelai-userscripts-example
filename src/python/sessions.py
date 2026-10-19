@@ -29,6 +29,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -271,12 +272,18 @@ class AdoptError(Exception):
     """前のデータを渡せない(利用者がまだいない・もう渡してある など)。"""
 
 
-def adopt_legacy_data(email: str, *, force: bool = False) -> int:
+# 利用者のファイルを置くフォルダ(プロジェクトのフォルダからのパス。db.user_root の下に同じ形で置く)
+LEGACY_FILE_DIRS = ("outputs", "data/imports", "data/stamps")
+
+
+def adopt_legacy_data(email: str, *, force: bool = False, files_only: bool = False) -> int:
     """
-    single で使っていたデータ(data/app.db と data/trash)を、その利用者のデータとしてコピーする(ステップ 3)。
+    single で使っていたデータを、その利用者のデータとしてコピーする(ステップ 3)。
+    - DB(data/app.db)とごみ箱(data/trash): その人の DB があれば、force でなければ断る(上書きすると、その人が
+      multi で作ったものが消える)。files_only なら DB は写さない(DB を先に写したあと、ファイルだけ写すとき)
+    - ファイル(LEGACY_FILE_DIRS): その人のフォルダの同じ場所へ(同じ名前のファイルは上書き)
     元のデータは消さない(single に戻せば今までどおり使える)。その人が一度ログインして、利用者ができている必要が
-    ある。すでにその人の DB があれば、force でなければ断る(上書きすると、その人が multi で作ったものが消える)。
-    渡した利用者の ID を返す。
+    ある。渡した利用者の ID を返す。
     """
     with _conn() as conn:
         row = conn.execute("SELECT id FROM users WHERE email_hash = ?", (email_hash(email),)).fetchone()
@@ -284,8 +291,19 @@ def adopt_legacy_data(email: str, *, force: bool = False) -> int:
         raise AdoptError("その人はまだログインしていません(一度ログインすると利用者ができます)")
     user_id = int(row["id"])
     target = db.user_db_path(user_id)
-    if target.exists() and not force:
-        raise AdoptError(f"その人のデータはもうあります({target})。上書きするなら --force")
+    if not files_only:
+        if target.exists() and not force:
+            raise AdoptError(f"その人のデータはもうあります({target})。上書きするなら --force")
+        _copy_legacy_db(target)
+    project = db._PROJECT_ROOT
+    for rel in LEGACY_FILE_DIRS:
+        source = project / rel
+        if source.is_dir():
+            shutil.copytree(source, target.parent / rel, dirs_exist_ok=True)
+    return user_id
+
+
+def _copy_legacy_db(target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     # 書き込み中でもそろった状態で写せるよう、sqlite のバックアップの仕組みでコピーする。ファイルを置き換えず
     # 中身を書き換えるので、バックエンドがその人の DB を開いていても上書きできる(Windows はファイルを置き換えられない)
@@ -303,7 +321,6 @@ def adopt_legacy_data(email: str, *, force: bool = False) -> int:
     legacy_trash = db._DB_PATH.parent / "trash"
     if legacy_trash.is_dir():
         shutil.copytree(legacy_trash, target.parent / "trash", dirs_exist_ok=True)
-    return user_id
 
 
 # ---- ミドルウェア ----

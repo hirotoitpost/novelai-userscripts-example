@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -28,10 +27,12 @@ from ..db import (
     list_publications,
     update_publication,
 )
+from ..db import user_files
 
 router = APIRouter(prefix="/api/publications", tags=["publications"])
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 MAX_IMAGES = 1000
 MAX_BOOKS = 50
 

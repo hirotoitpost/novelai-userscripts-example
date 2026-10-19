@@ -79,12 +79,14 @@ from ..models import (
     LoraDatasetRequest,
 )
 from ..similarity import similarity
+from ..db import user_files
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
 router = APIRouter(prefix="/api/lora-dataset", tags=["lora-dataset"])
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 _SAFE_NAME_RE = re.compile(r"[^\w\-]+")
 
 

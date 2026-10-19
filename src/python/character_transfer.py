@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from .db import user_files
 
 FORMAT = "novelai-userscripts-example/characters"
 VERSION = 1
@@ -27,7 +28,8 @@ MAX_ZIP_BYTES = 100 * 1024 * 1024
 SHEET_KEYS = (
     "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult", "is_minor",
 )
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 _REF_DIR = "outputs/manga/refs"
 
 

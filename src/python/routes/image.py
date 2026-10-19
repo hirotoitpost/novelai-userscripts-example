@@ -4,7 +4,6 @@ import base64
 import io
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -52,6 +51,7 @@ from ..models import (
     ImagePresetCreateRequest,
     ImagePresetResponse,
 )
+from ..db import user_files
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
@@ -59,7 +59,7 @@ router = APIRouter(prefix="/api/image", tags=["image"])
 # UC プリセット「なし」を SDK が API へ送れるようにする(sdk_compat.py)
 allow_uc_preset_none()
 
-_HISTORY_DIR = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "history"
+_HISTORY_DIR = user_files() / "outputs" / "history"  # 今の利用者のフォルダ(db.UserPath)
 
 
 def _save_reference_image(image_b64: str) -> str:

@@ -26,10 +26,11 @@ from pathlib import Path
 from typing import Any
 
 from . import db
-from .db import get_connection
+from .db import get_connection, user_files
 
 RETENTION_DAYS = 30
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 KIND_LABELS = {
     "history_image": "生成画像",
     "panel": "漫画のコマ",

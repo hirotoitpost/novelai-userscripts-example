@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 from base64 import b64decode, b64encode
-from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -63,12 +62,13 @@ from ..models import (
     WordSelectionGenerateRequest,
 )
 from .image import _build_kwargs, _decode_b64, _http_status, _pil_to_b64, save_generation
+from ..db import user_files
 
 router = APIRouter(prefix="/api/chunks", tags=["chunks"])
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
-_HISTORY_DIR = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "history"
+_HISTORY_DIR = user_files() / "outputs" / "history"  # 今の利用者のフォルダ(db.UserPath)
 
 # promptmacros(プロンプトチャンク)は image.novelai.net 側のユーザーストレージにある。
 # persistent access token は拒否されるため、実ログインで発行されたセッショントークンが必要。

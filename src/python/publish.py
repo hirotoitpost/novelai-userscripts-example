@@ -24,8 +24,10 @@ from pathlib import Path
 from PIL import Image
 
 from .nai_metadata import read_comment
+from .db import user_files
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 PUBLICATIONS_DIR = _PROJECT_ROOT / "outputs" / "publications"
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 # 画像の付属情報のうち、生成情報が入りうるもの(確かめるときに見る)

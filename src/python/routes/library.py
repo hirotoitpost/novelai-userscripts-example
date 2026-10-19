@@ -49,10 +49,12 @@ from ..db import (
 from ..relatedness import Item, idf_weights, normalize_tags, rank
 from .lora_dataset import _safe_name
 from .story import _jobs
+from ..db import user_files
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# 利用者のデータのファイルの基準(single はプロジェクトのフォルダ、multi はその人のフォルダ。db.UserPath)
+_PROJECT_ROOT = user_files()
 _OUTPUTS = _PROJECT_ROOT / "outputs"
 # 配信してよいフォルダ(生成履歴と漫画)。LoRA の学習データなどは出さない。
 # うごイラのコマ(outputs/ugoira)も画面に出す

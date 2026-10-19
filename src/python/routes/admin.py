@@ -35,8 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .. import app_settings, db
-from ..client import app_mode
-from ..db import get_connection
+from ..db import get_connection, user_files
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # Docker のコンテナ(APP_IN_CONTAINER=1)では、開発中のサーバー(dev-ctl.ps1)の記録と混ざらないよう別のフォルダ
@@ -496,6 +495,11 @@ async def put_env(req: EnvUpdate) -> dict[str, Any]:
 
 # ---- データの管理 ----
 
+# 利用者のファイル(画像・取り込んだ作品)の基準。multi ではその人のフォルダ(db.UserPath)。モデルや DB の
+# バックアップなど、サーバー全体のものは _PROJECT_ROOT のまま
+_USER_ROOT = user_files()
+_SHARED_STORAGE = ("data/models", "data/eval", "data/backups")
+
 _STORAGE = [
     ("生成した画像(画像生成ページ)", "outputs/history"),
     ("漫画のコマ", "outputs/manga/panels"),
@@ -532,7 +536,7 @@ def _composed_targets() -> list[Path]:
     合成したページの前の版: 物語の final_image_path が指している版(token)以外の、ページとつなげた画像。
     物語が無くなっているものも入れる。
     """
-    folder = _PROJECT_ROOT / "outputs/manga/v2"
+    folder = _USER_ROOT / "outputs/manga/v2"
     if not folder.is_dir():
         return []
     conn = get_connection()
@@ -554,7 +558,7 @@ def _composed_targets() -> list[Path]:
 
 def _v1_page_targets() -> list[Path]:
     """v1(ページごとに生成)の挿絵・完成画像で、どの物語のページにも使われていないもの。"""
-    folder = _PROJECT_ROOT / "outputs/manga"
+    folder = _USER_ROOT / "outputs/manga"
     if not folder.is_dir():
         return []
     conn = get_connection()
@@ -569,14 +573,14 @@ def _v1_page_targets() -> list[Path]:
 def _cleanup_targets(category: str) -> list[Path]:
     """消してよいファイル。DB から参照されているものは入れない。"""
     if category == "candidates":
-        folder = _PROJECT_ROOT / "outputs/manga/refs/candidates"
+        folder = _USER_ROOT / "outputs/manga/refs/candidates"
         return sorted(folder.glob("*.png")) if folder.is_dir() else []
     if category == "references":
-        folder = _PROJECT_ROOT / "outputs/manga/refs"
+        folder = _USER_ROOT / "outputs/manga/refs"
         used = _referenced_references()
         return sorted(p for p in folder.glob("*.png") if p.name not in used) if folder.is_dir() else []
     if category == "panels":
-        folder = _PROJECT_ROOT / "outputs/manga/panels"
+        folder = _USER_ROOT / "outputs/manga/panels"
         used = _referenced_panels()
         return sorted(p for p in folder.glob("*.png") if p.name not in used) if folder.is_dir() else []
     if category == "composed":
@@ -612,7 +616,7 @@ async def get_cleanup_files(category: str) -> dict[str, Any]:
             continue
         files.append({
             "name": path.name,
-            "path": path.relative_to(_PROJECT_ROOT).as_posix(),
+            "path": path.relative_to(_USER_ROOT).as_posix(),
             "bytes": stat.st_size,
             "modified_at": stat.st_mtime,
         })
@@ -624,7 +628,7 @@ async def get_cleanup_files(category: str) -> dict[str, Any]:
 async def get_storage() -> dict[str, Any]:
     usage = []
     for label, rel in _STORAGE:
-        size, count = _dir_bytes(_PROJECT_ROOT / rel)
+        size, count = _dir_bytes((_PROJECT_ROOT if rel.startswith(_SHARED_STORAGE) else _USER_ROOT) / rel)
         usage.append({"label": label, "path": rel, "bytes": size, "files": count})
     disk = shutil.disk_usage(_PROJECT_ROOT)
     cleanup = []
@@ -649,10 +653,6 @@ async def post_cleanup(category: str, req: CleanupRequest | None = None) -> dict
     """
     from .. import trash
 
-    if app_mode() == "multi":
-        # 画像のフォルダはまだ全員で共有している(利用者ごとに分けるのはステップ 3b)。今の利用者の DB から
-        # 使われていないだけで、ほかの人の画像を片付けてしまうので止める
-        raise HTTPException(status_code=409, detail="複数ユーザー(APP_MODE=multi)では、まだ片付けられません")
     targets = _cleanup_targets(category)
     if req is not None and req.names is not None:
         wanted = set(req.names)

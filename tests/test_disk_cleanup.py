@@ -24,6 +24,7 @@ from python.routes import admin, trash as trash_routes  # noqa: E402
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(db, "_DB_PATH", tmp_path / "data" / "app.db")
     monkeypatch.setattr(admin, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(admin, "_USER_ROOT", tmp_path)
     monkeypatch.setattr(trash, "_PROJECT_ROOT", tmp_path)
     app = FastAPI()
     app.include_router(admin.router)

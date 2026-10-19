@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`data/users/{id}/app.db`)に置く。招待・利用者・セッションとバックアップの設定は全体の DB。運営者の前のデータは
   `scripts/manage_users.py adopt <メールアドレス>` でコピーする(元は残す)。バックアップは利用者ごとの DB も壊れない写しで
   入れる。画像のフォルダを分けるまで(次の PR)、multi では管理ページの「使っていない画像の片付け」を止める(計画のステップ 3a)
+- **利用者ごとのフォルダ(`APP_MODE=multi`)** — multi では、画像・漫画・取り込んだ作品・出版物・うごイラ・スタンプなどの
+  ファイルを利用者ごとのフォルダ(`data/users/{id}/`)に置く。モデル・フォントなどサーバー全体のものは今の場所のまま。
+  運営者の前のファイルは `scripts/manage_users.py adopt <メールアドレス> --files-only` でコピーする(元は残す)。管理ページの
+  片付けを multi でも使えるように戻した(その人のフォルダだけを見る。計画のステップ 3b)
 
 ### Planned
 

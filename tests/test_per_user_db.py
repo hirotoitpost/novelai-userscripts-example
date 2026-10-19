@@ -22,6 +22,7 @@ from python.routes import auth  # noqa: E402
 @pytest.fixture()
 def multi(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(db, "_DB_PATH", tmp_path / "app.db")
+    monkeypatch.setattr(db, "_PROJECT_ROOT", tmp_path)  # adopt が本物の outputs/ を写さないように
     monkeypatch.setenv("APP_MODE", "multi")
     monkeypatch.setenv("APP_MASTER_KEY", base64.b64encode(b"m" * 32).decode())
 
@@ -157,12 +158,48 @@ def test_jobs_keyed_by_db_ids_do_not_mix_between_users(multi: Path) -> None:
         assert jobs[1] == "bob's story 1"
 
 
-def test_shared_file_cleanup_is_refused_in_multi(multi: Path) -> None:
+def test_cleanup_only_looks_at_the_users_own_folder(multi: Path) -> None:
+    # 片付けの対象は、その人のフォルダの中の、その人の DB から使われていないものだけ(ほかの人の画像は見ない)
     from python.routes import admin
 
+    for user_id in (1, 2):
+        panel = multi / "users" / str(user_id) / "outputs" / "manga" / "panels" / f"user{user_id}.png"
+        panel.parent.mkdir(parents=True)
+        panel.write_bytes(b"png")
     app = FastAPI()
     app.include_router(admin.router)
     client = TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 50000))
     with db.as_user(1):
-        res = client.post("/api/admin/cleanup/panels")
-    assert res.status_code == 409
+        files = client.get("/api/admin/cleanup/panels/files").json()["files"]
+    assert [f["name"] for f in files] == ["user1.png"]
+    assert files[0]["path"] == "outputs/manga/panels/user1.png"
+
+
+def test_adopt_copies_files_and_paths_resolve_in_the_users_folder(
+    app: FastAPI, multi: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from python.routes import story
+
+    for rel in ("outputs/manga/panels/p.png", "data/imports/3/page.png", "data/stamps/src/1.png", "data/models/m.onnx"):
+        (multi / rel).parent.mkdir(parents=True, exist_ok=True)
+        (multi / rel).write_bytes(rel.encode())
+    _client_for(app, "owner@example.com")
+    user_id = sessions.adopt_legacy_data("owner@example.com")
+    home = multi / "users" / str(user_id)
+    assert (home / "outputs/manga/panels/p.png").read_bytes() == b"outputs/manga/panels/p.png"
+    assert (home / "data/imports/3/page.png").is_file() and (home / "data/stamps/src/1.png").is_file()
+    assert not (home / "data/models").exists()  # モデルはサーバー全体のもの(写さない)
+    assert (multi / "outputs/manga/panels/p.png").is_file()  # 元は残す
+    # 各モジュールの _PROJECT_ROOT(db.UserPath)は、その人のフォルダを指す。DB の相対パスもそこから読む
+    with db.as_user(user_id):
+        assert (story._PROJECT_ROOT / "outputs/manga/panels/p.png").read_bytes() == b"outputs/manga/panels/p.png"
+        assert story._MANGA_DIR.resolve() == (home / "outputs" / "manga").resolve()
+    with db.as_user(user_id + 1):
+        assert not (story._PROJECT_ROOT / "outputs/manga/panels/p.png").exists()
+    with pytest.raises(db.NoUserError):
+        story._MANGA_DIR.exists()  # multi で利用者が決まっていなければ、共有の場所を見ない
+    # DB を写したあとでも、ファイルだけなら写せる
+    (multi / "outputs/history/new.png").parent.mkdir(parents=True)
+    (multi / "outputs/history/new.png").write_bytes(b"new")
+    sessions.adopt_legacy_data("owner@example.com", files_only=True)
+    assert (home / "outputs/history/new.png").read_bytes() == b"new"
