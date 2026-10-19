@@ -168,6 +168,15 @@ def get_system_connection() -> sqlite3.Connection:
     return _connect(_DB_PATH)
 
 
+def get_guard_connection() -> sqlite3.Connection:
+    """
+    コンテンツガードの設定(判定の設定・パスワード・プロファイル)の DB。multi では運営者が全員分を決めるので
+    全体の DB(ステップ 4b)。single では全体の DB と利用者の DB は同じファイル。ガードの記録やキャラの年齢区分は
+    その人のデータなので、利用者の DB(get_connection)のまま。
+    """
+    return _connect(_DB_PATH)
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(

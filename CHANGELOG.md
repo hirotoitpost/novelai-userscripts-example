@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   片付けを multi でも使えるように戻した(その人のフォルダだけを見る。計画のステップ 3b)
 - **管理者のロール(`APP_MODE=multi`)** — multi では開発管理者のページを管理者だけが使える(`scripts/manage_users.py admin
   <メールアドレス>`)。ほかの利用者には、ホームのカードも出さない。multi では `.env` を画面から書き換えられない(計画のステップ 4a)
+- **コンテンツガードは運営者が決める(`APP_MODE=multi`)** — multi では、コンテンツガードの判定の設定・パスワード・プロファイルを
+  全体の DB に 1 つだけ置き、全員に同じものが効く。変えられるのは管理者だけ。守りを緩める操作には運営者のパスワードが要る
+  (計画のステップ 4b)
 
 ### Planned
 

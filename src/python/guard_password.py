@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from fastapi import Header, HTTPException
 
-from .db import get_connection
+from .db import get_guard_connection
 
 MIN_LENGTH = 8
 UNLOCK_SECONDS = 10 * 60
@@ -43,7 +43,7 @@ def _hash(password: str, salt: bytes) -> str:
 
 
 def _stored() -> tuple[bytes, str] | None:
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         row = conn.execute("SELECT salt, hash FROM guard_secret WHERE id = 1").fetchone()
     finally:
@@ -53,7 +53,7 @@ def _stored() -> tuple[bytes, str] | None:
 
 def _save(password: str) -> None:
     salt = secrets.token_bytes(16)
-    conn = get_connection()
+    conn = get_guard_connection()
     try:
         conn.execute(
             "INSERT INTO guard_secret (id, salt, hash, updated_at) VALUES (1, ?, ?, ?) "
@@ -154,7 +154,7 @@ def guard_token(x_guard_token: str | None = Header(default=None)) -> str | None:
 def clear() -> None:
     """パスワードを消す(この PC で scripts/reset_guard_password.py から使う。画面からは呼べない)。"""
     with _lock:
-        conn = get_connection()
+        conn = get_guard_connection()
         try:
             conn.execute("DELETE FROM guard_secret")
             conn.commit()
