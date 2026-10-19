@@ -32,6 +32,7 @@ from .. import content_guard
 from ..client import get_client
 from ..content_guard import sanitize_scene_tags
 from ..db import (
+    PerUser,
     add_story_scenes,
     delete_cast_preset,
     list_cast_presets,
@@ -248,7 +249,7 @@ class _Job:
 
 # 物語ごとに同時に1ジョブだけ。プロセス内メモリなので再起動で消えるが、
 # 途中結果はDBへ逐次書き込むので処理そのものは失われない。
-_jobs: dict[int, _Job] = {}
+_jobs: PerUser[_Job] = PerUser()  # 物語の ID ごと(multi では利用者ごと。db.PerUser)
 # 送信中の通知タスク(参照を持たないと途中で GC されることがある)
 _notify_tasks: set[asyncio.Task[None]] = set()
 

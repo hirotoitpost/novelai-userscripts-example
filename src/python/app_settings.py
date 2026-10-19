@@ -99,13 +99,13 @@ SETTINGS: tuple[Setting, ...] = (
 )
 
 _BY_KEY = {s.key: s for s in SETTINGS}
-# (DB の場所, 読み込んだ値)。DB の場所が変わったら(テストなど)読み直す
+# (DB の場所, 読み込んだ値)。DB の場所が変わったら(テスト・multi で別の利用者)読み直す
 _cache: tuple[Any, dict[str, Any]] | None = None
 
 
 def _load() -> dict[str, Any]:
     global _cache
-    if _cache is None or _cache[0] != db._DB_PATH:
+    if _cache is None or _cache[0] != db.db_path():
         conn = get_connection()
         try:
             rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
@@ -117,7 +117,7 @@ def _load() -> dict[str, Any]:
                 values[row["key"]] = json.loads(row["value"])
             except json.JSONDecodeError:
                 continue
-        _cache = (db._DB_PATH, values)
+        _cache = (db.db_path(), values)
     return _cache[1]
 
 

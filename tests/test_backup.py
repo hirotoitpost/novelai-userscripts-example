@@ -99,6 +99,37 @@ def test_restore_brings_back_files_and_db(app_root: Path, tmp_path: Path) -> Non
     assert any(s["reason"].endswith("に戻す前") for s in backup.snapshots(tmp_path / "drive" / backup.FOLDER))
 
 
+def test_user_dbs_are_snapshotted_and_restored(
+    app_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # multi の利用者ごとの DB も、ファイルとしてではなく壊れない写しで入れ、戻すときも入れ替える
+    monkeypatch.setenv("APP_MODE", "multi")
+    with db.as_user(3):
+        conn = db.get_connection()
+        try:
+            db.save_character(conn, "あおい", "1girl")
+        finally:
+            conn.close()
+    settings = _settings(tmp_path)
+    taken = backup.run_backup(settings)
+    files = _snapshot_files(tmp_path, taken["name"])
+    assert "data/users/3/app.db" in files and files["data/users/3/app.db"]["mtime"] == 0
+    with db.as_user(3):
+        conn = db.get_connection()
+        try:
+            db.save_character(conn, "ゆら", "1girl")
+        finally:
+            conn.close()
+    time.sleep(1.1)
+    backup.restore(settings, taken["name"])
+    with db.as_user(3):
+        conn = db.get_connection()
+        try:
+            assert [c["name"] for c in db.list_characters(conn)] == ["あおい"]
+        finally:
+            conn.close()
+
+
 def test_keeps_seven_and_cleans_unused_objects(app_root: Path, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     store = tmp_path / "drive" / backup.FOLDER
