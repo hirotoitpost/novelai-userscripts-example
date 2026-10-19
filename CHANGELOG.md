@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   管理ページとコンテンツガードでの変更、スクリプトでの招待などの操作を監査ログに残す(メールアドレス・トークンは残さない)。
   管理ページの「監査ログ」タブと `scripts/manage_users.py audit` で見られる。`manage_users.py export` で利用者のデータを ZIP に
   書き出し、`delete` で消す(計画のステップ 6a)
+- **GPU の利用上限(`APP_MODE=multi`)** — 文章生成(Ollama / vLLM)と動画の生成(ComfyUI)に、利用者ごとの 1 日の回数
+  (`APP_LIMIT_LLM_PER_DAY`・`APP_LIMIT_VIDEO_PER_DAY`。既定 500 回・20 本)と「同時に 1 つ」をかける。管理者にはかけない。
+  上限に達すると、その理由を出す。`docs/architecture.md` と `SECURITY.md` に複数ユーザーの節を足した(計画のステップ 6b)
 
 ### Planned
 

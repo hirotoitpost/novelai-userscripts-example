@@ -434,6 +434,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # GPU の利用の回数(multi。usage.py。全体の DB に置く): 利用者・日付・種類ごと
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usage_counts (
+            user_id INTEGER NOT NULL,
+            day TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, day, kind)
+        )
+        """
+    )
     # 監査ログ(multi。sessions.audit。全体の DB に置く): ログイン・招待や管理者の変更・管理の操作。作品の中身は残さない
     conn.execute(
         """

@@ -33,6 +33,7 @@ from uuid import uuid4
 
 import httpx
 from PIL import Image, ImageSequence
+from . import usage
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOW_DIR = _PROJECT_ROOT / "assets" / "comfyui"
@@ -297,7 +298,13 @@ async def _upload(client: httpx.AsyncClient, image: Image.Image, size: tuple[int
     )
 
 
-async def generate(
+async def generate(*args: Any, **kwargs: Any) -> list[Image.Image]:
+    """元の絵から動画を作らせる(_generate)。multi では利用者ごとの 1 日の本数と「同時に 1 つ」をかける(usage.py)。"""
+    async with usage.slot("video"):
+        return await _generate(*args, **kwargs)
+
+
+async def _generate(
     source: Image.Image,
     prompt: str,
     *,
