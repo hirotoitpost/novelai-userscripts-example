@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import base64
 import binascii
 import io
@@ -48,7 +47,7 @@ from ..db import (
     update_manga_import,
 )
 from ..manga_import import analyze_page, classify_panel, load_pages, panel_dict
-from ..client import get_client
+from ..client import get_client, operator_token
 from ..models import (
     MangaImportAutoRequest,
     MangaImportLinesRequest,
@@ -386,10 +385,13 @@ def _job_response(job: _ImportJob | None) -> dict[str, Any] | None:
 
 
 def _optional_api_key(authorization: str | None = Header(None)) -> str | None:
-    """NovelAI のトークン(Authorization か .env の NOVELAI_API_TOKEN)。無ければ None(取り込みだけなら要らない)。"""
+    """
+    NovelAI のトークン(Authorization か .env の NOVELAI_API_TOKEN。APP_MODE=multi では .env を使わない)。
+    無ければ None(取り込みだけなら要らない)。
+    """
     if authorization and authorization.startswith("Bearer "):
         return authorization[7:]
-    return os.environ.get("NOVELAI_API_TOKEN") or None
+    return operator_token()
 
 
 @router.post("")
