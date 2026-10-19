@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ファイルを利用者ごとのフォルダ(`data/users/{id}/`)に置く。モデル・フォントなどサーバー全体のものは今の場所のまま。
   運営者の前のファイルは `scripts/manage_users.py adopt <メールアドレス> --files-only` でコピーする(元は残す)。管理ページの
   片付けを multi でも使えるように戻した(その人のフォルダだけを見る。計画のステップ 3b)
+- **管理者のロール(`APP_MODE=multi`)** — multi では開発管理者のページを管理者だけが使える(`scripts/manage_users.py admin
+  <メールアドレス>`)。ほかの利用者には、ホームのカードも出さない。multi では `.env` を画面から書き換えられない(計画のステップ 4a)
 
 ### Planned
 

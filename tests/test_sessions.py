@@ -97,6 +97,7 @@ def test_login_sets_a_strict_cookie_and_injects_the_users_token(app: FastAPI, mu
         "authenticated": True,
         "has_api_token": False,
         "has_encryption_key": True,
+        "is_admin": False,
     }
 
 

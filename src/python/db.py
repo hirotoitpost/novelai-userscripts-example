@@ -396,6 +396,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 管理者(開発管理者のページを使える人。ステップ 4)。招待に付けるので、ログインの前から決めておける
+    if "is_admin" not in {row["name"] for row in conn.execute("PRAGMA table_info(user_invites)")}:
+        conn.execute("ALTER TABLE user_invites ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (

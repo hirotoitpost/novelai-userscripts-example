@@ -168,6 +168,7 @@ def test_cleanup_only_looks_at_the_users_own_folder(multi: Path) -> None:
         panel.write_bytes(b"png")
     app = FastAPI()
     app.include_router(admin.router)
+    app.dependency_overrides[admin.require_admin] = lambda: None  # 管理者の確認は test_admin_role.py で見る
     client = TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 50000))
     with db.as_user(1):
         files = client.get("/api/admin/cleanup/panels/files").json()["files"]

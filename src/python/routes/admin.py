@@ -11,6 +11,9 @@ LAN の中から使える(require_lan)。この PC のほか、スマホや LAN 
   (DNS rebinding)も Host で防ぐ)
 
 .env の秘密は、LAN の中でも末尾の数文字しか返さない。
+
+複数ユーザー(APP_MODE=multi)では、さらに管理者(scripts/manage_users.py admin)だけが使える。ほかの利用者は
+LAN の中からでも使えない。.env の書き換え(PUT /env)は multi では画面からはできない(サーバーの PC で直す)。
 """
 
 from __future__ import annotations
@@ -35,7 +38,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .. import app_settings, db
+from ..client import app_mode
 from ..db import get_connection, user_files
+from ..sessions import current_session
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # Docker のコンテナ(APP_IN_CONTAINER=1)では、開発中のサーバー(dev-ctl.ps1)の記録と混ざらないよう別のフォルダ
@@ -111,7 +116,16 @@ def require_lan(request: Request) -> None:
         raise denied
 
 
-router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_lan)])
+def require_admin(request: Request) -> None:
+    """multi では管理者だけ(single は LAN の中なら誰でも。今までどおり)。"""
+    if app_mode() != "multi":
+        return
+    session = current_session(request)
+    if session is None or not session.is_admin:
+        raise HTTPException(status_code=403, detail="開発管理者のページは、管理者だけが使えます。")
+
+
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_lan), Depends(require_admin)])
 
 
 # ---- 状態とログ ----
@@ -462,6 +476,9 @@ async def put_env(req: EnvUpdate) -> dict[str, Any]:
     .env の1項目を書き換える(コメントや並びはそのまま)。無い項目は末尾に足す。値を None にすると、その行を
     コメントにする。反映に何が要るか(サーバーの再起動か、PC の再起動か)を restart で返す。
     """
+    if app_mode() == "multi":
+        # マスター鍵やほかの人も使う設定が入っている。画面(ブラウザ)からは変えられないようにする
+        raise HTTPException(status_code=403, detail="複数ユーザー(APP_MODE=multi)では、.env は画面から書き換えられません。サーバーの PC で直してください。")
     if not _VALID_KEY.match(req.key):
         raise HTTPException(status_code=422, detail="項目名は英大文字・数字・_ で、英大文字から始めてください。")
     if req.value is not None and ("\n" in req.value or "\r" in req.value):
