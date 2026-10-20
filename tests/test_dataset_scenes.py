@@ -204,6 +204,32 @@ def test_adult_only_states_need_an_adult_character_without_minor_tags(
     assert '"situation": "カフェで休憩"' in res.text and '"state": "食べ過ぎでお腹が出る"' in res.text
 
 
+def test_image_settings_reach_the_generation(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PIL import Image
+
+    configs: list = []
+
+    async def fake_generate(client, prompt, size, cfg, *, seed=None):
+        configs.append((size, cfg))
+        return Image.new("RGB", (8, 8), "white")
+
+    monkeypatch.setattr(routes, "generate_one", fake_generate)
+    monkeypatch.setattr(routes, "_character_root", lambda root, character: tmp_path / "dataset")
+    body = {
+        "count": 1, "model": "nai-diffusion-5-full", "width": 1024, "height": 1024,
+        "sampler": "k_dpmpp_2m", "noise_schedule": "exponential", "cfg_rescale": 0.2,
+        "quality": False, "uc_preset": "strong", "variety_boost": True,
+    }
+    res = client.post(f"/api/lora-dataset/character/{_character(False)}/generate", json=body, headers={"Authorization": "Bearer t"})
+    assert res.status_code == 200
+    size, cfg = configs[0]
+    assert size == (1024, 1024) and cfg.model == "nai-diffusion-5-full"
+    assert (cfg.sampler, cfg.noise_schedule, cfg.cfg_rescale) == ("k_dpmpp_2m", "exponential", 0.2)
+    assert (cfg.quality, cfg.uc_preset, cfg.variety_boost) == (False, "strong", True)
+
+
 def test_body_field_is_replaced_by_states() -> None:
     face, body = split_body("1girl, black hair, long hair, large eyes, pale skin, slim, flat stomach, medium breasts, tall")
     assert face == "1girl, black hair, long hair, large eyes, pale skin" and body == "slim, flat stomach, medium breasts, tall"

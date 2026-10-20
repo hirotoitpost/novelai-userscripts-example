@@ -32,6 +32,7 @@ from .models import (
     ImageModelLiteral,
     NoiseScheduleLiteral,
     SamplerLiteral,
+    UCPresetLiteral,
 )
 
 QUALITY_TAGS = "anime style, masterpiece, best quality"
@@ -195,6 +196,9 @@ class GenConfig:
     sampler: SamplerLiteral = "k_euler_ancestral"
     noise_schedule: NoiseScheduleLiteral = "karras"
     cfg_rescale: float = 0.0
+    quality: bool = True
+    uc_preset: UCPresetLiteral = "light"
+    variety_boost: bool = False
     negative_prompt: str = field(default=NEGATIVE_PROMPT_DEFAULT)
     seed: int | None = None
     seed_offset: bool = False
@@ -225,13 +229,14 @@ async def generate_one(
         model=cfg.model,
         size=size,
         negative_prompt=cfg.negative_prompt,
-        quality=True,
-        uc_preset="light",
+        quality=cfg.quality,
+        uc_preset=cfg.uc_preset,
         steps=cfg.steps,
         scale=cfg.scale,
         sampler=cfg.sampler,
         noise_schedule=cfg.noise_schedule,
         cfg_rescale=cfg.cfg_rescale,
+        variety_boost=cfg.variety_boost,
         n_samples=1,
     )
     if seed is not None:

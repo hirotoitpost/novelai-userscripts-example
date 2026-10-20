@@ -451,6 +451,9 @@ export interface CharacterDatasetRequest {
   sampler: string
   noise_schedule: string
   cfg_rescale: number
+  quality?: boolean
+  uc_preset?: string
+  variety_boost?: boolean
   use_reference: boolean
   reference_fidelity: number
   reference_strength: number
