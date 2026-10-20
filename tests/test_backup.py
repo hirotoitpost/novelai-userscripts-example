@@ -35,6 +35,8 @@ def app_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "data/trash/3/0_x.png": "trash",
         "data/models/big.onnx": "model",
         "data/run/backend.log": "log",
+        "data/certs/ca.key": "ca private key",
+        "data/certs/server.key": "server private key",
     }.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +130,43 @@ def test_user_dbs_are_snapshotted_and_restored(
             assert [c["name"] for c in db.list_characters(conn)] == ["あおい"]
         finally:
             conn.close()
+
+
+def test_certificate_keys_are_never_backed_up_or_restored(app_root: Path, tmp_path: Path) -> None:
+    # 認証局の秘密鍵(ca.key)などは写し先に置かない。前のバックアップに入っていても書き戻さない
+    settings = _settings(tmp_path)
+    taken = backup.run_backup(settings)
+    files = _snapshot_files(tmp_path, taken["name"])
+    assert not any(rel.startswith("data/certs") for rel in files)
+    objects = {p.read_text(encoding="utf-8", errors="ignore") for p in (tmp_path / "drive" / backup.FOLDER / "objects").glob("*/*")}
+    assert "ca private key" not in objects
+    snapshot = tmp_path / "drive" / backup.FOLDER / "snapshots" / f"{taken['name']}.json"
+    data = json.loads(snapshot.read_text(encoding="utf-8"))
+    data["files"]["data/certs/ca.key"] = data["files"]["outputs/history/a.png"]  # 修正の前に取ったバックアップ
+    snapshot.write_text(json.dumps(data), encoding="utf-8")
+    (app_root / "data/certs/ca.key").write_text("new ca key", encoding="utf-8")
+    time.sleep(1.1)
+    backup.restore(settings, taken["name"])
+    assert (app_root / "data/certs/ca.key").read_text(encoding="utf-8") == "new ca key"
+
+
+def test_keys_in_backups_taken_before_the_fix_are_removed(app_root: Path, tmp_path: Path) -> None:
+    # 修正の前に取った回に入っていた秘密鍵は、次にバックアップを取ったときに記録からも中身からも消える
+    settings = _settings(tmp_path)
+    store = tmp_path / "drive" / backup.FOLDER
+    taken = backup.run_backup(settings)
+    snapshot = store / "snapshots" / f"{taken['name']}.json"
+    data = json.loads(snapshot.read_text(encoding="utf-8"))
+    key_object = store / "objects" / "ke" / "keyhash"
+    key_object.parent.mkdir(parents=True)
+    key_object.write_text("old ca private key", encoding="utf-8")
+    data["files"]["data/certs/ca.key"] = {"hash": "keyhash", "size": 18, "mtime": 0}
+    snapshot.write_text(json.dumps(data), encoding="utf-8")
+    time.sleep(1.1)
+    backup.run_backup(settings)
+    assert "data/certs/ca.key" not in json.loads(snapshot.read_text(encoding="utf-8"))["files"]
+    assert not key_object.exists()
+    assert "data/app.db" in json.loads(snapshot.read_text(encoding="utf-8"))["files"]  # DB は外さない
 
 
 def test_keeps_seven_and_cleans_unused_objects(app_root: Path, tmp_path: Path) -> None:
