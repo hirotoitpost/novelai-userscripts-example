@@ -135,23 +135,69 @@ entered. Reload the browser after changing frontend code, or start Vite with `NA
 The MCP tools follow the scheme dev-ctl last started the backend with (`data/run/backend.scheme`); the userscripts call
 `http://127.0.0.1:8000`, so change their `API_BASE` while on HTTPS.
 
-### Admin page (this PC only)
+### Admin page (LAN only)
 
 `/admin` (the "開発管理者" card on the home page) shows the servers' state and logs, running jobs and external
 services (NovelAI token, Ollama, models, certificate), edits `.env` (secrets are shown masked and never sent to the
 page in full), restarts the servers or switches http/https, shows storage use, cleans up unused images, backs up
 the database, and edits app defaults, image presets and content-guard profiles (the core guard is read-only).
 
-Its API (`/api/admin`) only answers a browser on the PC itself talking to the backend directly: the caller must be
-loopback, not forwarded by the Vite proxy (which also refuses to relay it), and the `Host`/`Origin` must be
-localhost — the backend's CORS allows any origin, so without this any site open in the PC's browser could read it.
+Its API (`/api/admin`) only answers callers inside the LAN: this PC or a private address (also checked through the
+Vite proxy's `X-Forwarded-For`), with a `Host`/`Origin` that is this PC, a LAN address or a LAN name such as
+`*.lan` — the backend's CORS allows any origin in single-user mode, so without this any site open in a browser could
+read it. In [multi-user mode](#multi-user-mode-app_modemulti) it is additionally limited to admins, and `.env` cannot be
+edited from the page.
 
 ### 4. Log in
 
 Enter your NovelAI account **email** and **password**.  
 The backend derives the access key using argon2id (same algorithm as the official client) and authenticates with NovelAI — your raw password is never stored.
 
-> **Alternative:** Set `NOVELAI_API_TOKEN=pst-...` in `.env` to skip the login screen and use a [persistent API token](https://docs.novelai.net) instead.
+NovelAI's login requires reCAPTCHA, and the key this app borrows from novelai.net only works on novelai.net, so email
+login often fails with `Login failed (400): Please refresh NovelAI.net`. Use **「アクセストークンで直接ログイン」** instead:
+paste the access token (`eyJ…`) from a browser logged in to novelai.net (developer tools).
+
+> **Persistent token:** with `NOVELAI_API_TOKEN=pst-...` in `.env` (a [persistent API token](https://docs.novelai.net)),
+> requests keep working when the browser's login token expires. You still log in on the screen.
+
+### Multi-user mode (`APP_MODE=multi`)
+
+By default (`APP_MODE=single`) the app is for one person. With `APP_MODE=multi`, several **invited** people share one
+server, each with their own data. The design is in [docs/architecture.md](docs/architecture.md#multi-user-mode-app_modemulti)
+and [SECURITY.md](SECURITY.md#multi-user-mode-app_modemulti); the plan and its decisions are in
+[docs/multi_user_plan_jp.md](docs/multi_user_plan_jp.md) (Japanese).
+
+1. Add to `.env` (see `.env.example`), then restart the backend:
+
+   ```
+   APP_MODE=multi
+   APP_MASTER_KEY=...   # python -c "import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode())"
+   APP_ALLOWED_ORIGINS=http://localhost:5173,http://novelai.lan:5173   # only for the Vite dev server
+   ```
+
+   Keep `APP_MASTER_KEY` safe: if it is lost or changed, no invite or user can be recognised any more. The operator's
+   `NOVELAI_API_TOKEN` is never used for anyone's requests in multi-user mode.
+
+2. Invite people and make yourself an admin (on the server PC):
+
+   ```bash
+   uv run python scripts/manage_users.py add someone@example.com --note "who"
+   uv run python scripts/manage_users.py admin you@example.com
+   ```
+
+3. Each person logs in with their NovelAI email, password **and** a novelai.net access token (`eyJ…`); the server checks
+   that the token's keystore opens with the key from the email and password. After logging in, register a persistent
+   token (`pst-…`) on the home screen so the session keeps working when the login token expires.
+
+4. To keep the data you used in single-user mode, log in once and copy it to your user (the originals stay):
+
+   ```bash
+   uv run python scripts/manage_users.py adopt you@example.com
+   ```
+
+Other commands: `remove` (revoke an invite), `list`, `export` (ZIP of a user's data under `data/exports/`), `delete`
+(remove a user and their data; asks first), `audit` (audit log). The MCP server runs as `APP_MCP_USER`. Ollama / vLLM and
+ComfyUI have per-user daily limits (`APP_LIMIT_LLM_PER_DAY`, `APP_LIMIT_VIDEO_PER_DAY`; admins are exempt).
 
 ## Usage
 
