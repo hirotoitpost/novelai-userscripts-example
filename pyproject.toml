@@ -1,6 +1,6 @@
 [project]
 name = "novelai-userscripts-example"
-version = "0.9.0"
+version = "0.10.0"
 description = "A UI framework example for NovelAI integration using novelai-sdk"
 readme = "README.md"
 license = { text = "MIT" }

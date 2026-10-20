@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+
+- Inpainting UI
+- Character Reference UI
+- Vibe Transfer / ControlNet UI
+- Batch generation UI
+
+---
+
+## [0.10.0] - 2026-10-20
+
 ### Added
 
 - **複数ユーザー対応の計画(`docs/multi_user_plan_jp.md`)** — `.env` の利用者情報(NovelAI のトークンなど)を利用者ごと・安全な形式で
@@ -56,13 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **バックアップに証明書の秘密鍵を入れない** — データのバックアップが `data/certs`(LAN 用の認証局の秘密鍵 `ca.key` と
   サーバーの秘密鍵)も写していた。`ca.key` があれば、スマホが信頼する証明書をいくらでも作れる。入れないようにし、戻すときも
   書き戻さない。前に取った回に入っていた分は、次にバックアップを取ったときに記録と中身の両方から消す
-
-### Planned
-
-- Inpainting UI
-- Character Reference UI
-- Vibe Transfer / ControlNet UI
-- Batch generation UI
 
 ---
 
