@@ -450,6 +450,7 @@ export default function CharacterDataset() {
                   classes={SHEET_CLASSES}
                   showReference
                   fileUrl={fileUrl}
+                  candidateStyle="illustration"
                   onDuplicated={created => {
                     loadCharacters()
                     setCharacterId(created.id)

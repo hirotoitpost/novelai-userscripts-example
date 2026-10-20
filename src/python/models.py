@@ -1180,6 +1180,8 @@ class MangaV2ReferenceCandidatesRequest(BaseModel):
     count: int = Field(default=4, ge=1, le=4)
     color: bool = True
     model: Optional[str] = None
+    # manga: 漫画のコマと同じ組み立て(manga style)。illustration: キャラ別データセットと同じ組み立て(キャラシートの画風)
+    style: Literal["manga", "illustration"] = "manga"
 
 
 class MangaV2ReferenceCandidate(BaseModel):
