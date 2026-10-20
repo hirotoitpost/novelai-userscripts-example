@@ -86,7 +86,53 @@ docker compose up -d
 NovelAI アカウントの**メールアドレス**と**パスワード**を入力してください。  
 バックエンドが argon2id でアクセスキーを導出し（公式クライアントと同じアルゴリズム）、NovelAI に認証します。生のパスワードはどこにも保存されません。
 
-> **代替手段:** `.env` に `NOVELAI_API_TOKEN=pst-...` を設定すると、[永続 API トークン](https://docs.novelai.net)によってログイン画面をスキップできます。
+NovelAI のログインには reCAPTCHA が要り、このアプリが借りている鍵は novelai.net でしか使えないため、メールアドレスでの
+ログインは `Login failed (400): Please refresh NovelAI.net` で失敗することが多いです。その場合は
+**「アクセストークンで直接ログイン」** を使い、novelai.net にログインしたブラウザ(開発者ツール)からアクセストークン(`eyJ…`)を
+貼ってください。
+
+> **永続トークン:** `.env` に `NOVELAI_API_TOKEN=pst-...`([永続 API トークン](https://docs.novelai.net))を書いておくと、
+> 画面のログインのトークンの期限が切れても続けて使えます。ログインの画面は出ます。
+
+### 複数ユーザー(`APP_MODE=multi`)
+
+既定(`APP_MODE=single`)は 1 人で使う形です。`APP_MODE=multi` にすると、**招待した**何人かで 1 つのサーバーを使い、データは
+人ごとに分かれます。作りは [architecture.md](architecture.md#multi-user-mode-app_modemulti) と
+[SECURITY_jp.md](SECURITY_jp.md#複数ユーザーapp_modemulti)、計画と決めたことは [multi_user_plan_jp.md](multi_user_plan_jp.md) にあります。
+
+1. `.env` に書いて(`.env.example` を参照)、バックエンドを再起動します。
+
+   ```
+   APP_MODE=multi
+   APP_MASTER_KEY=...   # python -c "import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode())"
+   APP_ALLOWED_ORIGINS=http://localhost:5173,http://novelai.lan:5173   # Vite の開発サーバーで開くときだけ
+   ```
+
+   `APP_MASTER_KEY` は控えておいてください。なくしたり変えたりすると、招待も利用者も見分けられなくなります。multi では、
+   運営者の `NOVELAI_API_TOKEN` をほかの人のリクエストに使うことはありません。
+
+2. サーバーの PC で、使う人を招待し、自分を管理者にします。
+
+   ```bash
+   uv run python scripts/manage_users.py add someone@example.com --note "誰か"
+   uv run python scripts/manage_users.py admin you@example.com
+   ```
+
+3. 各自、NovelAI のメールアドレス・パスワード**と**、novelai.net のアクセストークン(`eyJ…`)でログインします。サーバーは、
+   そのトークンの keystore がメールアドレスとパスワードの鍵で開けるかで本人かを確かめます。ログインしたら、ホームで永続
+   トークン(`pst-…`)を登録すると、ログインのトークンの期限が切れても続けて使えます。
+
+4. single で使っていたデータを使い続けるなら、一度ログインしてから自分の利用者へコピーします(元のデータは残ります)。
+
+   ```bash
+   uv run python scripts/manage_users.py adopt you@example.com
+   ```
+
+ほかのコマンド: `remove`(招待の取り消し)、`list`、`export`(その人のデータを `data/exports/` に ZIP で)、`delete`(その人と
+データを消す。先に確かめます)、`audit`(監査ログ)。MCP サーバーは `APP_MCP_USER` の人として動きます。Ollama / vLLM と
+ComfyUI には、利用者ごとの 1 日の上限があります(`APP_LIMIT_LLM_PER_DAY`・`APP_LIMIT_VIDEO_PER_DAY`。管理者にはかけません)。
+
+開発管理者のページ(`/admin`)は LAN の中からだけ使えます。multi では、さらに管理者だけになり、`.env` は画面から書き換えられません。
 
 ## 使い方
 
