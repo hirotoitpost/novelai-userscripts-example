@@ -43,7 +43,9 @@ FOLDER = "novelai-backup"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DB_NAME = "data/app.db"
 # 入れないもの(リポジトリのルートからのパスの頭)
-_SKIP = ("data/models", "data/fonts", "data/eval", "data/backups", "data/run", "data/app.db", "data/exports")
+# data/certs: LAN 用の認証局と、サーバーの証明書の秘密鍵(ca.key があれば、スマホが信頼する証明書をいくらでも作れる)。
+# 写し先(外付けドライブ・クラウド)に置かない。scripts/make_lan_cert.py で作り直せる
+_SKIP = ("data/models", "data/fonts", "data/eval", "data/backups", "data/run", "data/app.db", "data/exports", "data/certs")
 # multi の利用者ごとの DB(db.user_db_path)。全体の DB と同じく、壊れない写しを作ってから入れる
 _USER_DB = re.compile(r"data/users/\d+/app\.db")
 
@@ -195,6 +197,7 @@ def run_backup(settings: Settings, reason: str = "手動", progress: Progress | 
     """1回分のバックアップを取る。戻り値はその回の要約。"""
     store = check_destination(settings.destination)
     report = progress or (lambda message, done, total: None)
+    _forget_skipped(store)
     previous = _previous(store)
     files: dict[str, dict[str, Any]] = {}
     added = 0
@@ -270,6 +273,29 @@ def run_backup(settings: Settings, reason: str = "手動", progress: Progress | 
     return {"name": name, "files": len(files), "added": added, "added_bytes": added_bytes, "removed": removed}
 
 
+def _forget_skipped(store: Path) -> int:
+    """
+    前の回の記録から、今は入れないもの(_SKIP。DB は除く)を外す。中身はこの回の最後の prune が片付ける
+    (data/certs を入れないようにする前の回に入っていた秘密鍵を、写し先に残さないため)。外した数。
+    """
+    forgotten = 0
+    folder = store / "snapshots"
+    if not folder.is_dir():
+        return 0
+    for path in folder.glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        drop = [rel for rel in data["files"] if rel.startswith(_SKIP) and not _is_db(rel)]
+        if not drop:
+            continue
+        for rel in drop:
+            del data["files"][rel]
+        tmp = path.with_suffix(".json.part")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+        forgotten += len(drop)
+    return forgotten
+
+
 def prune(store: Path, keep: int = KEEP) -> int:
     """KEEP より古い回を消し、どの回からも使われていない中身を片付ける。消した回の数。"""
     listed = snapshots(store)
@@ -320,7 +346,8 @@ def restore(settings: Settings, name: str, progress: Progress | None = None) -> 
         finally:
             source.close()
     written = 0
-    items = [(rel, f) for rel, f in data["files"].items() if not _is_db(rel)]
+    # 前のバックアップに入っていても、今は入れないもの(data/certs など)は書き戻さない
+    items = [(rel, f) for rel, f in data["files"].items() if not _is_db(rel) and not rel.startswith(_SKIP)]
     for index, (rel, f) in enumerate(items, start=1):
         target_path = _PROJECT_ROOT / rel
         if target_path.is_file() and target_path.stat().st_size == f["size"] and _hash_file(target_path) == f["hash"]:

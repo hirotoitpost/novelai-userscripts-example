@@ -51,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`APP_LIMIT_LLM_PER_DAY`・`APP_LIMIT_VIDEO_PER_DAY`。既定 500 回・20 本)と「同時に 1 つ」をかける。管理者にはかけない。
   上限に達すると、その理由を出す。`docs/architecture.md` と `SECURITY.md` に複数ユーザーの節を足した(計画のステップ 6b)
 
+### Fixed
+
+- **バックアップに証明書の秘密鍵を入れない** — データのバックアップが `data/certs`(LAN 用の認証局の秘密鍵 `ca.key` と
+  サーバーの秘密鍵)も写していた。`ca.key` があれば、スマホが信頼する証明書をいくらでも作れる。入れないようにし、戻すときも
+  書き戻さない。前に取った回に入っていた分は、次にバックアップを取ったときに記録と中身の両方から消す
+
 ### Planned
 
 - Inpainting UI
