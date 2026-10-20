@@ -300,6 +300,9 @@ class CharacterDatasetRequest(BaseModel):
     sampler: SamplerLiteral = "k_euler_ancestral"
     noise_schedule: NoiseScheduleLiteral = "karras"
     cfg_rescale: float = Field(0.0, ge=0.0, le=1.0)
+    quality: bool = True
+    uc_preset: UCPresetLiteral = "light"
+    variety_boost: bool = False
     # 既定は検証結果(docs/trials/2026-10-06_character-dataset-stability.md)に合わせる:
     # 基準シード+容姿タグだけで見た目は安定し、参照画像の上乗せ効果は小さかったため既定はオフ。
     # 使うときは「キャラのみ・強さ0.7」(服装や構図が参照画像に引っぱられにくい)。

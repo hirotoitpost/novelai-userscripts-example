@@ -4,6 +4,8 @@ import BackButton from '../components/BackButton'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import {
+  apiFetch,
+  ImagePreset,
   streamCharacterDataset,
   CharacterDatasetRequest,
   LoraDatasetCompleteEvent,
@@ -20,11 +22,15 @@ import VariationImportDialog, { AXES } from '../components/VariationImportDialog
 import DatasetScenes from '../components/DatasetScenes'
 import type { DatasetState, Situation } from '../components/DatasetScenes'
 import type { Axis, Variations } from '../components/VariationImportDialog'
+import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
 import './LoraDataset.css'
 import './CharacterDataset.css'
 
 
 type Phase = 'idle' | 'running' | 'complete' | 'error' | 'cancelled'
+
+// キャラ参照(Character Reference)は NovelAI が V4.5 系でしか受け付けない
+const REFERENCE_MODELS = new Set(['nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
 
 function readFileAsDataURL(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -94,6 +100,16 @@ export default function CharacterDataset() {
   const [height, setHeight] = useLocalStorage('nai_chards_height', 1216)
   const [steps, setSteps] = useLocalStorage('nai_chards_steps', 23)
   const [scale, setScale] = useLocalStorage('nai_chards_scale', 5.0)
+  const [model, setModel] = useLocalStorage('nai_chards_model', 'nai-diffusion-4-5-full')
+  const [sampler, setSampler] = useLocalStorage('nai_chards_sampler', 'k_euler_ancestral')
+  const [noiseSchedule, setNoiseSchedule] = useLocalStorage('nai_chards_noise_schedule', 'karras')
+  const [cfgRescale, setCfgRescale] = useLocalStorage('nai_chards_cfg_rescale', 0)
+  const [ucPreset, setUcPreset] = useLocalStorage('nai_chards_uc_preset', 'light')
+  const [quality, setQuality] = useLocalStorage('nai_chards_quality', true)
+  const [varietyBoost, setVarietyBoost] = useLocalStorage('nai_chards_variety_boost', false)
+  // 画像生成ページのプリセット(/api/image/presets)から、画像の設定だけを読み込む
+  const [presets, setPresets] = useState<ImagePreset[]>([])
+  const [presetMsg, setPresetMsg] = useState<string | null>(null)
   const [useReference, setUseReference] = useLocalStorage('nai_chards_use_ref', false)
   const [refFidelity, setRefFidelity] = useLocalStorage('nai_chards_ref_fidelity', 1.0)
   const [refStrength, setRefStrength] = useLocalStorage('nai_chards_ref_strength', 0.7)
@@ -157,8 +173,34 @@ export default function CharacterDataset() {
     fetch('/api/lora-dataset/variations').then(r => (r.ok ? r.json() : null)).then(v => v && applyVariations(v)).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (!token) return
+    apiFetch<ImagePreset[]>(token, '/api/image/presets')
+      .then(setPresets)
+      .catch(() => {})  // 一覧が取れなくても生成はできるのでサイレント失敗
+  }, [token])
+
+  function applyPreset(preset: ImagePreset) {
+    const s = preset.settings
+    const notes: string[] = []
+    if (MODELS.some(m => m.value === s.model)) setModel(s.model)
+    else notes.push(`モデル ${s.model} はここでは使えないため変更していません`)
+    setWidth(s.width)
+    setHeight(s.height)
+    setSteps(s.steps)
+    setScale(s.scale)
+    setSampler(s.sampler)
+    setNoiseSchedule(s.noise_schedule)
+    setCfgRescale(s.cfg_rescale)
+    setVarietyBoost(s.variety_boost ?? false)
+    // シード値とネガティブプロンプトはキャラシートのものを使う
+    setPresetMsg([`「${preset.name}」を読み込みました(シード値・ネガティブはキャラシートのまま)`, ...notes].join('。'))
+  }
+
   const character = characters.find(c => c.id === characterId) ?? null
   const hasReference = !!character?.reference_image_path
+  const referenceModel = REFERENCE_MODELS.has(model)
+  const sizeValue = SIZES.find(z => z.width === width && z.height === height)?.value ?? 'custom'
   // 成人キャラ以外では選べない(キャラを切り替えたら自動で全年齢に戻る)
   const r18 = r18Selected && !!character?.is_adult
   const rating = r18 ? 'r18' : 'general'
@@ -254,15 +296,18 @@ export default function CharacterDataset() {
       inpaint_strength: inpaintStrength,
       save_face_crops: saveFaces,
       count,
-      model: 'nai-diffusion-4-5-full',
+      model,
       width,
       height,
       steps,
       scale,
-      sampler: 'k_euler_ancestral',
-      noise_schedule: 'karras',
-      cfg_rescale: 0,
-      use_reference: useReference,
+      sampler,
+      noise_schedule: noiseSchedule,
+      cfg_rescale: cfgRescale,
+      quality,
+      uc_preset: ucPreset,
+      variety_boost: varietyBoost,
+      use_reference: useReference && referenceModel,
       reference_fidelity: refFidelity,
       reference_strength: refStrength,
       reference_type: refType,
@@ -460,21 +505,87 @@ export default function CharacterDataset() {
               {' '}内部で1枚ずつ順番にリクエストします。
             </p>
 
-            <div className="chards-row">
-              <label className="lora-label">幅<input className="lora-input" type="number" step={64} value={width} onChange={e => setWidth(Number(e.target.value))} disabled={isRunning} /></label>
-              <label className="lora-label">高さ<input className="lora-input" type="number" step={64} value={height} onChange={e => setHeight(Number(e.target.value))} disabled={isRunning} /></label>
-            </div>
-            <div className="chards-row">
-              <label className="lora-label">Steps<input className="lora-input" type="number" min={1} max={50} value={steps} onChange={e => setSteps(Number(e.target.value))} disabled={isRunning} /></label>
-              <label className="lora-label">Scale<input className="lora-input" type="number" step={0.1} value={scale} onChange={e => setScale(Number(e.target.value))} disabled={isRunning} /></label>
-            </div>
+            <fieldset className="lora-fieldset">
+              <legend>画像の設定</legend>
+              {presets.length > 0 && (
+                <label className="lora-label">画像生成のプリセットから読み込む
+                  <select
+                    className="lora-select" value=""
+                    onChange={e => {
+                      const p = presets.find(x => String(x.id) === e.target.value)
+                      if (p) applyPreset(p)
+                    }}
+                    disabled={isRunning}
+                  >
+                    <option value="">選択して読み込み...</option>
+                    {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </label>
+              )}
+              {presetMsg && <p className="lora-hint">{presetMsg}</p>}
+              <label className="lora-label">モデル
+                <select className="lora-select" value={model} onChange={e => setModel(e.target.value)} disabled={isRunning}>
+                  {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              </label>
+              <label className="lora-label">サイズ
+                <select
+                  className="lora-select" value={sizeValue}
+                  onChange={e => {
+                    const z = SIZES.find(x => x.value === e.target.value)
+                    if (z) { setWidth(z.width); setHeight(z.height) }
+                  }}
+                  disabled={isRunning}
+                >
+                  {sizeValue === 'custom' && <option value="custom">カスタム ({width}×{height})</option>}
+                  {SIZES.map(z => <option key={z.value} value={z.value}>{z.label}</option>)}
+                </select>
+              </label>
+              <div className="chards-row">
+                <label className="lora-label">幅<input className="lora-input" type="number" step={64} value={width} onChange={e => setWidth(Number(e.target.value))} disabled={isRunning} /></label>
+                <label className="lora-label">高さ<input className="lora-input" type="number" step={64} value={height} onChange={e => setHeight(Number(e.target.value))} disabled={isRunning} /></label>
+              </div>
+              <div className="chards-row">
+                <label className="lora-label">ステップ<input className="lora-input" type="number" min={1} max={50} value={steps} onChange={e => setSteps(Number(e.target.value))} disabled={isRunning} /></label>
+                <label className="lora-label">プロンプトガイダンス<input className="lora-input" type="number" min={0} max={10} step={0.1} value={scale} onChange={e => setScale(Number(e.target.value))} disabled={isRunning} /></label>
+              </div>
+              <div className="chards-row">
+                <label className="lora-label">サンプラー
+                  <select className="lora-select" value={sampler} onChange={e => setSampler(e.target.value)} disabled={isRunning}>
+                    {SAMPLERS.map(x => <option key={x.value} value={x.value}>{x.label}</option>)}
+                  </select>
+                </label>
+                <label className="lora-label">ノイズ設定
+                  <select className="lora-select" value={noiseSchedule} onChange={e => setNoiseSchedule(e.target.value)} disabled={isRunning}>
+                    {NOISE_SCHEDULES.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+              <label className="lora-label">プロンプトガイダンスの再調整 {cfgRescale.toFixed(2)}
+                <input className="lora-range" type="range" min={0} max={1} step={0.01} value={cfgRescale} onChange={e => setCfgRescale(Number(e.target.value))} disabled={isRunning} />
+              </label>
+              <label className="lora-label">UC プリセット
+                <select className="lora-select" value={ucPreset} onChange={e => setUcPreset(e.target.value)} disabled={isRunning}>
+                  {UC_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </label>
+              <label className="lora-checkbox-label">
+                <input type="checkbox" checked={quality} onChange={e => setQuality(e.target.checked)} disabled={isRunning} />
+                品質タグを自動付与
+              </label>
+              <label className="lora-checkbox-label">
+                <input type="checkbox" checked={varietyBoost} onChange={e => setVarietyBoost(e.target.checked)} disabled={isRunning} />
+                多様性(Variety Boost)
+              </label>
+            </fieldset>
 
             <fieldset className="lora-fieldset">
               <legend>キャラ参照(V4.5)</legend>
               <label className="lora-checkbox-label">
-                <input type="checkbox" checked={useReference} onChange={e => setUseReference(e.target.checked)} disabled={isRunning || !hasReference} />
+                <input type="checkbox" checked={useReference && referenceModel} onChange={e => setUseReference(e.target.checked)} disabled={isRunning || !hasReference || !referenceModel} />
                 参照画像を Character Reference に使う
               </label>
+              {!referenceModel && <p className="lora-hint">キャラ参照は V4.5 系のモデルでだけ使えます。</p>}
               <label className="lora-label">参照する範囲
                 <select className="lora-select" value={refType} onChange={e => setRefType(e.target.value as 'character' | 'character&style')} disabled={isRunning}>
                   <option value="character">キャラのみ(服装・構図を変えやすい)</option>
