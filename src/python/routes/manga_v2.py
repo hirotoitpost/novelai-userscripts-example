@@ -147,7 +147,10 @@ from ..character_sheet import (
     characters_negative,
     characters_seed,
     join_tags,
+    sheet_negative,
+    sheet_prompt,
 )
+from ..lora_dataset import GenConfig, generate_one
 from .. import minor_guard
 from .. import ugoira
 from ..script_lines import script_sfx
@@ -543,7 +546,29 @@ async def generate_reference_candidates(
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
     if not character_prompt_tags(character):
         raise HTTPException(status_code=400, detail="キャラシートに容姿のタグがありません。")
+    if req.style == "illustration":
+        return await make_illustration_candidates(client, character, req.count, model=req.model)
     return await make_reference_candidates(client.api_key, character, req.count, color=req.color, model=req.model)
+
+
+async def make_illustration_candidates(
+    client: AsyncNovelAI, character: dict[str, Any], count: int, *, model: str | None = None
+) -> list[dict[str, Any]]:
+    """
+    漫画のコマ用ではなく、キャラ別データセットと同じ組み立て(SDK・キャラシートの画風・基本のネガティブ)で
+    参照画像の候補を作る。画像生成ページやデータセットの絵に近い候補になる。全年齢の立ち絵にするのは同じ。
+    """
+    prompt = join_tags(sheet_prompt(character), app_settings.get("reference.candidate_tags"))
+    cfg = GenConfig(output_root=_CANDIDATE_DIR, model=model or _REFERENCE_MODEL, negative_prompt=sheet_negative(character))
+    _CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
+    candidates: list[dict[str, Any]] = []
+    for _ in range(count):
+        seed = random.randrange(4294967296)
+        image = await generate_one(client, prompt, (832, 1216), cfg, seed=seed)
+        filename = f"char{character['id']}_{seed}_{uuid4().hex[:6]}.png"
+        image.save(_CANDIDATE_DIR / filename, format="PNG")
+        candidates.append({"path": f"outputs/manga/refs/candidates/{filename}", "seed": seed})
+    return candidates
 
 
 async def make_reference_candidates(

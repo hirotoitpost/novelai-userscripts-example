@@ -9,6 +9,8 @@ interface Candidate {
   seed: number
 }
 
+type CandidateStyle = 'illustration' | 'manga'
+
 interface Props {
   apiOrigin: string
   characterId: number
@@ -16,6 +18,8 @@ interface Props {
   /** 1枚選んで参照画像と基準シードに登録できたら呼ぶ(呼び出し側でキャラ一覧を読み直す) */
   onChosen: () => void
   disabled?: boolean
+  /** 候補の画風の初期値。illustration はキャラ別データセットと同じ組み立て、manga は漫画のコマと同じ組み立て */
+  defaultStyle?: CandidateStyle
   buttonClass?: string
   labelClass?: string
   errorClass?: string
@@ -35,7 +39,8 @@ async function errorDetail(res: Response): Promise<string> {
  * 候補は1枚ずつ頼んで、できたものから並べる(進み具合が分かるように)。押すと拡大して見比べられる。
  */
 export default function ReferenceCandidates({
-  apiOrigin, characterId, fileUrl, onChosen, disabled, buttonClass = '', labelClass = '', errorClass = '',
+  apiOrigin, characterId, fileUrl, onChosen, disabled, defaultStyle = 'manga',
+  buttonClass = '', labelClass = '', errorClass = '',
 }: Props) {
   // 候補の生成は NovelAI を呼ぶので、ログイン中のトークンを渡す(無ければサーバーの永続トークン)
   const { token } = useAuth()
@@ -46,6 +51,7 @@ export default function ReferenceCandidates({
   const [now, setNow] = useState(() => Date.now())
   const [preview, setPreview] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [style, setStyle] = useState<CandidateStyle>(defaultStyle)
   // 別のキャラに切り替えたら、生成中の残りは捨てる
   const runRef = useRef(0)
 
@@ -76,7 +82,7 @@ export default function ReferenceCandidates({
         const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${characterId}/reference-candidates`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ count: 1 }),
+          body: JSON.stringify({ count: 1, style }),
         })
         if (!res.ok) throw new Error(await errorDetail(res))
         const made: Candidate[] = await res.json()
@@ -115,6 +121,13 @@ export default function ReferenceCandidates({
 
   return (
     <>
+      <label className={labelClass}>
+        候補の画風{' '}
+        <select value={style} onChange={e => setStyle(e.target.value as CandidateStyle)} disabled={busy}>
+          <option value="illustration">イラスト(キャラシートの画風・データセットと同じ)</option>
+          <option value="manga">漫画(コマの絵と同じ manga style)</option>
+        </select>
+      </label>
       <button type="button" className={buttonClass} onClick={() => void generate()} disabled={busy}>
         {generating ? `候補を生成中… ${done}/${COUNT}` : candidates.length ? '候補を作り直す' : 'キャラシートから候補を生成'}
       </button>

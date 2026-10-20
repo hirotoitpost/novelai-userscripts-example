@@ -53,6 +53,8 @@ interface Props {
   /** 参照画像の登録/削除も出すか(物語の画面では漫画v2側に既にあるので出さない) */
   showReference?: boolean
   fileUrl?: (path: string) => string
+  /** 参照画像の候補の画風の初期値(既定は漫画。キャラ別データセットではイラスト) */
+  candidateStyle?: 'illustration' | 'manga'
   /** 別名保存できた新しいキャラを渡す(呼び出し側でそのキャラを選び直す)。未指定なら別名保存を出さない */
   onDuplicated?: (created: Character) => void
   /** 削除できたら呼ぶ。未指定なら削除を出さない */
@@ -78,7 +80,7 @@ async function errorDetail(res: Response): Promise<string> {
  * 変更した項目だけを PUT /api/story/characters/{id}/sheet に送る。
  */
 export default function CharacterSheetEditor({
-  apiOrigin, character, onSaved, disabled, classes = STORY_CLASSES, showReference, fileUrl, onDuplicated, onDeleted,
+  apiOrigin, character, onSaved, disabled, classes = STORY_CLASSES, showReference, fileUrl, candidateStyle, onDuplicated, onDeleted,
 }: Props) {
   const [draft, setDraft] = useState<Partial<Record<SheetField, string>>>({})
   const [error, setError] = useState<string | null>(null)
@@ -315,6 +317,7 @@ export default function CharacterSheetEditor({
               characterId={character.id}
               fileUrl={fileUrl}
               disabled={busy}
+              defaultStyle={candidateStyle}
               buttonClass={classes.button}
               labelClass={classes.label}
               errorClass={classes.error}

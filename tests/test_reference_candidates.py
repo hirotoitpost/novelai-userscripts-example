@@ -112,3 +112,37 @@ def test_candidates_need_a_character(client: TestClient) -> None:
         ).status_code
         == 404
     )
+
+
+def test_illustration_candidates_use_the_dataset_prompt(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    async def fake_sdk(novelai, prompt, size, cfg, *, seed=None):
+        calls.append({"prompt": prompt, "size": size, "cfg": cfg, "seed": seed})
+        return Image.new("RGB", (8, 12), "white")
+
+    monkeypatch.setattr(manga_v2, "generate_one", fake_sdk)
+    character_id = _character()
+    conn = db.get_connection()
+    try:
+        db.update_character_sheet(conn, character_id, {"style_tags": "flat color"})
+    finally:
+        conn.close()
+    res = client.post(
+        f"/api/manga-v2/characters/{character_id}/reference-candidates",
+        json={"count": 1, "style": "illustration"},
+        headers=AUTH,
+    )
+    assert res.status_code == 200, res.text
+    candidate = res.json()[0]
+    assert (tmp_path / candidate["path"]).is_file()
+    # 漫画用の組み立て(manga style・キャラの欄)は使わず、キャラシートの画風と候補の構図を全体のプロンプトに入れる
+    assert client.calls == []  # type: ignore[attr-defined]
+    call = calls[0]
+    assert "manga style" not in call["prompt"]
+    assert call["prompt"].startswith("1boy, black hair, glasses, white shirt, flat color")
+    assert "white background" in call["prompt"]
+    assert "beard" in call["cfg"].negative_prompt and call["cfg"].model == "nai-diffusion-4-5-full"
+    assert call["seed"] == candidate["seed"] and call["size"] == (832, 1216)
