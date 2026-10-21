@@ -10,6 +10,10 @@ export const PAGE_H = 1700
 export interface Gaps { gutter_x: number; gutter_y: number; margin: number }
 export const DEFAULT_GAPS: Gaps = { gutter_x: 16, gutter_y: 28, margin: 50 }
 
+/** ページの見た目: 地の色(余白・コマの間隔)と、枠線の色・太さ(ピクセル。0 なら描かない) */
+export interface PageStyle { background: string; border_color: string; border_width: number }
+export const DEFAULT_STYLE: PageStyle = { background: '#ffffff', border_color: '#000000', border_width: 4 }
+
 export type Point = [number, number]
 export type Box = [number, number, number, number]
 export type ShapeKind = 'rect' | 'ellipse' | 'triangle' | 'polygon'
@@ -24,6 +28,9 @@ export interface Leaf {
   points?: Point[]
   /** false なら枠線を描かない */
   border?: boolean
+  /** このコマだけの枠線の色・太さ(無ければページの設定) */
+  border_color?: string
+  border_width?: number
 }
 
 export interface Split {
@@ -69,7 +76,9 @@ export function tidyLeaf(leaf: Leaf): Tree {
   if (leaf.shape === 'triangle') out.point = leaf.point ?? 'up'
   if (leaf.shape === 'polygon') out.points = leaf.points
   if (leaf.border === false) out.border = false
-  return out.shape === 'rect' && out.border !== false ? 'panel' : out
+  if (leaf.border_color !== undefined) out.border_color = leaf.border_color
+  if (leaf.border_width !== undefined) out.border_width = leaf.border_width
+  return Object.keys(out).length === 1 && out.shape === 'rect' ? 'panel' : out
 }
 
 type Polygon = Point[]

@@ -1,7 +1,8 @@
 import { PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MangaV2Scene } from './MangaV2Studio'
 import {
-  Box, DEFAULT_GAPS, DividerLine, Gaps, Leaf, MAX_TILT, MIN_SHARE, PAGE_H, PAGE_W, Point, ShapeKind, Split, Tree, TrianglePoint,
+  Box, DEFAULT_GAPS, DEFAULT_STYLE, DividerLine, Gaps, Leaf, MAX_TILT, MIN_SHARE, PAGE_H, PAGE_W, PageStyle, Point, ShapeKind, Split,
+  Tree, TrianglePoint,
   count, isSplit, layoutGeometry, leafOf, nodeAt, setAt, simplify, tidyLeaf,
 } from './layoutTree'
 import './PageLayoutEditor.css'
@@ -19,6 +20,7 @@ interface ViewPage {
   scene_ids: number[]
   tree: Tree | null
   gaps: Gaps
+  style: PageStyle
   spread: boolean
   panels: Point[][]
 }
@@ -28,7 +30,7 @@ interface View { explicit: boolean; template: string; scenes: number; pages: Vie
 interface Pattern { id: string; label: string; tree: Tree }
 
 /** 画面で直している1ページ。tree が無いのは取り込んだ作品から写したページ(斜めの枠など。形はそのまま) */
-interface DraftPage { tree: Tree | null; layout: number | null; panels: Point[][]; gaps: Gaps }
+interface DraftPage { tree: Tree | null; layout: number | null; panels: Point[][]; gaps: Gaps; style: PageStyle }
 
 interface Props {
   apiOrigin: string
@@ -54,10 +56,16 @@ const TRIANGLE_POINTS: { value: TrianglePoint; label: string }[] = [
   { value: 'left', label: '左に尖る' }, { value: 'right', label: '右に尖る' },
 ]
 
-/** ページの上のコマの輪郭(ページに対する割合)。写したページはサーバーの輪郭のまま */
-function outlinesOf(page: DraftPage): Point[][] {
-  if (page.tree) return layoutGeometry(page.tree, page.gaps).panels.map(p => p.outline)
-  return page.panels
+/** ページの上のコマの輪郭(ページに対する割合)と枠線。写したページはサーバーの輪郭のまま */
+function outlinesOf(page: DraftPage): { points: Point[]; stroke: string; width: number }[] {
+  if (page.tree) {
+    return layoutGeometry(page.tree, page.gaps).panels.map(p => ({
+      points: p.outline,
+      stroke: p.leaf.border_color ?? page.style.border_color,
+      width: p.leaf.border === false ? 0 : (p.leaf.border_width ?? page.style.border_width),
+    }))
+  }
+  return page.panels.map(points => ({ points, stroke: page.style.border_color, width: page.style.border_width }))
 }
 
 const GAP_FIELDS: { key: keyof Gaps; label: string; max: number }[] = [
@@ -79,13 +87,14 @@ function PageSvg({ page, labels, width }: { page: DraftPage; labels: string[]; w
   return (
     <svg className="ple-svg" viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="img"
       aria-label={`${outlinesOf(page).length}コマのページ`}>
-      <rect x={0} y={0} width={width} height={height} className="ple-paper" />
-      {outlinesOf(page).map((points, i) => {
+      <rect x={0} y={0} width={width} height={height} className="ple-paper" style={{ fill: page.style.background }} />
+      {outlinesOf(page).map(({ points, stroke, width: line }, i) => {
         const [cx, cy] = centroid(points)
         return (
           <g key={i}>
             <polygon points={points.map(([x, y]) => `${x * width},${y * height}`).join(' ')}
-              className={labels[i] ? 'ple-panel' : 'ple-panel ple-panel--empty'} />
+              className={labels[i] ? 'ple-panel' : 'ple-panel ple-panel--empty'}
+              style={{ stroke: line ? stroke : 'none', strokeWidth: Math.max(0.6, (line * width) / PAGE_W) }} />
             <text x={cx * width} y={cy * height} className="ple-label" fontSize={Math.max(9, width / 14)}>{labels[i] ?? '空'}</text>
           </g>
         )
@@ -117,7 +126,10 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
     const data: View = await res.json()
     setView(data)
-    setPages(data.pages.map(p => ({ tree: p.tree, layout: p.source === 'layout' ? p.layout : null, panels: p.panels, gaps: p.gaps ?? DEFAULT_GAPS })))
+    setPages(data.pages.map(p => ({
+      tree: p.tree, layout: p.source === 'layout' ? p.layout : null, panels: p.panels,
+      gaps: p.gaps ?? DEFAULT_GAPS, style: p.style ?? DEFAULT_STYLE,
+    })))
     setSelected(s => Math.min(s, Math.max(0, data.pages.length - 1)))
     setSelection(null)
     setDirty(false)
@@ -171,7 +183,10 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   async function changeCount(n: number) {
     try {
       const list = await loadPatterns(n)
-      if (list[0]) { editPage(selected, { tree: list[0].tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS }); setSelection(null) }
+      if (list[0]) {
+        editPage(selected, { tree: list[0].tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS, style: current?.style ?? DEFAULT_STYLE })
+        setSelection(null)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -179,7 +194,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
 
   function addPage() {
     const tree: Tree = { dir: 'rows', sizes: [0.5, 0.5], items: [{ dir: 'cols', sizes: [0.5, 0.5], items: ['panel', 'panel'] }, { dir: 'cols', sizes: [0.5, 0.5], items: ['panel', 'panel'] }] }
-    setPages(prev => [...prev.slice(0, selected + 1), { tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS }, ...prev.slice(selected + 1)])
+    setPages(prev => [...prev.slice(0, selected + 1), { tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS, style: current?.style ?? DEFAULT_STYLE }, ...prev.slice(selected + 1)])
     setSelected(selected + 1)
     setDirty(true)
   }
@@ -333,7 +348,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
       const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/page-layout`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template, pages: pages.map(p => (p.tree ? { tree: p.tree, gaps: p.gaps } : { layout: p.layout })) }),
+        body: JSON.stringify({ template, pages: pages.map(p => (p.tree ? { tree: p.tree, gaps: p.gaps, style: p.style } : { layout: p.layout })) }),
       })
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
       const result = await res.json()
@@ -404,15 +419,18 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
             {current.tree && geometry ? (
               <svg ref={svgRef} className={drawMode ? 'ple-svg ple-svg--draw' : 'ple-svg'} viewBox={`0 0 ${W} ${H}`} width={W} height={H}
                 role="img" aria-label={`${selected + 1}ページ目のコマ割り`} onPointerDown={onSvgPointerDown}>
-                <rect x={0} y={0} width={W} height={H} className="ple-paper" onClick={() => !drawMode && setSelection(null)} />
+                <rect x={0} y={0} width={W} height={H} className="ple-paper" style={{ fill: current.style.background }}
+                  onClick={() => !drawMode && setSelection(null)} />
                 {geometry.panels.map(p => {
                   const [cx, cy] = centroid(p.outline)
                   const on = selectedPanel && pathKey(selectedPanel.path) === pathKey(p.path)
                   const label = labels(selected)[p.index]
+                  const line = p.leaf.border === false ? 0 : (p.leaf.border_width ?? current.style.border_width)
                   return (
                     <g key={pathKey(p.path)}>
                       <polygon points={p.outline.map(([x, y]) => `${x * W},${y * H}`).join(' ')}
                         className={`ple-panel${label ? '' : ' ple-panel--empty'}${on ? ' ple-panel--on' : ''}${p.leaf.border === false ? ' ple-panel--borderless' : ''}`}
+                        style={on ? undefined : { stroke: line ? (p.leaf.border_color ?? current.style.border_color) : '#9a9ab0', strokeWidth: line ? Math.max(0.8, (line * W) / PAGE_W) : 0.8 }}
                         onClick={() => !drawMode && setSelection({ kind: 'panel', path: p.path })} />
                       <text x={cx * W} y={cy * H} className="ple-label" fontSize={W / 14}>{label ?? '空'}</text>
                     </g>
@@ -486,6 +504,37 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
               </div>
             )}
 
+            {current.tree && (
+              <div className="ple-box">
+                <strong>色と枠線</strong>
+                <div className="ple-row">
+                  <label className="ple-range">
+                    地の色(余白・間隔)
+                    <input type="color" value={current.style.background} disabled={off}
+                      onChange={e => editPage(selected, { ...current, style: { ...current.style, background: e.target.value } })} />
+                  </label>
+                  <label className="ple-range">
+                    枠線の色
+                    <input type="color" value={current.style.border_color} disabled={off}
+                      onChange={e => editPage(selected, { ...current, style: { ...current.style, border_color: e.target.value } })} />
+                  </label>
+                </div>
+                <label className="ple-range">
+                  枠線の太さ
+                  <input type="range" min={0} max={20} step={1} value={current.style.border_width} disabled={off}
+                    onChange={e => editPage(selected, { ...current, style: { ...current.style, border_width: Number(e.target.value) } })} />
+                  {current.style.border_width === 0 ? 'なし' : `${current.style.border_width}px`}
+                </label>
+                <div className="ple-row">
+                  <button type="button" disabled={off}
+                    onClick={() => editPage(selected, { ...current, style: { background: '#000000', border_color: '#ffffff', border_width: current.style.border_width } })}>
+                    黒地(回想など)
+                  </button>
+                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, style: DEFAULT_STYLE })}>既定に戻す</button>
+                </div>
+              </div>
+            )}
+
             {selection?.kind === 'divider' && (
               <div className="ple-box">
                 <strong>境目の傾き</strong>
@@ -519,6 +568,31 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
                     枠線
                   </label>
                 </div>
+                {selectedPanel.leaf.border !== false && (
+                  <div className="ple-row">
+                    <label className="ple-check">
+                      <input type="checkbox" disabled={off}
+                        checked={selectedPanel.leaf.border_color !== undefined || selectedPanel.leaf.border_width !== undefined}
+                        onChange={e => editLeaf(e.target.checked
+                          ? { border_color: current.style.border_color, border_width: current.style.border_width }
+                          : { border_color: undefined, border_width: undefined })} />
+                      このコマだけ線を変える
+                    </label>
+                    {(selectedPanel.leaf.border_color !== undefined || selectedPanel.leaf.border_width !== undefined) && (
+                      <>
+                        <input type="color" aria-label="このコマの枠線の色" disabled={off}
+                          value={selectedPanel.leaf.border_color ?? current.style.border_color}
+                          onChange={e => editLeaf({ border_color: e.target.value })} />
+                        <label className="ple-range">
+                          <input type="range" min={0} max={20} step={1} disabled={off} aria-label="このコマの枠線の太さ"
+                            value={selectedPanel.leaf.border_width ?? current.style.border_width}
+                            onChange={e => editLeaf({ border_width: Number(e.target.value) })} />
+                          {selectedPanel.leaf.border_width ?? current.style.border_width}px
+                        </label>
+                      </>
+                    )}
+                  </div>
+                )}
                 {selectedPanel.leaf.shape === 'polygon' && (
                   <div className="ple-row">
                     <button type="button" disabled={off || drawMode} onClick={addVertex}>頂点を足す</button>
@@ -541,8 +615,8 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
             <div className="ple-patterns">
               {(patterns[currentCount] ?? []).map(p => (
                 <button key={p.id} type="button" className="ple-pattern" disabled={off} title={p.label}
-                  onClick={() => { editPage(selected, { tree: p.tree, layout: null, panels: [], gaps: current.gaps }); setSelection(null) }}>
-                  <PageSvg page={{ tree: p.tree, layout: null, panels: [], gaps: current.gaps }} labels={[]} width={52} />
+                  onClick={() => { editPage(selected, { ...current, tree: p.tree, layout: null, panels: [] }); setSelection(null) }}>
+                  <PageSvg page={{ ...current, tree: p.tree, layout: null, panels: [] }} labels={[]} width={52} />
                   <span>{p.label}</span>
                 </button>
               ))}

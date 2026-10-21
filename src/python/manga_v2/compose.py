@@ -724,17 +724,19 @@ def inscribed_rect(shape: PanelShape) -> Rect:
 
 def _draw_border(page: Image.Image, shape: PanelShape) -> None:
     """コマの枠線。ページの端に接する辺(裁ち落とし)には描かない。"""
+    if shape.border_width <= 0:
+        return
     draw = ImageDraw.Draw(page)
     width, height = page.size
     x0, y0, x1, y1 = shape.rect
     if shape.is_rect and x0 > 0 and y0 > 0 and x1 < width and y1 < height:
-        draw.rectangle(shape.rect, outline=(0, 0, 0), width=_BORDER)
+        draw.rectangle(shape.rect, outline=shape.border_color, width=shape.border_width)
         return
     points = shape.points
     for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1]):
         on_edge = (ax == bx and ax in (0, width)) or (ay == by and ay in (0, height))
         if not on_edge:
-            draw.line([(ax, ay), (bx, by)], fill=(0, 0, 0), width=_BORDER, joint="curve")
+            draw.line([(ax, ay), (bx, by)], fill=shape.border_color, width=shape.border_width, joint="curve")
 
 
 def compose_page(
@@ -746,7 +748,7 @@ def compose_page(
     """
     if not isinstance(spec, PageSpec):
         spec = PageSpec(PAGE_WIDTH, PAGE_HEIGHT, tuple(rect_shape(r) for r in spec))
-    page = Image.new("RGB", (spec.width, spec.height), (255, 255, 255))
+    page = Image.new("RGB", (spec.width, spec.height), spec.background)
     pictures: list[_Picture] = []
     for shape, content in zip(spec.panels, panels):
         if shape.is_rect:

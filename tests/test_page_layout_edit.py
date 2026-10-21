@@ -232,3 +232,30 @@ def test_zero_gutter_and_margin_make_panels_touch(client: TestClient) -> None:
     assert min(x for panel in page["panels"] for x, _ in panel) == 0 and max(y for panel in page["panels"] for _, y in panel) == 1
     # 既定のままなら、保存した形に間隔は入れない
     assert "gaps" not in tree_layout(tree) and tree_layout(tree, {"margin": 0})["gaps"]["margin"] == 0
+
+
+def test_page_background_and_border_colors(client: TestClient) -> None:
+    from python.manga_v2.compose import LetteringStyle, PanelContent, compose_page
+    from python.manga_v2.lettering import resolve_font
+
+    # 地は黒、枠線は赤で太さ6。2コマ目だけ青で太さ10
+    tree = normalize_tree({"dir": "rows", "sizes": [0.5, 0.5], "items": [PANEL, {"shape": "rect", "border_color": "#0000FF", "border_width": 10}]})
+    layout = tree_layout(tree, None, {"background": "#000000", "border_color": "#ff0000", "border_width": 6})
+    spec = layout_page(layout)
+    assert spec.background == (0, 0, 0)
+    assert [(s.border_color, s.border_width) for s in spec.panels] == [((255, 0, 0), 6), ((0, 0, 255), 10)]
+    style = LetteringStyle(font_path=resolve_font(None), sfx_font_path=resolve_font(None))
+    page, _ = compose_page(spec, [PanelContent(None, key="0"), PanelContent(None, key="1")], style)
+    # 余白は地の色、上のコマの枠線は赤、下のコマの枠線は青
+    assert page.getpixel((10, 10)) == (0, 0, 0)
+    top, bottom = spec.panels
+    assert page.getpixel((top.rect[0] + 200, top.rect[1] + 1)) == (255, 0, 0)
+    assert page.getpixel((bottom.rect[0] + 200, bottom.rect[3] - 2)) == (0, 0, 255)
+
+    s = _story(2)
+    bad = client.put(f"/api/manga-v2/{s['id']}/page-layout", json={"pages": [{"tree": tree, "style": {"background": "black"}}]})
+    assert bad.status_code == 422
+    ok = client.put(f"/api/manga-v2/{s['id']}/page-layout", json={"pages": [{"tree": tree, "style": {"background": "#112233"}}]})
+    assert ok.status_code == 200, ok.text
+    page_view = client.get(f"/api/manga-v2/{s['id']}/page-layout").json()["pages"][0]
+    assert page_view["style"] == {"background": "#112233", "border_color": "#000000", "border_width": 4}

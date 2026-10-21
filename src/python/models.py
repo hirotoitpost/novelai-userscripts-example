@@ -1263,6 +1263,8 @@ class MangaV2PageLayoutItem(BaseModel):
     layout: Optional[int] = Field(None, ge=0)
     # tree のページのコマの間隔(gutter_x / gutter_y)と余白(margin)のピクセル。0 でコマどうしが接する・裁ち落とし
     gaps: Optional[dict[str, float]] = None
+    # tree のページの見た目: 地の色(background)・枠線の色(border_color、#rrggbb)・太さ(border_width)
+    style: Optional[dict[str, Any]] = None
 
 
 class MangaV2PageLayoutEditRequest(BaseModel):

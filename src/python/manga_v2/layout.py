@@ -149,6 +149,9 @@ class PanelShape:
     rect: Rect
     points: tuple[Point, ...]
     border: bool = True
+    # 枠線の色(RGB)と太さ(ピクセル。0 なら描かない)
+    border_color: tuple[int, int, int] = (0, 0, 0)
+    border_width: int = 4
 
     @property
     def is_rect(self) -> bool:
@@ -168,6 +171,8 @@ class PageSpec:
     width: int
     height: int
     panels: tuple[PanelShape, ...]
+    # ページの地の色(余白・コマの間隔に見える色)
+    background: tuple[int, int, int] = (255, 255, 255)
 
 
 def template_page(template_id: str) -> PageSpec:
@@ -190,12 +195,19 @@ def layout_page(layout: PageLayout) -> PageSpec:
         ]
         return PageSpec(PAGE_WIDTH, PAGE_HEIGHT, tuple(rect_shape(r) for r in rects))
     width = PAGE_WIDTH * 2 if layout.get("spread") else PAGE_WIDTH
+    style = normalize_style(layout.get("style"))
     shapes = []
     for panel in layout.get("panels") or []:
         points = tuple((round(x * width), round(y * PAGE_HEIGHT)) for x, y in panel["points"])
         xs, ys = [x for x, _ in points], [y for _, y in points]
-        shapes.append(PanelShape((min(xs), min(ys), max(xs), max(ys)), points, bool(panel.get("border", True))))
-    return PageSpec(width, PAGE_HEIGHT, tuple(shapes))
+        shapes.append(PanelShape(
+            (min(xs), min(ys), max(xs), max(ys)),
+            points,
+            bool(panel.get("border", True)),
+            hex_rgb(panel.get("border_color") or style["border_color"]),
+            int(panel.get("border_width", style["border_width"])),
+        ))
+    return PageSpec(width, PAGE_HEIGHT, tuple(shapes), hex_rgb(style["background"]))
 
 
 def layout_rects(layout: PageLayout) -> list[Rect]:
@@ -325,6 +337,11 @@ def _normalize_leaf(leaf: Any) -> LayoutTree:
         node["points"] = [[round(min(max(float(x), 0.0), 1.0), 4), round(min(max(float(y), 0.0), 1.0), 4)] for x, y in points]
     if leaf.get("border", True) is False:
         node["border"] = False
+    # このコマだけの枠線の色・太さ(無ければページの設定)
+    if leaf.get("border_color") is not None:
+        node["border_color"] = _color(leaf["border_color"])
+    if leaf.get("border_width") is not None:
+        node["border_width"] = _border_width(leaf["border_width"])
     # 何も決めていなければ、ふつうのコマ
     return PANEL if node == {"shape": "rect"} else node
 
@@ -511,6 +528,38 @@ def normalize_gaps(gaps: Mapping[str, Any] | None) -> dict[str, int]:
     return result
 
 
+# ページの見た目: 地の色(余白・コマの間隔)と、枠線の色・太さ(コマごとに変えられる)
+DEFAULT_STYLE: dict[str, Any] = {"background": "#ffffff", "border_color": "#000000", "border_width": 4}
+_MAX_BORDER_WIDTH = 20
+
+
+def _color(value: Any) -> str:
+    text = str(value).strip().lower()
+    if len(text) != 7 or text[0] != "#" or any(c not in "0123456789abcdef" for c in text[1:]):
+        raise ValueError(f"色は #rrggbb で指定してください: {value}")
+    return text
+
+
+def _border_width(value: Any) -> int:
+    return min(max(int(round(float(value))), 0), _MAX_BORDER_WIDTH)
+
+
+def hex_rgb(color: str) -> tuple[int, int, int]:
+    return int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+
+
+def normalize_style(style: Mapping[str, Any] | None) -> dict[str, Any]:
+    """地の色・枠線の色と太さを検査して整える(無い項目は既定の値)。おかしな色は ValueError。"""
+    result = dict(DEFAULT_STYLE)
+    if style:
+        for key in ("background", "border_color"):
+            if style.get(key) is not None:
+                result[key] = _color(style[key])
+        if style.get("border_width") is not None:
+            result["border_width"] = _border_width(style["border_width"])
+    return result
+
+
 def tree_outlines(tree: LayoutTree, gaps: Mapping[str, Any] | None = None) -> list[tuple[Polygon, bool]]:
     """木のコマの輪郭(ページのピクセル)と枠線の有無を、読む順に。gaps はコマの間隔と余白(無ければ既定)。"""
     g = normalize_gaps(gaps)
@@ -543,19 +592,28 @@ def _tidy(polygon: Polygon) -> Polygon:
     return points
 
 
-def tree_layout(tree: LayoutTree, gaps: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def tree_layout(
+    tree: LayoutTree, gaps: Mapping[str, Any] | None = None, style: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     """
     木のコマ割りを、ページごとのコマ割り(manga_v2_page_layouts の今の形)にする。合成は panels の輪郭を使い、
-    画面で直せるように木と間隔・余白(既定と違うときだけ)も一緒に持つ。
+    画面で直せるように木と間隔・余白・見た目(既定と違うときだけ)も一緒に持つ。
     """
     g = normalize_gaps(gaps)
-    panels = [
-        {"points": [[round(x / PAGE_WIDTH, 4), round(y / PAGE_HEIGHT, 4)] for x, y in outline], "border": border}
-        for outline, border in tree_outlines(tree, g)
-    ]
+    look = normalize_style(style)
+    panels = []
+    for (outline, border), leaf in zip(tree_outlines(tree, g), tree_leaves(tree)):
+        panel: dict[str, Any] = {"points": [[round(x / PAGE_WIDTH, 4), round(y / PAGE_HEIGHT, 4)] for x, y in outline], "border": border}
+        if isinstance(leaf, Mapping):
+            for key in ("border_color", "border_width"):
+                if leaf.get(key) is not None:
+                    panel[key] = leaf[key]
+        panels.append(panel)
     layout: dict[str, Any] = {"spread": False, "panels": panels, "tree": tree}
     if g != DEFAULT_GAPS:
         layout["gaps"] = g
+    if look != DEFAULT_STYLE:
+        layout["style"] = look
     return layout
 
 
