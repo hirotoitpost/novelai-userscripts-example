@@ -57,6 +57,18 @@
 .ple-check { display: inline-flex; align-items: center; gap: 0.25rem; }
 .ple .ple-on { outline: 2px solid #7b5cf6; }
 
+/* 背景を消したコマの確認 */
+.ple-cutout { display: flex; flex-direction: column; gap: 0.35rem; }
+.ple-cutout-preview {
+  max-width: 160px;
+  border-radius: 6px;
+  background-color: #c8c8c8;
+  background-image: linear-gradient(45deg, #8c8c8c 25%, transparent 25%, transparent 75%, #8c8c8c 75%),
+    linear-gradient(45deg, #8c8c8c 25%, transparent 25%, transparent 75%, #8c8c8c 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+
 /* 重ねて置くコマ */
 .ple-panel--float { cursor: move; fill-opacity: 0.92; }
 .ple-resize { cursor: nwse-resize; }

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Sequence
+import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw
 
 from .detect import detect_heads
@@ -504,8 +508,13 @@ def _draw_panel(
     return elements
 
 
-def _draw_picture(page: Image.Image, rect: Rect, content: PanelContent) -> _Picture:
-    """コマの絵を rect に嵌め込む(まだ無ければ灰色の仮の絵)。吹き出しの置き場所を決めるための頭の位置を返す。"""
+def _draw_picture(
+    page: Image.Image, rect: Rect, content: PanelContent, cutout: Mapping[str, Any] | None = None
+) -> _Picture:
+    """
+    コマの絵を rect に嵌め込む(まだ無ければ灰色の仮の絵)。吹き出しの置き場所を決めるための頭の位置を返す。
+    cutout(背景を消す)なら、人物だけを置き、縁取りを決めていれば人物のまわりに色の縁を付ける。
+    """
     x0, y0, x1, y1 = rect
     width, height = x1 - x0, y1 - y0
     draw = ImageDraw.Draw(page)
@@ -523,8 +532,13 @@ def _draw_picture(page: Image.Image, rect: Rect, content: PanelContent) -> _Pict
         if content.picture_path is not None and content.picture_path.is_file():
             with Image.open(content.picture_path) as frame:
                 image = frame.convert("RGB").resize(image.size, Image.Resampling.LANCZOS)
+        if cutout is not None:
+            image = _with_cutout(image, content.image_path)
         picture, scale, left, top = _cover(image, width, height, content.zoom_step, source_heads, focus_indexes)
-        page.paste(picture, (x0, y0))
+        if picture.mode == "RGBA":
+            _paste_cutout(page, picture, (x0, y0), cutout or {})
+        else:
+            page.paste(picture, (x0, y0))
         for index, (hx0, hy0, hx1, hy1) in enumerate(source_heads):
             head_id = source_ids[index] if source_ids else None
             box = (
@@ -688,6 +702,32 @@ def _draw_lettering(
     return elements
 
 
+def _with_cutout(image: Image.Image, image_path: Path) -> Image.Image:
+    """背景を消した絵(人物の外は透明)。切り分けに失敗したら、元の絵のまま(合成は止めない)。"""
+    from . import cutout
+
+    try:
+        mask = cutout.best_mask(image_path)
+    except Exception:  # noqa: BLE001 モデルを取れない等。背景を残して描く
+        logging.getLogger(__name__).warning("背景を消せませんでした: %s", image_path, exc_info=True)
+        return image
+    rgba = image.convert("RGBA")
+    rgba.putalpha(mask.resize(image.size, Image.Resampling.LANCZOS))
+    return rgba
+
+
+def _paste_cutout(page: Image.Image, picture: Image.Image, at: tuple[int, int], options: Mapping[str, Any]) -> None:
+    """人物だけを貼る。縁取りがあれば、人物の形を太らせた所を先に縁の色で塗る。"""
+    alpha = picture.getchannel("A")
+    if options.get("outline"):
+        width = int(options.get("outline_width", 8))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (width * 2 + 1, width * 2 + 1))
+        grown = Image.fromarray(cv2.dilate(np.asarray(alpha), kernel), "L")
+        color = Image.new("RGB", picture.size, options.get("outline_color", "#ffffff"))
+        page.paste(color, at, grown)
+    page.paste(picture.convert("RGB"), at, alpha)
+
+
 def inscribed_rect(shape: PanelShape) -> Rect:
     """
     コマの形の内側に収まる、なるべく大きな長方形(吹き出し・描き文字を置く範囲)。輪郭を縮小して塗り、
@@ -759,10 +799,10 @@ def compose_page(
     for i in order:
         shape, content = spec.panels[i], panels[i]
         if shape.is_rect:
-            pictures[i] = _draw_picture(page, shape.rect, content)
+            pictures[i] = _draw_picture(page, shape.rect, content, shape.cutout)
         else:
             layer = page.copy()
-            pictures[i] = _draw_picture(layer, shape.rect, content)
+            pictures[i] = _draw_picture(layer, shape.rect, content, shape.cutout)
             mask = Image.new("L", page.size, 0)
             ImageDraw.Draw(mask).polygon(list(shape.points), fill=255)
             page.paste(layer, (0, 0), mask)

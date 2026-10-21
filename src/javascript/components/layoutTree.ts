@@ -33,7 +33,12 @@ export interface Leaf {
   border_width?: number
   /** 重なり順(大きいほど前面。既定 0) */
   z?: number
+  /** 背景を消して人物だけを見せる(縁取りは選べる) */
+  cutout?: Cutout
 }
+
+export interface Cutout { outline: boolean; outline_color: string; outline_width: number }
+export const DEFAULT_CUTOUT: Cutout = { outline: false, outline_color: '#ffffff', outline_width: 8 }
 
 /** 重ねて置くコマ(マス目とは別に、ページの好きな位置に置く)。rect はページに対する割合 */
 export interface FloatPanel extends Leaf {
@@ -89,6 +94,7 @@ export function tidyLeaf(leaf: Leaf): Tree {
   if (leaf.border_color !== undefined) out.border_color = leaf.border_color
   if (leaf.border_width !== undefined) out.border_width = leaf.border_width
   if (leaf.z) out.z = leaf.z
+  if (leaf.cutout) out.cutout = leaf.cutout
   return Object.keys(out).length === 1 && out.shape === 'rect' ? 'panel' : out
 }
 
