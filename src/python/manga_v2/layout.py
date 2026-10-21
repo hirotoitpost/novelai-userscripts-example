@@ -154,6 +154,8 @@ class PanelShape:
     border_width: int = 4
     # 重なり順(大きいほど前面)。同じなら読む順の後ろが前
     z: int = 0
+    # 背景を消して人物だけを見せる(normalize_cutout の形)。None なら絵をそのまま
+    cutout: Mapping[str, Any] | None = None
 
     @property
     def is_rect(self) -> bool:
@@ -209,6 +211,7 @@ def layout_page(layout: PageLayout) -> PageSpec:
             hex_rgb(panel.get("border_color") or style["border_color"]),
             int(panel.get("border_width", style["border_width"])),
             int(panel.get("z", 0)),
+            panel.get("cutout"),
         ))
     return PageSpec(width, PAGE_HEIGHT, tuple(shapes), hex_rgb(style["background"]))
 
@@ -348,6 +351,9 @@ def _normalize_leaf(leaf: Any) -> LayoutTree:
     # 重なり順(0 が既定。前面へ・背面へで変える)
     if leaf.get("z"):
         node["z"] = _z(leaf["z"])
+    # 背景を消す(前面に重ねたコマで、人物だけを見せる)
+    if leaf.get("cutout"):
+        node["cutout"] = normalize_cutout(leaf["cutout"])
     # 何も決めていなければ、ふつうのコマ
     return PANEL if node == {"shape": "rect"} else node
 
@@ -673,9 +679,22 @@ def tree_layout(
     return layout
 
 
+_MAX_OUTLINE = 40
+
+
+def normalize_cutout(value: Any) -> dict[str, Any]:
+    """背景を消す設定: 縁取り(outline)の有無・色・太さ(ピクセル)。True だけなら縁取りなし。"""
+    options = value if isinstance(value, Mapping) else {}
+    return {
+        "outline": bool(options.get("outline", False)),
+        "outline_color": _color(options.get("outline_color") or "#ffffff"),
+        "outline_width": min(max(int(round(float(options.get("outline_width", 8)))), 1), _MAX_OUTLINE),
+    }
+
+
 def _panel_entry(outline: Polygon, border: bool, props: Mapping[str, Any]) -> dict[str, Any]:
     panel: dict[str, Any] = {"points": [[round(x / PAGE_WIDTH, 4), round(y / PAGE_HEIGHT, 4)] for x, y in outline], "border": border}
-    for key in ("border_color", "border_width", "z"):
+    for key in ("border_color", "border_width", "z", "cutout"):
         if props.get(key):
             panel[key] = props[key]
     return panel

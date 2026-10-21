@@ -1,7 +1,7 @@
 import { PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MangaV2Scene } from './MangaV2Studio'
 import {
-  Box, DEFAULT_GAPS, DEFAULT_STYLE, DividerLine, FloatPanel, Gaps, Leaf, MAX_TILT, MIN_SHARE, PAGE_H, PAGE_W, PageStyle, Point,
+  Box, DEFAULT_CUTOUT, DEFAULT_GAPS, DEFAULT_STYLE, DividerLine, FloatPanel, Gaps, Leaf, MAX_TILT, MIN_SHARE, PAGE_H, PAGE_W, PageStyle, Point,
   ShapeKind, Split, Tree, TrianglePoint,
   count, floatOutline, isSplit, layoutGeometry, nodeAt, setAt, simplify, tidyLeaf,
 } from './layoutTree'
@@ -41,6 +41,92 @@ interface Props {
   busy: boolean
   /** 保存したあと(コマの絵の一覧を読み直すなど) */
   onSaved?: () => void
+  /** 出力フォルダのファイルを画面で見せる URL(切り抜きの確認) */
+  fileUrl?: (path: string) => string
+}
+
+/** シーンのコマの絵の切り抜きの状態(/api/manga-v2/scenes/{id}/cutout) */
+interface CutoutStatus { methods: string[]; preview_path: string | null; width: number; height: number }
+
+async function detail(res: Response): Promise<string> {
+  return (await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`
+}
+
+/**
+ * そのコマに入るシーンの絵の、背景を消した結果の確認と、NovelAI での作り直し(Anlas を使う)。
+ * 合成ではこの PC で切り抜く(無ければ作る)。NovelAI で作ったものがあれば、そちらを使う。
+ */
+function CutoutTools({ apiOrigin, sceneId, fileUrl, disabled }: { apiOrigin: string; sceneId: number; fileUrl?: (p: string) => string; disabled: boolean }) {
+  const [status, setStatus] = useState<CutoutStatus | null>(null)
+  const [missing, setMissing] = useState(false)
+  const [working, setWorking] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/cutout`)
+    if (res.status === 404) { setMissing(true); setStatus(null); return }
+    if (!res.ok) throw new Error(await detail(res))
+    setMissing(false)
+    setStatus(await res.json())
+  }, [apiOrigin, sceneId])
+
+  useEffect(() => { refresh().catch(e => setMessage(e instanceof Error ? e.message : String(e))) }, [refresh])
+
+  async function run(work: () => Promise<void>) {
+    setWorking(true)
+    setMessage(null)
+    try {
+      await work()
+      await refresh()
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const local = () => run(async () => {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/cutout`, { method: 'POST' })
+    if (!res.ok) throw new Error(await detail(res))
+  })
+
+  const novelai = () => run(async () => {
+    if (!status) return
+    const est = await fetch(`${apiOrigin}/api/image/tools/anlas?tool=bg-removal&width=${status.width}&height=${status.height}`)
+    const anlas = est.ok ? (await est.json()).total_anlas : null
+    if (!window.confirm(`NovelAI で背景を消します(${anlas !== null ? `約 ${anlas} Anlas` : 'Anlas を使います'}。Opus でも無料になりません)。続けますか？`)) return
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/cutout/novelai`, { method: 'POST' })
+    if (!res.ok) throw new Error(await detail(res))
+    setMessage('NovelAI で背景を消しました。次の合成から使います。')
+  })
+
+  const dropNovelai = () => run(async () => {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/cutout`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(await detail(res))
+  })
+
+  if (missing) return <p className="story-muted">このコマに入るシーンには、まだ絵がありません(絵を描いてから確認できます)。</p>
+  const off = disabled || working
+  return (
+    <div className="ple-cutout">
+      <div className="ple-row">
+        <button type="button" disabled={off || !status} onClick={() => void local()}>
+          {working ? '処理中…' : '切り抜きを確認(この PC・無料)'}
+        </button>
+        <button type="button" disabled={off || !status} onClick={() => void novelai()}>NovelAI で背景を消す(Anlas)</button>
+        {status?.methods.includes('novelai') && (
+          <button type="button" disabled={off} onClick={() => void dropNovelai()}>NovelAI の切り抜きをやめる</button>
+        )}
+      </div>
+      <p className="story-muted">
+        合成で使う切り抜き: {status?.methods.includes('novelai') ? 'NovelAI で作ったもの' : 'この PC で作るもの(合成のときに作ります)'}
+      </p>
+      {status?.preview_path && fileUrl && (
+        <img className="ple-cutout-preview" src={`${fileUrl(status.preview_path)}&t=${status.methods.join('-')}`} alt="背景を消した絵" />
+      )}
+      {message && <p className="story-muted" role="status">{message}</p>}
+    </div>
+  )
 }
 
 const MAX_PANELS = 12
@@ -141,7 +227,7 @@ type Drag =
   | { kind: 'move'; index: number; start: Point; rect: Box }
   | { kind: 'resize'; index: number; rect: Box }
 
-export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes, busy, onSaved }: Props) {
+export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes, busy, onSaved, fileUrl }: Props) {
   const [view, setView] = useState<View | null>(null)
   const [pages, setPages] = useState<DraftPage[]>([])
   const [selected, setSelected] = useState(0)
@@ -653,6 +739,39 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
                     )}
                   </div>
                 )}
+                <div className="ple-row">
+                  <label className="ple-check">
+                    <input type="checkbox" checked={!!target.leaf.cutout} disabled={off}
+                      onChange={e => editLeaf({ cutout: e.target.checked ? DEFAULT_CUTOUT : undefined })} />
+                    背景を消す(人物だけを見せる)
+                  </label>
+                  {target.leaf.cutout && (
+                    <>
+                      <label className="ple-check">
+                        <input type="checkbox" checked={target.leaf.cutout.outline} disabled={off}
+                          onChange={e => editLeaf({ cutout: { ...target.leaf.cutout!, outline: e.target.checked } })} />
+                        縁取り
+                      </label>
+                      {target.leaf.cutout.outline && (
+                        <>
+                          <input type="color" aria-label="縁取りの色" value={target.leaf.cutout.outline_color} disabled={off}
+                            onChange={e => editLeaf({ cutout: { ...target.leaf.cutout!, outline_color: e.target.value } })} />
+                          <label className="ple-range">
+                            <input type="range" min={1} max={40} step={1} aria-label="縁取りの太さ" value={target.leaf.cutout.outline_width} disabled={off}
+                              onChange={e => editLeaf({ cutout: { ...target.leaf.cutout!, outline_width: Number(e.target.value) } })} />
+                            {target.leaf.cutout.outline_width}px
+                          </label>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+                {target.leaf.cutout && (() => {
+                  const scene = assigned.pages[selected]?.[readingOf(target)]
+                  return scene
+                    ? <CutoutTools key={scene.id} apiOrigin={apiOrigin} sceneId={scene.id} fileUrl={fileUrl} disabled={off} />
+                    : <p className="story-muted">このコマに入るシーンがありません。</p>
+                })()}
                 {target.leaf.shape === 'polygon' && (
                   <div className="ple-row">
                     <button type="button" disabled={off || drawMode} onClick={addVertex}>頂点を足す</button>

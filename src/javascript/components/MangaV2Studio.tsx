@@ -605,7 +605,7 @@ export default function MangaV2Studio({
       <details className="story-characters-block">
         <summary>ページのコマ割り(確認・変更)</summary>
         <PageLayoutEditor apiOrigin={apiOrigin} storyId={storyId} template={template} scenes={scenes} busy={busy}
-          onSaved={() => loadPanels()} />
+          onSaved={() => loadPanels()} fileUrl={fileUrl} />
       </details>
 
       <details className="story-characters-block" open={useReference}>

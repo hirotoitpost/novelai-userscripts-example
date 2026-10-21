@@ -835,6 +835,90 @@ async def suggest_sfx(story_id: int, req: MangaV2SuggestSfxRequest) -> dict[str,
     return _job_response(_start_job(story_id, "sfx", runner))
 
 
+def _scene_panel_image(scene_id: int) -> Path:
+    """シーンのコマの絵のファイル。まだ無ければ 404。"""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT image_path FROM manga_panels WHERE scene_id = ?", (scene_id,)).fetchone()
+    finally:
+        conn.close()
+    path = _PROJECT_ROOT / row["image_path"] if row else None
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="このシーンにはまだコマの絵がありません。")
+    return path
+
+
+def _cutout_preview(image_path: Path, mask: Image.Image) -> str:
+    """背景を消した絵(透明な PNG)を残し、その場所(画面で見せる)を返す。"""
+    with Image.open(image_path) as source:
+        picture = source.convert("RGBA")
+    picture.putalpha(mask.resize(picture.size, Image.Resampling.LANCZOS))
+    preview = image_path.with_name(f"{image_path.stem}.cutout-preview.png")
+    picture.save(preview)
+    return preview.relative_to(_PROJECT_ROOT).as_posix()
+
+
+@router.post("/scenes/{scene_id}/cutout")
+async def make_cutout(scene_id: int) -> dict[str, Any]:
+    """シーンのコマの絵の背景を消す形(マスク)を、この PC で作る(無料)。合成のときにも無ければ作る。"""
+    from ..manga_v2 import cutout
+
+    image_path = _scene_panel_image(scene_id)
+    mask = await asyncio.to_thread(cutout.local_mask, image_path)
+    return {"method": "local", "preview_path": await asyncio.to_thread(_cutout_preview, image_path, mask)}
+
+
+@router.post("/scenes/{scene_id}/cutout/novelai")
+async def make_novelai_cutout(scene_id: int, client: ClientDep) -> dict[str, Any]:
+    """
+    NovelAI の背景の削除(ディレクターツール)で背景を消す形を作る。Anlas を使い、Opus でも無料にならない。
+    合成では、これがあれば この PC で作ったものより優先する。
+    """
+    from ..manga_v2 import cutout
+
+    image_path = _scene_panel_image(scene_id)
+    try:
+        images = await client.tools.remove_background(image_path.read_bytes())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"NovelAI で背景を消せませんでした: {exc}")
+    with Image.open(image_path) as source:
+        size = source.size
+    try:
+        mask = cutout.mask_from_novelai(images, size)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    cutout.save_mask(image_path, "novelai", mask)
+    return {"method": "novelai", "preview_path": await asyncio.to_thread(_cutout_preview, image_path, mask)}
+
+
+@router.get("/scenes/{scene_id}/cutout")
+async def get_cutout(scene_id: int) -> dict[str, Any]:
+    """そのシーンのコマの絵に、どの方法の切り抜きがあるか(NovelAI のものがあれば合成ではそちらを使う)。"""
+    from ..manga_v2 import cutout
+
+    image_path = _scene_panel_image(scene_id)
+    made = [m for m in cutout.METHODS if cutout.mask_path(image_path, m).is_file()]
+    preview = image_path.with_name(f"{image_path.stem}.cutout-preview.png")
+    with Image.open(image_path) as source:
+        width, height = source.size
+    return {
+        "methods": made,
+        "preview_path": preview.relative_to(_PROJECT_ROOT).as_posix() if preview.is_file() else None,
+        "width": width,
+        "height": height,
+    }
+
+
+@router.delete("/scenes/{scene_id}/cutout", status_code=204)
+async def delete_novelai_cutout(scene_id: int) -> None:
+    """NovelAI で作った切り抜きをやめる(この PC で作る切り抜きに戻す)。"""
+    from ..manga_v2 import cutout
+
+    image_path = _scene_panel_image(scene_id)
+    cutout.mask_path(image_path, "novelai").unlink(missing_ok=True)
+    image_path.with_name(f"{image_path.stem}.cutout-preview.png").unlink(missing_ok=True)
+
+
 @router.put("/scenes/{scene_id}/narration", status_code=204)
 async def put_scene_narration(scene_id: int, req: MangaV2SceneNarrationRequest) -> None:
     conn = get_connection()
