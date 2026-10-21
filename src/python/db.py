@@ -828,6 +828,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_stories(conn)
     _migrate_manga_pages(conn)
     _migrate_story_scenes(conn)
+    _migrate_manga_panels(conn)
     _migrate_scene_characters(conn)
     _migrate_characters(conn)
     _migrate_stamp_sources(conn)
@@ -862,11 +863,26 @@ _STORIES_EXTRA_COLUMNS = {
     "recap": "TEXT",
     # 物語エディタのメモリ(世界観・登場人物)。登場人物の抽出で容姿の手がかりに使う。
     "memory": "TEXT",
+    # ページの区切りをシーンごとに決めた(編集画面で個別に区切った)か。1 なら漫画v2の合成も
+    # story_scenes.page_index のページごとに分ける。0 なら panels_per_page / テンプレートのコマ数で割り付ける
+    "custom_pages": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
 # 生成に使ったシード。良いページが出たときに引き直しの当たりを再現できるようにする。
 _MANGA_PAGES_EXTRA_COLUMNS = {"seed": "INTEGER"}
+
+# stale: 絵を描いたあとでシーンのタグ・登場人物を編集した(描き直し待ち)。絵は使えるが、コマの生成で
+# 「生成済みを飛ばす」ときも描き直しの対象にする。描き直すと 0 に戻る
+_MANGA_PANELS_EXTRA_COLUMNS = {"stale": "INTEGER NOT NULL DEFAULT 0"}
+
+
+def _migrate_manga_panels(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(manga_panels)")}
+    for column, column_type in _MANGA_PANELS_EXTRA_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE manga_panels ADD COLUMN {column} {column_type}")
+    conn.commit()
 
 
 def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
@@ -880,7 +896,9 @@ def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
 # 漫画v2で描き文字にする効果音(JSONの文字列配列)。NULL は未設定(AI提案の対象)、
 # 空配列は「このシーンには効果音を付けない」と決めた状態。
 # narration は漫画v2のナレーション枠の文。NULL は未設定、空文字は「ナレーションなし」。
-_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT", "narration": "TEXT"}
+# dialogue は編集画面で1行ずつ決めたセリフ(JSON [{"text": str, "speaker_id": int | null}])。NULL なら
+# 本文の「」から取り出し、話し手も推定する(従来どおり)。
+_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT", "narration": "TEXT", "dialogue": "TEXT"}
 
 
 def _migrate_story_scenes(conn: sqlite3.Connection) -> None:
@@ -1898,6 +1916,7 @@ def list_story_scenes(conn: sqlite3.Connection, story_id: int) -> list[dict[str,
         {
             **dict(row),
             "sfx": json.loads(row["sfx"]) if row["sfx"] is not None else None,
+            "dialogue": json.loads(row["dialogue"]) if row["dialogue"] is not None else None,
             "characters": by_scene.get(row["id"], []),
         }
         for row in rows
@@ -2264,7 +2283,8 @@ def update_story_layout(conn: sqlite3.Connection, story_id: int, panels_per_page
     残りのコマは内容なしで埋められ、同じ構図の反復になった。8シーン渡すと
     大小のコマが混ざった漫画らしいレイアウトになったため、後から調整できるようにする。
     """
-    conn.execute("UPDATE stories SET panels_per_page = ? WHERE id = ?", (panels_per_page, story_id))
+    # コマ数で割り付け直すので、個別に決めたページの区切りはやめる
+    conn.execute("UPDATE stories SET panels_per_page = ?, custom_pages = 0 WHERE id = ?", (panels_per_page, story_id))
     conn.execute(
         "UPDATE story_scenes SET page_index = scene_index / ? WHERE story_id = ?",
         (panels_per_page, story_id),
@@ -2343,7 +2363,7 @@ def upsert_manga_panel(
         INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (scene_id) DO UPDATE SET image_path = excluded.image_path, seed = excluded.seed,
-            width = excluded.width, height = excluded.height, created_at = excluded.created_at
+            width = excluded.width, height = excluded.height, created_at = excluded.created_at, stale = 0
         """,
         (story_id, scene_id, image_path, seed, width, height, now),
     )

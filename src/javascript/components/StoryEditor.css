@@ -1,0 +1,145 @@
+/* 物語の編集画面。全画面に重ね、中だけをスクロールする */
+.sed-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(5, 5, 15, 0.75);
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.sed-panel {
+  width: min(1100px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  background: #0f0f22;
+  color: #e8e8ff;
+  padding: 0 1rem 2rem;
+  box-sizing: border-box;
+  font-size: 0.85rem;
+}
+
+.sed-panel input,
+.sed-panel textarea,
+.sed-panel select,
+.sed-panel button {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.sed-panel button { cursor: pointer; white-space: nowrap; }
+.sed-panel button:disabled { opacity: 0.45; cursor: not-allowed; }
+.sed-panel .sed-primary { background: #7b5cf6; border-color: #7b5cf6; color: #fff; }
+.sed-panel .sed-danger:hover:not(:disabled) { color: #ff8a9a; }
+.sed-panel textarea { width: 100%; resize: vertical; }
+
+.sed-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0f0f22;
+  border-bottom: 1px solid #2a2a50;
+  padding: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sed-header h2 { margin: 0; font-size: 1rem; }
+.sed-dirty { color: #e6c27a; font-size: 0.8rem; margin-left: 0.5rem; }
+
+.sed-header-fields,
+.sed-header-actions,
+.sed-saveas,
+.sed-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sed-header-fields label { display: inline-flex; align-items: center; gap: 0.3rem; }
+.sed-header-fields input[type='number'] { width: 4rem; }
+.sed-check input { width: auto; }
+
+.sed-note, .sed-error, .sed-hint { margin: 0; font-size: 0.75rem; }
+.sed-note { color: #9ae6b4; }
+.sed-error { color: #ff8a9a; }
+.sed-hint { color: #9a9ac0; }
+
+.sed-scenes { list-style: none; margin: 0.75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.sed-page-label { color: #b9a8ff; font-weight: 600; margin-top: 0.5rem; }
+.sed-break { display: flex; justify-content: center; }
+.sed-break button { font-size: 0.75rem; border-style: dashed; }
+
+.sed-card {
+  border: 1px solid #2a2a50;
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  background: #13132a;
+}
+
+.sed-card-head { display: flex; align-items: center; gap: 0.4rem; }
+.sed-num { font-weight: 600; white-space: nowrap; }
+.sed-title { flex: 1 1 auto; }
+.sed-card-actions { display: inline-flex; gap: 0.25rem; }
+
+.sed-card-body { display: flex; gap: 0.6rem; margin-top: 0.5rem; align-items: flex-start; }
+
+.sed-thumb {
+  position: relative;
+  flex: 0 0 120px;
+  aspect-ratio: 832 / 1216;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6a6a90;
+  overflow: hidden;
+}
+
+.sed-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+.sed-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  background: #e6c27a;
+  color: #1a1a2e;
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  font-size: 0.7rem;
+}
+
+.sed-fields { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.sed-label { display: flex; flex-direction: column; gap: 0.2rem; color: #9a9ac0; font-size: 0.75rem; flex: 1 1 12rem; }
+.sed-label small { color: #6a6a90; }
+
+.sed-cast { border-collapse: collapse; width: 100%; }
+.sed-cast td { padding: 0.1rem 0.2rem; color: #e8e8ff; white-space: nowrap; }
+.sed-cast td:nth-child(3), .sed-cast td:nth-child(4) { width: 40%; }
+.sed-cast input { width: 100%; }
+
+.sed-lines { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.sed-lines li { display: flex; gap: 0.25rem; align-items: center; }
+.sed-lines li input { flex: 1 1 auto; }
+
+.sed-text summary { cursor: pointer; color: #9a9ac0; font-size: 0.75rem; }
+
+@media (max-width: 640px) {
+  .sed-card-body { flex-direction: column; }
+  .sed-thumb { flex-basis: auto; width: 96px; }
+  .sed-cast tr { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.2rem; margin-bottom: 0.3rem; }
+  .sed-cast td { width: auto !important; white-space: normal; }
+  .sed-lines li { flex-wrap: wrap; }
+}

@@ -1134,7 +1134,12 @@ async def _run_illustrate(
             minor_guard.record(minor_guard.ALL_AGES, f"挿絵(ページ{page_index + 1})", reasons, story_id)
         panels = [
             {
-                "draft_text": s["novelai_text"] or s["draft_text"],
+                # 編集画面で決めたセリフがあれば、それを「」にして渡す(ページに描かせるのは「」の中だけ)
+                "draft_text": (
+                    "".join(f"「{line['text']}」" for line in s["dialogue"] if str(line.get("text") or "").strip())
+                    if s.get("dialogue") is not None
+                    else s["novelai_text"] or s["draft_text"]
+                ),
                 "draft_prompt_tags": minor_guard.all_ages_tags(s["draft_prompt_tags"]) if softened else s["draft_prompt_tags"],
             }
             for s in page_scenes

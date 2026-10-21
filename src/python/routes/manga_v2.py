@@ -245,8 +245,17 @@ def _scene_speakers(scene: dict[str, Any]) -> tuple[list[int | None], list[CastM
     cast = cast_members(scene.get("characters") or [])
     if not cast:
         return [], []
+    if scene.get("dialogue") is not None:
+        # 編集画面で決めたセリフは、決めた話し手を使う(シーンにいないキャラは話し手なし)
+        ids = {member.id for member in cast}
+        return [line.get("speaker_id") if line.get("speaker_id") in ids else None for line in _edited_lines(scene)], cast
     text = _scene_text(scene)
     return attribute_speakers(text, _spoken_spans(text)[0], cast), cast
+
+
+def _edited_lines(scene: dict[str, Any]) -> list[dict[str, Any]]:
+    """編集画面で決めたセリフ(空の行は除く)。"""
+    return [line for line in scene.get("dialogue") or [] if str(line.get("text") or "").strip()]
 
 
 def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -256,6 +265,9 @@ def _lettering(scene: dict[str, Any]) -> tuple[list[str], list[str]]:
     """
     spoken, sfx = _spoken_spans(_scene_text(scene))
     dialogue = [line for _, _, line in spoken]
+    if scene.get("dialogue") is not None:
+        # 編集画面で決めたセリフがあれば、本文の「」の代わりに使う(効果音は本文からも取る)
+        dialogue = [str(line["text"]).strip() for line in _edited_lines(scene)]
     for extra in scene.get("sfx") or []:
         if extra.strip() and extra.strip() not in sfx:
             sfx.append(extra.strip())
@@ -988,7 +1000,8 @@ async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: Clie
     conn = get_connection()
     try:
         scenes = list_story_scenes(conn, story_id)
-        existing = {p["scene_id"] for p in list_manga_panels(conn, story_id)}
+        # 描き直し待ち(絵のあとでタグ・登場人物を編集した)のコマは、生成済みを飛ばすときも描き直す
+        existing = {p["scene_id"] for p in list_manga_panels(conn, story_id) if not p.get("stale")}
     finally:
         conn.close()
     if not scenes:
@@ -1248,6 +1261,22 @@ def _page_layouts(story_id: int) -> list[Any]:
         conn.close()
 
 
+def _page_groups(story_id: int, contents: list[PanelContent]) -> list[int] | None:
+    """
+    編集画面でページの区切りを個別に決めた物語なら、コマ(分けたコマも元のシーン)ごとのページ番号。
+    決めていなければ None(テンプレートのコマ数で割り付ける)。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    if not story or not story.get("custom_pages"):
+        return None
+    pages = {str(s["id"]): s["page_index"] for s in story["scenes"]}
+    return [pages.get(c.key, 0) for c in contents]
+
+
 def _split(contents: list[PanelContent], max_lines: int, layouts: list[Any]) -> list[PanelContent]:
     """
     セリフの多いシーンを寄りのコマに分ける。写したコマ割りを使うときは分けない(コマが増えると、
@@ -1305,7 +1334,7 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
     contents, style, _ = _compose_inputs(story_id, req)
     layouts = _page_layouts(story_id)
     split = _split(contents, req.max_lines_per_panel, layouts)
-    plans = plan_pages(req.template, len(split), layouts)
+    plans = plan_pages(req.template, len(split), layouts, _page_groups(story_id, split))
     composed = [compose_page(plan.spec, split[plan.start : plan.end], style) for plan in plans]
     pages = [page for page, _ in composed]
     tracks = _ugoira_tracks(story_id)
@@ -1521,14 +1550,16 @@ def _download_images(
     scene_numbers: dict[str, int],
     req: MangaV2DownloadRequest,
     layouts: list[Any] | None = None,
+    story_id: int | None = None,
 ) -> list[tuple[str, Image.Image]]:
     """ダウンロードの1種類分を (ファイル名, 画像) の並びで作る。ページ・コマの並びは合成と同じ。"""
     split = _split(contents, req.max_lines_per_panel, layouts or [])
+    groups = _page_groups(story_id, split) if story_id is not None else None
     if kind in ("pages", "pages_clean"):
         if kind == "pages_clean":
             # 寄りのコマもセリフありと同じ並びにするため、分けた後で文字だけを外す
             split = [replace(c, dialogue=[], sfx=[], narration="") for c in split]
-        pages = [page for page, _ in compose_pages(req.template, split, style, layouts)]
+        pages = [page for page, _ in compose_pages(req.template, split, style, layouts, groups)]
         width = max(2, len(str(len(pages))))
         return [(f"page_{i + 1:0{width}d}.png", page) for i, page in enumerate(pages)]
 
@@ -1918,7 +1949,7 @@ def download(story_id: int, req: MangaV2DownloadRequest) -> Response:
     kinds = list(dict.fromkeys(req.contents))  # 重複を除き、選んだ順を保つ
 
     if req.format == "pdf" and len(kinds) == 1:
-        images = _download_images(kinds[0], contents, style, scene_numbers, req, layouts)
+        images = _download_images(kinds[0], contents, style, scene_numbers, req, layouts, story_id)
         return Response(
             _pdf_bytes([image for _, image in images]),
             media_type="application/pdf",
@@ -1935,7 +1966,7 @@ def download(story_id: int, req: MangaV2DownloadRequest) -> Response:
                 for name, path in _clean_panel_files(contents, scene_numbers):
                     archive.write(path, f"{folder}/{name}")
                 continue
-            images = _download_images(kind, contents, style, scene_numbers, req, layouts)
+            images = _download_images(kind, contents, style, scene_numbers, req, layouts, story_id)
             if req.format == "pdf":
                 archive.writestr(f"{folder}.pdf", _pdf_bytes([image for _, image in images]))
             else:

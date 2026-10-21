@@ -11,6 +11,7 @@ import MangaImageSettings, {
 import StoryCharacters, { Character, SceneCharacter } from '../components/StoryCharacters'
 import SceneCast from '../components/SceneCast'
 import SceneDirection from '../components/SceneDirection'
+import StoryEditor from '../components/StoryEditor'
 import type { DatasetState, Situation } from '../components/DatasetScenes'
 import MangaV2Studio, { MangaV2ComposeSettings } from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
@@ -430,6 +431,9 @@ export default function Story() {
     await loadStory(id)
     void resumeJobIfRunning(id)
   }
+
+  // 編集画面(コマ割り・セリフ・タグをまとめて直し、上書き保存/別名保存する)
+  const [editing, setEditing] = useState(false)
 
   function createDraft() {
     return runTask('シーン分割ドラフトの作成(Ollama)', async signal => {
@@ -1054,6 +1058,34 @@ export default function Story() {
         {story && (
           <section className="story-section">
             <h2>シーン一覧</h2>
+            {!isUnsplitImport && story.scenes.length > 0 && (
+              <div className="story-actions">
+                <button type="button" disabled={busy} onClick={() => setEditing(true)}
+                  title="コマ割り(並べ替え・追加・削除・ページの区切り)・セリフ・タグ・登場人物をまとめて直し、上書き保存か別名保存します">
+                  編集(コマ割り・セリフ・タグ)
+                </button>
+              </div>
+            )}
+            {editing && (
+              <StoryEditor
+                apiOrigin={API_ORIGIN}
+                storyId={story.id}
+                characters={allCharacters}
+                states={datasetStates}
+                fileUrl={mangaFileUrl}
+                onClose={() => setEditing(false)}
+                onSaved={id => {
+                  loadHistory()
+                  if (id === story.id) {
+                    void loadStory(id)
+                  } else {
+                    // 別名保存した新しい物語を開く
+                    setEditing(false)
+                    void openStory(id)
+                  }
+                }}
+              />
+            )}
             {isUnsplitImport ? (
               <div className="story-raw-preview">
                 <p className="story-muted">

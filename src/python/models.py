@@ -1431,3 +1431,54 @@ class WriterDuplicateRequest(BaseModel):
 
 class WriterToStoryRequest(BaseModel):
     panels_per_page: int = Field(4, ge=1, le=12)
+
+
+# ---- 物語の編集画面(コマ割り・セリフ・タグをまとめて直し、上書き保存/別名保存する) ----
+
+
+class StoryEditLine(BaseModel):
+    """吹き出し1つのセリフ。speaker_id はシーンの登場キャラ(null は話し手なし)。（…）で囲むと心の声。"""
+
+    text: str = Field(max_length=500)
+    speaker_id: Optional[int] = None
+
+
+class StoryEditCharacter(BaseModel):
+    """シーンの登場キャラ。outfit_tags は空ならキャラシートのふだんの服装、state_id は状態(null はふだん)。"""
+
+    id: int
+    action_tags: str = ""
+    outfit_tags: str = ""
+    state_id: Optional[int] = None
+
+
+class StoryEditScene(BaseModel):
+    """1コマ(シーン)。id が null なら新しく足したシーン。"""
+
+    id: Optional[int] = None
+    title: Optional[str] = Field(None, max_length=200)
+    text: str = Field("", max_length=20000)
+    prompt_tags: str = Field("", max_length=4000)
+    narration: Optional[str] = Field(None, max_length=1000)
+    sfx: Optional[list[str]] = None
+    # null なら本文の「」から取り出す(話し手も推定する)。並びを送ると、それを吹き出しにする
+    dialogue: Optional[list[StoryEditLine]] = None
+    # custom_pages のときだけ使う。前のシーンより小さい番号は前のシーンと同じページになる
+    page_index: int = Field(0, ge=0)
+    characters: list[StoryEditCharacter] = Field(default_factory=list, max_length=12)
+
+
+class StoryEditRequest(BaseModel):
+    """編集画面の内容。scenes の並びがコマの順番になる(並べ替え・追加・削除をまとめて反映する)。"""
+
+    title: Optional[str] = Field(None, max_length=200)
+    panels_per_page: int = Field(4, ge=1, le=12)
+    # True ならシーンごとの page_index でページを区切る。False なら panels_per_page ずつ
+    custom_pages: bool = False
+    scenes: list[StoryEditScene] = Field(min_length=1, max_length=500)
+
+
+class StorySaveAsRequest(StoryEditRequest):
+    """別名保存。title が新しい物語の題名になる。"""
+
+    title: str = Field(min_length=1, max_length=200)
