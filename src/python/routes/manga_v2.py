@@ -99,7 +99,6 @@ from ..manga_v2.stamps import (
 from ..manga_v2.layout import (
     PAGE_HEIGHT,
     PAGE_WIDTH,
-    MAX_TREE_PANELS,
     PANEL_SIZES,
     TEMPLATE_TREES,
     TEMPLATES,
