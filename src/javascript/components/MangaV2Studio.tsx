@@ -6,6 +6,7 @@ import { SceneCharacter } from './StoryCharacters'
 import MangaV2PageEditor, { MangaV2Element } from './MangaV2PageEditor'
 import MangaV2SfxFonts from './MangaV2SfxFonts'
 import MangaV2Stamps from './MangaV2Stamps'
+import PageLayoutEditor from './PageLayoutEditor'
 
 /** 漫画v2で使うシーンの項目(Story ページの StoryScene の一部)。 */
 export interface MangaV2Scene {
@@ -157,6 +158,8 @@ export default function MangaV2Studio({
   const [sfxFont, setSfxFont] = useLocalStorage('nai_manga_v2_sfx_font', 'hg-soei-kakugothic-ub')
   const [opacity, setOpacity] = useLocalStorage('nai_manga_v2_bubble_opacity', 100)
   const [color, setColor] = useLocalStorage('nai_manga_v2_color', false)
+  // コマのプロンプトの先頭に manga style を付けるか(外すと画風がイラスト寄りになる)
+  const [mangaStyle, setMangaStyle] = useLocalStorage('nai_manga_v2_manga_style', true)
   const [maxLines, setMaxLines] = useLocalStorage('nai_manga_v2_max_lines_v2', 2)
   // 文字の大きさの全体の倍率(%)。コマの大きさ・叫び/小声による自動調整に、さらに掛ける
   const [textScale, setTextScale] = useLocalStorage('nai_manga_v2_text_scale', 100)
@@ -281,6 +284,7 @@ export default function MangaV2Studio({
             template,
             skip_existing: skipExisting,
             color,
+            manga_style: mangaStyle,
             ...referenceOptions,
             settings: imageSettings,
           },
@@ -304,6 +308,7 @@ export default function MangaV2Studio({
             template,
             skip_existing: false,
             color,
+            manga_style: mangaStyle,
             ...referenceOptions,
             settings: { ...imageSettings, seed },
           },
@@ -586,12 +591,22 @@ export default function MangaV2Studio({
             <input type="checkbox" checked={color} disabled={busy} onChange={e => setColor(e.target.checked)} />
             カラーで描く(オフならモノクロ)
           </label>
+          <label className="mv2-check" title="コマの絵のプロンプトの先頭に manga style を付けます。外すと画風がイラスト寄りになります">
+            <input type="checkbox" checked={mangaStyle} disabled={busy} onChange={e => setMangaStyle(e.target.checked)} />
+            manga style を付ける
+          </label>
         </div>
         <p className="story-muted">
           画像生成の設定(モデル・ステップ数など)は上の「挿絵の設定」を使います。幅・高さはコマの形から自動で決めます。
           セリフ「{fontLabel(font)}」/ 効果音「{fontLabel(sfxFont)}」。
         </p>
       </div>
+
+      <details className="story-characters-block">
+        <summary>ページのコマ割り(確認・変更)</summary>
+        <PageLayoutEditor apiOrigin={apiOrigin} storyId={storyId} template={template} scenes={scenes} busy={busy}
+          onSaved={() => loadPanels()} />
+      </details>
 
       <details className="story-characters-block" open={useReference}>
         <summary>キャラ参照(登場人物の見た目をコマ間で揃える)</summary>

@@ -22,10 +22,13 @@ def is_sexual(tags: str) -> bool:
     return content_guard.is_sexual(tags)
 
 
-def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None) -> str:
+def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None, manga_style: bool = True) -> str:
+    """manga_style が False なら先頭の manga style を付けない(モノクロの指定は color に従って付ける)。"""
     from ..content_guard import sanitize_scene_tags
 
-    parts = ["manga style" if color else "manga style, monochrome, greyscale, screentone"]
+    parts = [] if color else ["monochrome, greyscale, screentone"]
+    if manga_style:
+        parts.insert(0, "manga style")
     tags = sanitize_scene_tags(scene_tags.strip().strip(","), adult=False)
     if tags:
         parts.append(tags)

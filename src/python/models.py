@@ -1165,6 +1165,8 @@ class MangaV2PanelsRequest(BaseModel):
     skip_existing: bool = True
     # 漫画らしいモノクロが既定。カラーにしたい場合は True。
     color: bool = False
+    # プロンプトの先頭に manga style を付けるか(外すと画風がイラスト寄りになる)
+    manga_style: bool = True
     # 参照画像を登録したキャラが出るコマで、NovelAIのキャラ参照(Character Reference)を使う。
     # V5は未対応(実機で500)なので、そのコマはV4.5 Fullで生成する。1コマあたり+5 Anlas。
     use_character_reference: bool = False
@@ -1249,6 +1251,23 @@ class MangaV2PageLayoutsRequest(BaseModel):
     """取り込んだ作品のコマ割りを物語に写す。null ならテンプレートに戻す。"""
 
     import_id: Optional[int] = None
+
+
+class MangaV2PageLayoutItem(BaseModel):
+    """
+    1ページのコマ割り。tree は分割の木(パターン・ドラッグで直したもの。manga_v2/layout.py)、
+    layout は今の物語のページごとのコマ割りの番号(取り込んだ作品から写したものをそのまま残すとき)。どちらか1つ。
+    """
+
+    tree: Optional[Any] = None
+    layout: Optional[int] = Field(None, ge=0)
+
+
+class MangaV2PageLayoutEditRequest(BaseModel):
+    """ページごとのコマ割りを保存する。pages の後ろに続くシーンは template のコマ割りで続ける。"""
+
+    template: str = "grid4"
+    pages: list[MangaV2PageLayoutItem] = Field(min_length=1, max_length=200)
 
 
 class MangaV2CheckRequest(BaseModel):

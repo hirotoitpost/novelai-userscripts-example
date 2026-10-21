@@ -100,8 +100,14 @@ from ..manga_v2.layout import (
     PAGE_HEIGHT,
     PAGE_WIDTH,
     PANEL_SIZES,
+    TEMPLATE_TREES,
     TEMPLATES,
+    layout_patterns,
+    layout_size,
+    normalize_tree,
     panel_size_kind,
+    tree_layout,
+    tree_rects,
 )
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.panel_shapes import trace_page
@@ -126,6 +132,7 @@ from ..models import (
     MangaV2RedrawStatesRequest,
     PanelRedrawStateRequest,
     MangaV2MakeRequest,
+    MangaV2PageLayoutEditRequest,
     MangaV2PageLayoutsRequest,
     MangaV2ComposeResponse,
     MangaV2UgoiraLink,
@@ -540,6 +547,16 @@ async def put_sfx_stamp(story_id: int, req: MangaV2SfxStampRequest) -> None:
 @router.get("/templates", response_model=list[MangaV2Template])
 async def get_templates() -> list[dict[str, Any]]:
     return [{"id": t.id, "label": t.label, "panels": len(t.panels)} for t in TEMPLATES.values()]
+
+
+@router.get("/layout-patterns")
+async def get_layout_patterns(count: int) -> list[dict[str, Any]]:
+    """コマ数 count のページのコマ割りの候補(分割の木と、本文領域に対する各コマの (x0, y0, x1, y1))。"""
+    try:
+        patterns = layout_patterns(count)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return [{**p, "rects": tree_rects(p["tree"])} for p in patterns]
 
 
 @router.post("/characters/{character_id}/reference-candidates", response_model=list[MangaV2ReferenceCandidate])
@@ -1145,7 +1162,9 @@ async def _run_panels(
         sexual = is_sexual(scene_tags)
         image = await generate_image_v5(
             api_key,
-            build_panel_prompt(join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity),
+            build_panel_prompt(
+                join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity, manga_style=req.manga_style
+            ),
             join_tags(
                 build_panel_negative(settings.negative_prompt, color=req.color, sexual=sexual),
                 guard_negative,
@@ -1338,6 +1357,114 @@ async def put_page_layouts(story_id: int, req: MangaV2PageLayoutsRequest) -> dic
         "panels": sum(len(layout["panels"]) for layout in layouts),
         "spreads": sum(1 for layout in layouts if layout["spread"]),
     }
+
+
+def _page_layout_view(story: dict[str, Any], template: str, layouts: list[Any]) -> dict[str, Any]:
+    """
+    ページごとの割り付け(合成と同じ)を画面に出す形にする。シーンは先頭から順にページのコマに入る。
+    tree があるページ(パターン・テンプレート)は、画面でドラッグして大きさを直せる。
+    """
+    scenes = story["scenes"]
+    groups = [s["page_index"] for s in scenes] if story.get("custom_pages") and not layouts else None
+    pages = []
+    for plan in plan_pages(template, len(scenes), layouts, groups):
+        if plan.layout is not None:
+            source = layouts[plan.layout]
+            tree = source.get("tree") if isinstance(source, dict) else None
+            count = layout_size(source)
+        else:
+            tree = TEMPLATE_TREES.get(plan.template or "")
+            count = plan.end - plan.start
+        spec = plan.spec
+        pages.append({
+            "source": "layout" if plan.layout is not None else "template",
+            "layout": plan.layout,
+            "count": count,
+            "scene_ids": [s["id"] for s in scenes[plan.start : plan.end]],
+            "tree": tree,
+            "spread": spec.width > PAGE_WIDTH,
+            # 各コマの輪郭(ページの幅・高さに対する割合)。斜めの枠もそのまま出す
+            "panels": [
+                [[round(x / spec.width, 4), round(y / spec.height, 4)] for x, y in shape.points] for shape in spec.panels
+            ],
+        })
+    return {"explicit": bool(layouts), "template": template, "scenes": len(scenes), "pages": pages}
+
+
+@router.get("/{story_id}/page-layout")
+async def get_page_layout(story_id: int, template: str = "grid4") -> dict[str, Any]:
+    """
+    ページごとのコマ割りの確認用。ページごとのコマ割りを決めていなければ、テンプレート(個別に決めたページの区切りが
+    あればそれ)で割り付けた結果を返す。
+    """
+    _require_template(template)
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        layouts = get_manga_v2_page_layouts(conn, story_id)
+    finally:
+        conn.close()
+    return _page_layout_view(story, template, layouts)
+
+
+def _save_page_layouts(story_id: int, template: str, layouts: list[Any] | None) -> int:
+    """
+    ページごとのコマ割りを保存し(None でテンプレートに戻す)、生成サイズ(縦長・横長・正方形)が変わるコマを
+    描き直し待ちにする。描き直し待ちにしたコマの数を返す。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        before = panel_size_kinds(story, template, get_manga_v2_page_layouts(conn, story_id))
+        set_manga_v2_page_layouts(conn, story_id, layouts)
+        after = panel_size_kinds(story, template, layouts or [])
+        sized = {s["id"] for s in story["scenes"] if s.get("panel_size")}
+        resized = [scene_id for scene_id, kind in after.items() if scene_id not in sized and before.get(scene_id) != kind]
+        stale = 0
+        for scene_id in resized:
+            stale += conn.execute("UPDATE manga_panels SET stale = 1 WHERE scene_id = ?", (scene_id,)).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return stale
+
+
+@router.put("/{story_id}/page-layout")
+async def put_page_layout(story_id: int, req: MangaV2PageLayoutEditRequest) -> dict[str, Any]:
+    """
+    ページごとのコマ割りを保存する(パターンを選んだ・ドラッグで大きさを直した・コマ数を変えた)。シーンは先頭から順に
+    ページのコマに入り、pages の後ろに続くシーンはテンプレートで続ける。写したコマ割りは layout の番号で残せる。
+    """
+    _require_template(req.template)
+    conn = get_connection()
+    try:
+        current = get_manga_v2_page_layouts(conn, story_id)
+    finally:
+        conn.close()
+    layouts: list[Any] = []
+    for index, page in enumerate(req.pages, start=1):
+        if page.tree is not None:
+            try:
+                layouts.append(tree_layout(normalize_tree(page.tree)))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"{index}ページ目: {exc}")
+        elif page.layout is not None and page.layout < len(current):
+            layouts.append(current[page.layout])
+        else:
+            raise HTTPException(status_code=422, detail=f"{index}ページ目のコマ割りがありません。")
+    stale = _save_page_layouts(story_id, req.template, layouts)
+    return {"pages": len(layouts), "stale_panels": stale}
+
+
+@router.delete("/{story_id}/page-layout")
+async def reset_page_layout(story_id: int, template: str = "grid4") -> dict[str, Any]:
+    """ページごとのコマ割りをやめて、テンプレート(とページの区切り)の割り付けに戻す。"""
+    _require_template(template)
+    return {"stale_panels": _save_page_layouts(story_id, template, None)}
 
 
 # 画像処理で数秒かかるので、同期関数にしてスレッドプールで実行させる(イベントループを塞がない)
@@ -1761,7 +1888,7 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
                     tags = minor_guard.all_ages_tags(tags)
                 seed = ((panel.get("seed") or story_id * 1000 + scene["scene_index"]) + 101) % 4294967296
                 params = GenerateImageParams(
-                    prompt=build_panel_prompt(tags, color=req.color, complexity=settings.complexity),
+                    prompt=build_panel_prompt(tags, color=req.color, complexity=settings.complexity, manga_style=req.manga_style),
                     negative_prompt=join_tags(
                         build_panel_negative(settings.negative_prompt, color=req.color),
                         minor_guard.all_ages_negative() if softened else "",

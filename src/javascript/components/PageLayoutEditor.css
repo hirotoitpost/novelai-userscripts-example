@@ -1,0 +1,39 @@
+/* 漫画v2のページごとのコマ割り */
+.ple { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.ple-svg { display: block; touch-action: none; }
+.ple-paper { fill: #fff; }
+.ple-panel { fill: #f2f2f7; stroke: #1a1a2e; stroke-width: 1.5; }
+.ple-panel--empty { fill: #e3e3ea; stroke-dasharray: 4 3; }
+.ple-label { fill: #4a4a6a; text-anchor: middle; dominant-baseline: middle; font-weight: 600; pointer-events: none; }
+.ple-divider { fill: transparent; }
+.ple-divider:hover, .ple-divider--active { fill: rgba(123, 92, 246, 0.35); }
+
+.ple-strip { display: flex; gap: 0.4rem; overflow-x: auto; padding-bottom: 0.25rem; }
+
+.ple .ple-thumb,
+.ple .ple-pattern {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  background: #14142a;
+  border: 2px solid #2a2a50;
+  border-radius: 6px;
+  padding: 0.25rem;
+  color: #c8c8e8;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.ple .ple-thumb--on { border-color: #7b5cf6; }
+.ple .ple-pattern span { max-width: 6.5rem; text-align: center; line-height: 1.2; }
+
+.ple-edit { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-start; }
+.ple-large { flex: 0 0 auto; }
+.ple-side { flex: 1 1 16rem; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.ple-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.ple-row label { display: inline-flex; align-items: center; gap: 0.3rem; }
+.ple-patterns { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.ple-note { color: #9ae6b4; margin: 0; font-size: 0.8rem; }
+.ple-error { color: #ff8a9a; margin: 0; font-size: 0.8rem; }
