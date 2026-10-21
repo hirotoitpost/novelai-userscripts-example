@@ -210,3 +210,25 @@ def test_leaf_shapes_stay_inside_their_cell() -> None:
             normalize_tree(bad)
     # 何も決めていない葉は、ふつうのコマ
     assert normalize_tree({"shape": "rect"}) == PANEL and normalize_tree({"shape": "rect", "border": False}) == {"shape": "rect", "border": False}
+
+
+def test_zero_gutter_and_margin_make_panels_touch(client: TestClient) -> None:
+    from python.manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, normalize_gaps, tree_outlines
+
+    tree = TEMPLATE_TREES["grid4"]
+    rects = [outline for outline, _ in tree_outlines(tree, {"gutter_x": 0, "gutter_y": 0, "margin": 0})]
+    xs = sorted({round(x) for outline in rects for x, _ in outline})
+    ys = sorted({round(y) for outline in rects for _, y in outline})
+    # 間隔0・余白0: コマどうしが同じ線で接し、ページの端まで届く
+    assert xs == [0, PAGE_WIDTH // 2, PAGE_WIDTH] and ys == [0, PAGE_HEIGHT // 2, PAGE_HEIGHT]
+    # 範囲外は収める・無い項目は既定
+    assert normalize_gaps({"gutter_x": -5, "margin": 999}) == {"gutter_x": 0, "gutter_y": 28, "margin": 200}
+
+    s = _story(4)
+    res = client.put(f"/api/manga-v2/{s['id']}/page-layout", json={"pages": [{"tree": tree, "gaps": {"gutter_x": 0, "gutter_y": 0, "margin": 0}}]})
+    assert res.status_code == 200, res.text
+    page = client.get(f"/api/manga-v2/{s['id']}/page-layout").json()["pages"][0]
+    assert page["gaps"] == {"gutter_x": 0, "gutter_y": 0, "margin": 0}
+    assert min(x for panel in page["panels"] for x, _ in panel) == 0 and max(y for panel in page["panels"] for _, y in panel) == 1
+    # 既定のままなら、保存した形に間隔は入れない
+    assert "gaps" not in tree_layout(tree) and tree_layout(tree, {"margin": 0})["gaps"]["margin"] == 0

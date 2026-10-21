@@ -1,7 +1,14 @@
 /**
  * ページのコマ割りの分割の木(src/python/manga_v2/layout.py と同じ形)と、画面に描くための輪郭の計算。
- * 本文領域を単位正方形とした座標で、コマの間隔は描かない(サーバーの合成では間隔を空ける)。
+ * サーバーと同じく、ページ(1200×1700)の上で余白とコマの間隔を空けて計算し、ページに対する割合で返す。
  */
+
+export const PAGE_W = 1200
+export const PAGE_H = 1700
+
+/** コマの間隔(横・縦)とページの余白(ピクセル)。0 でコマどうしが接する・裁ち落とし */
+export interface Gaps { gutter_x: number; gutter_y: number; margin: number }
+export const DEFAULT_GAPS: Gaps = { gutter_x: 16, gutter_y: 28, margin: 50 }
 
 export type Point = [number, number]
 export type Box = [number, number, number, number]
@@ -137,10 +144,16 @@ export interface PanelOutline {
 
 export interface DividerLine { path: number[]; index: number; dir: 'rows' | 'cols'; box: Box; ends: [Point, Point] }
 
-/** 木のコマの輪郭と、ドラッグできる境目 */
-export function layoutGeometry(tree: Tree): { panels: PanelOutline[]; dividers: DividerLine[] } {
+/**
+ * 木のコマの輪郭と、ドラッグできる境目(どれもページに対する割合)。境目の直線の両側に、コマの間隔の半分ずつを空ける。
+ */
+export function layoutGeometry(tree: Tree, gaps: Gaps = DEFAULT_GAPS): { panels: PanelOutline[]; dividers: DividerLine[] } {
   const panels: PanelOutline[] = []
   const dividers: DividerLine[] = []
+  const halfX = Math.floor(gaps.gutter_x / 2)
+  const halfY = Math.floor(gaps.gutter_y / 2)
+  const norm = (p: Point): Point => [p[0] / PAGE_W, p[1] / PAGE_H]
+  const normBox = (b: Box): Box => [b[0] / PAGE_W, b[1] / PAGE_H, b[2] / PAGE_W, b[3] / PAGE_H]
   const walk = (node: Tree, region: Polygon, box: Box, path: number[]) => {
     if (!isSplit(node)) {
       const leaf = leafOf(node)
@@ -155,7 +168,7 @@ export function layoutGeometry(tree: Tree): { panels: PanelOutline[]; dividers: 
         })
         if (outline.length < 3) outline = region
       }
-      panels.push({ index: panels.length, path, leaf, region, box: cell, outline })
+      panels.push({ index: panels.length, path, leaf, region: region.map(norm), box: normBox(cell), outline: outline.map(norm) })
       return
     }
     const n = node.items.length
@@ -164,14 +177,19 @@ export function layoutGeometry(tree: Tree): { panels: PanelOutline[]; dividers: 
     node.items.forEach((item, i) => {
       const end = i === n - 1 ? 1 : start + node.sizes[i]
       let piece = region
+      // 境目の直線を、間隔の半分だけ子の側へずらして切る(rows は下・上、cols は左・右へ)
+      const shift = (line: [Point, Point], toward: 1 | -1): [Point, Point] => node.dir === 'rows'
+        ? [[line[0][0], line[0][1] + toward * halfY], [line[1][0], line[1][1] + toward * halfY]]
+        : [[line[0][0] - toward * halfX, line[0][1]], [line[1][0] - toward * halfX, line[1][1]]]
       if (i > 0) {
-        const [a, b] = dividerLine(node, box, start, tilts[i - 1])
+        const [a, b] = shift(dividerLine(node, box, start, tilts[i - 1]), 1)
         piece = clip(piece, a, b, false)
       }
       if (i < n - 1) {
-        const [a, b] = dividerLine(node, box, end, tilts[i])
+        const line = dividerLine(node, box, end, tilts[i])
+        const [a, b] = shift(line, -1)
         piece = clip(piece, a, b, true)
-        dividers.push({ path, index: i, dir: node.dir, box, ends: [a, b] })
+        dividers.push({ path, index: i, dir: node.dir, box: normBox(box), ends: [norm(line[0]), norm(line[1])] })
       }
       const [x0, y0, x1, y1] = box
       const child: Box = node.dir === 'rows'
@@ -181,7 +199,8 @@ export function layoutGeometry(tree: Tree): { panels: PanelOutline[]; dividers: 
       start = end
     })
   }
-  walk(tree, [[0, 0], [1, 0], [1, 1], [0, 1]], [0, 0, 1, 1], [])
+  const m = gaps.margin
+  walk(tree, [[m, m], [PAGE_W - m, m], [PAGE_W - m, PAGE_H - m], [m, PAGE_H - m]], [m, m, PAGE_W - m, PAGE_H - m], [])
   return { panels, dividers }
 }
 

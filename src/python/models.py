@@ -1261,6 +1261,8 @@ class MangaV2PageLayoutItem(BaseModel):
 
     tree: Optional[Any] = None
     layout: Optional[int] = Field(None, ge=0)
+    # tree のページのコマの間隔(gutter_x / gutter_y)と余白(margin)のピクセル。0 でコマどうしが接する・裁ち落とし
+    gaps: Optional[dict[str, float]] = None
 
 
 class MangaV2PageLayoutEditRequest(BaseModel):

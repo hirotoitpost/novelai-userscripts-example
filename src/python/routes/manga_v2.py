@@ -99,11 +99,13 @@ from ..manga_v2.stamps import (
 from ..manga_v2.layout import (
     PAGE_HEIGHT,
     PAGE_WIDTH,
+    DEFAULT_GAPS,
     PANEL_SIZES,
     TEMPLATE_TREES,
     TEMPLATES,
     layout_patterns,
     layout_size,
+    normalize_gaps,
     normalize_tree,
     panel_size_kind,
     tree_layout,
@@ -1368,9 +1370,12 @@ def _page_layout_view(story: dict[str, Any], template: str, layouts: list[Any]) 
     groups = [s["page_index"] for s in scenes] if story.get("custom_pages") and not layouts else None
     pages = []
     for plan in plan_pages(template, len(scenes), layouts, groups):
+        gaps = dict(DEFAULT_GAPS)
         if plan.layout is not None:
             source = layouts[plan.layout]
             tree = source.get("tree") if isinstance(source, dict) else None
+            if tree is not None:
+                gaps = normalize_gaps(source.get("gaps"))
             count = layout_size(source)
         else:
             tree = TEMPLATE_TREES.get(plan.template or "")
@@ -1382,6 +1387,7 @@ def _page_layout_view(story: dict[str, Any], template: str, layouts: list[Any]) 
             "count": count,
             "scene_ids": [s["id"] for s in scenes[plan.start : plan.end]],
             "tree": tree,
+            "gaps": gaps,
             "spread": spec.width > PAGE_WIDTH,
             # 各コマの輪郭(ページの幅・高さに対する割合)。斜めの枠もそのまま出す
             "panels": [
@@ -1449,7 +1455,7 @@ async def put_page_layout(story_id: int, req: MangaV2PageLayoutEditRequest) -> d
     for index, page in enumerate(req.pages, start=1):
         if page.tree is not None:
             try:
-                layouts.append(tree_layout(normalize_tree(page.tree)))
+                layouts.append(tree_layout(normalize_tree(page.tree), page.gaps))
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=f"{index}ページ目: {exc}")
         elif page.layout is not None and page.layout < len(current):

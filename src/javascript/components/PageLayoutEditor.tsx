@@ -1,7 +1,7 @@
 import { PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MangaV2Scene } from './MangaV2Studio'
 import {
-  Box, DividerLine, Leaf, MAX_TILT, MIN_SHARE, Point, ShapeKind, Split, Tree, TrianglePoint,
+  Box, DEFAULT_GAPS, DividerLine, Gaps, Leaf, MAX_TILT, MIN_SHARE, PAGE_H, PAGE_W, Point, ShapeKind, Split, Tree, TrianglePoint,
   count, isSplit, layoutGeometry, leafOf, nodeAt, setAt, simplify, tidyLeaf,
 } from './layoutTree'
 import './PageLayoutEditor.css'
@@ -18,6 +18,7 @@ interface ViewPage {
   count: number
   scene_ids: number[]
   tree: Tree | null
+  gaps: Gaps
   spread: boolean
   panels: Point[][]
 }
@@ -27,7 +28,7 @@ interface View { explicit: boolean; template: string; scenes: number; pages: Vie
 interface Pattern { id: string; label: string; tree: Tree }
 
 /** 画面で直している1ページ。tree が無いのは取り込んだ作品から写したページ(斜めの枠など。形はそのまま) */
-interface DraftPage { tree: Tree | null; layout: number | null; panels: Point[][] }
+interface DraftPage { tree: Tree | null; layout: number | null; panels: Point[][]; gaps: Gaps }
 
 interface Props {
   apiOrigin: string
@@ -40,8 +41,7 @@ interface Props {
 }
 
 const MAX_PANELS = 12
-// ページ(本文領域)の縦横比。1200×1700 から余白を除いた形に近い
-const PAGE_ASPECT = 1100 / 1600
+const PAGE_ASPECT = PAGE_W / PAGE_H
 
 const SHAPES: { value: ShapeKind; label: string }[] = [
   { value: 'rect', label: '四角(斜めの境目なら台形)' },
@@ -54,15 +54,17 @@ const TRIANGLE_POINTS: { value: TrianglePoint; label: string }[] = [
   { value: 'left', label: '左に尖る' }, { value: 'right', label: '右に尖る' },
 ]
 
-/** ページの輪郭(サーバーの形: ページに対する割合)を、本文領域の単位正方形に寄せる(余白 50/1200・50/1700 を除く) */
-function toContent([x, y]: Point): Point {
-  return [(x * 1200 - 50) / 1100, (y * 1700 - 50) / 1600]
+/** ページの上のコマの輪郭(ページに対する割合)。写したページはサーバーの輪郭のまま */
+function outlinesOf(page: DraftPage): Point[][] {
+  if (page.tree) return layoutGeometry(page.tree, page.gaps).panels.map(p => p.outline)
+  return page.panels
 }
 
-function outlinesOf(page: DraftPage): Point[][] {
-  if (page.tree) return layoutGeometry(page.tree).panels.map(p => p.outline)
-  return page.panels.map(points => points.map(toContent))
-}
+const GAP_FIELDS: { key: keyof Gaps; label: string; max: number }[] = [
+  { key: 'gutter_x', label: '横の間隔', max: 120 },
+  { key: 'gutter_y', label: '縦の間隔', max: 120 },
+  { key: 'margin', label: 'ページの余白', max: 200 },
+]
 
 function centroid(points: Point[]): Point {
   return [points.reduce((s, p) => s + p[0], 0) / points.length, points.reduce((s, p) => s + p[1], 0) / points.length]
@@ -115,7 +117,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
     const data: View = await res.json()
     setView(data)
-    setPages(data.pages.map(p => ({ tree: p.tree, layout: p.source === 'layout' ? p.layout : null, panels: p.panels })))
+    setPages(data.pages.map(p => ({ tree: p.tree, layout: p.source === 'layout' ? p.layout : null, panels: p.panels, gaps: p.gaps ?? DEFAULT_GAPS })))
     setSelected(s => Math.min(s, Math.max(0, data.pages.length - 1)))
     setSelection(null)
     setDirty(false)
@@ -148,7 +150,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
 
   const current = pages[selected]
   const currentCount = current ? (current.tree ? count(current.tree) : current.panels.length) : 0
-  const geometry = useMemo(() => (current?.tree ? layoutGeometry(current.tree) : null), [current])
+  const geometry = useMemo(() => (current?.tree ? layoutGeometry(current.tree, current.gaps) : null), [current])
 
   useEffect(() => {
     if (currentCount > 0) loadPatterns(currentCount).catch(() => {})
@@ -169,7 +171,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   async function changeCount(n: number) {
     try {
       const list = await loadPatterns(n)
-      if (list[0]) { editPage(selected, { tree: list[0].tree, layout: null, panels: [] }); setSelection(null) }
+      if (list[0]) { editPage(selected, { tree: list[0].tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS }); setSelection(null) }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -177,7 +179,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
 
   function addPage() {
     const tree: Tree = { dir: 'rows', sizes: [0.5, 0.5], items: [{ dir: 'cols', sizes: [0.5, 0.5], items: ['panel', 'panel'] }, { dir: 'cols', sizes: [0.5, 0.5], items: ['panel', 'panel'] }] }
-    setPages(prev => [...prev.slice(0, selected + 1), { tree, layout: null, panels: [] }, ...prev.slice(selected + 1)])
+    setPages(prev => [...prev.slice(0, selected + 1), { tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS }, ...prev.slice(selected + 1)])
     setSelected(selected + 1)
     setDirty(true)
   }
@@ -331,7 +333,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
       const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/page-layout`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template, pages: pages.map(p => (p.tree ? { tree: p.tree } : { layout: p.layout })) }),
+        body: JSON.stringify({ template, pages: pages.map(p => (p.tree ? { tree: p.tree, gaps: p.gaps } : { layout: p.layout })) }),
       })
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
       const result = await res.json()
@@ -460,6 +462,30 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
               <p className="story-muted">取り込んだ作品から写したページです(形はそのまま)。パターンを選ぶと置き換わり、形も直せます。</p>
             )}
 
+            {current.tree && (
+              <div className="ple-box">
+                <strong>コマの間隔・ページの余白</strong>
+                {GAP_FIELDS.map(f => (
+                  <label key={f.key} className="ple-range">
+                    {f.label}
+                    <input type="range" min={0} max={f.max} step={1} value={current.gaps[f.key]} disabled={off}
+                      onChange={e => editPage(selected, { ...current, gaps: { ...current.gaps, [f.key]: Number(e.target.value) } })} />
+                    {current.gaps[f.key] === 0 ? '0(接する)' : `${current.gaps[f.key]}px`}
+                  </label>
+                ))}
+                <div className="ple-row">
+                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, gaps: { gutter_x: 0, gutter_y: 0, margin: current.gaps.margin } })}>
+                    コマをぴったり接する
+                  </button>
+                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, gaps: { ...current.gaps, margin: 0 } })}>
+                    余白なし(裁ち落とし)
+                  </button>
+                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, gaps: DEFAULT_GAPS })}>既定に戻す</button>
+                </div>
+                <p className="story-muted">0 にするとコマどうしが同じ線で接します。ページの端に接する辺には枠線を描きません。</p>
+              </div>
+            )}
+
             {selection?.kind === 'divider' && (
               <div className="ple-box">
                 <strong>境目の傾き</strong>
@@ -515,8 +541,8 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
             <div className="ple-patterns">
               {(patterns[currentCount] ?? []).map(p => (
                 <button key={p.id} type="button" className="ple-pattern" disabled={off} title={p.label}
-                  onClick={() => { editPage(selected, { tree: p.tree, layout: null, panels: [] }); setSelection(null) }}>
-                  <PageSvg page={{ tree: p.tree, layout: null, panels: [] }} labels={[]} width={52} />
+                  onClick={() => { editPage(selected, { tree: p.tree, layout: null, panels: [], gaps: current.gaps }); setSelection(null) }}>
+                  <PageSvg page={{ tree: p.tree, layout: null, panels: [], gaps: current.gaps }} labels={[]} width={52} />
                   <span>{p.label}</span>
                 </button>
               ))}

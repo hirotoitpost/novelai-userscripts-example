@@ -407,7 +407,10 @@ def _bounds(polygon: Polygon) -> tuple[float, float, float, float]:
 
 
 def _tree_polygons(
-    tree: LayoutTree, region: Polygon, box: tuple[float, float, float, float]
+    tree: LayoutTree,
+    region: Polygon,
+    box: tuple[float, float, float, float],
+    gutters: tuple[int, int] = (GUTTER_X, GUTTER_Y),
 ) -> list[tuple[Polygon, LayoutTree, tuple[float, float, float, float]]]:
     """
     木のコマを、ページの上の輪郭(ピクセル)・葉・そのコマの傾きの無いときの枠の組にして読む順に並べる。box は分割の基準の枠(本文領域から
@@ -416,6 +419,7 @@ def _tree_polygons(
     """
     if is_leaf(tree):
         return [(region, tree, box)]
+    gutter_x, gutter_y = gutters
     x0, y0, x1, y1 = box
     count = len(tree["items"])
     tilts = tree.get("tilts") or [0.0] * (count - 1)
@@ -425,7 +429,7 @@ def _tree_polygons(
         end = 1.0 if index == count - 1 else start + share
         piece = region
         if tree["dir"] == "rows":
-            gap = GUTTER_Y // 2
+            gap = gutter_y // 2
             # 上の境目(下へ間隔の半分)・下の境目(上へ間隔の半分)で切る。傾きは左端が下がる向きが正
             if index > 0:
                 t = tilts[index - 1]
@@ -437,7 +441,7 @@ def _tree_polygons(
                 piece = _clip(piece, (x0, ya - gap), (x1, yb - gap), keep_left=True)
             child = (x0, y0 + (y1 - y0) * start, x1, y0 + (y1 - y0) * end)
         else:  # cols: 右から左へ。傾きは上端が左へ寄る向きが正
-            gap = GUTTER_X // 2
+            gap = gutter_x // 2
             if index > 0:
                 t = tilts[index - 1]
                 xa, xb = round(x1 - (x1 - x0) * (start + t)), round(x1 - (x1 - x0) * (start - t))
@@ -447,7 +451,7 @@ def _tree_polygons(
                 xa, xb = round(x1 - (x1 - x0) * (end + t)), round(x1 - (x1 - x0) * (end - t))
                 piece = _clip(piece, (xa + gap, y0), (xb + gap, y1), keep_left=True)
             child = (x1 - (x1 - x0) * end, y0, x1 - (x1 - x0) * start, y1)
-        result.extend(_tree_polygons(item, piece, child))
+        result.extend(_tree_polygons(item, piece, child, gutters))
         start = end
     return result
 
@@ -492,12 +496,29 @@ def _shape_outline(leaf: Mapping[str, Any], shape: str, x0: float, y0: float, x1
     return [(x0 + w * x, y0 + h * y) for x, y in leaf["points"]]
 
 
-def tree_outlines(tree: LayoutTree) -> list[tuple[Polygon, bool]]:
-    """木のコマの輪郭(ページのピクセル)と枠線の有無を、読む順に。"""
-    content = (PAGE_MARGIN, PAGE_MARGIN, PAGE_WIDTH - PAGE_MARGIN, PAGE_HEIGHT - PAGE_MARGIN)
+# ページのコマの間隔と余白(ピクセル)。0 にするとコマどうしが接する・ページの端まで(裁ち落とし)になる
+DEFAULT_GAPS: dict[str, int] = {"gutter_x": GUTTER_X, "gutter_y": GUTTER_Y, "margin": PAGE_MARGIN}
+_MAX_GUTTER = 120
+_MAX_MARGIN = 200
+
+
+def normalize_gaps(gaps: Mapping[str, Any] | None) -> dict[str, int]:
+    """間隔・余白を整数にして範囲に収める(無い項目は既定の値)。"""
+    result = dict(DEFAULT_GAPS)
+    for key, limit in (("gutter_x", _MAX_GUTTER), ("gutter_y", _MAX_GUTTER), ("margin", _MAX_MARGIN)):
+        if gaps is not None and gaps.get(key) is not None:
+            result[key] = min(max(int(round(float(gaps[key]))), 0), limit)
+    return result
+
+
+def tree_outlines(tree: LayoutTree, gaps: Mapping[str, Any] | None = None) -> list[tuple[Polygon, bool]]:
+    """木のコマの輪郭(ページのピクセル)と枠線の有無を、読む順に。gaps はコマの間隔と余白(無ければ既定)。"""
+    g = normalize_gaps(gaps)
+    margin = g["margin"]
+    content = (margin, margin, PAGE_WIDTH - margin, PAGE_HEIGHT - margin)
     region: Polygon = [(content[0], content[1]), (content[2], content[1]), (content[2], content[3]), (content[0], content[3])]
     result = []
-    for polygon, leaf, cell in _tree_polygons(tree, region, content):
+    for polygon, leaf, cell in _tree_polygons(tree, region, content, (g["gutter_x"], g["gutter_y"])):
         border = not (isinstance(leaf, Mapping) and leaf.get("border") is False)
         result.append((_tidy(_leaf_outline(leaf, polygon, cell)), border))
     return result
@@ -522,16 +543,20 @@ def _tidy(polygon: Polygon) -> Polygon:
     return points
 
 
-def tree_layout(tree: LayoutTree) -> dict[str, Any]:
+def tree_layout(tree: LayoutTree, gaps: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """
     木のコマ割りを、ページごとのコマ割り(manga_v2_page_layouts の今の形)にする。合成は panels の輪郭を使い、
-    画面で直せるように木も一緒に持つ。
+    画面で直せるように木と間隔・余白(既定と違うときだけ)も一緒に持つ。
     """
+    g = normalize_gaps(gaps)
     panels = [
         {"points": [[round(x / PAGE_WIDTH, 4), round(y / PAGE_HEIGHT, 4)] for x, y in outline], "border": border}
-        for outline, border in tree_outlines(tree)
+        for outline, border in tree_outlines(tree, g)
     ]
-    return {"spread": False, "panels": panels, "tree": tree}
+    layout: dict[str, Any] = {"spread": False, "panels": panels, "tree": tree}
+    if g != DEFAULT_GAPS:
+        layout["gaps"] = g
+    return layout
 
 
 def _rows(counts: Sequence[int], heights: Sequence[float] | None = None) -> LayoutTree:
