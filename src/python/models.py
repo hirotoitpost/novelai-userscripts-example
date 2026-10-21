@@ -1463,6 +1463,8 @@ class StoryEditScene(BaseModel):
     sfx: Optional[list[str]] = None
     # null なら本文の「」から取り出す(話し手も推定する)。並びを送ると、それを吹き出しにする
     dialogue: Optional[list[StoryEditLine]] = None
+    # コマの生成サイズ。null なら入る枠の形から自動(縦長 832×1216 / 横長 1216×832 / 正方形 1024×1024)
+    panel_size: Optional[Literal["portrait", "landscape", "square"]] = None
     # custom_pages のときだけ使う。前のシーンより小さい番号は前のシーンと同じページになる
     page_index: int = Field(0, ge=0)
     characters: list[StoryEditCharacter] = Field(default_factory=list, max_length=12)

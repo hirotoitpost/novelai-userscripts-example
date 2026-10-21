@@ -22,14 +22,13 @@ from python import db  # noqa: E402
 from python.manga_draft import episode_system  # noqa: E402
 from PIL import ImageDraw  # noqa: E402
 
-from python.manga_v2.compose import LetteringStyle, PanelContent, compose_page, compose_pages  # noqa: E402
+from python.manga_v2.compose import LetteringStyle, PanelContent, compose_page, compose_pages, slot_rects  # noqa: E402
 from python.manga_v2.layout import (  # noqa: E402
     PAGE_HEIGHT,
     PAGE_WIDTH,
     layout_page,
     layout_rects,
     normalize_boxes,
-    scene_rects,
 )
 from python.manga_v2.panel_shapes import trace_page  # noqa: E402
 from python.manga_v2.lettering import resolve_font  # noqa: E402
@@ -52,9 +51,9 @@ def test_normalize_and_scale_layout() -> None:
     assert all(0 <= x0 < x1 <= PAGE_WIDTH and 0 <= y0 < y1 <= PAGE_HEIGHT for x0, y0, x1, y1 in rects)
 
 
-def test_scene_rects_fall_back_to_template() -> None:
+def test_slot_rects_fall_back_to_template() -> None:
     layout = normalize_boxes(BOXES, *PAGE)
-    rects = scene_rects([layout], "stack2", 5)
+    rects = slot_rects("stack2", 5, [layout])
     assert rects[:3] == layout_rects(layout)
     # 写したコマ割りを使い切ったら、テンプレート(上下2コマ)で続ける
     assert rects[3][1] < rects[4][1]

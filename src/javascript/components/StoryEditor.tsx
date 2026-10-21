@@ -14,6 +14,18 @@ import './StoryEditor.css'
 
 interface Line { text: string; speaker_id: number | null }
 
+type PanelSize = 'portrait' | 'landscape' | 'square'
+
+/** コマの生成サイズ(NovelAI の通常サイズの3種類。Opusプランなら Anlas を使わない) */
+const PANEL_SIZES: { value: PanelSize; label: string }[] = [
+  { value: 'portrait', label: '縦長 832×1216' },
+  { value: 'landscape', label: '横長 1216×832' },
+  { value: 'square', label: '正方形 1024×1024' },
+]
+
+/** サイズの呼び名(縦長・横長・正方形) */
+const sizeName = (size: PanelSize) => PANEL_SIZES.find(z => z.value === size)?.label.split(' ')[0] ?? size
+
 interface CastRow { id: number; name: string; action_tags: string; outfit_tags: string; state_id: number | null }
 
 interface EditScene {
@@ -32,6 +44,10 @@ interface EditScene {
   /** この画面でセリフを触ったか(触っていなければ、本文から取り出す仕組みのまま保存する) */
   dialogue_touched: boolean
   page_index: number
+  /** コマの生成サイズ。null なら入る枠の形から自動 */
+  panel_size: PanelSize | null
+  /** 保存してある並びでの自動のサイズ(新しく足したシーンは保存するまで分からない) */
+  auto_size: PanelSize | null
   characters: CastRow[]
   panel: { image_path: string; stale: boolean } | null
 }
@@ -79,11 +95,11 @@ async function errorDetail(res: Response): Promise<string> {
 }
 
 /** 絵に効く内容(タグ・登場人物とその動作・服装・状態)。保存したときの内容と比べて「描き直し待ち」を出す */
-function imageKey(s: Pick<EditScene, 'prompt_tags' | 'characters'>): string {
+function imageKey(s: Pick<EditScene, 'prompt_tags' | 'characters' | 'panel_size'>): string {
   const cast = [...s.characters]
     .sort((a, b) => a.id - b.id)
     .map(c => [c.id, c.action_tags.trim(), c.outfit_tags.trim(), c.state_id])
-  return JSON.stringify([s.prompt_tags.trim(), cast])
+  return JSON.stringify([s.prompt_tags.trim(), cast, s.panel_size])
 }
 
 function move<T>(list: T[], from: number, to: number): T[] {
@@ -238,6 +254,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
       id: null, key: nextKey(), title: '', text: '', prompt_tags: '', narration: null, sfx: null,
       dialogue: [], dialogue_custom: false, dialogue_touched: true,
       page_index: base ? base.page_index : 0,
+      panel_size: null, auto_size: null,
       characters: base ? base.characters.map(c => ({ ...c, action_tags: '', outfit_tags: c.outfit_tags, state_id: c.state_id })) : [],
       panel: null,
     }
@@ -271,6 +288,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
         // セリフを触っていなくて、本文から取り出していたものは、そのまま本文から取り出す
         dialogue: s.dialogue_touched || s.dialogue_custom ? s.dialogue : null,
         page_index: pages[i],
+        panel_size: s.panel_size,
         characters: s.characters.map(c => ({ id: c.id, action_tags: c.action_tags, outfit_tags: c.outfit_tags, state_id: c.state_id })),
       })),
     }
@@ -366,8 +384,9 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
           {note && <p className="sed-note" role="status">{note}</p>}
           {error && <p className="sed-error" role="alert">{error}</p>}
           <p className="sed-hint">
-            直した内容は、保存するまで元の物語に反映されません。タグ・登場人物を変えたコマは「描き直し待ち」になり、
+            直した内容は、保存するまで元の物語に反映されません。タグ・登場人物・生成サイズを変えたコマは「描き直し待ち」になり、
             コマの生成で「生成済みを飛ばす」にしても描き直されます(それまでは今の絵を使います)。
+            生成サイズの「自動」は、保存してある並びでそのコマが入る枠の形から決めます(並べ替え・区切りの結果は保存後に出ます)。
           </p>
         </header>
 
@@ -477,6 +496,12 @@ function SceneCard({
         <span className="sed-num">コマ{index + 1}{scene.id === null && '(新)'}</span>
         <input className="sed-title" value={scene.title} placeholder="シーンの題(任意)" disabled={busy} aria-label={`コマ${index + 1}の題`}
           onChange={e => onChange({ title: e.target.value })} />
+        <select className="sed-size" value={scene.panel_size ?? ''} disabled={busy} aria-label={`コマ${index + 1}の生成サイズ`}
+          title="コマの絵を生成するときのサイズ。自動はそのコマが入る枠の形(縦長・横長・正方形)に一番近いもの"
+          onChange={e => onChange({ panel_size: (e.target.value || null) as PanelSize | null })}>
+          <option value="">自動{scene.auto_size ? `(${sizeName(scene.auto_size)})` : ''}</option>
+          {PANEL_SIZES.map(z => <option key={z.value} value={z.value}>{z.label}</option>)}
+        </select>
         <span className="sed-card-actions">
           <button type="button" disabled={busy || index === 0} onClick={() => onMove(index - 1)} aria-label="前へ">▲</button>
           <button type="button" disabled={busy || index === total - 1} onClick={() => onMove(index + 1)} aria-label="後ろへ">▼</button>

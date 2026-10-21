@@ -898,7 +898,8 @@ def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
 # narration は漫画v2のナレーション枠の文。NULL は未設定、空文字は「ナレーションなし」。
 # dialogue は編集画面で1行ずつ決めたセリフ(JSON [{"text": str, "speaker_id": int | null}])。NULL なら
 # 本文の「」から取り出し、話し手も推定する(従来どおり)。
-_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT", "narration": "TEXT", "dialogue": "TEXT"}
+# panel_size は漫画v2のコマの生成サイズ(portrait / landscape / square)。NULL なら入る枠の形から自動で決める。
+_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT", "narration": "TEXT", "dialogue": "TEXT", "panel_size": "TEXT"}
 
 
 def _migrate_story_scenes(conn: sqlite3.Connection) -> None:

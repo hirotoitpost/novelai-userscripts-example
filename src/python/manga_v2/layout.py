@@ -221,35 +221,27 @@ def normalize_boxes(
     return layout
 
 
-def scene_rects(layouts: Sequence[PageLayout], template_id: str, count: int) -> list[Rect]:
-    """
-    シーン順のコマの形(ピクセル座標)。写したコマ割りを先頭のページから順に使い、足りない分は
-    テンプレートのコマで続ける。コマの生成サイズを決めるのに使う。
-    """
-    rects = [rect for layout in layouts for rect in layout_rects(layout)]
-    template = panel_rects(template_id)
-    while len(rects) < count:
-        rects.append(template[(len(rects) - sum(layout_size(layout) for layout in layouts)) % len(template)])
-    return rects[:count]
-
-
 def panels_per_page(template_id: str) -> int:
     return len(TEMPLATES[template_id].panels)
 
 
-# 生成サイズの上限。Opusプランでは 1024×1024 相当の画素数・28ステップ以下・1枚なら
-# 通常モデルの生成がAnlasを消費しない。コマ単位なら大きな画像は要らないので、この範囲に収める。
-_MAX_PIXELS = 1024 * 1024
-# 極端に細長い画像は構図が破綻しやすいので、生成時の縦横比はこの範囲に丸め、あとで切り抜く。
-_MIN_ASPECT = 0.4
-_MAX_ASPECT = 2.5
+# コマの生成サイズ(幅, 高さ)。NovelAI の通常サイズの3種類で、Opusプランなら(28ステップ以下・1枚)
+# Anlas を使わずに生成できる。コマの形に一番近いものを使い、合成でコマの形に切り抜く。
+PANEL_SIZES: dict[str, tuple[int, int]] = {
+    "portrait": (832, 1216),
+    "landscape": (1216, 832),
+    "square": (1024, 1024),
+}
+# 縦長/正方形、正方形/横長の境目(コマの幅÷高さ)。隣り合うサイズの縦横比の中間(幾何平均)
+_PORTRAIT_BELOW = math.sqrt(832 / 1216)
+_LANDSCAPE_ABOVE = math.sqrt(1216 / 832)
 
 
-def generation_size(rect: Rect) -> tuple[int, int]:
-    """コマの形に近い、64の倍数の生成サイズ(幅, 高さ)。"""
-    w = rect[2] - rect[0]
-    h = rect[3] - rect[1]
-    aspect = min(max(w / h, _MIN_ASPECT), _MAX_ASPECT)
-    gen_h = math.sqrt(_MAX_PIXELS / aspect)
-    gen_w = gen_h * aspect
-    return int(gen_w // 64) * 64, int(gen_h // 64) * 64
+def panel_size_kind(rect: Rect) -> str:
+    """コマの形(外接矩形)に一番近い生成サイズの種類(portrait / landscape / square)。"""
+    aspect = (rect[2] - rect[0]) / max(rect[3] - rect[1], 1)
+    if aspect < _PORTRAIT_BELOW:
+        return "portrait"
+    if aspect > _LANDSCAPE_ABOVE:
+        return "landscape"
+    return "square"
