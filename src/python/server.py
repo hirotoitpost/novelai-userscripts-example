@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="NovelAI Userscripts Backend",
-    version="0.11.0",
+    version="0.12.0",
     lifespan=lifespan,
 )
 
