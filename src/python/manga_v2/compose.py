@@ -695,13 +695,19 @@ class PagePlan:
 
 
 def plan_pages(
-    template_id: str, count: int, layouts: Sequence[PageLayout] | None = None
+    template_id: str,
+    count: int,
+    layouts: Sequence[PageLayout] | None = None,
+    groups: Sequence[int] | None = None,
 ) -> list[PagePlan]:
     """
     シーン順のコマ count 個をテンプレートのコマ数ずつページに割り付ける。最後のページのコマが
     足りないときは、空きゴマを残さないよう少ないコマ数のテンプレートに切り替える。
     layouts(取り込んだ作品から写したページごとのコマ割り)があれば、先頭のページから順にそれを使い、
     使い切った後のコマはテンプレートで続ける。
+    groups(コマごとのページ番号。編集画面でページの区切りを決めたとき)があれば、同じ番号が続くコマを
+    1ページにまとめ、そのコマ数に合うテンプレートにする。テンプレートより多いときは、そのページの中だけで分ける。
+    写したコマ割りがあるときは、そちらを優先する。
     """
     plans = []
     start = 0
@@ -712,9 +718,18 @@ def plan_pages(
         plans.append(PagePlan(layout_page(layout), start, end))
         start = end
     per_page = len(panel_rects(template_id))
-    for i in range(start, count, per_page):
-        end = min(i + per_page, count)
-        plans.append(PagePlan(template_page(fill_template(template_id, end - i)), i, end))
+    runs = [(start, count)]
+    if groups is not None and not layouts:
+        runs = []
+        for i in range(count):
+            if i == 0 or groups[i] != groups[i - 1]:
+                runs.append((i, i + 1))
+            else:
+                runs[-1] = (runs[-1][0], i + 1)
+    for run_start, run_end in runs:
+        for i in range(run_start, run_end, per_page):
+            end = min(i + per_page, run_end)
+            plans.append(PagePlan(template_page(fill_template(template_id, end - i)), i, end))
     return plans
 
 
@@ -723,11 +738,12 @@ def compose_pages(
     panels: list[PanelContent],
     style: LetteringStyle,
     layouts: Sequence[PageLayout] | None = None,
+    groups: Sequence[int] | None = None,
 ) -> list[tuple[Image.Image, list[Element]]]:
     """コマをページに割り付けて(plan_pages)、ページごとに合成する。"""
     return [
         compose_page(plan.spec, panels[plan.start : plan.end], style)
-        for plan in plan_pages(template_id, len(panels), layouts)
+        for plan in plan_pages(template_id, len(panels), layouts, groups)
     ]
 
 
