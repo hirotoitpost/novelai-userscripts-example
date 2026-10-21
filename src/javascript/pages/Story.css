@@ -367,6 +367,14 @@
   margin: 0;
 }
 
+.story-scene-direction { margin-top: 0.3rem; }
+
+.story-scene-direction > summary {
+  font-size: 0.75rem;
+  color: #9a9ac0;
+  cursor: pointer;
+}
+
 .story-pages-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));

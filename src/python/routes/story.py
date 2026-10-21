@@ -46,6 +46,8 @@ from ..db import (
     story_characters,
     get_character,
     get_connection,
+    get_dataset_situation,
+    get_dataset_state,
     get_scene,
     get_series,
     get_story,
@@ -75,15 +77,18 @@ from ..sessions import keystore_credentials
 from ..manga_export import assemble_manga
 from ..notify import notify_job_finished
 from ..character_sheet import (
+    adult_only_tags,
     character_minor_tags,
     character_prompt_tags,
     characters_negative,
     characters_seed,
     join_tags,
+    minor_tags,
     split_body,
     split_prompt,
 )
 from ..models import (
+    ApplySceneSituationRequest,
     CastPresetRequest,
     CharacterNewRequest,
     CharacterResponse,
@@ -2426,12 +2431,88 @@ async def post_replace_story_character(story_id: int, req: ReplaceStoryCharacter
         conn.close()
 
 
+def _check_adult_only(characters: list[dict[str, Any]], text: str) -> None:
+    """
+    成人キャラだけに使うタグ(妊娠など。コンテンツガードの dataset.adult_only_tags)は、キャラ別データセットと同じく、
+    成人フラグのあるキャラで、未成年を示すタグが無いときだけ使える。
+    """
+    adult_only = adult_only_tags(text)
+    if not adult_only:
+        return
+    for character in characters:
+        if not character.get("is_adult"):
+            raise HTTPException(
+                status_code=403,
+                detail=f"{character['name']} は成人キャラではないため使えません(成人キャラだけのタグ: {', '.join(adult_only)})",
+            )
+        found = sorted(set(character_minor_tags(character)) | set(minor_tags(text)))
+        if found:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{', '.join(adult_only)} は、未成年を示すタグと一緒には使えません({character['name']}: {', '.join(found)})",
+            )
+
+
 @router.put("/scenes/{scene_id}/characters", status_code=204)
 async def put_scene_characters(scene_id: int, req: SetSceneCharactersRequest) -> None:
-    """シーンに登場するキャラを設定し直す(抽出結果の手直し用)。"""
+    """シーンに登場するキャラを設定し直す(抽出結果の手直し用)。状態は、成人キャラだけの状態を検査してから保存する。"""
     conn = get_connection()
     try:
-        set_scene_characters(conn, scene_id, req.character_ids, req.actions, req.outfits)
+        for character_id, state_id in (req.states or {}).items():
+            if state_id is None or character_id not in req.character_ids:
+                continue
+            state = get_dataset_state(conn, state_id)
+            if state is None:
+                raise HTTPException(status_code=404, detail="その状態が見つかりません。")
+            character = get_character(conn, character_id)
+            if character is None:
+                raise HTTPException(status_code=404, detail="character not found")
+            _check_adult_only([character], state["add_tags"])
+        set_scene_characters(conn, scene_id, req.character_ids, req.actions, req.outfits, req.states)
+    finally:
+        conn.close()
+
+
+_SITUATION_AXES = ("framings", "poses", "outfits", "expressions", "locations")
+
+
+@router.post("/scenes/{scene_id}/situation", status_code=204)
+async def apply_scene_situation(scene_id: int, req: ApplySceneSituationRequest) -> None:
+    """
+    シチュエーション(キャラ別データセットのもの)のタグを、シーンに書き込む。軸ごとに1つの値を使う(choices で選んだもの、
+    無ければ最初の値)。構図・場所・追加のタグはシーンのタグに、服装は登場キャラ全員のその場面の服装に、
+    ポーズ・表情は登場キャラ全員の動作に足す。書き込むだけなので、あとから手で直せる。
+    """
+    conn = get_connection()
+    try:
+        scene = get_scene(conn, scene_id)
+        if scene is None:
+            raise HTTPException(status_code=404, detail="scene not found")
+        situation = get_dataset_situation(conn, req.situation_id)
+        if situation is None:
+            raise HTTPException(status_code=404, detail="そのシチュエーションが見つかりません。")
+        picked: dict[str, str] = {}
+        for axis in _SITUATION_AXES:
+            values = situation[axis]
+            choice = req.choices.get(axis)
+            if choice is not None and choice not in values:
+                raise HTTPException(status_code=422, detail=f"{axis} に「{choice}」はありません。")
+            picked[axis] = choice if choice is not None else (values[0] if values else "")
+        cast = characters_by_scene(conn, scene["story_id"]).get(scene_id, [])
+        _check_adult_only(cast, join_tags(*picked.values(), situation["extra_tags"]))
+        update_scene_content(
+            conn,
+            scene_id,
+            draft_prompt_tags=join_tags(scene["draft_prompt_tags"], picked["framings"], picked["locations"], situation["extra_tags"]),
+        )
+        ids = [c["id"] for c in cast]
+        set_scene_characters(
+            conn,
+            scene_id,
+            ids,
+            actions={c["id"]: join_tags(c.get("action_tags"), picked["poses"], picked["expressions"]) for c in cast},
+            outfits={c["id"]: picked["outfits"] or (c.get("scene_outfit_tags") or "") for c in cast},
+        )
     finally:
         conn.close()
 

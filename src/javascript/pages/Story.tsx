@@ -10,6 +10,8 @@ import MangaImageSettings, {
 } from '../components/MangaImageSettings'
 import StoryCharacters, { Character, SceneCharacter } from '../components/StoryCharacters'
 import SceneCast from '../components/SceneCast'
+import SceneDirection from '../components/SceneDirection'
+import type { DatasetState, Situation } from '../components/DatasetScenes'
 import MangaV2Studio, { MangaV2ComposeSettings } from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { JOB_KIND_LABELS, TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
@@ -391,6 +393,13 @@ export default function Story() {
       .then(setAllCharacters)
       .catch(() => {/* 選べないだけ */})
   }, [castVersion])
+  // シーンの演出で選ぶ、キャラ別データセットのシチュエーションと状態
+  const [situations, setSituations] = useState<Situation[]>([])
+  const [datasetStates, setDatasetStates] = useState<DatasetState[]>([])
+  useEffect(() => {
+    fetch(`${API_ORIGIN}/api/lora-dataset/situations`).then(r => (r.ok ? r.json() : [])).then(setSituations).catch(() => {})
+    fetch(`${API_ORIGIN}/api/lora-dataset/states`).then(r => (r.ok ? r.json() : [])).then(setDatasetStates).catch(() => {})
+  }, [])
   const storyCastIds = useMemo(
     () => [...new Set((story?.scenes ?? []).flatMap(s => s.characters.map(c => c.id)))],
     [story],
@@ -1074,6 +1083,22 @@ export default function Story() {
                       disabled={busy}
                       onChanged={() => { setCastVersion(v => v + 1); void loadStory(story.id) }}
                     />
+                    <details className="story-scene-direction">
+                      <summary>
+                        状態・服装・動作・シチュエーション
+                        {scene.characters.some(c => c.state_name) &&
+                          `(${scene.characters.filter(c => c.state_name).map(c => `${c.name}: ${c.state_name}`).join('、')})`}
+                      </summary>
+                      <SceneDirection
+                        apiOrigin={API_ORIGIN}
+                        sceneId={scene.id}
+                        current={scene.characters}
+                        situations={situations}
+                        states={datasetStates}
+                        disabled={busy}
+                        onChanged={() => void loadStory(story.id)}
+                      />
+                    </details>
                   </li>
                 ))}
               </ol>

@@ -30,6 +30,13 @@ export interface SceneCharacter {
   appearance_tags: string
   /** 漫画v2のキャラ参照に使う画像 */
   reference_image_path?: string | null
+  /** そのシーンでの動作・表情 */
+  action_tags?: string | null
+  /** そのシーンでの服装(空ならふだんの服装) */
+  scene_outfit_tags?: string | null
+  /** そのシーンでの状態(キャラ別データセットの状態)。appearance_tags は状態を当てたあとの見た目 */
+  state_id?: number | null
+  state_name?: string | null
 }
 
 interface Props {

@@ -884,6 +884,11 @@ class SceneCharacterResponse(BaseModel):
     reference_image_path: Optional[str] = None
     # そのシーンでのこのキャラの表情・動作(英語タグ)
     action_tags: Optional[str] = None
+    # そのシーンでの服装(空ならキャラシートのふだんの服装)
+    scene_outfit_tags: Optional[str] = None
+    # そのシーンでの状態(キャラ別データセットの状態)。appearance_tags は状態を当てたあとの見た目
+    state_id: Optional[int] = None
+    state_name: Optional[str] = None
 
 
 class CharacterResponse(BaseModel):
@@ -980,6 +985,16 @@ class SetSceneCharactersRequest(BaseModel):
     actions: Optional[dict[int, str]] = None
     # キャラID → そのシーンでの服装(英語タグ。空ならふだんの服装)。省略すると、残るキャラの服装はそのまま
     outfits: Optional[dict[int, str]] = None
+    # キャラID → そのシーンでの状態(dataset_states の id。null で状態なし)。省略すると、残るキャラの状態はそのまま
+    states: Optional[dict[int, Optional[int]]] = None
+
+
+class ApplySceneSituationRequest(BaseModel):
+    """シチュエーションのタグを、シーンのタグとキャラごとの服装・動作に書き込む(書き込んだあとは手で直せる)。"""
+
+    situation_id: int
+    # 軸(framings / poses / outfits / expressions / locations) → 使う値。省略した軸は最初の値
+    choices: dict[str, str] = Field(default_factory=dict)
 
 
 class StorySceneResponse(BaseModel):
