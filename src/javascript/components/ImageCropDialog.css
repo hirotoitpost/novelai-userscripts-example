@@ -1,0 +1,83 @@
+/* 画像の切り抜きのダイアログ */
+.icd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(5, 5, 15, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.icd-panel {
+  background: #14142a;
+  color: #e8e8ff;
+  border: 1px solid #2a2a50;
+  border-radius: 10px;
+  padding: 0.75rem;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.icd-panel h3 { margin: 0; font-size: 1rem; }
+.icd-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.icd-actions { justify-content: flex-end; }
+.icd-note { margin: 0; font-size: 0.75rem; color: #9a9ac0; }
+
+.icd-panel button {
+  background: #1e1e3a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+.icd-panel button:disabled { opacity: 0.45; cursor: not-allowed; }
+.icd-panel .icd-chip--on { border-color: #7b5cf6; background: #2c2560; }
+.icd-panel .icd-primary { background: #7b5cf6; border-color: #7b5cf6; color: #fff; }
+
+.icd-stage {
+  position: relative;
+  align-self: center;
+  touch-action: none;
+  user-select: none;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.icd-stage img {
+  display: block;
+  max-width: min(80vw, 900px);
+  max-height: 65vh;
+}
+
+.icd-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  outline: 1px solid rgba(0, 0, 0, 0.6);
+  /* 範囲の外を暗くする */
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  cursor: move;
+}
+
+.icd-handle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 2px solid #7b5cf6;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.icd-handle--nw { left: -8px; top: -8px; cursor: nwse-resize; }
+.icd-handle--se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+.icd-handle--ne { right: -8px; top: -8px; cursor: nesw-resize; }
+.icd-handle--sw { left: -8px; bottom: -8px; cursor: nesw-resize; }

@@ -780,3 +780,6 @@
 .ig-result-tools .ig-select {
   width: auto;
 }
+
+/* i2i の参照画像の操作(貼り付け・切り抜き・戻す・クリア) */
+.ig-i2i-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }

@@ -513,3 +513,6 @@
 }
 
 .llm-rev-tag--character { border-style: dashed; }
+
+/* リバースプロンプトの画像の操作(貼り付け・切り抜き・戻す・クリア) */
+.llm-image-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
