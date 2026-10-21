@@ -1,6 +1,8 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, SyntheticEvent, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character } from './StoryCharacters'
 import type { DatasetState } from './DatasetScenes'
+import ChunkPicker from './ChunkPicker'
+import { insertTag } from '../tagInsert'
 import './StoryEditor.css'
 
 /**
@@ -41,6 +43,17 @@ interface EditData {
   custom_pages: boolean
   scenes: EditScene[]
 }
+
+/** プロンプトチャンクの入れ先にできる欄: シーンの作画タグ、キャラのこの場面の服装・動作 */
+type TagField = { scene: string; kind: 'prompt' } | { scene: string; kind: 'outfit' | 'action'; character: number }
+
+/** チャンクの入れ先を覚えるための、欄の見分け(data-tag-field に入れる) */
+function fieldId(f: TagField): string {
+  return f.kind === 'prompt' ? `${f.scene}|prompt` : `${f.scene}|${f.kind}|${f.character}`
+}
+
+/** 欄にフォーカス・カーソル移動したときに呼ぶ(チャンクの入れ先にする) */
+type TrackCaret = (field: TagField, label: string) => (e: SyntheticEvent<HTMLInputElement | HTMLTextAreaElement>) => void
 
 interface Props {
   apiOrigin: string
@@ -93,6 +106,48 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [saveAsTitle, setSaveAsTitle] = useState<string | null>(null)
+  // プロンプトチャンク: 最後にカーソルがあったタグの欄のカーソル位置に入れる
+  const [chunksOpen, setChunksOpen] = useState(false)
+  const caretRef = useRef<{ field: TagField; start: number; end: number } | null>(null)
+  const [target, setTarget] = useState<string | null>(null)
+
+  const trackCaret: TrackCaret = (field, label) => e => {
+    const el = e.currentTarget
+    caretRef.current = { field, start: el.selectionStart ?? el.value.length, end: el.selectionEnd ?? el.value.length }
+    setTarget(label)
+  }
+
+  function insertChunk(text: string) {
+    const caret = caretRef.current
+    if (!caret) {
+      setNote('チャンクを入れる欄(作画タグ・服装・動作)を先にクリックしてください。')
+      return
+    }
+    const { field } = caret
+    const index = scenes.findIndex(s => s.key === field.scene)
+    if (index < 0) return
+    const scene = scenes[index]
+    let caretPos = 0
+    if (field.kind === 'prompt') {
+      const inserted = insertTag(scene.prompt_tags, caret.start, caret.end, text)
+      caretPos = inserted.caret
+      update(index, { prompt_tags: inserted.value })
+    } else {
+      const key = field.kind === 'outfit' ? 'outfit_tags' : 'action_tags'
+      const member = scene.characters.find(c => c.id === field.character)
+      if (!member) return
+      const inserted = insertTag(member[key], caret.start, caret.end, text)
+      caretPos = inserted.caret
+      update(index, { characters: scene.characters.map(c => (c.id === member.id ? { ...c, [key]: inserted.value } : c)) })
+    }
+    // 次のチャンクも続けて同じ場所へ入るよう、入れた直後にカーソルを進める
+    caretRef.current = { field, start: caretPos, end: caretPos }
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-tag-field="${fieldId(field)}"]`)
+      el?.focus()
+      el?.setSelectionRange(caretPos, caretPos)
+    })
+  }
 
   async function load() {
     setError(null)
@@ -278,7 +333,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
 
   return (
     <div className="sed-overlay" role="dialog" aria-modal="true" aria-label="物語の編集">
-      <div className="sed-panel">
+      <div className={chunksOpen ? 'sed-panel sed-panel--chunks' : 'sed-panel'}>
         <header className="sed-header">
           <h2>物語の編集{dirty && <span className="sed-dirty">(未保存)</span>}</h2>
           <div className="sed-header-fields">
@@ -303,6 +358,9 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
                 <button type="button" disabled={busy} onClick={() => setSaveAsTitle(null)}>やめる</button>
               </span>
             )}
+            <button type="button" disabled={busy} onClick={() => setChunksOpen(o => !o)} aria-expanded={chunksOpen}>
+              プロンプトチャンク {chunksOpen ? '▼' : '▶'}
+            </button>
             <button type="button" disabled={busy} onClick={close}>閉じる</button>
           </div>
           {note && <p className="sed-note" role="status">{note}</p>}
@@ -342,6 +400,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
                     onMove={to => moveScene(i, to)}
                     onAdd={() => addScene(i)}
                     onRemove={() => removeScene(i)}
+                    trackCaret={trackCaret}
                   />
                 </li>
               </Fragment>
@@ -352,6 +411,18 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
           <button type="button" disabled={busy} onClick={() => addScene(-1)}>＋ シーンを足す</button>
         )}
       </div>
+      {chunksOpen && (
+        <aside className="sed-chunks" aria-label="プロンプトチャンク">
+          <div className="sed-chunks-head">
+            <strong>プロンプトチャンク</strong>
+            <button type="button" onClick={() => setChunksOpen(false)} aria-label="プロンプトチャンクを閉じる">✕</button>
+          </div>
+          <p className="sed-hint">
+            入れ先: {target ? <strong>{target}</strong> : '作画タグ・服装・動作の欄をクリックしてください'}(カーソルの位置)
+          </p>
+          <ChunkPicker onInsert={insertChunk} />
+        </aside>
+      )}
     </div>
   )
 }
@@ -370,11 +441,18 @@ interface CardProps {
   onMove: (to: number) => void
   onAdd: () => void
   onRemove: () => void
+  trackCaret: TrackCaret
 }
 
 function SceneCard({
-  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove,
+  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove, trackCaret,
 }: CardProps) {
+  /** チャンクの入れ先にできる欄に付けるもの(フォーカス・カーソル移動で入れ先にする) */
+  function tagField(field: TagField, label: string) {
+    const track = trackCaret(field, label)
+    return { 'data-tag-field': fieldId(field), onFocus: track, onSelect: track }
+  }
+
   const castIds = scene.characters.map(c => c.id)
   const addable = characters.filter(c => !castIds.includes(c.id)).sort((a, b) => a.name.localeCompare(b.name, 'ja'))
 
@@ -415,7 +493,8 @@ function SceneCard({
 
         <div className="sed-fields">
           <label className="sed-label">作画タグ
-            <textarea rows={2} value={scene.prompt_tags} disabled={busy} onChange={e => onChange({ prompt_tags: e.target.value })} />
+            <textarea rows={2} value={scene.prompt_tags} disabled={busy} onChange={e => onChange({ prompt_tags: e.target.value })}
+              {...tagField({ scene: scene.key, kind: 'prompt' }, `コマ${index + 1}の作画タグ`)} />
           </label>
 
           <div className="sed-label">登場人物
@@ -432,9 +511,11 @@ function SceneCard({
                       </select>
                     </td>
                     <td><input value={c.outfit_tags} placeholder="服装(空欄ならふだん)" disabled={busy} aria-label={`${c.name}の服装`}
-                      onChange={e => editCast(c.id, { outfit_tags: e.target.value })} /></td>
+                      onChange={e => editCast(c.id, { outfit_tags: e.target.value })}
+                      {...tagField({ scene: scene.key, kind: 'outfit', character: c.id }, `コマ${index + 1}・${c.name}の服装`)} /></td>
                     <td><input value={c.action_tags} placeholder="動作・表情" disabled={busy} aria-label={`${c.name}の動作`}
-                      onChange={e => editCast(c.id, { action_tags: e.target.value })} /></td>
+                      onChange={e => editCast(c.id, { action_tags: e.target.value })}
+                      {...tagField({ scene: scene.key, kind: 'action', character: c.id }, `コマ${index + 1}・${c.name}の動作`)} /></td>
                     <td><button type="button" disabled={busy} aria-label={`${c.name}を外す`}
                       onClick={() => setCast(scene.characters.filter(x => x.id !== c.id))}>✕</button></td>
                   </tr>
