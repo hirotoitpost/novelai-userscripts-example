@@ -692,6 +692,9 @@ class PagePlan:
     spec: PageSpec
     start: int
     end: int
+    # どこから来た割り付けか: ページごとのコマ割り(manga_v2_page_layouts)の番号か、テンプレートのID
+    layout: int | None = None
+    template: str | None = None
 
 
 def plan_pages(
@@ -711,11 +714,11 @@ def plan_pages(
     """
     plans = []
     start = 0
-    for layout in layouts or []:
+    for index, layout in enumerate(layouts or []):
         if start >= count:
             break
         end = min(start + layout_size(layout), count)
-        plans.append(PagePlan(layout_page(layout), start, end))
+        plans.append(PagePlan(layout_page(layout), start, end, layout=index))
         start = end
     per_page = len(panel_rects(template_id))
     runs = [(start, count)]
@@ -729,7 +732,8 @@ def plan_pages(
     for run_start, run_end in runs:
         for i in range(run_start, run_end, per_page):
             end = min(i + per_page, run_end)
-            plans.append(PagePlan(template_page(fill_template(template_id, end - i)), i, end))
+            filled = fill_template(template_id, end - i)
+            plans.append(PagePlan(template_page(filled), i, end, template=filled))
     return plans
 
 

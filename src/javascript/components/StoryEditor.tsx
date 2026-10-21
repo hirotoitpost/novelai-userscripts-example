@@ -57,6 +57,8 @@ interface EditData {
   title: string | null
   panels_per_page: number
   custom_pages: boolean
+  /** 漫画v2のページごとのコマ割り(漫画スタジオ)を決めてあるか */
+  page_layouts: boolean
   scenes: EditScene[]
 }
 
@@ -381,6 +383,12 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
             </button>
             <button type="button" disabled={busy} onClick={close}>閉じる</button>
           </div>
+          {data.page_layouts && (
+            <p className="sed-hint">
+              この物語は漫画スタジオで「ページのコマ割り」を決めてあります。漫画v2の合成はそちらに従い、
+              ここでのページの区切り・1ページのコマ数は挿絵(v1)にだけ効きます。
+            </p>
+          )}
           {note && <p className="sed-note" role="status">{note}</p>}
           {error && <p className="sed-error" role="alert">{error}</p>}
           <p className="sed-hint">

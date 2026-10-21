@@ -110,6 +110,7 @@ async def get_story_edit(story_id: int) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="story not found")
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
         auto = _sizes(conn, story_id, bool(story.get("custom_pages")), [(s["page_index"], None) for s in story["scenes"]])
+        page_layouts = bool(get_manga_v2_page_layouts(conn, story_id))
     finally:
         conn.close()
     return {
@@ -117,6 +118,8 @@ async def get_story_edit(story_id: int) -> dict[str, Any]:
         "title": story["title"],
         "panels_per_page": story["panels_per_page"],
         "custom_pages": bool(story.get("custom_pages")),
+        # 漫画v2のページごとのコマ割りを決めてあるか(あれば、合成はここでのページの区切りではなくそれに従う)
+        "page_layouts": page_layouts,
         "scenes": [
             _snapshot_scene(scene, panels.get(scene["id"]), size) for scene, size in zip(story["scenes"], auto)
         ],
