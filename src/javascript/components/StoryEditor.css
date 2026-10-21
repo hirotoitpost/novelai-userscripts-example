@@ -91,6 +91,7 @@
 .sed-card-head { display: flex; align-items: center; gap: 0.4rem; }
 .sed-num { font-weight: 600; white-space: nowrap; }
 .sed-title { flex: 1 1 auto; }
+.sed-panel .sed-size { flex: 0 0 auto; width: auto; }
 .sed-card-actions { display: inline-flex; gap: 0.25rem; }
 
 .sed-card-body { display: flex; gap: 0.6rem; margin-top: 0.5rem; align-items: flex-start; }

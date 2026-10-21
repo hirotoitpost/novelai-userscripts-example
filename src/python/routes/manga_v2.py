@@ -80,6 +80,7 @@ from ..manga_v2.compose import (
     concat_pages,
     page_png,
     plan_pages,
+    slot_rects,
     split_dense_panels,
 )
 from ..manga_v2.animate import merge_timeline
@@ -98,9 +99,9 @@ from ..manga_v2.stamps import (
 from ..manga_v2.layout import (
     PAGE_HEIGHT,
     PAGE_WIDTH,
+    PANEL_SIZES,
     TEMPLATES,
-    generation_size,
-    scene_rects,
+    panel_size_kind,
 )
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.panel_shapes import trace_page
@@ -1087,11 +1088,12 @@ async def _run_panels(
     try:
         characters = characters_by_scene(conn, story_id)
         layouts = get_manga_v2_page_layouts(conn, story_id)
-        guard_text = minor_guard.story_text(get_story(conn, story_id))
+        story = get_story(conn, story_id)
+        guard_text = minor_guard.story_text(story)
     finally:
         conn.close()
-    # コマの形(生成サイズを決める)。写したコマ割りがあればそれ、無ければテンプレート
-    rects = scene_rects(layouts, req.template, max(s["scene_index"] for s in targets) + 1)
+    # コマの生成サイズ: シーンで決めたもの、無ければ入る枠の形に一番近いもの(縦長・横長・正方形)
+    auto = panel_size_kinds(story or {"scenes": []}, req.template, layouts)
 
     _PANEL_DIR.mkdir(parents=True, exist_ok=True)
     job.total = len(targets)
@@ -1099,7 +1101,7 @@ async def _run_panels(
     softened: list[int] = []
     for i, scene in enumerate(targets, start=1):
         job.message = f"シーン{scene['scene_index'] + 1}のコマを生成中 ({i}/{len(targets)})"
-        width, height = generation_size(rects[scene["scene_index"]])
+        width, height = PANEL_SIZES[scene.get("panel_size") or auto.get(scene["id"], "portrait")]
         # そのシーンに出るキャラだけの容姿を渡す(v1はページ内の全員をまとめていた)
         # (キャラシートの普段の服装も含む)
         scene_characters = characters.get(scene["id"], [])
@@ -1259,6 +1261,17 @@ def _page_layouts(story_id: int) -> list[Any]:
         return get_manga_v2_page_layouts(conn, story_id)
     finally:
         conn.close()
+
+
+def panel_size_kinds(story: dict[str, Any], template_id: str, layouts: list[Any]) -> dict[int, str]:
+    """
+    シーンごとの自動の生成サイズの種類(シーンID → portrait / landscape / square)。合成と同じ割り付けで、
+    そのシーンが入る枠の形から決める(写したコマ割り・個別に決めたページの区切りにも従う)。
+    """
+    scenes = story["scenes"]
+    groups = [s["page_index"] for s in scenes] if story.get("custom_pages") else None
+    rects = slot_rects(template_id, len(scenes), layouts, groups)
+    return {s["id"]: panel_size_kind(rect) for s, rect in zip(scenes, rects)}
 
 
 def _page_groups(story_id: int, contents: list[PanelContent]) -> list[int] | None:

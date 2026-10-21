@@ -107,14 +107,16 @@ def test_overwrite_reorders_adds_deletes_and_marks_changed_panels(client: TestCl
     body.update(custom_pages=True, scenes=[third, first, new])
     res = client.put(f"/api/story/{s['id']}/edit", json=body)
     assert res.status_code == 200, res.text
-    assert res.json()["stale_panels"] == 1
+    # 教室はタグを変えたので、屋上は2コマのページ(上下2コマ)に移って枠が横長になったので、描き直し待ち
+    assert res.json()["stale_panels"] == 2
 
     data = _edited(client, s["id"])
     assert [sc["title"] for sc in data["scenes"]] == ["屋上", "教室", None]
     assert [sc["page_index"] for sc in data["scenes"]] == [0, 0, 1] and data["custom_pages"] is True
     rooftop, classroom, park = data["scenes"]
-    # タグを変えたコマは描き直し待ち、変えていないコマはそのまま
-    assert classroom["panel"]["stale"] is True and rooftop["panel"]["stale"] is False and park["panel"] is None
+    assert classroom["panel"]["stale"] is True and rooftop["panel"]["stale"] is True and park["panel"] is None
+    # 自動の生成サイズは入る枠の形から: 上下2コマのページは横長、1コマだけのページは縦長
+    assert [sc["auto_size"] for sc in data["scenes"]] == ["landscape", "landscape", "portrait"]
     assert classroom["dialogue_custom"] is True
     assert classroom["dialogue"] == [{"text": "おはよう!", "speaker_id": s["rei"]}]
     # 消したシーンの大きさの調整は捨て、残るシーンの手動配置は残す
@@ -127,7 +129,7 @@ def test_overwrite_reorders_adds_deletes_and_marks_changed_panels(client: TestCl
         assert manga_v2._scene_speakers(scene)[0] == [s["rei"]]
         assert scene["draft_text"] == "陽菜は手を振った。\n「おはよう」\n怜はうなずいた。\n「うん」"
         # 描き直し待ちのコマは、生成済みを飛ばすときも描き直す対象
-        assert [p["stale"] for p in db.list_manga_panels(conn, s["id"])] == [0, 1]
+        assert [p["stale"] for p in db.list_manga_panels(conn, s["id"])] == [1, 1]
     finally:
         conn.close()
     # ページの区切りは合成にも効く
@@ -194,3 +196,34 @@ def test_page_groups_split_pages_by_scene() -> None:
     assert [(p.start, p.end) for p in plans] == [(0, 2), (2, 6), (6, 7)]
     # 区切りが無ければこれまでどおり
     assert [(p.start, p.end) for p in plan_pages("grid4", 7)] == [(0, 4), (4, 7)]
+
+
+def test_panel_size_follows_the_slot_and_can_be_chosen(client: TestClient) -> None:
+    s = _story(client.root)  # type: ignore[attr-defined]
+    data = _edited(client, s["id"])
+    # 3コマだけのページは「上に大ゴマ+下に2コマ」になる: 上は横長、下の2コマは縦長
+    assert [sc["auto_size"] for sc in data["scenes"]] == ["landscape", "portrait", "portrait"]
+    assert data["scenes"][0]["panel_size"] is None
+    body = _body(data)
+    body["scenes"][1]["panel_size"] = "landscape"  # 絵の無いシーン
+    body["scenes"][2]["panel_size"] = "square"  # 絵のあるシーン: サイズが変わるので描き直し待ち
+    res = client.put(f"/api/story/{s['id']}/edit", json=body)
+    assert res.status_code == 200, res.text
+    assert res.json()["stale_panels"] == 1
+    data = _edited(client, s["id"])
+    assert [sc["panel_size"] for sc in data["scenes"]] == [None, "landscape", "square"]
+    assert data["scenes"][2]["panel"]["stale"] is True and data["scenes"][0]["panel"]["stale"] is False
+    # 同じサイズのまま保存し直しても、描き直し待ちは増えない
+    assert client.put(f"/api/story/{s['id']}/edit", json=_body(data) | {"scenes": [
+        {**sc, "panel_size": d["panel_size"]} for sc, d in zip(_body(data)["scenes"], data["scenes"])
+    ]}).json()["stale_panels"] == 0
+
+
+def test_panel_size_kind_picks_the_nearest_free_size() -> None:
+    from python.manga_v2.layout import PANEL_SIZES, panel_size_kind
+
+    assert panel_size_kind((0, 0, 500, 1000)) == "portrait"
+    assert panel_size_kind((0, 0, 1000, 300)) == "landscape"
+    assert panel_size_kind((0, 0, 500, 520)) == "square"
+    # どれも無料枠(1024×1024 相当の画素数以下)のサイズ
+    assert all(w * h <= 1024 * 1024 and w % 64 == 0 and h % 64 == 0 for w, h in PANEL_SIZES.values())

@@ -25,7 +25,9 @@ from ..db import (
     get_character,
     get_connection,
     get_dataset_state,
+    get_manga_v2_compose_settings,
     get_manga_v2_overrides,
+    get_manga_v2_page_layouts,
     get_manga_v2_ugoira,
     get_story,
     list_manga_pages,
@@ -35,7 +37,8 @@ from ..db import (
     set_scene_characters,
 )
 from ..models import StoryEditRequest, StoryEditScene, StorySaveAsRequest
-from .manga_v2 import _PANEL_DIR, _PROJECT_ROOT, _lettering, _scene_speakers
+from ..manga_v2.layout import TEMPLATES
+from .manga_v2 import _PANEL_DIR, _PROJECT_ROOT, _lettering, _scene_speakers, panel_size_kinds
 from .story import _check_adult_only
 
 router = APIRouter(prefix="/api/story", tags=["story-edit"])
@@ -48,7 +51,20 @@ def _scene_text(scene: dict[str, Any]) -> str:
     return scene["novelai_text"] or scene["draft_text"] or ""
 
 
-def _snapshot_scene(scene: dict[str, Any], panel: dict[str, Any] | None) -> dict[str, Any]:
+def _template(conn: sqlite3.Connection, story_id: int) -> str:
+    """自動の生成サイズを決めるテンプレート(最後に合成したときのもの。まだなら既定の grid4)。"""
+    template = (get_manga_v2_compose_settings(conn, story_id) or {}).get("template")
+    return template if template in TEMPLATES else "grid4"
+
+
+def _sizes(conn: sqlite3.Connection, story_id: int, custom_pages: bool, scenes: list[tuple[int, str | None]]) -> list[str]:
+    """シーン(ページ番号, 決めた生成サイズ)の並びごとの、実際に使う生成サイズ。決めていなければ入る枠の形から。"""
+    story = {"custom_pages": custom_pages, "scenes": [{"id": i, "page_index": page} for i, (page, _) in enumerate(scenes)]}
+    auto = panel_size_kinds(story, _template(conn, story_id), get_manga_v2_page_layouts(conn, story_id))
+    return [size or auto[i] for i, (_, size) in enumerate(scenes)]
+
+
+def _snapshot_scene(scene: dict[str, Any], panel: dict[str, Any] | None, auto_size: str) -> dict[str, Any]:
     if scene.get("dialogue") is not None:
         dialogue = [
             {"text": str(line.get("text") or ""), "speaker_id": line.get("speaker_id")} for line in scene["dialogue"]
@@ -68,6 +84,8 @@ def _snapshot_scene(scene: dict[str, Any], panel: dict[str, Any] | None) -> dict
         "dialogue": dialogue,
         "dialogue_custom": scene.get("dialogue") is not None,
         "page_index": scene["page_index"],
+        "panel_size": scene.get("panel_size"),
+        "auto_size": auto_size,
         "characters": [
             {
                 "id": c["id"],
@@ -91,6 +109,7 @@ async def get_story_edit(story_id: int) -> dict[str, Any]:
         if story is None:
             raise HTTPException(status_code=404, detail="story not found")
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
+        auto = _sizes(conn, story_id, bool(story.get("custom_pages")), [(s["page_index"], None) for s in story["scenes"]])
     finally:
         conn.close()
     return {
@@ -98,7 +117,9 @@ async def get_story_edit(story_id: int) -> dict[str, Any]:
         "title": story["title"],
         "panels_per_page": story["panels_per_page"],
         "custom_pages": bool(story.get("custom_pages")),
-        "scenes": [_snapshot_scene(scene, panels.get(scene["id"])) for scene in story["scenes"]],
+        "scenes": [
+            _snapshot_scene(scene, panels.get(scene["id"]), size) for scene, size in zip(story["scenes"], auto)
+        ],
     }
 
 
@@ -181,14 +202,17 @@ def _write_scene(
 ) -> int:
     """シーンを1つ書く(stored が無ければ新しく作る)。シーンIDを返す。"""
     sfx = json.dumps([w.strip() for w in scene.sfx if w.strip()], ensure_ascii=False) if scene.sfx is not None else None
-    values = (scene.title or None, scene.prompt_tags.strip(), scene.narration, sfx, _dialogue_json(scene), index, page_index)
+    values = (
+        scene.title or None, scene.prompt_tags.strip(), scene.narration, sfx, _dialogue_json(scene), scene.panel_size,
+        index, page_index,
+    )
     if stored is None:
         scene_id = conn.execute(
             """
             INSERT INTO story_scenes
-                (story_id, draft_title, draft_prompt_tags, narration, sfx, dialogue, scene_index, page_index,
+                (story_id, draft_title, draft_prompt_tags, narration, sfx, dialogue, panel_size, scene_index, page_index,
                  draft_text, novelai_text)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (story_id, *values, scene.text, scene.text),
         ).lastrowid
@@ -197,7 +221,7 @@ def _write_scene(
         conn.execute(
             """
             UPDATE story_scenes SET draft_title = ?, draft_prompt_tags = ?, narration = ?, sfx = ?, dialogue = ?,
-                scene_index = ?, page_index = ?
+                panel_size = ?, scene_index = ?, page_index = ?
             WHERE id = ?
             """,
             (*values, scene_id),
@@ -208,6 +232,21 @@ def _write_scene(
                 "UPDATE story_scenes SET draft_text = ?, novelai_text = ? WHERE id = ?", (scene.text, scene.text, scene_id)
             )
     return int(scene_id)
+
+
+def _resized(
+    conn: sqlite3.Connection, story_id: int, story: dict[str, Any], req: StoryEditRequest, pages: list[int]
+) -> list[bool]:
+    """
+    編集した並びのシーンごとに、生成サイズ(決めたもの、無ければ入る枠の形から)が今と変わるか。
+    変わるコマの絵は描き直し待ちにする(縦長の絵を横長の枠に入れると大きく切れるため)。
+    """
+    before_sizes = _sizes(
+        conn, story_id, bool(story.get("custom_pages")), [(s["page_index"], s.get("panel_size")) for s in story["scenes"]]
+    )
+    before = {s["id"]: size for s, size in zip(story["scenes"], before_sizes)}
+    after = _sizes(conn, story_id, req.custom_pages, [(page, s.panel_size) for page, s in zip(pages, req.scenes)])
+    return [s.id is not None and s.id in before and before[s.id] != size for s, size in zip(req.scenes, after)]
 
 
 def _write_cast(conn: sqlite3.Connection, scene_id: int, scene: StoryEditScene) -> None:
@@ -253,6 +292,7 @@ async def put_story_edit(story_id: int, req: StoryEditRequest) -> dict[str, Any]
         old = {s["id"]: s for s in story["scenes"]}
         _validate(conn, req, old)
         pages = _page_indexes(req)
+        sizes = _resized(conn, story_id, story, req, pages)
         keep = {s.id for s in req.scenes if s.id is not None}
         for scene_id in old:
             if scene_id not in keep:
@@ -267,7 +307,7 @@ async def put_story_edit(story_id: int, req: StoryEditRequest) -> dict[str, Any]
             stored = old.get(scene.id) if scene.id is not None else None
             scene_id = _write_scene(conn, story_id, scene, index, pages[index], stored)
             _write_cast(conn, scene_id, scene)
-            if stored is not None and scene_id in panels and _stored_key(stored) != _edited_key(scene):
+            if stored is not None and scene_id in panels and (_stored_key(stored) != _edited_key(scene) or sizes[index]):
                 conn.execute("UPDATE manga_panels SET stale = 1 WHERE scene_id = ?", (scene_id,))
                 stale += 1
             page_scenes.setdefault(pages[index], []).append(scene_id)
@@ -303,6 +343,7 @@ async def save_story_as(story_id: int, req: StorySaveAsRequest) -> dict[str, Any
         old = {s["id"]: s for s in story["scenes"]}
         _validate(conn, req, old)
         pages = _page_indexes(req)
+        sizes = _resized(conn, story_id, story, req, pages)
         new_id = conn.execute(
             """
             INSERT INTO stories (premise, title, n_scenes, panels_per_page, status, created_at, raw_text, memory,
@@ -341,7 +382,7 @@ async def save_story_as(story_id: int, req: StorySaveAsRequest) -> dict[str, Any
             if panel is not None and (_PROJECT_ROOT / panel["image_path"]).is_file():
                 filename = f"story{new_id}_scene{index}_{uuid4().hex[:8]}.png"
                 shutil.copyfile(_PROJECT_ROOT / panel["image_path"], _PANEL_DIR / filename)
-                changed = bool(panel.get("stale")) or _stored_key(source) != _edited_key(scene)
+                changed = bool(panel.get("stale")) or _stored_key(source) != _edited_key(scene) or sizes[index]
                 conn.execute(
                     """
                     INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at, stale)

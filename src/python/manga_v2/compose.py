@@ -733,6 +733,22 @@ def plan_pages(
     return plans
 
 
+def slot_rects(
+    template_id: str,
+    count: int,
+    layouts: Sequence[PageLayout] | None = None,
+    groups: Sequence[int] | None = None,
+) -> list[Rect]:
+    """
+    合成と同じ割り付け(plan_pages)で、シーン順のコマが入る枠の外接矩形(ピクセル座標)。コマの生成サイズを決める。
+    セリフの多いシーンを寄りのコマに分けると(合成の設定)、その後ろのコマは枠が1つずつずれる。
+    """
+    rects: list[Rect] = []
+    for plan in plan_pages(template_id, count, layouts, groups):
+        rects.extend(shape.rect for shape in plan.spec.panels[: plan.end - plan.start])
+    return rects
+
+
 def compose_pages(
     template_id: str,
     panels: list[PanelContent],
