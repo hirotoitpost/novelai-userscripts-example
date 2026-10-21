@@ -7,6 +7,8 @@
 - コマを生成する。シーンごとにシードをずらせる(同じシードだと全コマ同じ構図になるため)
 - 1コマだけ描き直す・コマの絵を見る・合成してページを見る
 - シリーズの巻のあらすじを付ける(次の巻を作るときの前提になる)
+- ページのコマ割り(パターン・形・斜めの境目・間隔/余白・色・重ねて置くコマ・重なり順)と、コマの背景を消す
+- シーンの状態・シチュエーション・この場面の服装、1行ずつのセリフと話し手、コマの生成サイズ
 
 コマの生成ジョブや合成はバックエンド(FastAPI)の処理をそのまま使うため、ここからは HTTP で
 バックエンドを呼ぶ。バックエンドを起動しておくこと(.env の MANGA_BACKEND_URL で接続先を変えられる)。
@@ -235,14 +237,19 @@ def register_manga_tools(mcp: MCPServer) -> None:
         character_actions: dict[int, str] | None = None,
         narration: str | None = None,
         sfx: list[str] | None = None,
+        character_outfits: dict[int, str] | None = None,
+        character_states: dict[int, int | None] | None = None,
     ) -> str:
         """
         シーンを手直しする(渡した項目だけ)。narration を空文字にするとナレーションを消す。
         character_actions(キャラID → 表情・動作の英語タグ)を変えるときは character_ids も渡す。
-        絵に効く項目(prompt_tags・character_ids・character_actions)を変えたら manga_generate_panels で描き直す。
+        character_outfits(キャラID → この場面の服装の英語タグ。空ならキャラシートのふだんの服装)と
+        character_states(キャラID → 状態の ID。manga_list_scene_presets。null でふだん)も同じ。
+        絵に効く項目(prompt_tags・character_ids・character_actions・服装・状態)を変えたら manga_generate_panels で描き直す。
         """
-        if character_actions is not None and character_ids is None:
-            raise ValueError("character_actions を変えるときは character_ids も渡してください")
+        per_character = (character_actions, character_outfits, character_states)
+        if any(v is not None for v in per_character) and character_ids is None:
+            raise ValueError("キャラごとの項目を変えるときは character_ids も渡してください")
         fields = {"title": title, "text": text, "prompt_tags": prompt_tags}
         if any(v is not None for v in fields.values()):
             await _call("PATCH", f"/api/story/scenes/{scene_id}", {k: v for k, v in fields.items() if v is not None})
@@ -250,6 +257,10 @@ def register_manga_tools(mcp: MCPServer) -> None:
             body: dict[str, Any] = {"character_ids": character_ids}
             if character_actions is not None:
                 body["actions"] = character_actions
+            if character_outfits is not None:
+                body["outfits"] = character_outfits
+            if character_states is not None:
+                body["states"] = character_states
             await _call("PUT", f"/api/story/scenes/{scene_id}/characters", body)
         if narration is not None:
             await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/narration", {"narration": narration})
@@ -278,9 +289,11 @@ def register_manga_tools(mcp: MCPServer) -> None:
         negative_prompt: str | None = None,
         seed_base: int | None = None,
         timeout_seconds: int = 1200,
+        manga_style: bool = True,
     ) -> dict[str, Any]:
         """
         コマの絵を生成し(既にあれば描き直し)、終わるまで待つ。NovelAI の Anlas を使う。
+        生成サイズはコマが入る枠の形(縦長・横長・正方形)か、manga_edit_scenes で決めたもの。
 
         scene_indexes: 対象のシーン番号(0始まり)。省略で全シーン。
         template: コマの形を決めるテンプレート(vertical4 / grid4 など)。省略時は前回の合成設定、無ければ grid4。
@@ -289,6 +302,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         seed_base: 渡すとシーンごとに seed_base + シーン番号×37 のシードで1コマずつ生成する
                    (省略時はキャラの基準シード→物語ごとの既定の順。基準シードだと全コマ似た構図になりやすい)。
         use_character_reference: キャラシートの参照画像を使う(V4.5 で生成、1人あたり +Anlas)。
+        manga_style: False ならプロンプトの先頭に manga style を付けない(画風がイラスト寄りになる)。
         """
         story = await _call("GET", f"/api/story/{story_id}")
         indexes = sorted(scene_indexes) if scene_indexes is not None else [s["scene_index"] for s in story["scenes"]]
@@ -311,6 +325,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "template": chosen,
             "skip_existing": False,
             "color": color,
+            "manga_style": manga_style,
             "use_character_reference": use_character_reference,
             "reference_strength": reference_strength,
         }
@@ -406,6 +421,122 @@ def register_manga_tools(mcp: MCPServer) -> None:
         """シリーズの巻のあらすじを付ける。次の巻を作るときの前提(これまでの話)として使われる。"""
         await _call("PUT", f"/api/series/volumes/{story_id}/recap", {"recap": recap})
         return f"物語 {story_id} のあらすじを保存しました"
+
+    @mcp.tool()
+    async def manga_list_scene_presets() -> dict[str, Any]:
+        """
+        シーンに使える状態(容姿を一時的に変える: 食べ過ぎでお腹が出る など)とシチュエーション(場所・服装・ポーズの
+        ひとまとまり)の一覧。adult_only があるものは成人キャラにだけ使える。状態は manga_update_scene の
+        character_states で、シチュエーションは manga_apply_situation でシーンに使う。
+        """
+        states = await _call("GET", "/api/lora-dataset/states")
+        situations = await _call("GET", "/api/lora-dataset/situations")
+        return {
+            "states": [{k: s[k] for k in ("id", "name", "add_tags", "adult_only")} for s in states],
+            "situations": [
+                {k: s[k] for k in ("id", "name", "framings", "poses", "outfits", "expressions", "locations", "extra_tags", "adult_only")}
+                for s in situations
+            ],
+        }
+
+    @mcp.tool()
+    async def manga_apply_situation(scene_id: int, situation_id: int, choices: dict[str, str] | None = None) -> str:
+        """
+        シチュエーションのタグをシーンに書き込む(構図・場所はシーンのタグに、服装は登場キャラ全員のこの場面の服装に、
+        ポーズ・表情は全員の動作に足す)。choices で軸(framings/poses/outfits/expressions/locations)ごとの値を選ぶ
+        (省略した軸は最初の値)。書き込んだあとは manga_update_scene で直せる。
+        """
+        await _call("POST", f"/api/story/scenes/{scene_id}/situation", {"situation_id": situation_id, "choices": choices or {}})
+        return f"シーン {scene_id} にシチュエーションを書き込みました"
+
+    @mcp.tool()
+    async def manga_edit_scenes(story_id: int, scenes: dict[int, dict[str, Any]]) -> dict[str, Any]:
+        """
+        シーンごとの、1行ずつのセリフと話し手・コマの生成サイズを決める(編集画面と同じ保存。ほかの項目は変えない)。
+
+        scenes: {シーン番号(0始まり): {"dialogue": [{"text": "…", "speaker_id": キャラID か null}, …],
+                                        "panel_size": "portrait" | "landscape" | "square" | null}}
+          dialogue を渡すと、本文の「」の代わりにその並びを吹き出しにする(（…）で囲むと心の声)。null で本文に戻す。
+          panel_size は生成サイズ(縦長 832×1216 / 横長 1216×832 / 正方形 1024×1024)。null でコマの枠の形から自動。
+        生成サイズが変わったコマの絵は描き直し待ちになる(manga_generate_panels で描き直す)。
+        """
+        data = await _call("GET", f"/api/story/{story_id}/edit")
+        keys = ("id", "title", "text", "prompt_tags", "narration", "sfx", "page_index", "characters", "panel_size")
+        body_scenes = []
+        for index, scene in enumerate(data["scenes"]):
+            item = {k: scene[k] for k in keys}
+            # 決めていたセリフはそのまま、本文から取り出していたものは本文のまま
+            item["dialogue"] = scene["dialogue"] if scene["dialogue_custom"] else None
+            change = scenes.get(index) or scenes.get(str(index))  # type: ignore[call-overload]
+            if change:
+                for key in ("dialogue", "panel_size"):
+                    if key in change:
+                        item[key] = change[key]
+            body_scenes.append(item)
+        body = {
+            "title": data["title"],
+            "panels_per_page": data["panels_per_page"],
+            "custom_pages": data["custom_pages"],
+            "scenes": body_scenes,
+        }
+        return await _call("PUT", f"/api/story/{story_id}/edit", body)
+
+    @mcp.tool()
+    async def manga_layout_patterns(count: int) -> list[dict[str, Any]]:
+        """コマ数 count(1〜12)のページのコマ割りの候補(id・名前・分割の木)。manga_save_page_layout の tree に使う。"""
+        patterns = await _call("GET", f"/api/manga-v2/layout-patterns?count={count}")
+        return [{k: p[k] for k in ("id", "label", "tree")} for p in patterns]
+
+    @mcp.tool()
+    async def manga_get_page_layout(story_id: int, template: str = "grid4") -> dict[str, Any]:
+        """
+        ページごとのコマ割り(合成と同じ割り付け)。ページごとに、入るシーンのID・コマ数・分割の木(tree)・
+        間隔と余白(gaps)・地の色と枠線(style)・重ねたコマ(floats)を返す。決めていなければ template で割り付けた結果。
+        """
+        view = await _call("GET", f"/api/manga-v2/{story_id}/page-layout?template={template}")
+        for page in view["pages"]:
+            page.pop("panels", None)
+        return view
+
+    @mcp.tool()
+    async def manga_save_page_layout(story_id: int, pages: list[dict[str, Any]], template: str = "grid4") -> dict[str, Any]:
+        """
+        ページごとのコマ割りを保存する。シーンは読む順にコマへ入り、pages の後ろに続くシーンは template で続ける。
+        保存すると合成・コマの生成サイズが従い、形が変わったコマは描き直し待ちになる(manga_generate_panels で描き直す)。
+
+        pages の各要素: {"tree": 分割の木, "gaps": {...}, "style": {...}, "floats": [...]} か、写したページを残す {"layout": 番号}
+          tree: 葉 "panel"(ふつうのコマ)か {"shape": "rect"|"ellipse"|"triangle"|"polygon", "point": "up"|"down"|"left"|"right"(三角),
+                 "points": [[x, y], …](多角形、枠に対する割合), "border": false(枠線なし), "border_color": "#rrggbb",
+                 "border_width": 0〜20, "z": 重なり順, "cutout": {"outline": bool, "outline_color": "#rrggbb", "outline_width": 1〜40}}、
+                 分割は {"dir": "rows"(上から)|"cols"(右から左), "sizes": [割合…], "tilts": [境目の傾き -0.25〜0.25…], "items": [子…]}。
+                 manga_layout_patterns の木を土台にするとよい
+          gaps: {"gutter_x": 横の間隔, "gutter_y": 縦の間隔, "margin": 余白}(ピクセル。0 でコマが接する・裁ち落とし。既定 16/28/50)
+          style: {"background": 地の色, "border_color": 枠線の色, "border_width": 太さ}(既定 #ffffff/#000000/4。回想は黒地に白線など)
+          floats: マス目とは別に重ねて置くコマ [{"rect": [x0, y0, x1, y1](ページに対する割合), "after": 読む順でマス目の何コマ目の後ろか,
+                  "z": 重なり順(既定 1。前面), 葉と同じ形・枠線・cutout}]。cutout(背景を消す)なら人物だけを見せる
+        """
+        return await _call("PUT", f"/api/manga-v2/{story_id}/page-layout", {"template": template, "pages": pages})
+
+    @mcp.tool()
+    async def manga_reset_page_layout(story_id: int, template: str = "grid4") -> dict[str, Any]:
+        """ページごとのコマ割りをやめて、テンプレートの割り付けに戻す。"""
+        return await _call("DELETE", f"/api/manga-v2/{story_id}/page-layout?template={template}")
+
+    @mcp.tool()
+    async def manga_cutout(scene_id: int, method: str = "local", max_size: int = 512) -> list[TextContent | ImageContent]:
+        """
+        シーンのコマの絵の背景を消した結果を作って見せる(ページのコマ割りで cutout を付けたコマに使われる)。
+        method: "local"(この PC、無料。合成のときにも無ければ作る) / "novelai"(NovelAI の背景の削除。約 65 Anlas、
+        Opus でも無料にならない。作ると local より優先される)。
+        """
+        if method not in ("local", "novelai"):
+            raise ValueError("method は local か novelai です")
+        path = f"/api/manga-v2/scenes/{scene_id}/cutout" + ("/novelai" if method == "novelai" else "")
+        result = await _call("POST", path, timeout=600)
+        return [
+            TextContent(type="text", text=f"{method} で背景を消しました: {result['preview_path']}"),
+            _image_content(_project_file(result["preview_path"]), max_size),
+        ]
 
     @mcp.tool()
     async def manga_get_job(story_id: int) -> dict[str, Any] | None:
