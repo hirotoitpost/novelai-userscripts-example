@@ -148,3 +148,65 @@ def test_manga_style_can_be_left_out() -> None:
     assert build_panel_prompt("1girl", color=True, complexity=None).startswith("manga style, 1girl")
     assert build_panel_prompt("1girl", color=False, complexity=None, manga_style=False).startswith("monochrome, greyscale")
     assert "manga style" not in build_panel_prompt("1girl", color=True, complexity=None, manga_style=False)
+
+
+# ---- コマの形・斜めの境目 ----
+
+
+def _area(polygon: list[tuple[float, float]]) -> float:
+    return abs(sum(ax * by - bx * ay for (ax, ay), (bx, by) in zip(polygon, polygon[1:] + polygon[:1]))) / 2
+
+
+def test_plain_trees_keep_the_same_rectangles() -> None:
+    from python.manga_v2.layout import tree_outlines
+
+    for count in range(1, MAX_TREE_PANELS + 1):
+        for pattern in layout_patterns(count):
+            old = [[(x0, y0), (x1, y0), (x1, y1), (x0, y1)] for x0, y0, x1, y1 in _content_rects(tree_rects(pattern["tree"]))]
+            new = [[(round(x), round(y)) for x, y in outline] for outline, _ in tree_outlines(pattern["tree"])]
+            assert new == old, pattern["id"]
+
+
+def test_tilted_divider_makes_matching_trapezoids() -> None:
+    from python.manga_v2.layout import tree_outlines
+
+    tree = normalize_tree({"dir": "rows", "sizes": [0.5, 0.5], "tilts": [0.1], "items": [PANEL, PANEL]})
+    (top, _), (bottom, _) = tree_outlines(tree)
+    # 上のコマの下の辺と下のコマの上の辺は同じ傾きで、間隔は一定
+    top_left = max(y for x, y in top if x == min(px for px, _ in top))
+    top_right = max(y for x, y in top if x == max(px for px, _ in top))
+    bottom_left = min(y for x, y in bottom if x == min(px for px, _ in bottom))
+    bottom_right = min(y for x, y in bottom if x == max(px for px, _ in bottom))
+    assert top_left > top_right and bottom_left - top_left == pytest.approx(bottom_right - top_right, abs=1)
+    # 傾けても2つのコマで本文領域を分け合う(面積はほぼ同じ)
+    assert _area(top) == pytest.approx(_area(bottom), rel=0.02)
+    # 傾きは、隣のコマがつぶれない範囲に収める
+    assert normalize_tree({"dir": "rows", "sizes": [0.5, 0.5], "tilts": [0.9], "items": [PANEL, PANEL]})["tilts"][0] <= 0.25
+
+
+def test_leaf_shapes_stay_inside_their_cell() -> None:
+    from python.manga_v2.compose import inscribed_rect
+    from python.manga_v2.layout import PanelShape, tree_outlines
+
+    star = [[0.5, 0.0], [0.62, 0.38], [1.0, 0.38], [0.69, 0.62], [0.81, 1.0], [0.5, 0.76], [0.19, 1.0], [0.31, 0.62], [0.0, 0.38], [0.38, 0.38]]
+    tree = normalize_tree({"dir": "cols", "sizes": [0.5, 0.5], "tilts": [0.1], "items": [
+        {"shape": "ellipse"},
+        {"dir": "rows", "sizes": [0.5, 0.5], "items": [{"shape": "triangle", "point": "down", "border": False}, {"shape": "polygon", "points": star}]},
+    ]})
+    outlines = tree_outlines(tree)
+    assert all(len(o) >= 3 for o, _ in outlines) and [b for _, b in outlines] == [True, False, True]
+    # 楕円は斜めの境目で切られ、左のコマの領域にはみ出さない
+    ellipse, triangle = outlines[0][0], outlines[1][0]
+    assert max(y for _, y in triangle) <= 875 and min(x for x, _ in ellipse) >= min(x for x, _ in outlines[0][0])
+    for outline, _ in outlines:
+        xs, ys = [x for x, _ in outline], [y for _, y in outline]
+        shape = PanelShape((round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys))), tuple((round(x), round(y)) for x, y in outline))
+        # 吹き出しを置く範囲は形の内側
+        x0, y0, x1, y1 = inscribed_rect(shape)
+        assert shape.rect[0] <= x0 < x1 <= shape.rect[2] and shape.rect[1] <= y0 < y1 <= shape.rect[3]
+    # おかしな形は弾く
+    for bad in ({"shape": "star"}, {"shape": "triangle", "point": "nw"}, {"shape": "polygon", "points": [[0, 0], [1, 1]]}):
+        with pytest.raises(ValueError):
+            normalize_tree(bad)
+    # 何も決めていない葉は、ふつうのコマ
+    assert normalize_tree({"shape": "rect"}) == PANEL and normalize_tree({"shape": "rect", "border": False}) == {"shape": "rect", "border": False}
