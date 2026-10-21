@@ -12,6 +12,8 @@ import {
   apiFetch,
   type CharacterPromptInput,
 } from '../api'
+import ImageCropDialog from '../components/ImageCropDialog'
+import { canReadClipboard, readClipboardImage, usePasteImage } from '../imagePaste'
 import './LLMPage.css'
 
 type LLMTab = 'prompt_format' | 'char_gen' | 'story_draft' | 'aux_text' | 'metadata_gen' | 'reverse_prompt'
@@ -602,6 +604,24 @@ function ReversePromptPanel() {
     reader.readAsDataURL(file)
   }, [])
 
+  // 切り抜く前の画像(「元に戻す」で戻す)と、切り抜きのダイアログ
+  const [original, setOriginal] = useState<string | null>(null)
+  const [cropping, setCropping] = useState(false)
+
+  const takeFile = useCallback((file: File) => { setOriginal(null); handleFile(file) }, [handleFile])
+  // ページのどこで Ctrl+V しても、クリップボードの画像を使う
+  usePasteImage(true, takeFile)
+
+  async function pasteFromClipboard() {
+    try {
+      const file = await readClipboardImage()
+      if (file) takeFile(file)
+      else setError('クリップボードに画像がありません。')
+    } catch (e) {
+      setError(`クリップボードを読めませんでした(Ctrl+V で貼り付けてください): ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   const handleRun = async () => {
     if (!token || !image) return
     setRunning(true)
@@ -680,7 +700,7 @@ function ReversePromptPanel() {
         className={['llm-drop', dragOver ? 'llm-drop--over' : '', image ? 'llm-drop--has-image' : ''].join(' ')}
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
-        onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}
+        onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) takeFile(f) }}
         onClick={() => fileInputRef.current?.click()}
         role="button"
         tabIndex={0}
@@ -689,13 +709,40 @@ function ReversePromptPanel() {
       >
         {image
           ? <img className="llm-drop-thumb" src={image} alt="解析対象画像" />
-          : <span>画像をドロップ / クリックして選択</span>}
+          : <span>画像をドロップ / クリックして選択 / Ctrl+V で貼り付け</span>}
       </div>
       <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={e => {
-        const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''
+        const f = e.target.files?.[0]; if (f) takeFile(f); e.target.value = ''
       }} />
-      {image && (
-        <button type="button" className="llm-clear-btn" onClick={() => { setImage(null); setResult(null) }}>✕ 画像をクリア</button>
+      <div className="llm-image-actions">
+        {canReadClipboard() && (
+          <button type="button" className="llm-clear-btn" onClick={() => void pasteFromClipboard()}>📋 クリップボードから貼り付け</button>
+        )}
+        {image && (
+          <button type="button" className="llm-clear-btn" onClick={() => setCropping(true)}>✂ 切り抜く</button>
+        )}
+        {original && (
+          <button type="button" className="llm-clear-btn" onClick={() => { setImage(original); setOriginal(null); setResult(null) }}>↺ 切り抜く前に戻す</button>
+        )}
+        {image && (
+          <button type="button" className="llm-clear-btn" onClick={() => { setImage(null); setOriginal(null); setResult(null) }}>✕ 画像をクリア</button>
+        )}
+      </div>
+      {original && (
+        <p className="llm-panel-desc">切り抜いた画像なので、画像に埋め込まれた NovelAI の生成情報は使わず、タグを推定します。</p>
+      )}
+      {cropping && image && (
+        <ImageCropDialog
+          src={image}
+          note="切り抜くと、画像に埋め込まれた NovelAI の生成情報(プロンプト・設定)は使えなくなり、タグの推定だけになります。"
+          onCancel={() => setCropping(false)}
+          onCrop={cropped => {
+            setOriginal(prev => prev ?? image)
+            setImage(cropped)
+            setResult(null)
+            setCropping(false)
+          }}
+        />
       )}
       <button className="llm-run-btn" onClick={() => void handleRun()} disabled={running || !image}>
         {running ? <span className="llm-spinner" /> : 'プロンプトを逆引き'}

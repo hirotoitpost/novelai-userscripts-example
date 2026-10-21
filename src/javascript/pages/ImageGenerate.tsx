@@ -14,6 +14,8 @@ import {
 } from '../api'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
 import { insertTag } from '../tagInsert'
+import ImageCropDialog from '../components/ImageCropDialog'
+import { canReadClipboard, readClipboardImage, usePasteImage } from '../imagePaste'
 import './ImageGenerate.css'
 
 // プリセットは挿絵パネルと共用しており、バックエンドが受け付けるモデルはこの3つだけ。
@@ -179,6 +181,23 @@ export default function ImageGenerate() {
     reader.onload = (e) => setI2iImage(e.target?.result as string)
     reader.readAsDataURL(file)
   }, [])
+
+  // i2i の参照画像: 切り抜く前の画像(「元に戻す」で戻す)と、切り抜きのダイアログ
+  const [i2iOriginal, setI2iOriginal] = useState<string | null>(null)
+  const [i2iCropping, setI2iCropping] = useState(false)
+  const takeI2iFile = useCallback((file: File) => { setI2iOriginal(null); handleI2iFile(file) }, [handleI2iFile])
+  // Image-to-Image を使っているあいだは、ページのどこで Ctrl+V しても参照画像にする
+  usePasteImage(i2iEnabled, takeI2iFile)
+
+  const pasteI2iFromClipboard = async () => {
+    try {
+      const file = await readClipboardImage()
+      if (file) takeI2iFile(file)
+      else setError('クリップボードに画像がありません。')
+    } catch (e) {
+      setError(`クリップボードを読めませんでした(Ctrl+V で貼り付けてください): ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   const loadPresets = useCallback(async () => {
     if (!token) return
@@ -1139,7 +1158,7 @@ export default function ImageGenerate() {
                     e.preventDefault()
                     setI2iDragOver(false)
                     const f = e.dataTransfer.files[0]
-                    if (f) handleI2iFile(f)
+                    if (f) takeI2iFile(f)
                   }}
                   onClick={() => i2iFileInputRef.current?.click()}
                   role="button"
@@ -1149,7 +1168,7 @@ export default function ImageGenerate() {
                 >
                   {i2iImage
                     ? <img className="ig-i2i-thumb" src={i2iImage} alt="参照画像" />
-                    : <span>参照画像をドロップ / クリック</span>}
+                    : <span>参照画像をドロップ / クリック / Ctrl+V で貼り付け</span>}
                 </div>
 
                 <input
@@ -1159,19 +1178,47 @@ export default function ImageGenerate() {
                   hidden
                   onChange={e => {
                     const f = e.target.files?.[0]
-                    if (f) handleI2iFile(f)
+                    if (f) takeI2iFile(f)
                     e.target.value = ''
                   }}
                 />
 
-                {i2iImage && (
-                  <button
-                    type="button"
-                    className="ig-i2i-clear"
-                    onClick={() => setI2iImage(null)}
-                  >
-                    ✕ 画像をクリア
-                  </button>
+                <div className="ig-i2i-actions">
+                  {canReadClipboard() && (
+                    <button type="button" className="ig-i2i-clear" onClick={() => void pasteI2iFromClipboard()}>
+                      📋 クリップボードから貼り付け
+                    </button>
+                  )}
+                  {i2iImage && (
+                    <button type="button" className="ig-i2i-clear" onClick={() => setI2iCropping(true)}>✂ 切り抜く</button>
+                  )}
+                  {i2iOriginal && (
+                    <button type="button" className="ig-i2i-clear" onClick={() => { setI2iImage(i2iOriginal); setI2iOriginal(null) }}>
+                      ↺ 切り抜く前に戻す
+                    </button>
+                  )}
+                  {i2iImage && (
+                    <button
+                      type="button"
+                      className="ig-i2i-clear"
+                      onClick={() => { setI2iImage(null); setI2iOriginal(null) }}
+                    >
+                      ✕ 画像をクリア
+                    </button>
+                  )}
+                </div>
+                {i2iCropping && i2iImage && (
+                  <ImageCropDialog
+                    src={i2iImage}
+                    title="参照画像を切り抜く"
+                    note="生成サイズの比(縦長・横長・正方形)に合わせて切り抜くと、絵が引き伸ばされずに済みます。"
+                    onCancel={() => setI2iCropping(false)}
+                    onCrop={cropped => {
+                      setI2iOriginal(prev => prev ?? i2iImage)
+                      setI2iImage(cropped)
+                      setI2iCropping(false)
+                    }}
+                  />
                 )}
 
                 <div className="ig-field ig-field--row">
