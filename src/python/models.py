@@ -1265,6 +1265,8 @@ class MangaV2PageLayoutItem(BaseModel):
     gaps: Optional[dict[str, float]] = None
     # tree のページの見た目: 地の色(background)・枠線の色(border_color、#rrggbb)・太さ(border_width)
     style: Optional[dict[str, Any]] = None
+    # tree のページに重ねて置くコマ: [{"rect": [x0, y0, x1, y1](ページに対する割合), "after": 読む順の位置, "z": 重なり順, 形・枠線}]
+    floats: Optional[list[dict[str, Any]]] = None
 
 
 class MangaV2PageLayoutEditRequest(BaseModel):

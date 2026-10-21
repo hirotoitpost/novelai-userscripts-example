@@ -31,6 +31,16 @@ export interface Leaf {
   /** このコマだけの枠線の色・太さ(無ければページの設定) */
   border_color?: string
   border_width?: number
+  /** 重なり順(大きいほど前面。既定 0) */
+  z?: number
+}
+
+/** 重ねて置くコマ(マス目とは別に、ページの好きな位置に置く)。rect はページに対する割合 */
+export interface FloatPanel extends Leaf {
+  rect: Box
+  /** 読む順で、マス目の何コマ目の後ろか(0 なら先頭) */
+  after: number
+  z: number
 }
 
 export interface Split {
@@ -78,6 +88,7 @@ export function tidyLeaf(leaf: Leaf): Tree {
   if (leaf.border === false) out.border = false
   if (leaf.border_color !== undefined) out.border_color = leaf.border_color
   if (leaf.border_width !== undefined) out.border_width = leaf.border_width
+  if (leaf.z) out.z = leaf.z
   return Object.keys(out).length === 1 && out.shape === 'rect' ? 'panel' : out
 }
 
@@ -115,6 +126,13 @@ function dividerLine(split: Split, box: Box, at: number, tilt: number): [Point, 
   const [x0, y0, x1, y1] = box
   if (split.dir === 'rows') return [[x0, y0 + (y1 - y0) * (at + tilt)], [x1, y0 + (y1 - y0) * (at - tilt)]]
   return [[x1 - (x1 - x0) * (at + tilt), y0], [x1 - (x1 - x0) * (at - tilt), y1]]
+}
+
+/** 重ねて置くコマの輪郭(ページに対する割合) */
+export function floatOutline(item: FloatPanel): Point[] {
+  const [x0, y0, x1, y1] = item.rect
+  if (item.shape === 'rect') return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+  return shapeOutline(item, item.rect)
 }
 
 /** 葉の形の輪郭(枠 box に収めた形) */

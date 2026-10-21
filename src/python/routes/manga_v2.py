@@ -1374,12 +1374,14 @@ def _page_layout_view(story: dict[str, Any], template: str, layouts: list[Any]) 
     for plan in plan_pages(template, len(scenes), layouts, groups):
         gaps = dict(DEFAULT_GAPS)
         style = dict(DEFAULT_STYLE)
+        floats: list[Any] = []
         if plan.layout is not None:
             source = layouts[plan.layout]
             tree = source.get("tree") if isinstance(source, dict) else None
             if tree is not None:
                 gaps = normalize_gaps(source.get("gaps"))
                 style = normalize_style(source.get("style"))
+                floats = list(source.get("floats") or [])
             count = layout_size(source)
         else:
             tree = TEMPLATE_TREES.get(plan.template or "")
@@ -1393,6 +1395,7 @@ def _page_layout_view(story: dict[str, Any], template: str, layouts: list[Any]) 
             "tree": tree,
             "gaps": gaps,
             "style": style,
+            "floats": floats,
             "spread": spec.width > PAGE_WIDTH,
             # 各コマの輪郭(ページの幅・高さに対する割合)。斜めの枠もそのまま出す
             "panels": [
@@ -1460,7 +1463,7 @@ async def put_page_layout(story_id: int, req: MangaV2PageLayoutEditRequest) -> d
     for index, page in enumerate(req.pages, start=1):
         if page.tree is not None:
             try:
-                layouts.append(tree_layout(normalize_tree(page.tree), page.gaps, page.style))
+                layouts.append(tree_layout(normalize_tree(page.tree), page.gaps, page.style, page.floats))
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=f"{index}ページ目: {exc}")
         elif page.layout is not None and page.layout < len(current):

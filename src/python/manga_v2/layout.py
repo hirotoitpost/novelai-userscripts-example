@@ -152,6 +152,8 @@ class PanelShape:
     # 枠線の色(RGB)と太さ(ピクセル。0 なら描かない)
     border_color: tuple[int, int, int] = (0, 0, 0)
     border_width: int = 4
+    # 重なり順(大きいほど前面)。同じなら読む順の後ろが前
+    z: int = 0
 
     @property
     def is_rect(self) -> bool:
@@ -206,6 +208,7 @@ def layout_page(layout: PageLayout) -> PageSpec:
             bool(panel.get("border", True)),
             hex_rgb(panel.get("border_color") or style["border_color"]),
             int(panel.get("border_width", style["border_width"])),
+            int(panel.get("z", 0)),
         ))
     return PageSpec(width, PAGE_HEIGHT, tuple(shapes), hex_rgb(style["background"]))
 
@@ -342,6 +345,9 @@ def _normalize_leaf(leaf: Any) -> LayoutTree:
         node["border_color"] = _color(leaf["border_color"])
     if leaf.get("border_width") is not None:
         node["border_width"] = _border_width(leaf["border_width"])
+    # 重なり順(0 が既定。前面へ・背面へで変える)
+    if leaf.get("z"):
+        node["z"] = _z(leaf["z"])
     # 何も決めていなければ、ふつうのコマ
     return PANEL if node == {"shape": "rect"} else node
 
@@ -592,29 +598,87 @@ def _tidy(polygon: Polygon) -> Polygon:
     return points
 
 
+# ---- 重ねて置くコマ(コマ割りのマス目とは別に、ページの好きな位置に置く) ----
+
+MAX_FLOATS = 8
+_MIN_FLOAT_SIZE = 0.04
+_MAX_Z = 99
+
+
+def _z(value: Any) -> int:
+    return min(max(int(value), -_MAX_Z), _MAX_Z)
+
+
+def normalize_floats(floats: Sequence[Mapping[str, Any]] | None, grid_count: int) -> list[dict[str, Any]]:
+    """
+    重ねて置くコマを検査して整える。rect はページに対する割合の (x0, y0, x1, y1)、after は読む順でマス目の何コマ目の
+    後ろか(0 なら先頭)、z は重なり順(既定 1。マス目のコマの前)。形・枠線は葉と同じ項目。
+    """
+    result: list[dict[str, Any]] = []
+    for item in floats or []:
+        if len(result) >= MAX_FLOATS:
+            raise ValueError(f"重ねて置くコマは1ページに {MAX_FLOATS} までです。")
+        rect = [min(max(float(v), 0.0), 1.0) for v in item.get("rect") or []]
+        if len(rect) != 4 or rect[2] - rect[0] < _MIN_FLOAT_SIZE or rect[3] - rect[1] < _MIN_FLOAT_SIZE:
+            raise ValueError("重ねて置くコマの位置・大きさが正しくありません。")
+        leaf = _normalize_leaf({k: v for k, v in item.items() if k not in ("rect", "after", "z")} or PANEL)
+        node: dict[str, Any] = {} if leaf == PANEL else dict(leaf)
+        node["rect"] = [round(v, 4) for v in rect]
+        node["after"] = min(max(int(item.get("after", grid_count)), 0), grid_count)
+        node["z"] = _z(item.get("z", 1))
+        result.append(node)
+    return result
+
+
+def _float_outline(item: Mapping[str, Any]) -> Polygon:
+    x0, y0, x1, y1 = item["rect"]
+    box = (x0 * PAGE_WIDTH, y0 * PAGE_HEIGHT, x1 * PAGE_WIDTH, y1 * PAGE_HEIGHT)
+    shape = item.get("shape", "rect")
+    if shape == "rect":
+        return [(box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3])]
+    return _shape_outline(item, shape, *box)
+
+
 def tree_layout(
-    tree: LayoutTree, gaps: Mapping[str, Any] | None = None, style: Mapping[str, Any] | None = None
+    tree: LayoutTree,
+    gaps: Mapping[str, Any] | None = None,
+    style: Mapping[str, Any] | None = None,
+    floats: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     木のコマ割りを、ページごとのコマ割り(manga_v2_page_layouts の今の形)にする。合成は panels の輪郭を使い、
-    画面で直せるように木と間隔・余白・見た目(既定と違うときだけ)も一緒に持つ。
+    画面で直せるように木と間隔・余白・見た目・重ねて置くコマ(既定と違うときだけ)も一緒に持つ。
+    panels は読む順: マス目のコマの間に、重ねて置くコマを after の位置で入れる。
     """
     g = normalize_gaps(gaps)
     look = normalize_style(style)
-    panels = []
+    grid = []
     for (outline, border), leaf in zip(tree_outlines(tree, g), tree_leaves(tree)):
-        panel: dict[str, Any] = {"points": [[round(x / PAGE_WIDTH, 4), round(y / PAGE_HEIGHT, 4)] for x, y in outline], "border": border}
-        if isinstance(leaf, Mapping):
-            for key in ("border_color", "border_width"):
-                if leaf.get(key) is not None:
-                    panel[key] = leaf[key]
-        panels.append(panel)
+        grid.append(_panel_entry(outline, border, leaf if isinstance(leaf, Mapping) else {}))
+    extra = normalize_floats(floats, len(grid))
+    panels: list[dict[str, Any]] = []
+    for index in range(len(grid) + 1):
+        for item in extra:
+            if item["after"] == index:
+                panels.append(_panel_entry(_tidy(_float_outline(item)), item.get("border") is not False, item))
+        if index < len(grid):
+            panels.append(grid[index])
     layout: dict[str, Any] = {"spread": False, "panels": panels, "tree": tree}
+    if extra:
+        layout["floats"] = extra
     if g != DEFAULT_GAPS:
         layout["gaps"] = g
     if look != DEFAULT_STYLE:
         layout["style"] = look
     return layout
+
+
+def _panel_entry(outline: Polygon, border: bool, props: Mapping[str, Any]) -> dict[str, Any]:
+    panel: dict[str, Any] = {"points": [[round(x / PAGE_WIDTH, 4), round(y / PAGE_HEIGHT, 4)] for x, y in outline], "border": border}
+    for key in ("border_color", "border_width", "z"):
+        if props.get(key):
+            panel[key] = props[key]
+    return panel
 
 
 def _rows(counts: Sequence[int], heights: Sequence[float] | None = None) -> LayoutTree:
