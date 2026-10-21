@@ -11,7 +11,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from .detect import detect_heads
 from .speakers import CastMember, identify_heads
@@ -533,9 +533,17 @@ def _draw_picture(
             with Image.open(content.picture_path) as frame:
                 image = frame.convert("RGB").resize(image.size, Image.Resampling.LANCZOS)
         if cutout is not None:
+            if content.picture_path is None:
+                # AI で拡大した絵があれば、そちらを使う(頭の位置も同じ倍率にする)
+                image, source_heads = _upscaled(image, content.image_path, source_heads)
             image = _with_cutout(image, content.image_path)
-        picture, scale, left, top = _cover(image, width, height, content.zoom_step, source_heads, focus_indexes)
+        if cutout is not None and image.mode == "RGBA" and cutout.get("fit") == "contain":
+            picture, scale, left, top = _contain(image, width, height)
+        else:
+            picture, scale, left, top = _cover(image, width, height, content.zoom_step, source_heads, focus_indexes)
         if picture.mode == "RGBA":
+            if cutout and cutout.get("fade"):
+                picture = _fade_bottom(picture)
             _paste_cutout(page, picture, (x0, y0), cutout or {})
         else:
             page.paste(picture, (x0, y0))
@@ -702,8 +710,24 @@ def _draw_lettering(
     return elements
 
 
+def _upscaled(image: Image.Image, image_path: Path, heads: list[Rect]) -> tuple[Image.Image, list[Rect]]:
+    """AI で拡大した絵(cutout.make_upscaled)があれば、それと、同じ倍率にした頭の位置。無ければそのまま。"""
+    from . import cutout
+
+    path = cutout.upscaled_path(image_path)
+    if not path.is_file():
+        return image, heads
+    with Image.open(path) as larger:
+        upscaled = larger.convert("RGB")
+    ratio = upscaled.width / image.width
+    return upscaled, [tuple(round(v * ratio) for v in head) for head in heads]  # type: ignore[misc]
+
+
 def _with_cutout(image: Image.Image, image_path: Path) -> Image.Image:
-    """背景を消した絵(人物の外は透明)。切り分けに失敗したら、元の絵のまま(合成は止めない)。"""
+    """
+    背景を消した絵(人物の外は透明)。境目に背景の色がにじまないよう、切り抜きの縁を少し内側に削ってから軽くぼかす。
+    切り分けに失敗したら、元の絵のまま(合成は止めない)。
+    """
     from . import cutout
 
     try:
@@ -711,9 +735,57 @@ def _with_cutout(image: Image.Image, image_path: Path) -> Image.Image:
     except Exception:  # noqa: BLE001 モデルを取れない等。背景を残して描く
         logging.getLogger(__name__).warning("背景を消せませんでした: %s", image_path, exc_info=True)
         return image
+    edge = max(1, round(image.width / 832))
+    mask = mask.resize(image.size, Image.Resampling.LANCZOS)
+    mask = mask.filter(ImageFilter.MinFilter(edge * 2 + 1)).filter(ImageFilter.GaussianBlur(edge * 0.8))
     rgba = image.convert("RGBA")
-    rgba.putalpha(mask.resize(image.size, Image.Resampling.LANCZOS))
+    rgba.putalpha(mask)
     return rgba
+
+
+# 人物全体を収めるときに、人物のまわりに残す余白(人物の大きさに対する割合)
+_CONTAIN_PAD = 0.03
+
+
+def _contain(img: Image.Image, width: int, height: int) -> tuple[Image.Image, float, int, int]:
+    """
+    背景を消した絵の、人物の写っている範囲を width×height に収める(切らない)。左右は真ん中、足元は下にそろえる。
+    戻り値は _cover と同じ (絵, 拡大率, 左端, 上端)。コマ座標 = 元座標 × 拡大率 − 左端/上端。
+    """
+    box = img.getchannel("A").point(lambda v: 255 if v > 24 else 0).getbbox() or (0, 0, img.width, img.height)
+    pad_x = round((box[2] - box[0]) * _CONTAIN_PAD)
+    pad_y = round((box[3] - box[1]) * _CONTAIN_PAD)
+    x0, y0 = max(box[0] - pad_x, 0), max(box[1] - pad_y, 0)
+    # 足元(下)には余白を付けない(枠の下端にそろえる)
+    x1, y1 = min(box[2] + pad_x, img.width), box[3]
+    figure = img.crop((x0, y0, x1, y1))
+    scale = min(width / figure.width, height / figure.height)
+    fw, fh = max(1, round(figure.width * scale)), max(1, round(figure.height * scale))
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    ox, oy = (width - fw) // 2, height - fh
+    canvas.alpha_composite(figure.resize((fw, fh), Image.Resampling.LANCZOS), (ox, oy))
+    return canvas, scale, round(x0 * scale) - ox, round(y0 * scale) - oy
+
+
+# 下端をぼかすときの、ぼかす高さ(見えている人物の高さに対する割合)
+_FADE_SHARE = 0.22
+
+
+def _fade_bottom(picture: Image.Image) -> Image.Image:
+    """人物の下の方を、下に向かってだんだん透明にする(枠で切れた所を目立たなくする)。"""
+    alpha = picture.getchannel("A")
+    box = alpha.point(lambda v: 255 if v > 24 else 0).getbbox()
+    if box is None:
+        return picture
+    bottom = box[3]
+    start = bottom - max(1, round((box[3] - box[1]) * _FADE_SHARE))
+    ramp = np.ones((picture.height, 1), np.float32)
+    ramp[start:bottom, 0] = np.linspace(1.0, 0.0, bottom - start, dtype=np.float32)
+    ramp[bottom:, 0] = 0.0
+    faded = (np.asarray(alpha, np.float32) * ramp).clip(0, 255).astype(np.uint8)
+    result = picture.copy()
+    result.putalpha(Image.fromarray(faded, "L"))
+    return result
 
 
 def _paste_cutout(page: Image.Image, picture: Image.Image, at: tuple[int, int], options: Mapping[str, Any]) -> None:

@@ -507,7 +507,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
         pages の各要素: {"tree": 分割の木, "gaps": {...}, "style": {...}, "floats": [...]} か、写したページを残す {"layout": 番号}
           tree: 葉 "panel"(ふつうのコマ)か {"shape": "rect"|"ellipse"|"triangle"|"polygon", "point": "up"|"down"|"left"|"right"(三角),
                  "points": [[x, y], …](多角形、枠に対する割合), "border": false(枠線なし), "border_color": "#rrggbb",
-                 "border_width": 0〜20, "z": 重なり順, "cutout": {"outline": bool, "outline_color": "#rrggbb", "outline_width": 1〜40}}、
+                 "border_width": 0〜20, "z": 重なり順, "cutout": {"outline": bool, "outline_color": "#rrggbb", "outline_width": 1〜40,
+                 "fit": "cover"(枠いっぱい・はみ出しは切る)|"contain"(人物全体を収め足元を下にそろえる), "fade": bool(下端をぼかす)}}、
                  分割は {"dir": "rows"(上から)|"cols"(右から左), "sizes": [割合…], "tilts": [境目の傾き -0.25〜0.25…], "items": [子…]}。
                  manga_layout_patterns の木を土台にするとよい
           gaps: {"gutter_x": 横の間隔, "gutter_y": 縦の間隔, "margin": 余白}(ピクセル。0 でコマが接する・裁ち落とし。既定 16/28/50)
@@ -537,6 +538,15 @@ def register_manga_tools(mcp: MCPServer) -> None:
             TextContent(type="text", text=f"{method} で背景を消しました: {result['preview_path']}"),
             _image_content(_project_file(result["preview_path"]), max_size),
         ]
+
+    @mcp.tool()
+    async def manga_upscale_panel(scene_id: int) -> str:
+        """
+        シーンのコマの絵を AI で2倍に拡大して残す(この PC、無料、1枚40秒ほど)。背景を消したコマ(cutout)を合成するときに
+        使われ、大きく貼っても輪郭がくっきりする。
+        """
+        result = await _call("POST", f"/api/manga-v2/scenes/{scene_id}/upscale", timeout=600)
+        return f"拡大しました: {result['upscaled_path']}"
 
     @mcp.tool()
     async def manga_get_job(story_id: int) -> dict[str, Any] | None:

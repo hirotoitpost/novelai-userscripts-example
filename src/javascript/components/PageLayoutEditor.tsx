@@ -46,7 +46,7 @@ interface Props {
 }
 
 /** シーンのコマの絵の切り抜きの状態(/api/manga-v2/scenes/{id}/cutout) */
-interface CutoutStatus { methods: string[]; preview_path: string | null; width: number; height: number }
+interface CutoutStatus { methods: string[]; preview_path: string | null; width: number; height: number; upscaled: boolean }
 
 async function detail(res: Response): Promise<string> {
   return (await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`
@@ -100,6 +100,17 @@ function CutoutTools({ apiOrigin, sceneId, fileUrl, disabled }: { apiOrigin: str
     setMessage('NovelAI で背景を消しました。次の合成から使います。')
   })
 
+  const upscale = () => run(async () => {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/upscale`, { method: 'POST' })
+    if (!res.ok) throw new Error(await detail(res))
+    setMessage('AI で2倍に拡大しました。次の合成から、大きく貼っても輪郭がくっきりします。')
+  })
+
+  const dropUpscale = () => run(async () => {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/upscale`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(await detail(res))
+  })
+
   const dropNovelai = () => run(async () => {
     const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/cutout`, { method: 'DELETE' })
     if (!res.ok) throw new Error(await detail(res))
@@ -117,6 +128,17 @@ function CutoutTools({ apiOrigin, sceneId, fileUrl, disabled }: { apiOrigin: str
         {status?.methods.includes('novelai') && (
           <button type="button" disabled={off} onClick={() => void dropNovelai()}>NovelAI の切り抜きをやめる</button>
         )}
+      </div>
+      <div className="ple-row">
+        {status?.upscaled
+          ? <button type="button" disabled={off} onClick={() => void dropUpscale()}>拡大をやめる</button>
+          : (
+            <button type="button" disabled={off || !status} onClick={() => void upscale()}
+              title="この PC のアニメ絵向けの拡大で、絵を2倍にします(無料・1枚40秒ほど)">
+              {working ? '処理中…' : 'AI で拡大して画質を上げる(この PC・約40秒)'}
+            </button>
+          )}
+        <span className="story-muted">{status?.upscaled ? '拡大した絵を使います' : ''}</span>
       </div>
       <p className="story-muted">
         合成で使う切り抜き: {status?.methods.includes('novelai') ? 'NovelAI で作ったもの' : 'この PC で作るもの(合成のときに作ります)'}
@@ -747,6 +769,16 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
                   </label>
                   {target.leaf.cutout && (
                     <>
+                      <select value={target.leaf.cutout.fit ?? 'cover'} disabled={off} aria-label="人物の収め方"
+                        onChange={e => editLeaf({ cutout: { ...target.leaf.cutout!, fit: e.target.value as 'cover' | 'contain' } })}>
+                        <option value="cover">枠いっぱい(はみ出しは切る)</option>
+                        <option value="contain">人物全体を収める(足元を下に)</option>
+                      </select>
+                      <label className="ple-check">
+                        <input type="checkbox" checked={!!target.leaf.cutout.fade} disabled={off}
+                          onChange={e => editLeaf({ cutout: { ...target.leaf.cutout!, fade: e.target.checked } })} />
+                        下端をぼかす
+                      </label>
                       <label className="ple-check">
                         <input type="checkbox" checked={target.leaf.cutout.outline} disabled={off}
                           onChange={e => editLeaf({ cutout: { ...target.leaf.cutout!, outline: e.target.checked } })} />
