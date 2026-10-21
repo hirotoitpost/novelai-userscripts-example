@@ -6,6 +6,9 @@
 - local: この PC でアニメ絵の人物を切り分ける(anime_seg、無料)。合成のときに無ければ作る
 - novelai: NovelAI のディレクターツール(背景の削除)。1枚 65 Anlas 前後で Opus でも無料にならないので、
   画面で選んだときだけ作る。あれば local より優先する
+
+背景を消したコマを大きく貼るときのために、絵を AI で2倍に拡大したもの(`<絵の名前>.upscaled.png`)も作れる
+(この PC のアニメ絵向けの拡大。無料だが1枚40秒ほどかかるので、画面・MCP で選んだときだけ作る)。あれば合成で使う。
 """
 
 from __future__ import annotations
@@ -61,6 +64,26 @@ def mask_from_novelai(images: list[Image.Image], size: tuple[int, int]) -> Image
 def save_mask(image_path: Path, method: str, mask: Image.Image) -> Path:
     path = mask_path(image_path, method)
     mask.convert("L").save(path)
+    return path
+
+
+def upscaled_path(image_path: Path) -> Path:
+    return image_path.with_name(f"{image_path.stem}.upscaled.png")
+
+
+UPSCALE = 2
+
+
+def make_upscaled(image_path: Path) -> Path:
+    """絵を AI で2倍に拡大して残す(既にあればそれ)。"""
+    path = upscaled_path(image_path)
+    if path.is_file():
+        return path
+    from .. import upscaler
+
+    with Image.open(image_path) as source:
+        image = source.convert("RGB")
+    upscaler.enlarge(image, (image.width * UPSCALE, image.height * UPSCALE)).save(path)
     return path
 
 

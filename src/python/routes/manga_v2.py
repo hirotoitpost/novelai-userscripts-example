@@ -906,7 +906,29 @@ async def get_cutout(scene_id: int) -> dict[str, Any]:
         "preview_path": preview.relative_to(_PROJECT_ROOT).as_posix() if preview.is_file() else None,
         "width": width,
         "height": height,
+        "upscaled": cutout.upscaled_path(image_path).is_file(),
     }
+
+
+@router.post("/scenes/{scene_id}/upscale")
+async def upscale_scene_panel(scene_id: int) -> dict[str, Any]:
+    """
+    シーンのコマの絵を AI で2倍に拡大して残す(この PC。無料、1枚40秒ほど)。背景を消したコマを合成するときに使う
+    (大きく貼っても輪郭がくっきりする)。
+    """
+    from ..manga_v2 import cutout
+
+    image_path = _scene_panel_image(scene_id)
+    path = await asyncio.to_thread(cutout.make_upscaled, image_path)
+    return {"upscaled_path": path.relative_to(_PROJECT_ROOT).as_posix()}
+
+
+@router.delete("/scenes/{scene_id}/upscale", status_code=204)
+async def delete_scene_upscale(scene_id: int) -> None:
+    """AI で拡大した絵をやめる(合成では元の絵を使う)。"""
+    from ..manga_v2 import cutout
+
+    cutout.upscaled_path(_scene_panel_image(scene_id)).unlink(missing_ok=True)
 
 
 @router.delete("/scenes/{scene_id}/cutout", status_code=204)

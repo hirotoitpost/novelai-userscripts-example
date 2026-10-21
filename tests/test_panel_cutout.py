@@ -73,7 +73,7 @@ def test_cutout_panel_shows_only_the_person_with_an_outline(tmp_path: Path) -> N
     floats = [{"rect": [0.2, 0.2, 0.8, 0.6], "after": 1, "border": False,
                "cutout": {"outline": True, "outline_color": "#ffff00", "outline_width": 6}}]
     spec = layout_page(tree_layout(TEMPLATE_TREES["single1"], None, None, floats))
-    assert spec.panels[1].cutout == {"outline": True, "outline_color": "#ffff00", "outline_width": 6}
+    assert spec.panels[1].cutout == {"outline": True, "outline_color": "#ffff00", "outline_width": 6, "fit": "cover", "fade": False}
     style = LetteringStyle(font_path=resolve_font(None), sfx_font_path=resolve_font(None))
     page, _ = compose_page(spec, [PanelContent(back, key="0"), PanelContent(front, key="1")], style)
     x0, y0, x1, y1 = spec.panels[1].rect
@@ -87,11 +87,13 @@ def test_cutout_panel_shows_only_the_person_with_an_outline(tmp_path: Path) -> N
 
 
 def test_normalize_cutout() -> None:
-    assert normalize_cutout(True) == {"outline": False, "outline_color": "#ffffff", "outline_width": 8}
+    assert normalize_cutout(True) == {"outline": False, "outline_color": "#ffffff", "outline_width": 8, "fit": "cover", "fade": False}
     assert normalize_cutout({"outline": True, "outline_width": 99})["outline_width"] == 40
     assert normalize_floats([{"rect": [0, 0, 0.5, 0.5], "cutout": True}], 1)[0]["cutout"]["outline"] is False
     with pytest.raises(ValueError):
         normalize_cutout({"outline_color": "yellow"})
+    with pytest.raises(ValueError):
+        normalize_cutout({"fit": "stretch"})
 
 
 class _FakeTools:
@@ -140,3 +142,56 @@ def test_cutout_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         assert client.get(f"/api/manga-v2/scenes/{scene['id']}/cutout").json()["methods"] == ["local"]
         # 絵の無いシーンは 404
         assert client.post("/api/manga-v2/scenes/99999/cutout").status_code == 404
+
+
+def _compose_one(tmp_path: Path, cut: dict, rect: list[float]) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    back = _image(tmp_path / "back.png", (255, 0, 0))
+    front = _image(tmp_path / "front.png", (0, 0, 255))
+    floats = [{"rect": rect, "after": 1, "border": False, "cutout": cut}]
+    spec = layout_page(tree_layout(TEMPLATE_TREES["single1"], None, None, floats))
+    style = LetteringStyle(font_path=resolve_font(None), sfx_font_path=resolve_font(None))
+    page, _ = compose_page(spec, [PanelContent(back, key="0"), PanelContent(front, key="1")], style)
+    return page, spec.panels[1].rect
+
+
+def test_contain_keeps_the_whole_figure_and_sits_on_the_bottom(tmp_path: Path) -> None:
+    # 横長の枠: cover だと円(人物)の上下が切れるが、contain なら円が丸ごと入り、下端にそろう
+    page, (x0, y0, x1, y1) = _compose_one(tmp_path, {"fit": "contain"}, [0.1, 0.4, 0.9, 0.6])
+    blue = np.asarray(page)[y0:y1, x0:x1, 2] > 200
+    rows = np.where(blue.any(axis=1))[0]
+    assert rows.min() > 0 and rows.max() >= blue.shape[0] - 3
+    cols = np.where(blue.any(axis=0))[0]
+    # 左右は真ん中
+    assert abs((cols.min() + cols.max()) / 2 - blue.shape[1] / 2) < 4
+
+
+def test_fade_makes_the_bottom_transparent(tmp_path: Path) -> None:
+    page, (x0, y0, x1, y1) = _compose_one(tmp_path, {"fit": "contain", "fade": True}, [0.2, 0.2, 0.8, 0.8])
+    arr = np.asarray(page).astype(int)
+    cx = (x0 + x1) // 2
+    blue_rows = [y for y in range(y0, y1) if arr[y, cx, 2] > 150 and arr[y, cx, 0] < 100]
+    # 人物の一番下の辺りは、後ろのコマ(赤)と混ざって透けている
+    bottom = max(y for y in range(y0, y1) if arr[y, cx, 2] > 40)
+    assert arr[bottom, cx, 0] > 100 and blue_rows
+
+
+def test_upscaled_picture_is_used_for_cutout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import upscaler
+
+    calls = []
+
+    def fake_enlarge(image: Image.Image, size: tuple[int, int], *args, **kwargs) -> Image.Image:
+        calls.append(size)
+        return image.resize(size)
+
+    monkeypatch.setattr(upscaler, "enlarge", fake_enlarge)
+    picture = _image(tmp_path / "panel.png", (0, 0, 255))
+    path = cutout.make_upscaled(picture)
+    assert path.is_file() and Image.open(path).size == (800, 800) and calls == [(800, 800)]
+    # 2回目は残したものを使う
+    cutout.make_upscaled(picture)
+    assert len(calls) == 1
+    from python.manga_v2.compose import _upscaled
+
+    image, heads = _upscaled(Image.open(picture), picture, [(10, 20, 30, 40)])
+    assert image.size == (800, 800) and heads == [(20, 40, 60, 80)]

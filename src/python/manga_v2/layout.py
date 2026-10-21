@@ -682,13 +682,24 @@ def tree_layout(
 _MAX_OUTLINE = 40
 
 
+CUTOUT_FITS = ("cover", "contain")
+
+
 def normalize_cutout(value: Any) -> dict[str, Any]:
-    """背景を消す設定: 縁取り(outline)の有無・色・太さ(ピクセル)。True だけなら縁取りなし。"""
+    """
+    背景を消す設定: 縁取り(outline)の有無・色・太さ(ピクセル)、収め方(fit: cover は枠いっぱいに拡大してはみ出しを切る、
+    contain は人物の写っている範囲を枠に収めて足元を下にそろえる)、下端をぼかすか(fade)。True だけなら既定の設定。
+    """
     options = value if isinstance(value, Mapping) else {}
+    fit = options.get("fit") or "cover"
+    if fit not in CUTOUT_FITS:
+        raise ValueError(f"収め方が正しくありません: {fit}")
     return {
         "outline": bool(options.get("outline", False)),
         "outline_color": _color(options.get("outline_color") or "#ffffff"),
         "outline_width": min(max(int(round(float(options.get("outline_width", 8)))), 1), _MAX_OUTLINE),
+        "fit": fit,
+        "fade": bool(options.get("fade", False)),
     }
 
 

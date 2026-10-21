@@ -37,8 +37,15 @@ export interface Leaf {
   cutout?: Cutout
 }
 
-export interface Cutout { outline: boolean; outline_color: string; outline_width: number }
-export const DEFAULT_CUTOUT: Cutout = { outline: false, outline_color: '#ffffff', outline_width: 8 }
+/** fit: cover は枠いっぱいに拡大してはみ出しを切る、contain は人物全体を収めて足元を下にそろえる。fade は下端をぼかす */
+export interface Cutout {
+  outline: boolean
+  outline_color: string
+  outline_width: number
+  fit: 'cover' | 'contain'
+  fade: boolean
+}
+export const DEFAULT_CUTOUT: Cutout = { outline: false, outline_color: '#ffffff', outline_width: 8, fit: 'cover', fade: false }
 
 /** 重ねて置くコマ(マス目とは別に、ページの好きな位置に置く)。rect はページに対する割合 */
 export interface FloatPanel extends Leaf {
