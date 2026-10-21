@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useChunkSync } from '../hooks/useChunkSync'
+import './ChunkPicker.css'
 
 interface Chunk {
   id: string

@@ -13,6 +13,7 @@ import {
   MetadataGenerationSettings, GENERATE_FROM_IMAGE_KEY,
 } from '../api'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
+import { insertTag } from '../tagInsert'
 import './ImageGenerate.css'
 
 // プリセットは挿絵パネルと共用しており、バックエンドが受け付けるモデルはこの3つだけ。
@@ -311,17 +312,11 @@ export default function ImageGenerate() {
     const value   = field === 'prompt' ? prompt : negPrompt
     const setter  = field === 'prompt' ? setPrompt : setNegPrompt
     const ref     = field === 'prompt' ? promptRef : negPromptRef
-    const start   = Math.min(caretRef.current?.start ?? value.length, value.length)
-    const end     = Math.min(caretRef.current?.end   ?? value.length, value.length)
-    const before  = value.slice(0, start)
-    const after   = value.slice(end)
-    // 既にあるカンマ・空白は活かし、足りない分だけ補って "a, X, b" の形にそろえる。
-    const lead  = !before.trim() ? '' : /,\s*$/.test(before) ? (/\s$/.test(before) ? '' : ' ') : ', '
-    const trail = !after.trim()  ? '' : /^\s*,/.test(after)  ? '' : (/^\s/.test(after) ? ',' : ', ')
-    setter(before + lead + text + trail + after)
+    const inserted = insertTag(value, caretRef.current?.start ?? value.length, caretRef.current?.end ?? value.length, text)
+    setter(inserted.value)
 
     // 次のチャンクも続けて同じ場所へ入るよう、挿入した直後にカーソルを進める。
-    const caret = (before + lead + text).length
+    const caret = inserted.caret
     caretRef.current = { field, start: caret, end: caret }
     requestAnimationFrame(() => {
       ref.current?.focus()

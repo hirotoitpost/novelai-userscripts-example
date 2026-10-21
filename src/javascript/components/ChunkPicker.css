@@ -1,0 +1,99 @@
+/* プロンプトチャンクの選択(画像生成ページと物語の編集画面で共用)。色は画像生成ページの変数、無ければ同じ色 */
+.ig-chunk-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.ig-chunk-list {
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--nai-card, #222335);
+  border: 1px solid var(--nai-border, #2d2f45);
+  border-radius: 6px;
+  padding: 0.3rem;
+}
+
+.ig-chunk-category > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--nai-text, #e1e4ff);
+  padding: 0.25rem 0.3rem;
+  border-radius: 4px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.ig-chunk-category > summary:hover { background: rgba(123, 92, 246, 0.08); }
+.ig-chunk-children { padding-left: 0.8rem; }
+
+.ig-chunk-leaf {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 0.3rem;
+  text-align: left;
+  color: var(--nai-text, #e1e4ff);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ig-chunk-leaf:hover:not(:disabled) { background: rgba(123, 92, 246, 0.15); }
+.ig-chunk-leaf:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.ig-chunk-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 0.35rem;
+}
+
+.ig-chunk-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ig-chunk-label { font-size: 0.82rem; }
+.ig-chunk-expansion {
+  font-size: 0.72rem;
+  color: var(--nai-muted, #a1a4bf);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ig-chunk-import {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.ig-chunk-import-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.ig-chunk-import-row .ig-preset-btn { padding: 0.35rem 0.8rem; }
+.ig-chunk-import-row .ig-icon-btn { font-size: 0.75rem; }
+
+.ig-chunk-key-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  background: var(--nai-card, #222335);
+  border: 1px solid var(--nai-border, #2d2f45);
+  border-radius: 6px;
+}
+.ig-chunk-key-form .ig-chunk-note { margin: 0; }
+.ig-chunk-key-form .ig-preset-btn { padding: 0.4rem 0.8rem; align-self: flex-end; }
+
+.ig-chunk-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  color: var(--nai-muted, #a1a4bf);
+}
+.ig-chunk-note--error { color: var(--nai-error, #ff6b8a); }
