@@ -1,0 +1,77 @@
+/* 物語のページの全体のボタン・入力の見た目(.story-section button など)より強くするため、.scene-dir から書く */
+.scene-dir {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: #9a9ac0;
+  margin-top: 0.3rem;
+}
+
+.scene-dir .scene-dir-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.scene-dir .scene-dir-table th {
+  font-weight: 400;
+  text-align: left;
+  padding: 0.1rem 0.3rem;
+}
+
+.scene-dir .scene-dir-table td {
+  padding: 0.15rem 0.3rem;
+  color: #e8e8ff;
+  white-space: nowrap;
+}
+
+.scene-dir .scene-dir-table td:nth-child(3),
+.scene-dir .scene-dir-table td:nth-child(4) { width: 40%; }
+
+.scene-dir select,
+.scene-dir input,
+.scene-dir button {
+  background: #14142a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.75rem;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.scene-dir input { width: 100%; }
+.scene-dir button { cursor: pointer; white-space: nowrap; }
+.scene-dir button:disabled,
+.scene-dir select:disabled,
+.scene-dir input:disabled { background: #14142a; opacity: 0.45; cursor: not-allowed; }
+
+.scene-dir .scene-dir-actions,
+.scene-dir .scene-dir-situation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.scene-dir .scene-dir-situation label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.scene-dir .scene-dir-hint,
+.scene-dir .scene-dir-note,
+.scene-dir .scene-dir-error { margin: 0; }
+.scene-dir .scene-dir-hint { color: #e6c27a; }
+.scene-dir .scene-dir-error { color: #ff8a9a; }
+.scene-dir-none { font-size: 0.75rem; color: #9a9ac0; font-style: italic; margin: 0.3rem 0 0; }
+
+@media (max-width: 640px) {
+  .scene-dir .scene-dir-table thead { display: none; }
+  .scene-dir .scene-dir-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem; margin-bottom: 0.4rem; }
+  .scene-dir .scene-dir-table td { width: auto !important; white-space: normal; }
+}
