@@ -551,9 +551,11 @@ def _draw_lettering(
     style: LetteringStyle,
     picture: _Picture,
     area: Rect | None = None,
+    covered: list[Rect] | None = None,
 ) -> list[Element]:
     """
     吹き出し・描き文字・ナレーションを置いて描く。area は置ける範囲(形のあるコマでは形の内側の長方形。無ければ rect)。
+    covered は前面のコマに覆われた所(置き済みとして避ける)。
     手動配置・文字の大きさの基準・画面に返すコマの範囲は、コマの外接矩形 rect のまま。
     """
     heads, head_ids, offscreen = picture.heads, picture.head_ids, picture.offscreen
@@ -566,7 +568,8 @@ def _draw_lettering(
     if len(pairs) > _MAX_BUBBLES:
         pairs = pairs[: _MAX_BUBBLES - 1] + [("　".join(line for line, _ in pairs[_MAX_BUBBLES - 1 :]), None)]
     lines = [line for line, _ in pairs]
-    placed: list[Rect] = []
+    # 前面のコマに覆われた所は、はじめから置き済みとして避ける
+    placed: list[Rect] = list(covered or [])
     speaker = ((x0 + x1) / 2, y0 + height * 0.6)
     elements: list[Element] = []
     key_base = f"{content.key}:{content.zoom_step}"
@@ -749,25 +752,41 @@ def compose_page(
     if not isinstance(spec, PageSpec):
         spec = PageSpec(PAGE_WIDTH, PAGE_HEIGHT, tuple(rect_shape(r) for r in spec))
     page = Image.new("RGB", (spec.width, spec.height), spec.background)
-    pictures: list[_Picture] = []
-    for shape, content in zip(spec.panels, panels):
+    count = min(len(spec.panels), len(panels))
+    # 重なり順(z が小さい方から。同じなら読む順)に、絵と枠線を描く。前面のコマが後ろのコマの上に来る
+    order = sorted(range(count), key=lambda i: (spec.panels[i].z, i))
+    pictures: dict[int, _Picture] = {}
+    for i in order:
+        shape, content = spec.panels[i], panels[i]
         if shape.is_rect:
-            pictures.append(_draw_picture(page, shape.rect, content))
+            pictures[i] = _draw_picture(page, shape.rect, content)
         else:
             layer = page.copy()
-            pictures.append(_draw_picture(layer, shape.rect, content))
+            pictures[i] = _draw_picture(layer, shape.rect, content)
             mask = Image.new("L", page.size, 0)
             ImageDraw.Draw(mask).polygon(list(shape.points), fill=255)
             page.paste(layer, (0, 0), mask)
-    for shape in spec.panels[: len(panels)]:
         if shape.border:
             _draw_border(page, shape)
-    # 文字は全部の絵と枠線の上に描く(形のあるコマで吹き出しが形に切られない・隣のコマに隠れないように)
+    # 文字は全部の絵と枠線の上に描く(形のあるコマで吹き出しが形に切られない・隣のコマに隠れないように)。
+    # 前面のコマに覆われた所には、後ろのコマの吹き出しを置かない
+    rank = {i: r for r, i in enumerate(order)}
     elements: list[Element] = []
-    for shape, content, picture in zip(spec.panels, panels, pictures):
+    for i in range(count):
+        shape = spec.panels[i]
         area = None if shape.is_rect else inscribed_rect(shape)
-        elements.extend(_draw_lettering(page, shape.rect, content, style, picture, area))
+        covered = [
+            overlap
+            for j in range(count)
+            if rank[j] > rank[i] and (overlap := _intersection(shape.rect, spec.panels[j].rect)) is not None
+        ]
+        elements.extend(_draw_lettering(page, shape.rect, panels[i], style, pictures[i], area, covered))
     return page, elements
+
+
+def _intersection(a: Rect, b: Rect) -> Rect | None:
+    box = (max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3]))
+    return box if box[2] > box[0] and box[3] > box[1] else None
 
 
 @dataclass

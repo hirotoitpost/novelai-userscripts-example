@@ -1,16 +1,16 @@
 import { PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MangaV2Scene } from './MangaV2Studio'
 import {
-  Box, DEFAULT_GAPS, DEFAULT_STYLE, DividerLine, Gaps, Leaf, MAX_TILT, MIN_SHARE, PAGE_H, PAGE_W, PageStyle, Point, ShapeKind, Split,
-  Tree, TrianglePoint,
-  count, isSplit, layoutGeometry, leafOf, nodeAt, setAt, simplify, tidyLeaf,
+  Box, DEFAULT_GAPS, DEFAULT_STYLE, DividerLine, FloatPanel, Gaps, Leaf, MAX_TILT, MIN_SHARE, PAGE_H, PAGE_W, PageStyle, Point,
+  ShapeKind, Split, Tree, TrianglePoint,
+  count, floatOutline, isSplit, layoutGeometry, nodeAt, setAt, simplify, tidyLeaf,
 } from './layoutTree'
 import './PageLayoutEditor.css'
 
 /**
  * 漫画v2のページごとのコマ割り: 確認(ページごとにどのシーンがどのコマに入るか)・変更(コマ数からパターンを選ぶ、
- * コマの境目をドラッグして大きさを変える・傾ける、コマの形(楕円・三角形・自由な多角形・手書き)と枠線、
- * ページを足す・消す)。保存すると合成・ダウンロード・コマの生成サイズが従う。
+ * コマの境目をドラッグして大きさを変える・傾ける、コマの形(楕円・三角形・自由な形・手書き)と枠線、間隔・余白・色、
+ * 重ねて置くコマと重なり順、ページを足す・消す)。保存すると合成・ダウンロード・コマの生成サイズが従う。
  */
 
 interface ViewPage {
@@ -21,6 +21,7 @@ interface ViewPage {
   tree: Tree | null
   gaps: Gaps
   style: PageStyle
+  floats: FloatPanel[]
   spread: boolean
   panels: Point[][]
 }
@@ -30,7 +31,7 @@ interface View { explicit: boolean; template: string; scenes: number; pages: Vie
 interface Pattern { id: string; label: string; tree: Tree }
 
 /** 画面で直している1ページ。tree が無いのは取り込んだ作品から写したページ(斜めの枠など。形はそのまま) */
-interface DraftPage { tree: Tree | null; layout: number | null; panels: Point[][]; gaps: Gaps; style: PageStyle }
+interface DraftPage { tree: Tree | null; layout: number | null; panels: Point[][]; gaps: Gaps; style: PageStyle; floats: FloatPanel[] }
 
 interface Props {
   apiOrigin: string
@@ -43,6 +44,7 @@ interface Props {
 }
 
 const MAX_PANELS = 12
+const MAX_FLOATS = 8
 const PAGE_ASPECT = PAGE_W / PAGE_H
 
 const SHAPES: { value: ShapeKind; label: string }[] = [
@@ -55,53 +57,89 @@ const TRIANGLE_POINTS: { value: TrianglePoint; label: string }[] = [
   { value: 'up', label: '上に尖る' }, { value: 'down', label: '下に尖る' },
   { value: 'left', label: '左に尖る' }, { value: 'right', label: '右に尖る' },
 ]
-
-/** ページの上のコマの輪郭(ページに対する割合)と枠線。写したページはサーバーの輪郭のまま */
-function outlinesOf(page: DraftPage): { points: Point[]; stroke: string; width: number }[] {
-  if (page.tree) {
-    return layoutGeometry(page.tree, page.gaps).panels.map(p => ({
-      points: p.outline,
-      stroke: p.leaf.border_color ?? page.style.border_color,
-      width: p.leaf.border === false ? 0 : (p.leaf.border_width ?? page.style.border_width),
-    }))
-  }
-  return page.panels.map(points => ({ points, stroke: page.style.border_color, width: page.style.border_width }))
-}
-
 const GAP_FIELDS: { key: keyof Gaps; label: string; max: number }[] = [
   { key: 'gutter_x', label: '横の間隔', max: 120 },
   { key: 'gutter_y', label: '縦の間隔', max: 120 },
   { key: 'margin', label: 'ページの余白', max: 200 },
 ]
 
+/**
+ * ページに描くコマ(読む順)。grid はマス目のコマ(path で木の葉を指す)、float は重ねて置くコマ(floats の番号)。
+ * box は形を収める枠(自由な形の頂点はこの枠に対する割合)。
+ */
+type Item =
+  | { kind: 'grid'; key: string; path: number[]; leaf: Leaf; box: Box; outline: Point[]; z: number }
+  | { kind: 'float'; key: string; index: number; leaf: FloatPanel; box: Box; outline: Point[]; z: number }
+
+/** 読む順のコマ。マス目のコマの間に、重ねて置くコマを after の位置で入れる(サーバーと同じ) */
+function itemsOf(page: DraftPage): Item[] {
+  if (!page.tree) return []
+  const grid = layoutGeometry(page.tree, page.gaps).panels
+  const out: Item[] = []
+  for (let i = 0; i <= grid.length; i++) {
+    page.floats.forEach((f, index) => {
+      if (Math.min(f.after, grid.length) === i) {
+        out.push({ kind: 'float', key: `f${index}`, index, leaf: f, box: f.rect, outline: floatOutline(f), z: f.z })
+      }
+    })
+    if (i < grid.length) {
+      const g = grid[i]
+      out.push({ kind: 'grid', key: `g${g.path.join('.')}`, path: g.path, leaf: g.leaf, box: g.box, outline: g.outline, z: g.leaf.z ?? 0 })
+    }
+  }
+  return out
+}
+
+/** 重なり順に並べる(z が小さい方から。同じなら読む順)。後ろほど前面 */
+function byLayer(items: Item[]): Item[] {
+  return items.map((item, reading) => ({ item, reading })).sort((a, b) => a.item.z - b.item.z || a.reading - b.reading).map(x => x.item)
+}
+
+function panelCount(page: DraftPage): number {
+  return page.tree ? count(page.tree) + page.floats.length : page.panels.length
+}
+
 function centroid(points: Point[]): Point {
   return [points.reduce((s, p) => s + p[0], 0) / points.length, points.reduce((s, p) => s + p[1], 0) / points.length]
 }
 
-const pathKey = (path: number[]) => path.join('.')
+function strokeOf(leaf: Leaf, style: PageStyle): { stroke: string; width: number } {
+  return { stroke: leaf.border_color ?? style.border_color, width: leaf.border === false ? 0 : (leaf.border_width ?? style.border_width) }
+}
 
-type Selection = { kind: 'panel'; path: number[] } | { kind: 'divider'; path: number[]; index: number } | null
-
+/** 小さな図(ページの一覧・パターン) */
 function PageSvg({ page, labels, width }: { page: DraftPage; labels: string[]; width: number }) {
   const height = width / PAGE_ASPECT
+  const items = page.tree ? itemsOf(page) : null
+  const shapes = items
+    ? byLayer(items).map(item => ({ points: item.outline, reading: items.indexOf(item), ...strokeOf(item.leaf, page.style) }))
+    : page.panels.map((points, i) => ({ points, reading: i, stroke: page.style.border_color, width: page.style.border_width }))
   return (
     <svg className="ple-svg" viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="img"
-      aria-label={`${outlinesOf(page).length}コマのページ`}>
+      aria-label={`${shapes.length}コマのページ`}>
       <rect x={0} y={0} width={width} height={height} className="ple-paper" style={{ fill: page.style.background }} />
-      {outlinesOf(page).map(({ points, stroke, width: line }, i) => {
+      {shapes.map(({ points, reading, stroke, width: line }) => {
         const [cx, cy] = centroid(points)
         return (
-          <g key={i}>
+          <g key={reading}>
             <polygon points={points.map(([x, y]) => `${x * width},${y * height}`).join(' ')}
-              className={labels[i] ? 'ple-panel' : 'ple-panel ple-panel--empty'}
+              className={labels[reading] ? 'ple-panel' : 'ple-panel ple-panel--empty'}
               style={{ stroke: line ? stroke : 'none', strokeWidth: Math.max(0.6, (line * width) / PAGE_W) }} />
-            <text x={cx * width} y={cy * height} className="ple-label" fontSize={Math.max(9, width / 14)}>{labels[i] ?? '空'}</text>
+            <text x={cx * width} y={cy * height} className="ple-label" fontSize={Math.max(9, width / 14)}>{labels[reading] ?? '空'}</text>
           </g>
         )
       })}
     </svg>
   )
 }
+
+type Selection = { kind: 'item'; key: string } | { kind: 'divider'; path: number[]; index: number } | null
+
+type Drag =
+  | { kind: 'divider'; line: DividerLine }
+  | { kind: 'vertex'; key: string; vertex: number }
+  | { kind: 'move'; index: number; start: Point; rect: Box }
+  | { kind: 'resize'; index: number; rect: Box }
 
 export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes, busy, onSaved }: Props) {
   const [view, setView] = useState<View | null>(null)
@@ -113,9 +151,8 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection>(null)
-  // ドラッグ中のもの: 境目(位置)・頂点
-  const [drag, setDrag] = useState<{ kind: 'divider'; line: DividerLine } | { kind: 'vertex'; path: number[]; vertex: number; box: Box } | null>(null)
-  // 手書きで輪郭を描いている途中の点(本文領域の単位正方形)
+  const [drag, setDrag] = useState<Drag | null>(null)
+  // 手書きで輪郭を描いている途中の点(ページに対する割合)
   const [drawing, setDrawing] = useState<Point[] | null>(null)
   const [drawMode, setDrawMode] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -128,7 +165,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     setView(data)
     setPages(data.pages.map(p => ({
       tree: p.tree, layout: p.source === 'layout' ? p.layout : null, panels: p.panels,
-      gaps: p.gaps ?? DEFAULT_GAPS, style: p.style ?? DEFAULT_STYLE,
+      gaps: p.gaps ?? DEFAULT_GAPS, style: p.style ?? DEFAULT_STYLE, floats: p.floats ?? [],
     })))
     setSelected(s => Math.min(s, Math.max(0, data.pages.length - 1)))
     setSelection(null)
@@ -153,7 +190,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     const out: MangaV2Scene[][] = []
     let next = 0
     for (const page of pages) {
-      const n = page.tree ? count(page.tree) : page.panels.length
+      const n = panelCount(page)
       out.push(scenes.slice(next, next + n))
       next += n
     }
@@ -161,13 +198,14 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   }, [pages, scenes])
 
   const current = pages[selected]
-  const currentCount = current ? (current.tree ? count(current.tree) : current.panels.length) : 0
-  const geometry = useMemo(() => (current?.tree ? layoutGeometry(current.tree, current.gaps) : null), [current])
+  const gridCount = current?.tree ? count(current.tree) : 0
+  const items = useMemo(() => (current ? itemsOf(current) : []), [current])
+  const dividers = useMemo(() => (current?.tree ? layoutGeometry(current.tree, current.gaps).dividers : []), [current])
 
   useEffect(() => {
-    if (currentCount > 0) loadPatterns(currentCount).catch(() => {})
+    if (gridCount > 0) loadPatterns(gridCount).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentCount])
+  }, [gridCount])
 
   useEffect(() => { setSelection(null); setDrawMode(false) }, [selected])
 
@@ -176,15 +214,16 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     setDirty(true)
   }
 
-  function editTree(tree: Tree) {
-    if (current) editPage(selected, { ...current, tree })
+  function editCurrent(patch: Partial<DraftPage>) {
+    if (current) editPage(selected, { ...current, ...patch })
   }
 
   async function changeCount(n: number) {
     try {
       const list = await loadPatterns(n)
-      if (list[0]) {
-        editPage(selected, { tree: list[0].tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS, style: current?.style ?? DEFAULT_STYLE })
+      if (list[0] && current) {
+        // マス目のコマ数が変わるので、重ねたコマの読む順は後ろに寄せる
+        editCurrent({ tree: list[0].tree, layout: null, panels: [], floats: current.floats.map(f => ({ ...f, after: Math.min(f.after, n) })) })
         setSelection(null)
       }
     } catch (e) {
@@ -194,7 +233,8 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
 
   function addPage() {
     const tree: Tree = { dir: 'rows', sizes: [0.5, 0.5], items: [{ dir: 'cols', sizes: [0.5, 0.5], items: ['panel', 'panel'] }, { dir: 'cols', sizes: [0.5, 0.5], items: ['panel', 'panel'] }] }
-    setPages(prev => [...prev.slice(0, selected + 1), { tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS, style: current?.style ?? DEFAULT_STYLE }, ...prev.slice(selected + 1)])
+    const page: DraftPage = { tree, layout: null, panels: [], gaps: current?.gaps ?? DEFAULT_GAPS, style: current?.style ?? DEFAULT_STYLE, floats: [] }
+    setPages(prev => [...prev.slice(0, selected + 1), page, ...prev.slice(selected + 1)])
     setSelected(selected + 1)
     setDirty(true)
   }
@@ -207,21 +247,52 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   }
 
   // ---- 選んだコマ・境目 ----
-  const selectedPanel = selection?.kind === 'panel' && geometry
-    ? geometry.panels.find(p => pathKey(p.path) === pathKey(selection.path)) ?? null
-    : null
+  const target = selection?.kind === 'item' ? items.find(item => item.key === selection.key) ?? null : null
   const selectedSplit = selection?.kind === 'divider' && current?.tree ? nodeAt(current.tree, selection.path) : null
 
-  function editLeaf(patch: Partial<Leaf>) {
-    if (!current?.tree || !selectedPanel) return
-    const leaf = { ...selectedPanel.leaf, ...patch }
-    if (patch.shape === 'polygon' && !leaf.points?.length) {
-      // 今の形の輪郭から始める(枠に対する割合)
-      const [x0, y0, x1, y1] = selectedPanel.box
-      const rel = (v: number, lo: number, hi: number) => Math.round(Math.min(Math.max((v - lo) / Math.max(hi - lo, 1e-6), 0), 1) * 1000) / 1000
-      leaf.points = selectedPanel.outline.map(([x, y]) => [rel(x, x0, x1), rel(y, y0, y1)] as Point)
+  /** 選んだコマ(マス目・重ねたコマ)の形・枠線・重なり順を変える */
+  function updateItem(item: Item, patch: Partial<Leaf>) {
+    if (!current?.tree) return
+    if (item.kind === 'grid') {
+      editCurrent({ tree: setAt(current.tree, item.path, tidyLeaf({ ...item.leaf, ...patch })) })
+    } else {
+      const next = { ...item.leaf, ...patch }
+      editCurrent({ floats: current.floats.map((f, i) => (i === item.index ? next : f)) })
     }
-    editTree(setAt(current.tree, selectedPanel.path, tidyLeaf(leaf)))
+  }
+
+  function editLeaf(patch: Partial<Leaf>) {
+    if (!target) return
+    if (patch.shape === 'polygon' && !target.leaf.points?.length) {
+      // 今の形の輪郭から始める(枠に対する割合)
+      const [x0, y0, x1, y1] = target.box
+      const rel = (v: number, lo: number, hi: number) => Math.round(Math.min(Math.max((v - lo) / Math.max(hi - lo, 1e-6), 0), 1) * 1000) / 1000
+      patch = { ...patch, points: target.outline.map(([x, y]) => [rel(x, x0, x1), rel(y, y0, y1)] as Point) }
+    }
+    updateItem(target, patch)
+  }
+
+  /** 重なり順: 一番前・一つ前・一つ後ろ・一番後ろ */
+  function restack(how: 'front' | 'forward' | 'backward' | 'back') {
+    if (!target) return
+    const zs = items.map(item => item.z)
+    const z = how === 'front' ? Math.max(...zs) + 1 : how === 'back' ? Math.min(...zs) - 1 : target.z + (how === 'forward' ? 1 : -1)
+    updateItem(target, { z: Math.max(-99, Math.min(99, z)) })
+  }
+
+  function addFloat() {
+    if (!current?.tree || current.floats.length >= MAX_FLOATS) return
+    const after = target?.kind === 'grid' ? items.filter(i => i.kind === 'grid').indexOf(target) + 1 : gridCount
+    const z = Math.max(0, ...items.map(i => i.z)) + 1
+    const item: FloatPanel = { shape: 'rect', rect: [0.3, 0.35, 0.7, 0.6], after, z }
+    editCurrent({ floats: [...current.floats, item] })
+    setSelection({ kind: 'item', key: `f${current.floats.length}` })
+  }
+
+  function removeFloat(index: number) {
+    if (!current) return
+    editCurrent({ floats: current.floats.filter((_, i) => i !== index) })
+    setSelection(null)
   }
 
   function setTilt(value: number) {
@@ -229,12 +300,12 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     const tilts = selectedSplit.tilts ?? Array(selectedSplit.items.length - 1).fill(0)
     const next: Split = { ...selectedSplit, tilts: tilts.map((t, i) => (i === selection.index ? value : t)) }
     if (next.tilts!.every(t => t === 0)) delete next.tilts
-    editTree(setAt(current.tree, selection.path, next))
+    editCurrent({ tree: setAt(current.tree, selection.path, next) })
   }
 
   function addVertex() {
-    if (!selectedPanel?.leaf.points) return
-    const pts = selectedPanel.leaf.points
+    const pts = target?.leaf.points
+    if (!target || !pts) return
     // 一番長い辺の真ん中に足す
     let at = 0
     let longest = -1
@@ -245,43 +316,49 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     })
     const q = pts[(at + 1) % pts.length]
     const mid: Point = [(pts[at][0] + q[0]) / 2, (pts[at][1] + q[1]) / 2]
-    editLeaf({ points: [...pts.slice(0, at + 1), mid, ...pts.slice(at + 1)] })
+    updateItem(target, { points: [...pts.slice(0, at + 1), mid, ...pts.slice(at + 1)] })
   }
 
   function removeVertex(vertex: number) {
-    const pts = selectedPanel?.leaf.points
-    if (!pts || pts.length <= 3) return
-    editLeaf({ points: pts.filter((_, i) => i !== vertex) })
+    const pts = target?.leaf.points
+    if (!target || !pts || pts.length <= 3) return
+    updateItem(target, { points: pts.filter((_, i) => i !== vertex) })
   }
 
   // ---- ポインター(ドラッグ・手書き) ----
-  function unitPoint(e: ReactPointerEvent): Point | null {
+  function pagePoint(e: ReactPointerEvent): Point | null {
     const svg = svgRef.current
     if (!svg) return null
     const r = svg.getBoundingClientRect()
     return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]
   }
 
-  function startDivider(line: DividerLine, e: ReactPointerEvent<SVGElement>) {
-    if (busy || saving || drawMode) return
+  function capture(e: ReactPointerEvent<SVGElement>) {
     e.preventDefault()
     e.stopPropagation()
     ;(e.target as Element).setPointerCapture?.(e.pointerId)
+  }
+
+  function startDivider(line: DividerLine, e: ReactPointerEvent<SVGElement>) {
+    if (busy || saving || drawMode) return
+    capture(e)
     setSelection({ kind: 'divider', path: line.path, index: line.index })
     setDrag({ kind: 'divider', line })
   }
 
-  function startVertex(vertex: number, e: ReactPointerEvent<SVGElement>) {
-    if (!selectedPanel) return
-    e.preventDefault()
-    e.stopPropagation()
-    ;(e.target as Element).setPointerCapture?.(e.pointerId)
-    setDrag({ kind: 'vertex', path: selectedPanel.path, vertex, box: selectedPanel.box })
+  function startItem(item: Item, e: ReactPointerEvent<SVGElement>) {
+    if (busy || saving || drawMode) return
+    setSelection({ kind: 'item', key: item.key })
+    if (item.kind !== 'float') return
+    const p = pagePoint(e)
+    if (!p) return
+    capture(e)
+    setDrag({ kind: 'move', index: item.index, start: p, rect: item.leaf.rect })
   }
 
   function onSvgPointerDown(e: ReactPointerEvent<SVGSVGElement>) {
-    if (!drawMode || !selectedPanel) return
-    const p = unitPoint(e)
+    if (!drawMode || !target) return
+    const p = pagePoint(e)
     if (!p) return
     e.preventDefault()
     svgRef.current?.setPointerCapture?.(e.pointerId)
@@ -289,23 +366,38 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   }
 
   function onPointerMove(e: ReactPointerEvent) {
-    const p = unitPoint(e)
+    const p = pagePoint(e)
     if (!p || !current?.tree) return
     if (drawing) {
       setDrawing(prev => (prev ? [...prev, p] : prev))
       return
     }
     if (!drag) return
+    const round = (v: number) => Math.round(v * 1000) / 1000
+    if (drag.kind === 'move' || drag.kind === 'resize') {
+      const f = current.floats[drag.index]
+      if (!f) return
+      const [x0, y0, x1, y1] = drag.rect
+      let rect: Box
+      if (drag.kind === 'move') {
+        const dx = Math.min(Math.max(p[0] - drag.start[0], -x0), 1 - x1)
+        const dy = Math.min(Math.max(p[1] - drag.start[1], -y0), 1 - y1)
+        rect = [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
+      } else {
+        rect = [x0, y0, Math.min(Math.max(p[0], x0 + 0.05), 1), Math.min(Math.max(p[1], y0 + 0.05), 1)]
+      }
+      editCurrent({ floats: current.floats.map((x, i) => (i === drag.index ? { ...x, rect: rect.map(round) as Box } : x)) })
+      return
+    }
     if (drag.kind === 'vertex') {
-      const node = nodeAt(current.tree, drag.path)
-      const leaf = leafOf(node)
-      if (!leaf.points) return
-      const [x0, y0, x1, y1] = drag.box
+      const item = items.find(i => i.key === drag.key)
+      if (!item?.leaf.points) return
+      const [x0, y0, x1, y1] = item.box
       const rel: Point = [
-        Math.round(Math.min(Math.max((p[0] - x0) / (x1 - x0), 0), 1) * 1000) / 1000,
-        Math.round(Math.min(Math.max((p[1] - y0) / (y1 - y0), 0), 1) * 1000) / 1000,
+        round(Math.min(Math.max((p[0] - x0) / (x1 - x0), 0), 1)),
+        round(Math.min(Math.max((p[1] - y0) / (y1 - y0), 0), 1)),
       ]
-      editTree(setAt(current.tree, drag.path, tidyLeaf({ ...leaf, points: leaf.points.map((q, i) => (i === drag.vertex ? rel : q)) })))
+      updateItem(item, { points: item.leaf.points.map((q, i) => (i === drag.vertex ? rel : q)) })
       return
     }
     const { line } = drag
@@ -318,22 +410,19 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     const pair = node.sizes[line.index] + node.sizes[line.index + 1]
     const first = Math.min(Math.max(f - before, MIN_SHARE), pair - MIN_SHARE)
     const sizes = node.sizes.map((s, i) => (i === line.index ? first : i === line.index + 1 ? pair - first : s))
-    editTree(setAt(current.tree, line.path, { ...node, sizes: sizes.map(s => Math.round(s * 1000) / 1000) }))
+    editCurrent({ tree: setAt(current.tree, line.path, { ...node, sizes: sizes.map(round) }) })
   }
 
   function onPointerUp() {
-    if (drawing && selectedPanel && current?.tree) {
-      const [x0, y0, x1, y1] = selectedPanel.box
+    if (drawing && target) {
+      const [x0, y0, x1, y1] = target.box
       const rel = drawing.map(([x, y]) => [
         Math.min(Math.max((x - x0) / (x1 - x0), 0), 1),
         Math.min(Math.max((y - y0) / (y1 - y0), 0), 1),
       ] as Point)
       const points = simplify(rel).slice(0, 400).map(([x, y]) => [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000] as Point)
-      if (points.length >= 3) {
-        editTree(setAt(current.tree, selectedPanel.path, tidyLeaf({ ...selectedPanel.leaf, shape: 'polygon', points })))
-      } else {
-        setNote('線が短すぎます。コマの中をぐるっと囲むように描いてください。')
-      }
+      if (points.length >= 3) updateItem(target, { shape: 'polygon', points })
+      else setNote('線が短すぎます。コマの中をぐるっと囲むように描いてください。')
       setDrawing(null)
       setDrawMode(false)
     }
@@ -348,7 +437,10 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
       const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/page-layout`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template, pages: pages.map(p => (p.tree ? { tree: p.tree, gaps: p.gaps, style: p.style } : { layout: p.layout })) }),
+        body: JSON.stringify({
+          template,
+          pages: pages.map(p => (p.tree ? { tree: p.tree, gaps: p.gaps, style: p.style, floats: p.floats } : { layout: p.layout })),
+        }),
       })
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
       const result = await res.json()
@@ -386,6 +478,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   const tiltValue = selection?.kind === 'divider' && selectedSplit && isSplit(selectedSplit)
     ? (selectedSplit.tilts?.[selection.index] ?? 0)
     : 0
+  const readingOf = (item: Item) => items.indexOf(item)
 
   if (!view) return error ? <p className="ple-error" role="alert">{error}</p> : <p className="story-muted">読み込み中…</p>
 
@@ -395,8 +488,8 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
         {view.explicit
           ? 'ページごとのコマ割りを決めてあります。'
           : `今はテンプレートで割り付けています(変えて保存すると、ページごとのコマ割りになります)。`}
-        数字はコマに入るシーンの番号です(先頭から順にコマに入ります)。境目はドラッグで動かし、押して選ぶと傾けられます。
-        コマを押すと、形・枠線を変えられます。
+        数字はコマに入るシーンの番号です(読む順にコマに入ります)。境目はドラッグで動かし、押して選ぶと傾けられます。
+        コマを押すと、形・枠線・重なり順を変えられます。
       </p>
 
       <div className="ple-strip" role="list">
@@ -416,42 +509,46 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
       {current && (
         <div className="ple-edit">
           <div className="ple-large" onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}>
-            {current.tree && geometry ? (
+            {current.tree ? (
               <svg ref={svgRef} className={drawMode ? 'ple-svg ple-svg--draw' : 'ple-svg'} viewBox={`0 0 ${W} ${H}`} width={W} height={H}
                 role="img" aria-label={`${selected + 1}ページ目のコマ割り`} onPointerDown={onSvgPointerDown}>
                 <rect x={0} y={0} width={W} height={H} className="ple-paper" style={{ fill: current.style.background }}
                   onClick={() => !drawMode && setSelection(null)} />
-                {geometry.panels.map(p => {
-                  const [cx, cy] = centroid(p.outline)
-                  const on = selectedPanel && pathKey(selectedPanel.path) === pathKey(p.path)
-                  const label = labels(selected)[p.index]
-                  const line = p.leaf.border === false ? 0 : (p.leaf.border_width ?? current.style.border_width)
+                {byLayer(items).map(item => {
+                  const [cx, cy] = centroid(item.outline)
+                  const on = target?.key === item.key
+                  const label = labels(selected)[readingOf(item)]
+                  const { stroke, width: line } = strokeOf(item.leaf, current.style)
                   return (
-                    <g key={pathKey(p.path)}>
-                      <polygon points={p.outline.map(([x, y]) => `${x * W},${y * H}`).join(' ')}
-                        className={`ple-panel${label ? '' : ' ple-panel--empty'}${on ? ' ple-panel--on' : ''}${p.leaf.border === false ? ' ple-panel--borderless' : ''}`}
-                        style={on ? undefined : { stroke: line ? (p.leaf.border_color ?? current.style.border_color) : '#9a9ab0', strokeWidth: line ? Math.max(0.8, (line * W) / PAGE_W) : 0.8 }}
-                        onClick={() => !drawMode && setSelection({ kind: 'panel', path: p.path })} />
+                    <g key={item.key}>
+                      <polygon points={item.outline.map(([x, y]) => `${x * W},${y * H}`).join(' ')}
+                        className={`ple-panel${label ? '' : ' ple-panel--empty'}${on ? ' ple-panel--on' : ''}${item.kind === 'float' ? ' ple-panel--float' : ''}`}
+                        style={on ? undefined : { stroke: line ? stroke : '#9a9ab0', strokeWidth: line ? Math.max(0.8, (line * W) / PAGE_W) : 0.8, strokeDasharray: line ? undefined : '2 4' }}
+                        onPointerDown={e => startItem(item, e)} />
                       <text x={cx * W} y={cy * H} className="ple-label" fontSize={W / 14}>{label ?? '空'}</text>
                     </g>
                   )
                 })}
-                {!drawMode && geometry.dividers.map(d => {
-                  const on = selection?.kind === 'divider' && pathKey(selection.path) === pathKey(d.path) && selection.index === d.index
+                {!drawMode && dividers.map(d => {
+                  const on = selection?.kind === 'divider' && selection.path.join('.') === d.path.join('.') && selection.index === d.index
                   const [[ax, ay], [bx, by]] = d.ends
                   return (
-                    <line key={`${pathKey(d.path)}-${d.index}`} x1={ax * W} y1={ay * H} x2={bx * W} y2={by * H}
+                    <line key={`${d.path.join('.')}-${d.index}`} x1={ax * W} y1={ay * H} x2={bx * W} y2={by * H}
                       className={on ? 'ple-divider ple-divider--active' : 'ple-divider'}
                       style={{ cursor: d.dir === 'rows' ? 'ns-resize' : 'ew-resize' }}
                       onPointerDown={e => startDivider(d, e)} />
                   )
                 })}
-                {!drawMode && selectedPanel?.leaf.shape === 'polygon' && selectedPanel.leaf.points!.length <= 40 &&
-                  selectedPanel.leaf.points!.map(([x, y], i) => {
-                    const [x0, y0, x1, y1] = selectedPanel.box
+                {!drawMode && target?.kind === 'float' && (
+                  <circle cx={target.leaf.rect[2] * W} cy={target.leaf.rect[3] * H} r={7} className="ple-vertex ple-resize"
+                    onPointerDown={e => { capture(e); setDrag({ kind: 'resize', index: target.index, rect: target.leaf.rect }) }} />
+                )}
+                {!drawMode && target?.leaf.shape === 'polygon' && (target.leaf.points?.length ?? 0) <= 40 &&
+                  target.leaf.points!.map(([x, y], i) => {
+                    const [x0, y0, x1, y1] = target.box
                     return (
                       <circle key={i} cx={(x0 + (x1 - x0) * x) * W} cy={(y0 + (y1 - y0) * y) * H} r={6}
-                        className="ple-vertex" onPointerDown={e => startVertex(i, e)}
+                        className="ple-vertex" onPointerDown={e => { capture(e); setDrag({ kind: 'vertex', key: target.key, vertex: i }) }}
                         onDoubleClick={() => removeVertex(i)} />
                     )
                   })}
@@ -468,8 +565,8 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
             <div className="ple-row">
               <strong>{selected + 1}ページ目</strong>
               <label>
-                コマ数
-                <select value={currentCount} disabled={off} onChange={e => void changeCount(Number(e.target.value))}>
+                マス目のコマ数
+                <select value={gridCount || panelCount(current)} disabled={off} onChange={e => void changeCount(Number(e.target.value))}>
                   {Array.from({ length: MAX_PANELS }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
               </label>
@@ -479,59 +576,100 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
             {!current.tree && (
               <p className="story-muted">取り込んだ作品から写したページです(形はそのまま)。パターンを選ぶと置き換わり、形も直せます。</p>
             )}
-
             {current.tree && (
-              <div className="ple-box">
-                <strong>コマの間隔・ページの余白</strong>
-                {GAP_FIELDS.map(f => (
-                  <label key={f.key} className="ple-range">
-                    {f.label}
-                    <input type="range" min={0} max={f.max} step={1} value={current.gaps[f.key]} disabled={off}
-                      onChange={e => editPage(selected, { ...current, gaps: { ...current.gaps, [f.key]: Number(e.target.value) } })} />
-                    {current.gaps[f.key] === 0 ? '0(接する)' : `${current.gaps[f.key]}px`}
-                  </label>
-                ))}
-                <div className="ple-row">
-                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, gaps: { gutter_x: 0, gutter_y: 0, margin: current.gaps.margin } })}>
-                    コマをぴったり接する
-                  </button>
-                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, gaps: { ...current.gaps, margin: 0 } })}>
-                    余白なし(裁ち落とし)
-                  </button>
-                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, gaps: DEFAULT_GAPS })}>既定に戻す</button>
-                </div>
-                <p className="story-muted">0 にするとコマどうしが同じ線で接します。ページの端に接する辺には枠線を描きません。</p>
+              <div className="ple-row">
+                <button type="button" disabled={off || current.floats.length >= MAX_FLOATS} onClick={addFloat}
+                  title="マス目とは別に、ページの好きな位置にコマを重ねて置きます(ドラッグで移動、右下の丸で大きさ)">
+                  コマを重ねて置く
+                </button>
               </div>
             )}
 
-            {current.tree && (
+            {target && (
               <div className="ple-box">
-                <strong>色と枠線</strong>
+                <strong>
+                  {target.kind === 'float' ? '重ねたコマ' : 'コマ'}(読む順 {readingOf(target) + 1} 番目)
+                </strong>
                 <div className="ple-row">
-                  <label className="ple-range">
-                    地の色(余白・間隔)
-                    <input type="color" value={current.style.background} disabled={off}
-                      onChange={e => editPage(selected, { ...current, style: { ...current.style, background: e.target.value } })} />
-                  </label>
-                  <label className="ple-range">
-                    枠線の色
-                    <input type="color" value={current.style.border_color} disabled={off}
-                      onChange={e => editPage(selected, { ...current, style: { ...current.style, border_color: e.target.value } })} />
+                  <span>重なり順</span>
+                  <button type="button" disabled={off} onClick={() => restack('front')}>最前面へ</button>
+                  <button type="button" disabled={off} onClick={() => restack('forward')}>前面へ</button>
+                  <button type="button" disabled={off} onClick={() => restack('backward')}>背面へ</button>
+                  <button type="button" disabled={off} onClick={() => restack('back')}>最背面へ</button>
+                </div>
+                {target.kind === 'float' && (
+                  <div className="ple-row">
+                    <label>
+                      読む順
+                      <select value={Math.min(target.leaf.after, gridCount)} disabled={off}
+                        onChange={e => updateItem(target, { after: Number(e.target.value) } as Partial<FloatPanel>)}>
+                        {Array.from({ length: gridCount + 1 }, (_, i) => i).map(i => (
+                          <option key={i} value={i}>{i === 0 ? '先頭' : `マス目の ${i} コマ目の後ろ`}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button type="button" disabled={off} onClick={() => removeFloat(target.index)}>この重ねたコマを消す</button>
+                  </div>
+                )}
+                <div className="ple-row">
+                  <select value={target.leaf.shape} disabled={off} aria-label="コマの形"
+                    onChange={e => editLeaf({ shape: e.target.value as ShapeKind })}>
+                    {SHAPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                  {target.leaf.shape === 'triangle' && (
+                    <select value={target.leaf.point ?? 'up'} disabled={off} aria-label="三角形の向き"
+                      onChange={e => editLeaf({ point: e.target.value as TrianglePoint })}>
+                      {TRIANGLE_POINTS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                    </select>
+                  )}
+                  <label className="ple-check">
+                    <input type="checkbox" checked={target.leaf.border !== false} disabled={off}
+                      onChange={e => editLeaf({ border: e.target.checked ? undefined : false })} />
+                    枠線
                   </label>
                 </div>
-                <label className="ple-range">
-                  枠線の太さ
-                  <input type="range" min={0} max={20} step={1} value={current.style.border_width} disabled={off}
-                    onChange={e => editPage(selected, { ...current, style: { ...current.style, border_width: Number(e.target.value) } })} />
-                  {current.style.border_width === 0 ? 'なし' : `${current.style.border_width}px`}
-                </label>
-                <div className="ple-row">
-                  <button type="button" disabled={off}
-                    onClick={() => editPage(selected, { ...current, style: { background: '#000000', border_color: '#ffffff', border_width: current.style.border_width } })}>
-                    黒地(回想など)
-                  </button>
-                  <button type="button" disabled={off} onClick={() => editPage(selected, { ...current, style: DEFAULT_STYLE })}>既定に戻す</button>
-                </div>
+                {target.leaf.border !== false && (
+                  <div className="ple-row">
+                    <label className="ple-check">
+                      <input type="checkbox" disabled={off}
+                        checked={target.leaf.border_color !== undefined || target.leaf.border_width !== undefined}
+                        onChange={e => editLeaf(e.target.checked
+                          ? { border_color: current.style.border_color, border_width: current.style.border_width }
+                          : { border_color: undefined, border_width: undefined })} />
+                      このコマだけ線を変える
+                    </label>
+                    {(target.leaf.border_color !== undefined || target.leaf.border_width !== undefined) && (
+                      <>
+                        <input type="color" aria-label="このコマの枠線の色" disabled={off}
+                          value={target.leaf.border_color ?? current.style.border_color}
+                          onChange={e => editLeaf({ border_color: e.target.value })} />
+                        <label className="ple-range">
+                          <input type="range" min={0} max={20} step={1} disabled={off} aria-label="このコマの枠線の太さ"
+                            value={target.leaf.border_width ?? current.style.border_width}
+                            onChange={e => editLeaf({ border_width: Number(e.target.value) })} />
+                          {target.leaf.border_width ?? current.style.border_width}px
+                        </label>
+                      </>
+                    )}
+                  </div>
+                )}
+                {target.leaf.shape === 'polygon' && (
+                  <div className="ple-row">
+                    <button type="button" disabled={off || drawMode} onClick={addVertex}>頂点を足す</button>
+                    <button type="button" disabled={off} className={drawMode ? 'ple-on' : ''} onClick={() => setDrawMode(m => !m)}>
+                      {drawMode ? '手書きをやめる' : '手書きで描く'}
+                    </button>
+                  </div>
+                )}
+                <p className="story-muted">
+                  {target.leaf.shape === 'polygon'
+                    ? drawMode
+                      ? '左の図に、コマの輪郭をぐるっと一筆で描いてください(枠の中に収めます)。'
+                      : '頂点をドラッグで動かせます(ダブルクリックで消す)。「手書きで描く」で輪郭を描き直せます。'
+                    : target.kind === 'float'
+                      ? 'ドラッグで移動、右下の丸で大きさを変えます。前面のコマに隠れた所には、後ろのコマの吹き出しを置きません。'
+                      : '形はコマの枠に収め、隣のコマにははみ出しません。吹き出しは形の内側に置きます。'}
+                </p>
               </div>
             )}
 
@@ -548,74 +686,65 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
               </div>
             )}
 
-            {selectedPanel && (
+            {current.tree && (
               <div className="ple-box">
-                <strong>コマ {selectedPanel.index + 1} の形</strong>
+                <strong>コマの間隔・ページの余白</strong>
+                {GAP_FIELDS.map(f => (
+                  <label key={f.key} className="ple-range">
+                    {f.label}
+                    <input type="range" min={0} max={f.max} step={1} value={current.gaps[f.key]} disabled={off}
+                      onChange={e => editCurrent({ gaps: { ...current.gaps, [f.key]: Number(e.target.value) } })} />
+                    {current.gaps[f.key] === 0 ? '0(接する)' : `${current.gaps[f.key]}px`}
+                  </label>
+                ))}
                 <div className="ple-row">
-                  <select value={selectedPanel.leaf.shape} disabled={off} aria-label="コマの形"
-                    onChange={e => editLeaf({ shape: e.target.value as ShapeKind })}>
-                    {SHAPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
-                  {selectedPanel.leaf.shape === 'triangle' && (
-                    <select value={selectedPanel.leaf.point ?? 'up'} disabled={off} aria-label="三角形の向き"
-                      onChange={e => editLeaf({ point: e.target.value as TrianglePoint })}>
-                      {TRIANGLE_POINTS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                    </select>
-                  )}
-                  <label className="ple-check">
-                    <input type="checkbox" checked={selectedPanel.leaf.border !== false} disabled={off}
-                      onChange={e => editLeaf({ border: e.target.checked ? undefined : false })} />
-                    枠線
+                  <button type="button" disabled={off} onClick={() => editCurrent({ gaps: { gutter_x: 0, gutter_y: 0, margin: current.gaps.margin } })}>
+                    コマをぴったり接する
+                  </button>
+                  <button type="button" disabled={off} onClick={() => editCurrent({ gaps: { ...current.gaps, margin: 0 } })}>
+                    余白なし(裁ち落とし)
+                  </button>
+                  <button type="button" disabled={off} onClick={() => editCurrent({ gaps: DEFAULT_GAPS })}>既定に戻す</button>
+                </div>
+                <p className="story-muted">0 にするとコマどうしが同じ線で接します。ページの端に接する辺には枠線を描きません。</p>
+              </div>
+            )}
+
+            {current.tree && (
+              <div className="ple-box">
+                <strong>色と枠線</strong>
+                <div className="ple-row">
+                  <label className="ple-range">
+                    地の色(余白・間隔)
+                    <input type="color" value={current.style.background} disabled={off}
+                      onChange={e => editCurrent({ style: { ...current.style, background: e.target.value } })} />
+                  </label>
+                  <label className="ple-range">
+                    枠線の色
+                    <input type="color" value={current.style.border_color} disabled={off}
+                      onChange={e => editCurrent({ style: { ...current.style, border_color: e.target.value } })} />
                   </label>
                 </div>
-                {selectedPanel.leaf.border !== false && (
-                  <div className="ple-row">
-                    <label className="ple-check">
-                      <input type="checkbox" disabled={off}
-                        checked={selectedPanel.leaf.border_color !== undefined || selectedPanel.leaf.border_width !== undefined}
-                        onChange={e => editLeaf(e.target.checked
-                          ? { border_color: current.style.border_color, border_width: current.style.border_width }
-                          : { border_color: undefined, border_width: undefined })} />
-                      このコマだけ線を変える
-                    </label>
-                    {(selectedPanel.leaf.border_color !== undefined || selectedPanel.leaf.border_width !== undefined) && (
-                      <>
-                        <input type="color" aria-label="このコマの枠線の色" disabled={off}
-                          value={selectedPanel.leaf.border_color ?? current.style.border_color}
-                          onChange={e => editLeaf({ border_color: e.target.value })} />
-                        <label className="ple-range">
-                          <input type="range" min={0} max={20} step={1} disabled={off} aria-label="このコマの枠線の太さ"
-                            value={selectedPanel.leaf.border_width ?? current.style.border_width}
-                            onChange={e => editLeaf({ border_width: Number(e.target.value) })} />
-                          {selectedPanel.leaf.border_width ?? current.style.border_width}px
-                        </label>
-                      </>
-                    )}
-                  </div>
-                )}
-                {selectedPanel.leaf.shape === 'polygon' && (
-                  <div className="ple-row">
-                    <button type="button" disabled={off || drawMode} onClick={addVertex}>頂点を足す</button>
-                    <button type="button" disabled={off} className={drawMode ? 'ple-on' : ''}
-                      onClick={() => setDrawMode(m => !m)}>
-                      {drawMode ? '手書きをやめる' : '手書きで描く'}
-                    </button>
-                  </div>
-                )}
-                <p className="story-muted">
-                  {selectedPanel.leaf.shape === 'polygon'
-                    ? drawMode
-                      ? '左の図に、コマの輪郭をぐるっと一筆で描いてください(枠の中に収めます)。'
-                      : '頂点をドラッグで動かせます(ダブルクリックで消す)。「手書きで描く」で輪郭を描き直せます。'
-                    : '形はコマの枠に収め、隣のコマにははみ出しません。吹き出しは形の内側に置きます。'}
-                </p>
+                <label className="ple-range">
+                  枠線の太さ
+                  <input type="range" min={0} max={20} step={1} value={current.style.border_width} disabled={off}
+                    onChange={e => editCurrent({ style: { ...current.style, border_width: Number(e.target.value) } })} />
+                  {current.style.border_width === 0 ? 'なし' : `${current.style.border_width}px`}
+                </label>
+                <div className="ple-row">
+                  <button type="button" disabled={off}
+                    onClick={() => editCurrent({ style: { background: '#000000', border_color: '#ffffff', border_width: current.style.border_width } })}>
+                    黒地(回想など)
+                  </button>
+                  <button type="button" disabled={off} onClick={() => editCurrent({ style: DEFAULT_STYLE })}>既定に戻す</button>
+                </div>
               </div>
             )}
 
             <div className="ple-patterns">
-              {(patterns[currentCount] ?? []).map(p => (
+              {(patterns[gridCount] ?? []).map(p => (
                 <button key={p.id} type="button" className="ple-pattern" disabled={off} title={p.label}
-                  onClick={() => { editPage(selected, { ...current, tree: p.tree, layout: null, panels: [] }); setSelection(null) }}>
+                  onClick={() => { editCurrent({ tree: p.tree, layout: null, panels: [] }); setSelection(null) }}>
                   <PageSvg page={{ ...current, tree: p.tree, layout: null, panels: [] }} labels={[]} width={52} />
                   <span>{p.label}</span>
                 </button>

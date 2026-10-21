@@ -259,3 +259,61 @@ def test_page_background_and_border_colors(client: TestClient) -> None:
     assert ok.status_code == 200, ok.text
     page_view = client.get(f"/api/manga-v2/{s['id']}/page-layout").json()["pages"][0]
     assert page_view["style"] == {"background": "#112233", "border_color": "#000000", "border_width": 4}
+
+
+# ---- 重ねて置くコマ・重なり順 ----
+
+
+def _solid(tmp_path: Path, name: str, color: tuple[int, int, int]) -> Path:
+    from PIL import Image
+
+    path = tmp_path / f"{name}.png"
+    Image.new("RGB", (512, 512), color).save(path)
+    return path
+
+
+def test_floating_panel_order_and_layers(tmp_path: Path, client: TestClient) -> None:
+    from python.manga_v2.compose import LetteringStyle, PanelContent, compose_page
+    from python.manga_v2.layout import normalize_floats
+    from python.manga_v2.lettering import resolve_font
+
+    tree = TEMPLATE_TREES["stack2"]
+    # 上下2コマの間(読む順で2番目)に、真ん中に重ねるコマ
+    floats = [{"rect": [0.3, 0.35, 0.7, 0.65], "after": 1, "shape": "ellipse"}]
+    layout = tree_layout(tree, None, None, floats)
+    spec = layout_page(layout)
+    assert len(spec.panels) == 3 and [s.z for s in spec.panels] == [0, 1, 0]
+    assert layout["floats"][0]["z"] == 1 and layout["floats"][0]["shape"] == "ellipse"
+
+    style = LetteringStyle(font_path=resolve_font(None), sfx_font_path=resolve_font(None))
+    red, green, blue = _solid(tmp_path, "r", (255, 0, 0)), _solid(tmp_path, "g", (0, 255, 0)), _solid(tmp_path, "b", (0, 0, 255))
+    contents = [PanelContent(red, ["上のコマのセリフです"], [], key="0"), PanelContent(green, [], [], key="1"), PanelContent(blue, [], [], key="2")]
+    page, elements = compose_page(spec, contents, style)
+    # 上のコマと重ねたコマが重なる所
+    center = (600, 700)
+    # 重ねたコマ(緑)が前面
+    assert page.getpixel(center) == (0, 255, 0)
+    # 上のコマの吹き出しは、重ねたコマに覆われた所を避ける
+    bubble = next(e for e in elements if e.key.startswith("0:"))
+    float_rect = spec.panels[1].rect
+    assert not (bubble.box[0] < float_rect[2] and float_rect[0] < bubble.box[2] and bubble.box[1] < float_rect[3] and float_rect[1] < bubble.box[3])
+
+    # 重ねたコマを最背面へ(z を下げる)と、マス目のコマの後ろになる
+    back = layout_page(tree_layout(tree, None, None, [{**floats[0], "z": -1}]))
+    page, _ = compose_page(back, contents, style)
+    assert page.getpixel(center) == (255, 0, 0)
+    # マス目のコマも前面へ出せる
+    front = layout_page(tree_layout(normalize_tree({"dir": "rows", "sizes": [0.5, 0.5], "items": [{"shape": "rect", "z": 5}, PANEL]}), None, None, floats))
+    assert [s.z for s in front.panels] == [5, 1, 0]
+
+    # おかしな値は弾く・収める
+    with pytest.raises(ValueError):
+        normalize_floats([{"rect": [0.5, 0.5, 0.51, 0.9]}], 2)
+    assert normalize_floats([{"rect": [-1, 0, 2, 0.5], "after": 9, "z": 500}], 2)[0] == {"rect": [0.0, 0.0, 1.0, 0.5], "after": 2, "z": 99}
+
+    # API: 保存して読み直すと重ねたコマが戻り、シーンは読む順にコマへ入る
+    s = _story(3)
+    res = client.put(f"/api/manga-v2/{s['id']}/page-layout", json={"pages": [{"tree": tree, "floats": floats}]})
+    assert res.status_code == 200, res.text
+    page_view = client.get(f"/api/manga-v2/{s['id']}/page-layout").json()["pages"][0]
+    assert page_view["count"] == 3 and page_view["floats"][0]["after"] == 1 and page_view["scene_ids"] == s["scenes"]
