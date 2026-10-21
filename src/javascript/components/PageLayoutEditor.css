@@ -6,8 +6,6 @@
 .ple-panel { fill: #f2f2f7; stroke: #1a1a2e; stroke-width: 1.5; }
 .ple-panel--empty { fill: #e3e3ea; stroke-dasharray: 4 3; }
 .ple-label { fill: #4a4a6a; text-anchor: middle; dominant-baseline: middle; font-weight: 600; pointer-events: none; }
-.ple-divider { fill: transparent; }
-.ple-divider:hover, .ple-divider--active { fill: rgba(123, 92, 246, 0.35); }
 
 .ple-strip { display: flex; gap: 0.4rem; overflow-x: auto; padding-bottom: 0.25rem; }
 
@@ -37,3 +35,24 @@
 .ple-patterns { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .ple-note { color: #9ae6b4; margin: 0; font-size: 0.8rem; }
 .ple-error { color: #ff8a9a; margin: 0; font-size: 0.8rem; }
+
+/* 形・境目の編集 */
+.ple-panel { cursor: pointer; }
+.ple-panel--on { fill: #e2dafd; stroke: #7b5cf6; stroke-width: 2.5; }
+.ple-panel--borderless { stroke-dasharray: 2 4; }
+.ple-divider { stroke: transparent; stroke-width: 14; }
+.ple-divider:hover, .ple-divider--active { stroke: rgba(123, 92, 246, 0.45); }
+.ple-vertex { fill: #fff; stroke: #7b5cf6; stroke-width: 2; cursor: move; }
+.ple-stroke { fill: none; stroke: #7b5cf6; stroke-width: 2; }
+.ple-svg--draw { cursor: crosshair; }
+.ple-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+.ple-range { display: inline-flex; align-items: center; gap: 0.4rem; }
+.ple-check { display: inline-flex; align-items: center; gap: 0.25rem; }
+.ple .ple-on { outline: 2px solid #7b5cf6; }

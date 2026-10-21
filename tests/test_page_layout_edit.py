@@ -148,3 +148,114 @@ def test_manga_style_can_be_left_out() -> None:
     assert build_panel_prompt("1girl", color=True, complexity=None).startswith("manga style, 1girl")
     assert build_panel_prompt("1girl", color=False, complexity=None, manga_style=False).startswith("monochrome, greyscale")
     assert "manga style" not in build_panel_prompt("1girl", color=True, complexity=None, manga_style=False)
+
+
+# ---- コマの形・斜めの境目 ----
+
+
+def _area(polygon: list[tuple[float, float]]) -> float:
+    return abs(sum(ax * by - bx * ay for (ax, ay), (bx, by) in zip(polygon, polygon[1:] + polygon[:1]))) / 2
+
+
+def test_plain_trees_keep_the_same_rectangles() -> None:
+    from python.manga_v2.layout import tree_outlines
+
+    for count in range(1, MAX_TREE_PANELS + 1):
+        for pattern in layout_patterns(count):
+            old = [[(x0, y0), (x1, y0), (x1, y1), (x0, y1)] for x0, y0, x1, y1 in _content_rects(tree_rects(pattern["tree"]))]
+            new = [[(round(x), round(y)) for x, y in outline] for outline, _ in tree_outlines(pattern["tree"])]
+            assert new == old, pattern["id"]
+
+
+def test_tilted_divider_makes_matching_trapezoids() -> None:
+    from python.manga_v2.layout import tree_outlines
+
+    tree = normalize_tree({"dir": "rows", "sizes": [0.5, 0.5], "tilts": [0.1], "items": [PANEL, PANEL]})
+    (top, _), (bottom, _) = tree_outlines(tree)
+    # 上のコマの下の辺と下のコマの上の辺は同じ傾きで、間隔は一定
+    top_left = max(y for x, y in top if x == min(px for px, _ in top))
+    top_right = max(y for x, y in top if x == max(px for px, _ in top))
+    bottom_left = min(y for x, y in bottom if x == min(px for px, _ in bottom))
+    bottom_right = min(y for x, y in bottom if x == max(px for px, _ in bottom))
+    assert top_left > top_right and bottom_left - top_left == pytest.approx(bottom_right - top_right, abs=1)
+    # 傾けても2つのコマで本文領域を分け合う(面積はほぼ同じ)
+    assert _area(top) == pytest.approx(_area(bottom), rel=0.02)
+    # 傾きは、隣のコマがつぶれない範囲に収める
+    assert normalize_tree({"dir": "rows", "sizes": [0.5, 0.5], "tilts": [0.9], "items": [PANEL, PANEL]})["tilts"][0] <= 0.25
+
+
+def test_leaf_shapes_stay_inside_their_cell() -> None:
+    from python.manga_v2.compose import inscribed_rect
+    from python.manga_v2.layout import PanelShape, tree_outlines
+
+    star = [[0.5, 0.0], [0.62, 0.38], [1.0, 0.38], [0.69, 0.62], [0.81, 1.0], [0.5, 0.76], [0.19, 1.0], [0.31, 0.62], [0.0, 0.38], [0.38, 0.38]]
+    tree = normalize_tree({"dir": "cols", "sizes": [0.5, 0.5], "tilts": [0.1], "items": [
+        {"shape": "ellipse"},
+        {"dir": "rows", "sizes": [0.5, 0.5], "items": [{"shape": "triangle", "point": "down", "border": False}, {"shape": "polygon", "points": star}]},
+    ]})
+    outlines = tree_outlines(tree)
+    assert all(len(o) >= 3 for o, _ in outlines) and [b for _, b in outlines] == [True, False, True]
+    # 楕円は斜めの境目で切られ、左のコマの領域にはみ出さない
+    ellipse, triangle = outlines[0][0], outlines[1][0]
+    assert max(y for _, y in triangle) <= 875 and min(x for x, _ in ellipse) >= min(x for x, _ in outlines[0][0])
+    for outline, _ in outlines:
+        xs, ys = [x for x, _ in outline], [y for _, y in outline]
+        shape = PanelShape((round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys))), tuple((round(x), round(y)) for x, y in outline))
+        # 吹き出しを置く範囲は形の内側
+        x0, y0, x1, y1 = inscribed_rect(shape)
+        assert shape.rect[0] <= x0 < x1 <= shape.rect[2] and shape.rect[1] <= y0 < y1 <= shape.rect[3]
+    # おかしな形は弾く
+    for bad in ({"shape": "star"}, {"shape": "triangle", "point": "nw"}, {"shape": "polygon", "points": [[0, 0], [1, 1]]}):
+        with pytest.raises(ValueError):
+            normalize_tree(bad)
+    # 何も決めていない葉は、ふつうのコマ
+    assert normalize_tree({"shape": "rect"}) == PANEL and normalize_tree({"shape": "rect", "border": False}) == {"shape": "rect", "border": False}
+
+
+def test_zero_gutter_and_margin_make_panels_touch(client: TestClient) -> None:
+    from python.manga_v2.layout import PAGE_HEIGHT, PAGE_WIDTH, normalize_gaps, tree_outlines
+
+    tree = TEMPLATE_TREES["grid4"]
+    rects = [outline for outline, _ in tree_outlines(tree, {"gutter_x": 0, "gutter_y": 0, "margin": 0})]
+    xs = sorted({round(x) for outline in rects for x, _ in outline})
+    ys = sorted({round(y) for outline in rects for _, y in outline})
+    # 間隔0・余白0: コマどうしが同じ線で接し、ページの端まで届く
+    assert xs == [0, PAGE_WIDTH // 2, PAGE_WIDTH] and ys == [0, PAGE_HEIGHT // 2, PAGE_HEIGHT]
+    # 範囲外は収める・無い項目は既定
+    assert normalize_gaps({"gutter_x": -5, "margin": 999}) == {"gutter_x": 0, "gutter_y": 28, "margin": 200}
+
+    s = _story(4)
+    res = client.put(f"/api/manga-v2/{s['id']}/page-layout", json={"pages": [{"tree": tree, "gaps": {"gutter_x": 0, "gutter_y": 0, "margin": 0}}]})
+    assert res.status_code == 200, res.text
+    page = client.get(f"/api/manga-v2/{s['id']}/page-layout").json()["pages"][0]
+    assert page["gaps"] == {"gutter_x": 0, "gutter_y": 0, "margin": 0}
+    assert min(x for panel in page["panels"] for x, _ in panel) == 0 and max(y for panel in page["panels"] for _, y in panel) == 1
+    # 既定のままなら、保存した形に間隔は入れない
+    assert "gaps" not in tree_layout(tree) and tree_layout(tree, {"margin": 0})["gaps"]["margin"] == 0
+
+
+def test_page_background_and_border_colors(client: TestClient) -> None:
+    from python.manga_v2.compose import LetteringStyle, PanelContent, compose_page
+    from python.manga_v2.lettering import resolve_font
+
+    # 地は黒、枠線は赤で太さ6。2コマ目だけ青で太さ10
+    tree = normalize_tree({"dir": "rows", "sizes": [0.5, 0.5], "items": [PANEL, {"shape": "rect", "border_color": "#0000FF", "border_width": 10}]})
+    layout = tree_layout(tree, None, {"background": "#000000", "border_color": "#ff0000", "border_width": 6})
+    spec = layout_page(layout)
+    assert spec.background == (0, 0, 0)
+    assert [(s.border_color, s.border_width) for s in spec.panels] == [((255, 0, 0), 6), ((0, 0, 255), 10)]
+    style = LetteringStyle(font_path=resolve_font(None), sfx_font_path=resolve_font(None))
+    page, _ = compose_page(spec, [PanelContent(None, key="0"), PanelContent(None, key="1")], style)
+    # 余白は地の色、上のコマの枠線は赤、下のコマの枠線は青
+    assert page.getpixel((10, 10)) == (0, 0, 0)
+    top, bottom = spec.panels
+    assert page.getpixel((top.rect[0] + 200, top.rect[1] + 1)) == (255, 0, 0)
+    assert page.getpixel((bottom.rect[0] + 200, bottom.rect[3] - 2)) == (0, 0, 255)
+
+    s = _story(2)
+    bad = client.put(f"/api/manga-v2/{s['id']}/page-layout", json={"pages": [{"tree": tree, "style": {"background": "black"}}]})
+    assert bad.status_code == 422
+    ok = client.put(f"/api/manga-v2/{s['id']}/page-layout", json={"pages": [{"tree": tree, "style": {"background": "#112233"}}]})
+    assert ok.status_code == 200, ok.text
+    page_view = client.get(f"/api/manga-v2/{s['id']}/page-layout").json()["pages"][0]
+    assert page_view["style"] == {"background": "#112233", "border_color": "#000000", "border_width": 4}

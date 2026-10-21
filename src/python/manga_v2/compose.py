@@ -462,10 +462,12 @@ def _place_stamp(
     heads: list[Rect] | None = None,
     scale: float = 1.0,
     fixed: bool = False,
+    anchor: Rect | None = None,
 ) -> Rect:
     """
     スタンプの縦横比のまま、コマに収まる大きさで描き文字と同じ探し方で置き場所を決める。
     scale は大きさの倍率。fixed(個別に大きさを決めた)なら空きが無くても縮めない。
+    anchor は手動配置の基準(コマの外接矩形。無ければ panel)。panel は置ける範囲(形のあるコマでは形の内側)。
     """
     pw, ph = panel[2] - panel[0], panel[3] - panel[1]
     sw, sh = natural
@@ -475,16 +477,35 @@ def _place_stamp(
     while True:
         size = (max(1, round(sw * ratio)), max(1, round(sh * ratio)))
         if override is not None:
-            return _overridden_box(size, panel, override)
+            return _overridden_box(size, anchor or panel, override)
         box, free = _place(size, panel, placed, sfx=True, heads=heads)
         if free or fixed or size[1] <= ph * _STAMP_MIN_H * min(scale, 1.0):
             return box
         ratio *= _STAMP_SHRINK
 
 
+@dataclass
+class _Picture:
+    """コマに描いた絵の中の頭(ページ座標)と、そのキャラID、コマの外に切れたキャラの頭の中心。"""
+
+    heads: list[Rect]
+    head_ids: list[int | None]
+    offscreen: dict[int, tuple[float, float]]
+
+
 def _draw_panel(
     page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle, *, border: bool = True
 ) -> list[Element]:
+    """1コマを描く(絵・文字・枠線)。コマ単位のダウンロードで使う。"""
+    picture = _draw_picture(page, rect, content)
+    elements = _draw_lettering(page, rect, content, style, picture)
+    if border:
+        ImageDraw.Draw(page).rectangle(rect, outline=(0, 0, 0), width=_BORDER)
+    return elements
+
+
+def _draw_picture(page: Image.Image, rect: Rect, content: PanelContent) -> _Picture:
+    """コマの絵を rect に嵌め込む(まだ無ければ灰色の仮の絵)。吹き出しの置き場所を決めるための頭の位置を返す。"""
     x0, y0, x1, y1 = rect
     width, height = x1 - x0, y1 - y0
     draw = ImageDraw.Draw(page)
@@ -520,6 +541,26 @@ def _draw_panel(
     else:
         draw.rectangle(rect, fill=(225, 225, 225))
         draw.text((x0 + 12, y0 + 10), "(未生成)", fill=(120, 120, 120))
+    return _Picture(heads, head_ids, offscreen)
+
+
+def _draw_lettering(
+    page: Image.Image,
+    rect: Rect,
+    content: PanelContent,
+    style: LetteringStyle,
+    picture: _Picture,
+    area: Rect | None = None,
+) -> list[Element]:
+    """
+    吹き出し・描き文字・ナレーションを置いて描く。area は置ける範囲(形のあるコマでは形の内側の長方形。無ければ rect)。
+    手動配置・文字の大きさの基準・画面に返すコマの範囲は、コマの外接矩形 rect のまま。
+    """
+    heads, head_ids, offscreen = picture.heads, picture.head_ids, picture.offscreen
+    frame = rect
+    rect = area or rect
+    x0, y0, x1, y1 = rect
+    width, height = x1 - x0, y1 - y0
 
     pairs = [(line, speaker) for line, speaker in zip(content.dialogue, _padded(content)) if line.strip()]
     if len(pairs) > _MAX_BUBBLES:
@@ -534,7 +575,7 @@ def _draw_panel(
     if content.narration.strip():
         # ナレーションは先に場所を取り、吹き出しはそれを避けて置く。描くのは最後(枠線が上に来るように)。
         key = f"{key_base}:narration:0"
-        narration_scale = _panel_factor(rect) * style.text_scale * style.scales.get(key, 1.0)
+        narration_scale = _panel_factor(frame) * style.text_scale * style.scales.get(key, 1.0)
         narration_text_size = max(12, round(_NARRATION_SIZE * narration_scale))
         narration_block = fit_text(
             content.narration.strip(),
@@ -546,12 +587,12 @@ def _draw_panel(
         size = narration_size(narration_block)
         override = style.overrides.get(key)
         narration_box = (
-            _overridden_box(size, rect, override)
+            _overridden_box(size, frame, override)
             if override is not None
             else _place(size, rect, placed, narration=True, heads=heads)[0]
         )
         placed.append(narration_box)
-        elements.append(Element(key, "narration", content.narration.strip(), narration_box, rect))
+        elements.append(Element(key, "narration", content.narration.strip(), narration_box, frame))
     # 吹き出し・描き文字とも、既に置いたものと重なるなら文字を小さくして空きを探し直す。
     # 最小サイズでも空きが無ければ、重なりが最小の位置に置く。手動で動かしたものはその位置に置く。
     bubble_boxes: list[Rect] = []
@@ -562,7 +603,7 @@ def _draw_panel(
         shape, text = bubble_shape(line)
         # 文字の大きさ = 基準 × コマの大きさ × 形(叫び/小声) × 全体の設定 × 個別の調整
         element_scale = style.scales.get(key)
-        scale = _panel_factor(rect) * _SHAPE_TEXT_FACTOR.get(shape, 1.0) * style.text_scale * (element_scale or 1.0)
+        scale = _panel_factor(frame) * _SHAPE_TEXT_FACTOR.get(shape, 1.0) * style.text_scale * (element_scale or 1.0)
         start_size = max(12, round(_TEXT_SIZE * scale))
         # 個別に大きさを決めたものは、空きが無くても縮めない(置き場所の方を譲る)
         min_size = start_size if element_scale is not None else max(10, round(_TEXT_MIN_SIZE * min(scale, 1.0)))
@@ -578,7 +619,7 @@ def _draw_panel(
             for candidate_shape in shapes:
                 block, size = _fit_bubble(text, rect, text_size, candidate_shape, min_size)
                 if override is not None:
-                    best = (_overridden_box(size, rect, override), block, candidate_shape)
+                    best = (_overridden_box(size, frame, override), block, candidate_shape)
                     break
                 box, free = _place(
                     size, rect, placed, heads=heads, prefer_x=prefer_x, earlier=bubble_boxes, rivals=rivals
@@ -597,7 +638,7 @@ def _draw_panel(
         placed.append(box)
         bubble_boxes.append(box)
         bubble_speakers.append(speaker_id)
-        elements.append(Element(key, "bubble", line, box, rect))
+        elements.append(Element(key, "bubble", line, box, frame))
         # 頭に被ってしまう吹き出しだけ地を透かし、絵が見えるようにする
         opacity = min(style.bubble_opacity, _OVER_HEAD_OPACITY) if _covers_head(box, heads) else style.bubble_opacity
         draw_bubble(
@@ -619,45 +660,83 @@ def _draw_panel(
         if stamp_path is not None and stamp_path.is_file():
             with Image.open(stamp_path) as stamp:
                 stamp.load()
-                box = _place_stamp(stamp.size, rect, placed, override, heads, sfx_scale, element_scale is not None)
+                box = _place_stamp(
+                    stamp.size, rect, placed, override, heads, sfx_scale, element_scale is not None, anchor=frame
+                )
                 placed.append(box)
-                elements.append(Element(key, "sfx", text, box, rect))
+                elements.append(Element(key, "sfx", text, box, frame))
                 draw_stamp(page, box, stamp)
             continue
         layout = fit_sfx(text, width, height, scale=sfx_scale)
         while True:
             if override is not None:
-                box = _overridden_box((layout.width, layout.height), rect, override)
+                box = _overridden_box((layout.width, layout.height), frame, override)
                 break
             box, free = _place((layout.width, layout.height), rect, placed, sfx=True, heads=heads)
             if free or element_scale is not None or layout.size <= SFX_MIN_SIZE * min(sfx_scale, 1.0):
                 break
             layout = fit_sfx(text, width, height, max_size=layout.size - _SHRINK_STEP_SFX, scale=sfx_scale)
         placed.append(box)
-        elements.append(Element(key, "sfx", text, box, rect))
+        elements.append(Element(key, "sfx", text, box, frame))
         draw_sfx(page, box, layout, style.sfx_font_paths.get(text, style.sfx_font_path))
 
     if narration_box is not None and narration_block is not None:
         draw_narration(page, narration_box, narration_block, style.font_path)
-
-    if border:
-        draw.rectangle(rect, outline=(0, 0, 0), width=_BORDER)
     return elements
+
+
+def inscribed_rect(shape: PanelShape) -> Rect:
+    """
+    コマの形の内側に収まる、なるべく大きな長方形(吹き出し・描き文字を置く範囲)。輪郭を縮小して塗り、
+    塗った升目だけでできる一番大きな長方形を探す(ヒストグラムの最大長方形)。見つからなければ外接矩形。
+    """
+    x0, y0, x1, y1 = shape.rect
+    step = max(4, max(x1 - x0, y1 - y0) // 120)
+    cols, rows = max(1, (x1 - x0) // step), max(1, (y1 - y0) // step)
+    mask = Image.new("L", (cols, rows), 0)
+    ImageDraw.Draw(mask).polygon([((x - x0) / step, (y - y0) / step) for x, y in shape.points], fill=255)
+    filled = [[mask.getpixel((c, r)) > 0 for c in range(cols)] for r in range(rows)]
+    heights = [0] * cols
+    best = (0, 0, 0, 0, 0)  # 面積, 左, 上, 右, 下(升目)
+    for r in range(rows):
+        heights = [h + 1 if filled[r][c] else 0 for c, h in enumerate(heights)]
+        stack: list[int] = []
+        for c in range(cols + 1):
+            h = heights[c] if c < cols else 0
+            while stack and heights[stack[-1]] >= h:
+                top = heights[stack.pop()]
+                left = stack[-1] + 1 if stack else 0
+                area = top * (c - left)
+                if area > best[0]:
+                    best = (area, left, r - top + 1, c, r + 1)
+            stack.append(c)
+    if best[0] == 0:
+        return shape.rect
+    _, left, top, right, bottom = best
+    # 升目の境で縮めた分、内側に1升ずつ余裕を見る(輪郭の線に文字が掛からないように)
+    return (
+        x0 + (left + 1) * step if right - left > 2 else x0 + left * step,
+        y0 + (top + 1) * step if bottom - top > 2 else y0 + top * step,
+        x0 + (right - 1) * step if right - left > 2 else x0 + right * step,
+        y0 + (bottom - 1) * step if bottom - top > 2 else y0 + bottom * step,
+    )
 
 
 def _draw_border(page: Image.Image, shape: PanelShape) -> None:
     """コマの枠線。ページの端に接する辺(裁ち落とし)には描かない。"""
+    if shape.border_width <= 0:
+        return
     draw = ImageDraw.Draw(page)
     width, height = page.size
     x0, y0, x1, y1 = shape.rect
     if shape.is_rect and x0 > 0 and y0 > 0 and x1 < width and y1 < height:
-        draw.rectangle(shape.rect, outline=(0, 0, 0), width=_BORDER)
+        draw.rectangle(shape.rect, outline=shape.border_color, width=shape.border_width)
         return
     points = shape.points
     for (ax, ay), (bx, by) in zip(points, points[1:] + points[:1]):
         on_edge = (ax == bx and ax in (0, width)) or (ay == by and ay in (0, height))
         if not on_edge:
-            draw.line([(ax, ay), (bx, by)], fill=(0, 0, 0), width=_BORDER, joint="curve")
+            draw.line([(ax, ay), (bx, by)], fill=shape.border_color, width=shape.border_width, joint="curve")
 
 
 def compose_page(
@@ -669,19 +748,25 @@ def compose_page(
     """
     if not isinstance(spec, PageSpec):
         spec = PageSpec(PAGE_WIDTH, PAGE_HEIGHT, tuple(rect_shape(r) for r in spec))
-    page = Image.new("RGB", (spec.width, spec.height), (255, 255, 255))
-    elements: list[Element] = []
+    page = Image.new("RGB", (spec.width, spec.height), spec.background)
+    pictures: list[_Picture] = []
     for shape, content in zip(spec.panels, panels):
         if shape.is_rect:
-            elements.extend(_draw_panel(page, shape.rect, content, style, border=False))
+            pictures.append(_draw_picture(page, shape.rect, content))
         else:
             layer = page.copy()
-            elements.extend(_draw_panel(layer, shape.rect, content, style, border=False))
+            pictures.append(_draw_picture(layer, shape.rect, content))
             mask = Image.new("L", page.size, 0)
             ImageDraw.Draw(mask).polygon(list(shape.points), fill=255)
             page.paste(layer, (0, 0), mask)
+    for shape in spec.panels[: len(panels)]:
         if shape.border:
             _draw_border(page, shape)
+    # 文字は全部の絵と枠線の上に描く(形のあるコマで吹き出しが形に切られない・隣のコマに隠れないように)
+    elements: list[Element] = []
+    for shape, content, picture in zip(spec.panels, panels, pictures):
+        area = None if shape.is_rect else inscribed_rect(shape)
+        elements.extend(_draw_lettering(page, shape.rect, content, style, picture, area))
     return page, elements
 
 
