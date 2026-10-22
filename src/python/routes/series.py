@@ -259,6 +259,36 @@ def update_series_route(series_id: int, req: SeriesUpdateRequest) -> dict[str, A
     return _series_response(series_id)
 
 
+class VolumeOrderRequest(BaseModel):
+    """シリーズの巻の並び。story_ids の順に 1巻・2巻… と付け直す(シリーズの巻をすべて、1回ずつ並べる)。"""
+
+    story_ids: list[int] = Field(min_length=1, max_length=1000)
+
+
+@router.put("/{series_id}/volume-order", response_model=SeriesResponse)
+def put_volume_order(series_id: int, req: VolumeOrderRequest) -> dict[str, Any]:
+    """
+    巻番号を付け直す(巻を入れ替える・途中に足した巻を前へ回す)。巻のあらすじや中身は変えない。
+    同じ巻番号が2つできないよう、一度番号を外してから付け直す。
+    """
+    conn = get_connection()
+    try:
+        if get_series(conn, series_id) is None:
+            raise HTTPException(status_code=404, detail="series not found")
+        current = [row["id"] for row in conn.execute("SELECT id FROM stories WHERE series_id = ?", (series_id,))]
+        if sorted(current) != sorted(req.story_ids) or len(set(req.story_ids)) != len(req.story_ids):
+            raise HTTPException(
+                status_code=422, detail=f"このシリーズの巻をすべて1回ずつ並べてください(今の巻: {sorted(current)})。"
+            )
+        with conn:
+            conn.execute("UPDATE stories SET volume_no = NULL WHERE series_id = ?", (series_id,))
+            for number, story_id in enumerate(req.story_ids, start=1):
+                conn.execute("UPDATE stories SET volume_no = ? WHERE id = ?", (number, story_id))
+    finally:
+        conn.close()
+    return _series_response(series_id)
+
+
 class SplitRequest(BaseModel):
     max_scenes: int = Field(DEFAULT_MAX_SCENES, ge=1, le=1000)
 
