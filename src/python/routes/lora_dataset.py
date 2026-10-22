@@ -32,6 +32,10 @@ from ..character_sheet import (
     sheet_prompt,
 )
 from ..client import get_client
+from ..face_sheet import BACKGROUND as FACE_BACKGROUND
+from ..face_sheet import ITEMS as FACE_ITEMS
+from ..face_sheet import SIZES as FACE_SIZES
+from ..face_sheet import presets as face_presets
 from ..dataset_variations import clean_value
 from ..dataset_variations import extract as extract_variation_tags
 from .. import guard_password
@@ -75,6 +79,7 @@ from ..models import (
     DatasetVariationsExtractRequest,
     CharacterSheetPromptResponse,
     DatasetImportRequest,
+    FaceSheetRequest,
     GuardCoreResponse,
     GuardProfileResponse,
     GuardProfileSaveRequest,
@@ -709,6 +714,104 @@ async def generate_character_dataset(
         yield _sse("complete", {
             "total": total, "succeeded": succeeded, "failed": failed, "output_path": str(output_root),
         })
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- 顔・表情シート(face_sheet.py) ---
+
+
+def _face_dir(character: dict, root_name: str) -> Path:
+    return _character_root(root_name, character) / "face_sheet"
+
+
+def _face_entries(character: dict, root_name: str) -> list[dict[str, Any]]:
+    folder = _face_dir(character, root_name)
+    result = []
+    for item in FACE_ITEMS.values():
+        path = folder / f"{item.key}.png"
+        result.append({
+            "key": item.key,
+            "label": item.label,
+            "group": item.group,
+            "path": path.relative_to(_PROJECT_ROOT).as_posix() if path.is_file() else None,
+            "updated": path.stat().st_mtime if path.is_file() else None,
+        })
+    return result
+
+
+@router.get("/face-sheet/presets")
+async def get_face_sheet_presets() -> list[dict[str, str]]:
+    """顔・表情シートの項目(キー・名前・顔の向きか表情か・足すタグ)。"""
+    return face_presets()
+
+
+@router.get("/character/{character_id}/face-sheet")
+async def get_face_sheet(character_id: int, root_name: str = "training_data") -> list[dict[str, Any]]:
+    """顔・表情シートの項目ごとの、描いた絵のパス(描いていなければ null)。"""
+    return _face_entries(_load_character(character_id), root_name)
+
+
+@router.post("/character/{character_id}/face-sheet")
+async def generate_face_sheet(character_id: int, req: FaceSheetRequest, client: ClientDep) -> StreamingResponse:
+    """
+    顔・表情シートの項目を1枚ずつ描く(SSE で1枚ごとに知らせる)。キャラシートの見た目+向き・表情のタグ+無地の背景。
+    描いた絵は <データセットのフォルダ>/face_sheet/<キー>.png に、LoRA 用のキャプション(.txt)と一緒に置く(上書き)。
+    """
+    character = _load_character(character_id)
+    unknown = [k for k in req.keys if k not in FACE_ITEMS]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"顔・表情シートに無い項目です: {unknown}")
+    items = [FACE_ITEMS[k] for k in dict.fromkeys(req.keys)]
+    _check_tags(character, ", ".join(i.tags for i in items), _load_guard(None), False)
+
+    references = None
+    ref_path = character.get("reference_image_path")
+    if req.use_reference and ref_path and (_PROJECT_ROOT / ref_path).is_file():
+        references = [CharacterReference(
+            image=(_PROJECT_ROOT / ref_path).read_bytes(), type="character", fidelity=1.0, strength=req.reference_strength,
+        )]
+    folder = _face_dir(character, req.root_name)
+    try:
+        cfg = GenConfig(
+            output_root=folder.parent,
+            model=req.model,
+            steps=req.steps,
+            scale=req.scale,
+            negative_prompt=sheet_negative(character),
+            seed=character.get("seed") if character.get("seed") is not None else req.seed,
+            character_references=references,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    async def event_gen():
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        folder.mkdir(parents=True, exist_ok=True)
+        succeeded = failed = 0
+        for index, item in enumerate(items, start=1):
+            prompt = join_tags(sheet_prompt(character), item.tags, FACE_BACKGROUND)
+            event: dict[str, Any] = {"current": index, "total": len(items), "key": item.key, "label": item.label}
+            try:
+                image = await generate_one(client, prompt, FACE_SIZES[item.size], cfg, seed=cfg.seed)
+                path = folder / f"{item.key}.png"
+                image.save(path, "PNG")
+                caption = join_tags(character.get("trigger_word"), character.get("appearance_tags"), item.tags)
+                path.with_suffix(".txt").write_text(caption, encoding="utf-8")
+                event |= {"status": "ok", "path": path.relative_to(_PROJECT_ROOT).as_posix()}
+                succeeded += 1
+            except Exception as exc:
+                event |= {"status": "error", "message": str(exc)}
+                failed += 1
+            yield _sse("progress", event)
+            await asyncio.sleep(2)
+        yield _sse("complete", {"total": len(items), "succeeded": succeeded, "failed": failed})
 
     return StreamingResponse(
         event_gen(),

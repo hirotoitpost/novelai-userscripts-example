@@ -270,6 +270,22 @@ class DatasetStateRequest(BaseModel):
     part: Literal["none", "belly", "chest", "torso", "legs"] = "none"
 
 
+class FaceSheetRequest(BaseModel):
+    """
+    顔・表情シートを描く(face_sheet.py)。keys は描く項目(顔の向き・表情)。描いてある項目は描き直す(上書き)。
+    キャラシートの基準シードで描く(無ければ seed)。
+    """
+
+    keys: list[str] = Field(min_length=1, max_length=40)
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    model: ImageModelLiteral = "nai-diffusion-4-5-full"
+    steps: int = Field(23, ge=1, le=50)
+    scale: float = Field(5.0, ge=0.0, le=10.0)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
+    use_reference: bool = False
+    reference_strength: float = Field(0.7, ge=0.0, le=1.0)
+
+
 class CharacterDatasetRequest(BaseModel):
     """キャラシートを元に、ポーズ/服装/表情/場所を差し替えたデータセットを作る。"""
 

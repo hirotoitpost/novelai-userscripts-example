@@ -1,0 +1,50 @@
+/* キャラシートの顔・表情シート */
+.fsh { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.fsh h3 { margin: 0; font-size: 1rem; }
+.fsh h4 { margin: 0; font-size: 0.9rem; }
+.fsh-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.5rem 0 0.3rem; }
+
+.fsh-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 120px), 1fr));
+  gap: 0.5rem;
+}
+
+.fsh-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.3rem;
+  border: 1px solid #22224a;
+  border-radius: 8px;
+  background: #12122a;
+  min-width: 0;
+}
+
+.fsh-cell--on { border-color: #7b5cf6; background: #1f1a40; }
+
+.fsh-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1c1c3a;
+  cursor: zoom-in;
+}
+
+.fsh-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.fsh-thumb--none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6a6a90;
+  font-size: 0.8rem;
+  cursor: default;
+}
+
+.fsh-label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; overflow-wrap: anywhere; }
+.fsh-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 0.4rem; }
