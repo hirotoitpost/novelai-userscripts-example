@@ -272,6 +272,10 @@ def register_manga_tools(mcp: MCPServer) -> None:
               表情や仕草は prompt_tags ではなくここに書く(全体に書くと全員に付いてしまう)。
               prompt_tags には人数・場所・時間帯・構図・二人の位置関係など全体のことだけを書く
           sfx: 描き文字の効果音のリスト
+          character_outfits: {キャラID: この場面の服装の英語タグ}。キャラシートのふだんの服装の代わりに使う(水着・浴衣など)
+          dialogue: [{"text": "…", "speaker_id": キャラID か null}, …]。あれば本文の「」の代わりにこれを吹き出しにし、
+              話し手を推定しない。地の文に名前が出ない話し手(幼い子など)のセリフに使う。（…）で囲むと心の声
+          negative_prompt: このコマのネガティブ(ページ・物語のネガティブより優先。manga_set_negatives)
         話し手は「〜が言った/〜は笑った」などの地の文・呼びかけ・会話の交互から判定する。地の文は吹き出しにならない。
         series_id と volume_no を渡すと、そのシリーズの巻にする。
         """
@@ -302,9 +306,11 @@ def register_manga_tools(mcp: MCPServer) -> None:
         sfx: list[str] | None = None,
         character_outfits: dict[int, str] | None = None,
         character_states: dict[int, int | None] | None = None,
+        negative_prompt: str | None = None,
     ) -> str:
         """
         シーンを手直しする(渡した項目だけ)。narration を空文字にするとナレーションを消す。
+        negative_prompt はこのコマのネガティブ(ページ・物語より優先。空文字で未設定に戻す)。
         character_actions(キャラID → 表情・動作の英語タグ)を変えるときは character_ids も渡す。
         character_outfits(キャラID → この場面の服装の英語タグ。空ならキャラシートのふだんの服装)と
         character_states(キャラID → 状態の ID。manga_list_scene_presets。null でふだん)も同じ。
@@ -329,7 +335,26 @@ def register_manga_tools(mcp: MCPServer) -> None:
             await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/narration", {"narration": narration})
         if sfx is not None:
             await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/sfx", {"sfx": sfx})
+        if negative_prompt is not None:
+            await _call("PATCH", f"/api/story/scenes/{scene_id}", {"negative_prompt": negative_prompt})
         return f"シーン {scene_id} を更新しました"
+
+    @mcp.tool()
+    async def manga_set_negatives(
+        story_id: int, story: str | None = None, pages: dict[int, str] | None = None
+    ) -> dict[str, Any]:
+        """
+        コマを描くときのネガティブを、物語全体(story)とページごと(pages: {ページ番号(0始まり): 文})に決める。
+        入れてあれば細かい方(コマ > ページ > 物語 > manga_generate_panels の negative_prompt)を使う。
+        コマごとは manga_update_scene の negative_prompt。pages は丸ごと置き換える(空の辞書で全ページ消す)。
+        品質・文字を描かせない・モノクロ・未成年対策のネガティブは、どれを選んでも足される。
+        """
+        body: dict[str, Any] = {}
+        if story is not None:
+            body["story"] = story
+        if pages is not None:
+            body["pages"] = {str(k): v for k, v in pages.items()}
+        return await _call("PUT", f"/api/manga-v2/{story_id}/negatives", body)
 
     @mcp.tool()
     async def manga_check_speakers(story_id: int) -> list[dict[str, Any]]:
@@ -441,12 +466,14 @@ def register_manga_tools(mcp: MCPServer) -> None:
         max_lines_per_panel: int | None = None,
         font: str | None = None,
         text_scale: float | None = None,
+        monochrome: bool | None = None,
         show_pages: bool = True,
         page_max_size: int = 900,
     ) -> list[TextContent | ImageContent]:
         """
         コマの絵をテンプレートに嵌め、吹き出し・ナレーション・効果音を描いてページにする。
         省略した項目は前回の合成設定を使う。show_pages で全ページの画像も返す(読み味・吹き出しの確認用)。
+        monochrome: True でコマの絵を白黒にしてから嵌める(モノクロの漫画。色の残ったコマのシーン番号も知らせる)。
         """
         story = await _call("GET", f"/api/story/{story_id}")
         body = dict(story.get("manga_v2_compose_settings") or {})
@@ -455,14 +482,18 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "max_lines_per_panel": max_lines_per_panel,
             "font": font,
             "text_scale": text_scale,
+            "monochrome": monochrome,
         }
         body |= {k: v for k, v in given.items() if v is not None}
         result = await _call("POST", f"/api/manga-v2/{story_id}/compose", body, timeout=600)
+        colored = result.get("colored_scenes") or []
+        note = f"\n色の付いていたコマ(シーン{'・'.join(map(str, colored))})は白黒にして嵌めました。" if colored else ""
         content: list[TextContent | ImageContent] = [
             TextContent(
                 type="text",
                 text=f"{len(result['pages'])}ページを合成しました。全体: {result['final_image_path']}\n"
-                + "\n".join(result["pages"]),
+                + "\n".join(result["pages"])
+                + note,
             )
         ]
         if show_pages:
@@ -528,6 +559,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
         body_scenes = []
         for index, scene in enumerate(data["scenes"]):
             item = {k: scene[k] for k in keys}
+            # コマのネガティブは消さずにそのまま送り直す
+            item["negative_prompt"] = scene.get("negative_prompt")
             # 決めていたセリフはそのまま、本文から取り出していたものは本文のまま
             item["dialogue"] = scene["dialogue"] if scene["dialogue_custom"] else None
             change = scenes.get(index) or scenes.get(str(index))  # type: ignore[call-overload]

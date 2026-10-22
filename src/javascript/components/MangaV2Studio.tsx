@@ -6,6 +6,7 @@ import { SceneCharacter } from './StoryCharacters'
 import MangaV2PageEditor, { MangaV2Element } from './MangaV2PageEditor'
 import MangaV2SfxFonts from './MangaV2SfxFonts'
 import MangaV2Stamps from './MangaV2Stamps'
+import NegativeEditor from './NegativeEditor'
 import PageLayoutEditor from './PageLayoutEditor'
 
 /** 漫画v2で使うシーンの項目(Story ページの StoryScene の一部)。 */
@@ -51,6 +52,8 @@ export interface MangaV2ComposeSettings {
   max_lines_per_panel: number
   text_scale: number
   sfx_scale: number
+  /** モノクロの漫画(コマの絵を白黒にしてから嵌める) */
+  monochrome?: boolean
 }
 
 interface ComposeResult {
@@ -62,6 +65,8 @@ interface ComposeResult {
   elements: MangaV2Element[][]
   // pages と同じ順の、動くページのアニメ WebP(動かないページは null)
   animated_pages?: (string | null)[]
+  // モノクロで合成したとき、色の付いていたコマのシーン番号(白黒にして嵌めた)
+  colored_scenes?: number[]
 }
 
 /** うごイラ(/api/ugoira)の一覧の項目 */
@@ -233,6 +238,7 @@ export default function MangaV2Studio({
     setMaxLines(saved.max_lines_per_panel)
     setTextScale(Math.round(saved.text_scale * 100))
     setSfxScale(Math.round(saved.sfx_scale * 100))
+    if (saved.monochrome !== undefined) setColor(!saved.monochrome)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storyId])
 
@@ -413,6 +419,8 @@ export default function MangaV2Studio({
     max_lines_per_panel: maxLines,
     text_scale: textScale / 100,
     sfx_scale: sfxScale / 100,
+    // モノクロで描くなら、合成でも絵を白黒にそろえる(水や空の場面に色が残ることがある)
+    monochrome: !color,
   }
 
   /** シーンのコマを動かすうごイラを決める(null で外す)。次に合成したときから動く */
@@ -589,7 +597,7 @@ export default function MangaV2Studio({
         <div className="story-row">
           <label className="mv2-check">
             <input type="checkbox" checked={color} disabled={busy} onChange={e => setColor(e.target.checked)} />
-            カラーで描く(オフならモノクロ)
+            カラーで描く(オフならモノクロ。合成でも絵を白黒にそろえます)
           </label>
           <label className="mv2-check" title="コマの絵のプロンプトの先頭に manga style を付けます。外すと画風がイラスト寄りになります">
             <input type="checkbox" checked={mangaStyle} disabled={busy} onChange={e => setMangaStyle(e.target.checked)} />
@@ -601,6 +609,11 @@ export default function MangaV2Studio({
           セリフ「{fontLabel(font)}」/ 効果音「{fontLabel(sfxFont)}」。
         </p>
       </div>
+
+      <details className="story-characters-block">
+        <summary>ネガティブプロンプト(物語・ページ)</summary>
+        <NegativeEditor apiOrigin={apiOrigin} storyId={storyId} template={template} busy={busy} />
+      </details>
 
       <details className="story-characters-block">
         <summary>ページのコマ割り(確認・変更)</summary>
@@ -852,6 +865,11 @@ export default function MangaV2Studio({
 
       {composed && composed.pages.length > 0 && (
         <div className="mv2-compose">
+          {(composed.colored_scenes?.length ?? 0) > 0 && (
+            <p className="story-muted">
+              色の付いていたコマ(シーン{composed.colored_scenes?.join('・')})は、白黒にして嵌めました。
+            </p>
+          )}
           <div className="mv2-page-tabs">
             {composed.pages.map((path, index) => (
               <button

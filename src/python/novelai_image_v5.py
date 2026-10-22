@@ -50,7 +50,13 @@ _MAX_PANEL_TEXT_CHARS = 100
 _MAX_TEXT_LINES = 12
 
 # ページ別の指標(routes/story.py)でも同じ定義を使うため公開している。
-DIALOGUE_RE = re.compile(r"[「『]([^」』]*)[」』]")
+# 「」と『』はそれぞれ対で閉じる(「『パパ』って呼びます」の中の』で、セリフが切れないように)
+DIALOGUE_RE = re.compile(r"「([^」]*)」|『([^』]*)』")
+
+
+def dialogue_text(match: re.Match[str]) -> str:
+    """DIALOGUE_RE に当たったセリフの中身(「」か『』の内側)。"""
+    return match.group(1) if match.group(1) is not None else match.group(2)
 
 
 def _panel_dialogue_lines(text: str) -> list[str]:
@@ -61,7 +67,7 @@ def _panel_dialogue_lines(text: str) -> list[str]:
     その大半が日本語の散文になる。すると絵の指示である英語タグもコマ割り指示も
     埋もれてしまい、4コマ指定が8コマで描かれ、全コマが同じ構図になった。
     """
-    lines = [match.group(1).strip() for match in DIALOGUE_RE.finditer(text)]
+    lines = [dialogue_text(match).strip() for match in DIALOGUE_RE.finditer(text)]
     return [line[:_MAX_PANEL_TEXT_CHARS] for line in lines if line]
 
 

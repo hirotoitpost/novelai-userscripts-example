@@ -64,6 +64,7 @@ from ..db import (
     update_character_sheet,
     update_scene_content,
     update_scene_narration,
+    update_scene_negative,
     update_scene_sfx,
     update_scene_tags,
     update_scene_writing,
@@ -710,6 +711,20 @@ async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
                 set_scene_characters(conn, row["id"], scene.character_ids, scene.character_actions, scene.character_outfits)
             if scene.narration:
                 update_scene_narration(conn, row["id"], scene.narration)
+            if scene.dialogue is not None:
+                # 話し手がそのコマにいなければ話し手なし(編集画面で決めたセリフと同じ形で保存する)
+                cast = set(scene.character_ids)
+                lines = [
+                    {"text": line.text.strip(), "speaker_id": line.speaker_id if line.speaker_id in cast else None}
+                    for line in scene.dialogue
+                    if line.text.strip()
+                ]
+                conn.execute(
+                    "UPDATE story_scenes SET dialogue = ? WHERE id = ?", (json.dumps(lines, ensure_ascii=False), row["id"])
+                )
+                conn.commit()
+            if scene.negative_prompt:
+                update_scene_negative(conn, row["id"], scene.negative_prompt)
             # 効果音は未設定(None)だとAI提案の対象になるので、台本で無しなら空にしておく
             update_scene_sfx(conn, row["id"], [s.strip() for s in scene.sfx or [] if s.strip()])
         update_story_status(conn, story["id"], "written")
@@ -732,6 +747,8 @@ async def patch_scene(scene_id: int, req: SceneUpdateRequest) -> None:
         update_scene_content(
             conn, scene_id, draft_title=req.title, text=req.text, draft_prompt_tags=req.prompt_tags
         )
+        if req.negative_prompt is not None:
+            update_scene_negative(conn, scene_id, req.negative_prompt)
     finally:
         conn.close()
 

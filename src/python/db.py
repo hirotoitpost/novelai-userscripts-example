@@ -866,6 +866,10 @@ _STORIES_EXTRA_COLUMNS = {
     # ページの区切りをシーンごとに決めた(編集画面で個別に区切った)か。1 なら漫画v2の合成も
     # story_scenes.page_index のページごとに分ける。0 なら panels_per_page / テンプレートのコマ数で割り付ける
     "custom_pages": "INTEGER NOT NULL DEFAULT 0",
+    # 漫画v2のコマを描くときのネガティブ(物語全体)と、ページごとのネガティブ(JSON {ページ番号: 文})。
+    # 入れてあれば、細かい方(コマ > ページ > 物語 > 生成の設定)を使う
+    "manga_v2_negative": "TEXT",
+    "manga_v2_page_negatives": "TEXT",
 }
 
 
@@ -899,7 +903,10 @@ def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
 # dialogue は編集画面で1行ずつ決めたセリフ(JSON [{"text": str, "speaker_id": int | null}])。NULL なら
 # 本文の「」から取り出し、話し手も推定する(従来どおり)。
 # panel_size は漫画v2のコマの生成サイズ(portrait / landscape / square)。NULL なら入る枠の形から自動で決める。
-_STORY_SCENES_EXTRA_COLUMNS = {"sfx": "TEXT", "narration": "TEXT", "dialogue": "TEXT", "panel_size": "TEXT"}
+# negative_prompt はそのコマを描くときのネガティブ。入れてあればページ・物語のネガティブより優先する。
+_STORY_SCENES_EXTRA_COLUMNS = {
+    "sfx": "TEXT", "narration": "TEXT", "dialogue": "TEXT", "panel_size": "TEXT", "negative_prompt": "TEXT",
+}
 
 
 def _migrate_story_scenes(conn: sqlite3.Connection) -> None:
@@ -1972,6 +1979,32 @@ def update_scene_content(
         conn.execute("UPDATE story_scenes SET draft_text = ?, novelai_text = ? WHERE id = ?", (text, text, scene_id))
     if draft_prompt_tags is not None:
         conn.execute("UPDATE story_scenes SET draft_prompt_tags = ? WHERE id = ?", (draft_prompt_tags, scene_id))
+    conn.commit()
+
+
+def update_scene_negative(conn: sqlite3.Connection, scene_id: int, negative: str | None) -> None:
+    """コマのネガティブ。空なら未設定(ページ・物語のネガティブを使う)に戻す。"""
+    conn.execute("UPDATE story_scenes SET negative_prompt = ? WHERE id = ?", ((negative or "").strip() or None, scene_id))
+    conn.commit()
+
+
+def get_manga_v2_negatives(conn: sqlite3.Connection, story_id: int) -> dict[str, Any]:
+    """物語とページごとのネガティブ。{"story": 文 か None, "pages": {ページ番号(0始まり): 文}}。"""
+    row = conn.execute(
+        "SELECT manga_v2_negative, manga_v2_page_negatives FROM stories WHERE id = ?", (story_id,)
+    ).fetchone()
+    if row is None:
+        return {"story": None, "pages": {}}
+    pages = json.loads(row["manga_v2_page_negatives"]) if row["manga_v2_page_negatives"] else {}
+    return {"story": row["manga_v2_negative"], "pages": {int(k): v for k, v in pages.items() if v}}
+
+
+def set_manga_v2_negatives(conn: sqlite3.Connection, story_id: int, story: str | None, pages: dict[int, str]) -> None:
+    cleaned = {str(k): v.strip() for k, v in pages.items() if v and v.strip()}
+    conn.execute(
+        "UPDATE stories SET manga_v2_negative = ?, manga_v2_page_negatives = ? WHERE id = ?",
+        ((story or "").strip() or None, json.dumps(cleaned, ensure_ascii=False) if cleaned else None, story_id),
+    )
     conn.commit()
 
 
