@@ -11,7 +11,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from .detect import detect_heads
 from .speakers import CastMember, identify_heads
@@ -80,6 +80,8 @@ class PanelContent:
     # 動くコマ(うごイラ)の、いま貼るコマの絵。頭の検出・話し手の見分け・寄りの切り抜きは image_path(元の絵)で
     # 決め、貼る絵だけこれに替える(コマごとに吹き出しの位置が揺れないように)
     picture_path: Path | None = None
+    # モノクロの漫画のコマ。絵を白黒にしてから嵌める
+    monochrome: bool = False
 
 
 @dataclass
@@ -532,6 +534,8 @@ def _draw_picture(
         if content.picture_path is not None and content.picture_path.is_file():
             with Image.open(content.picture_path) as frame:
                 image = frame.convert("RGB").resize(image.size, Image.Resampling.LANCZOS)
+        if content.monochrome:
+            image = ImageOps.grayscale(image).convert("RGB")
         if cutout is not None:
             if content.picture_path is None:
                 # AI で拡大した絵があれば、そちらを使う(頭の位置も同じ倍率にする)
@@ -981,6 +985,18 @@ def compose_pages(
         compose_page(plan.spec, panels[plan.start : plan.end], style)
         for plan in plan_pages(template_id, len(panels), layouts, groups)
     ]
+
+
+def is_colored(path: Path) -> bool:
+    """
+    コマの絵に色が付いているか(彩度の高い画素が少しでも目立つか)。モノクロで描かせたのに色が残ったコマを見つける。
+    縮めてから数える(全画素を見るまでもない)。
+    """
+    with Image.open(path) as src:
+        small = src.convert("RGB").resize((128, 128))
+    rgb = np.asarray(small).astype(np.int16)
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    return float((chroma > 40).mean()) >= 0.03
 
 
 def compose_panel(content: PanelContent, style: LetteringStyle) -> Image.Image:

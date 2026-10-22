@@ -538,6 +538,13 @@ class StoryDraftCreateRequest(BaseModel):
     panels_per_page: int = Field(4, ge=1, le=8)
 
 
+class ScriptDialogueLine(BaseModel):
+    """台本の吹き出し1つ。speaker_id はそのコマの登場キャラ(null は話し手なし)。（…）で囲むと心の声。"""
+
+    text: str = Field(min_length=1, max_length=500)
+    speaker_id: Optional[int] = None
+
+
 class ScriptSceneInput(BaseModel):
     """台本の1シーン(=1コマ)。text のセリフ(「」)と心の声(（）だけの行)が吹き出しになる。"""
 
@@ -552,6 +559,11 @@ class ScriptSceneInput(BaseModel):
     character_outfits: dict[int, str] = Field(default_factory=dict)
     narration: Optional[str] = Field(None, max_length=80)
     sfx: Optional[list[str]] = Field(None, max_length=8)
+    # 1行ずつのセリフと話し手。あれば本文の「」の代わりにこれを吹き出しにする(話し手の推定をしない)。
+    # 地の文に名前が出ない話し手(幼い子など)や、「」の中に『』があるセリフに使う
+    dialogue: Optional[list[ScriptDialogueLine]] = Field(None, max_length=20)
+    # このコマを描くときのネガティブ。入れてあれば、ページ・物語のネガティブより優先する
+    negative_prompt: Optional[str] = Field(None, max_length=4000)
 
 
 class ScriptedStoryRequest(BaseModel):
@@ -571,6 +583,8 @@ class SceneUpdateRequest(BaseModel):
     title: Optional[str] = Field(None, max_length=100)
     text: Optional[str] = Field(None, min_length=1)
     prompt_tags: Optional[str] = None
+    # コマのネガティブ(空文字で未設定に戻す)
+    negative_prompt: Optional[str] = Field(None, max_length=4000)
 
 
 class MangaImportFile(BaseModel):
@@ -1254,6 +1268,8 @@ class MangaV2ComposeRequest(BaseModel):
     # 叫び・小声による自動調整に、さらに掛ける。
     text_scale: float = Field(1.0, ge=0.5, le=2.0)
     sfx_scale: float = Field(1.0, ge=0.5, le=2.0)
+    # モノクロの漫画。コマの絵を白黒にしてから嵌める(モノクロで描かせても、水や空の場面に色が残ることがある)
+    monochrome: bool = False
 
 
 # ダウンロードに入れるもの。pages=合成したページ、pages_clean=セリフ・効果音・ナレーションなしのページ、
@@ -1281,6 +1297,23 @@ class MangaV2PageLayoutItem(BaseModel):
     style: Optional[dict[str, Any]] = None
     # tree のページに重ねて置くコマ: [{"rect": [x0, y0, x1, y1](ページに対する割合), "after": 読む順の位置, "z": 重なり順, 形・枠線}]
     floats: Optional[list[dict[str, Any]]] = None
+
+
+class MangaV2NegativesRequest(BaseModel):
+    """
+    コマを描くときのネガティブ。入れてあれば細かい方(コマ > ページ > 物語 > 生成の設定)を使う。
+    送らなかった項目は変えない。pages は {ページ番号(0始まり): 文} で丸ごと置き換え、scenes は {シーンID: 文}(空で未設定)。
+    """
+
+    story: Optional[str] = Field(None, max_length=4000)
+    pages: Optional[dict[str, str]] = None
+    scenes: Optional[dict[str, str]] = None
+
+
+class MangaV2NegativesResponse(BaseModel):
+    story: Optional[str] = None
+    pages: dict[str, str] = Field(default_factory=dict)
+    scenes: dict[str, str] = Field(default_factory=dict)
 
 
 class MangaV2PageLayoutEditRequest(BaseModel):
@@ -1380,6 +1413,8 @@ class MangaV2ComposeResponse(BaseModel):
     elements: list[list[MangaV2Element]]
     # pages と同じ順の、動くページのアニメ WebP(動くコマが無いページは None)
     animated_pages: list[Optional[str]] = Field(default_factory=list)
+    # モノクロで合成したとき、色の付いていたコマのシーン番号(1始まり)。白黒にして嵌めた
+    colored_scenes: list[int] = Field(default_factory=list)
 
 
 class MangaV2UgoiraLink(BaseModel):
@@ -1504,6 +1539,8 @@ class StoryEditScene(BaseModel):
     dialogue: Optional[list[StoryEditLine]] = None
     # コマの生成サイズ。null なら入る枠の形から自動(縦長 832×1216 / 横長 1216×832 / 正方形 1024×1024)
     panel_size: Optional[Literal["portrait", "landscape", "square"]] = None
+    # このコマを描くときのネガティブ。空ならページ・物語のネガティブを使う
+    negative_prompt: Optional[str] = Field(None, max_length=4000)
     # custom_pages のときだけ使う。前のシーンより小さい番号は前のシーンと同じページになる
     page_index: int = Field(0, ge=0)
     characters: list[StoryEditCharacter] = Field(default_factory=list, max_length=12)

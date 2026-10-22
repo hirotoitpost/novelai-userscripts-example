@@ -36,11 +36,14 @@ from ..db import (
     get_connection,
     get_manga_v2_compose_settings,
     get_manga_import,
+    get_manga_v2_negatives,
     get_manga_v2_overrides,
     get_manga_v2_page_layouts,
     get_manga_v2_sfx_fonts,
     get_manga_v2_ugoira,
+    set_manga_v2_negatives,
     set_manga_v2_ugoira,
+    update_scene_negative,
     get_manga_v2_sfx_stamps,
     set_manga_v2_page_layouts,
     adult_stamp_sources,
@@ -136,6 +139,8 @@ from ..models import (
     MangaV2RedrawStatesRequest,
     PanelRedrawStateRequest,
     MangaV2MakeRequest,
+    MangaV2NegativesRequest,
+    MangaV2NegativesResponse,
     MangaV2PageLayoutEditRequest,
     MangaV2PageLayoutsRequest,
     MangaV2ComposeResponse,
@@ -166,7 +171,13 @@ from ..lora_dataset import GenConfig, generate_one
 from .. import minor_guard
 from .. import ugoira
 from ..script_lines import script_sfx
-from ..novelai_image_v5 import DIALOGUE_RE, CharacterReferenceInput, generate_image_v5, reference_image_b64
+from ..novelai_image_v5 import (
+    DIALOGUE_RE,
+    CharacterReferenceInput,
+    dialogue_text,
+    generate_image_v5,
+    reference_image_b64,
+)
 from .llm import stream_llm_text, strip_think_tags
 from .story import _MANGA_DIR, _PROJECT_ROOT, _Job, _job_response, _start_job
 
@@ -236,7 +247,7 @@ def _spoken_spans(text: str) -> tuple[list[tuple[int, int, str]], list[str]]:
     sfx += [w for w in script_sfx(text) if w not in sfx]
     spoken: list[tuple[int, int, str]] = []
     for match in DIALOGUE_RE.finditer(text):
-        line = match.group(1).strip()
+        line = dialogue_text(match).strip()
         if not line or not _is_spoken(text, match.start(), match.end()):
             continue
         if _is_katakana_sfx(line):
@@ -1217,6 +1228,8 @@ async def _run_panels(
         layouts = get_manga_v2_page_layouts(conn, story_id)
         story = get_story(conn, story_id)
         guard_text = minor_guard.story_text(story)
+        # コマ・ページ・物語ごとに決めたネガティブ(決めていなければ生成の設定のもの)
+        negatives = scene_negatives(conn, story, req.template, layouts) if story else {}
     finally:
         conn.close()
     # コマの生成サイズ: シーンで決めたもの、無ければ入る枠の形に一番近いもの(縦長・横長・正方形)
@@ -1276,7 +1289,7 @@ async def _run_panels(
                 join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity, manga_style=req.manga_style
             ),
             join_tags(
-                build_panel_negative(settings.negative_prompt, color=req.color, sexual=sexual),
+                build_panel_negative(negatives.get(scene["id"]) or settings.negative_prompt, color=req.color, sexual=sexual),
                 guard_negative,
                 "" if multiple else characters_negative(scene_characters),
             ),
@@ -1379,9 +1392,28 @@ def _compose_inputs(
                 narration=s.get("narration") or "",
                 speakers=speakers,
                 cast=cast,
+                monochrome=req.monochrome,
             )
         )
     return contents, style, {str(s["id"]): s["scene_index"] for s in scenes}
+
+
+def colored_scenes(story_id: int) -> list[int]:
+    """色の付いているコマのシーン番号(1始まり)。モノクロの漫画で、白黒にして嵌めたコマを知らせる。"""
+    from ..manga_v2.compose import is_colored
+
+    conn = get_connection()
+    try:
+        scenes = {s["id"]: s["scene_index"] for s in list_story_scenes(conn, story_id)}
+        panels = list_manga_panels(conn, story_id)
+    finally:
+        conn.close()
+    found = []
+    for panel in panels:
+        path = _PROJECT_ROOT / panel["image_path"]
+        if panel["scene_id"] in scenes and path.is_file() and is_colored(path):
+            found.append(scenes[panel["scene_id"]] + 1)
+    return sorted(found)
 
 
 def _page_layouts(story_id: int) -> list[Any]:
@@ -1390,6 +1422,36 @@ def _page_layouts(story_id: int) -> list[Any]:
         return get_manga_v2_page_layouts(conn, story_id)
     finally:
         conn.close()
+
+
+def scene_pages(story: dict[str, Any], template_id: str, layouts: list[Any]) -> dict[int, int]:
+    """シーンID → 入るページの番号(0始まり)。合成と同じ割り付け(寄りのコマに分ける前の、シーンごとの並び)。"""
+    scenes = story["scenes"]
+    groups = [s["page_index"] for s in scenes] if story.get("custom_pages") else None
+    pages: dict[int, int] = {}
+    for number, plan in enumerate(plan_pages(template_id, len(scenes), layouts, groups)):
+        for scene in scenes[plan.start : plan.end]:
+            pages[scene["id"]] = number
+    return pages
+
+
+def scene_negatives(conn: Any, story: dict[str, Any], template_id: str, layouts: list[Any]) -> dict[int, str]:
+    """
+    シーンID → そのコマを描くときのネガティブ(コマ > ページ > 物語 の順で、入れてある細かい方)。どれも無いシーンは
+    入れない(生成の設定のネガティブ、無ければ既定の品質タグを使う)。
+    """
+    saved = get_manga_v2_negatives(conn, story["id"])
+    pages = scene_pages(story, template_id, layouts)
+    result: dict[int, str] = {}
+    for scene in story["scenes"]:
+        chosen = (
+            (scene.get("negative_prompt") or "").strip()
+            or (saved["pages"].get(pages.get(scene["id"], -1)) or "").strip()
+            or (saved["story"] or "").strip()
+        )
+        if chosen:
+            result[scene["id"]] = chosen
+    return result
 
 
 def panel_size_kinds(story: dict[str, Any], template_id: str, layouts: list[Any]) -> dict[int, str]:
@@ -1529,6 +1591,49 @@ async def get_page_layout(story_id: int, template: str = "grid4") -> dict[str, A
     return _page_layout_view(story, template, layouts)
 
 
+@router.get("/{story_id}/negatives", response_model=MangaV2NegativesResponse)
+async def get_negatives(story_id: int) -> dict[str, Any]:
+    """コマを描くときのネガティブ(物語・ページごと・コマごと)。入れてあれば細かい方(コマ > ページ > 物語)を使う。"""
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        saved = get_manga_v2_negatives(conn, story_id)
+    finally:
+        conn.close()
+    return {
+        "story": saved["story"],
+        "pages": {str(k): v for k, v in saved["pages"].items()},
+        "scenes": {str(s["id"]): s["negative_prompt"] for s in story["scenes"] if s.get("negative_prompt")},
+    }
+
+
+@router.put("/{story_id}/negatives", response_model=MangaV2NegativesResponse)
+async def put_negatives(story_id: int, req: MangaV2NegativesRequest) -> dict[str, Any]:
+    """
+    物語・ページごとのネガティブを保存する(送った項目だけ。pages は丸ごと置き換える)。scenes を送ると、そのシーンの
+    コマのネガティブも書き換える(空文字で未設定に戻す)。絵は描き直さない(次に描くときから使う)。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        saved = get_manga_v2_negatives(conn, story_id)
+        story_negative = req.story if req.story is not None else saved["story"]
+        pages = {int(k): v for k, v in req.pages.items()} if req.pages is not None else saved["pages"]
+        set_manga_v2_negatives(conn, story_id, story_negative, pages)
+        ids = {s["id"] for s in story["scenes"]}
+        for key, value in (req.scenes or {}).items():
+            if int(key) not in ids:
+                raise HTTPException(status_code=422, detail=f"この物語に無いシーンです: {key}")
+            update_scene_negative(conn, int(key), value)
+    finally:
+        conn.close()
+    return await get_negatives(story_id)
+
+
 def _save_page_layouts(story_id: int, template: str, layouts: list[Any] | None) -> int:
     """
     ページごとのコマ割りを保存し(None でテンプレートに戻す)、生成サイズ(縦長・横長・正方形)が変わるコマを
@@ -1649,6 +1754,7 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
             for _, elements in composed
         ],
         "animated_pages": animated_paths,
+        "colored_scenes": colored_scenes(story_id) if req.monochrome else [],
     }
 
 
@@ -1965,7 +2071,9 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
         scenes = list_story_scenes(conn, story_id)
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
         cast = characters_by_scene(conn, story_id)
-        guard_text = minor_guard.story_text(get_story(conn, story_id))
+        story = get_story(conn, story_id)
+        guard_text = minor_guard.story_text(story)
+        negatives = scene_negatives(conn, story, req.template, get_manga_v2_page_layouts(conn, story_id)) if story else {}
     finally:
         conn.close()
     summary: dict[str, Any] = {"redrawn": [], "skipped": []}
@@ -2010,7 +2118,7 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
                 params = GenerateImageParams(
                     prompt=build_panel_prompt(tags, color=req.color, complexity=settings.complexity, manga_style=req.manga_style),
                     negative_prompt=join_tags(
-                        build_panel_negative(settings.negative_prompt, color=req.color),
+                        build_panel_negative(negatives.get(scene["id"]) or settings.negative_prompt, color=req.color),
                         minor_guard.all_ages_negative() if softened else "",
                     ),
                     model=settings.model,
