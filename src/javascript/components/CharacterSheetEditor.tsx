@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { guardFetch } from '../guardFetch'
+import GrowthStages from './GrowthStages'
 import ReferenceCandidates from './ReferenceCandidates'
 import type { Character } from './StoryCharacters'
 
 /** キャラシートで編集する項目。容姿は変えない部分、服装は場面で差し替える部分。 */
-export type SheetField = 'appearance_tags' | 'body_tags' | 'outfit_tags' | 'style_tags' | 'negative_tags' | 'trigger_word' | 'seed'
+export type SheetField =
+  | 'appearance_tags' | 'body_tags' | 'outfit_tags' | 'style_tags' | 'negative_tags' | 'trigger_word' | 'seed' | 'age'
+
+/** 数字で送る項目(空欄は null) */
+const NUMBER_FIELDS: Partial<Record<SheetField, string>> = { seed: '基準シード', age: '年齢' }
 
 export const SHEET_FIELDS: { key: SheetField; label: string; placeholder: string; rows: number }[] = [
   { key: 'appearance_tags', label: '容姿(顔・髪・目。固定)', placeholder: '1girl, brown hair, long hair, two side up, pink scrunchie, yellow eyes', rows: 2 },
@@ -14,6 +19,7 @@ export const SHEET_FIELDS: { key: SheetField; label: string; placeholder: string
   { key: 'negative_tags', label: 'ネガティブ', placeholder: 'short hair, blue eyes', rows: 1 },
   { key: 'trigger_word', label: 'トリガーワード', placeholder: 'kujo_yura', rows: 1 },
   { key: 'seed', label: '基準シード', placeholder: '3257661879', rows: 1 },
+  { key: 'age', label: '年齢(歳。入れると年齢区分は自動で決まります: 18 歳未満は未成年、18 歳以上は成人)', placeholder: '1', rows: 1 },
 ]
 
 export function sheetValue(character: Character, key: SheetField): string {
@@ -122,13 +128,14 @@ export default function CharacterSheetEditor({
     const body: Record<string, string | number | null> = {}
     for (const [key, raw] of Object.entries(draft) as [SheetField, string][]) {
       if (raw === sheetValue(character, key)) continue
-      if (key === 'seed') {
+      const numberLabel = NUMBER_FIELDS[key]
+      if (numberLabel) {
         const trimmed = raw.trim()
         if (trimmed && !/^\d+$/.test(trimmed)) {
-          setError('基準シードは数字で入力してください')
+          setError(`${numberLabel}は数字で入力してください`)
           return null
         }
-        body.seed = trimmed ? Number(trimmed) : null
+        body[key] = trimmed ? Number(trimmed) : null
       } else {
         body[key] = raw.trim()
       }
@@ -266,7 +273,8 @@ export default function CharacterSheetEditor({
         <span className={classes.label}>年齢区分</span>
         <select
           value={character.is_minor ? 'minor' : character.is_adult ? 'adult' : 'undefined'}
-          disabled={busy}
+          disabled={busy || character.age != null}
+          title={character.age != null ? '年齢が入っているので、年齢区分は年齢で決まります' : undefined}
           onChange={e => void put(
             e.target.value === 'minor' ? { is_minor: true }
               : e.target.value === 'adult' ? { is_adult: true }
@@ -283,6 +291,16 @@ export default function CharacterSheetEditor({
           未定義のキャラが性的な場面にいるときの扱いは、管理ページのコンテンツガードで決めます。
         </span>
       </label>
+
+      <GrowthStages
+        apiOrigin={apiOrigin}
+        character={character}
+        disabled={busy}
+        classes={classes}
+        onChanged={onSaved}
+        onCreated={onDuplicated}
+        save={put}
+      />
 
       {showReference && (
         <div className={classes.field}>

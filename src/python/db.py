@@ -941,6 +941,13 @@ _CHARACTERS_EXTRA_COLUMNS = {
     "is_adult": "INTEGER NOT NULL DEFAULT 0",
     # 未成年キャラ(定義してあれば、性的な場面には出さない)。is_adult と同時には立たない
     "is_minor": "INTEGER NOT NULL DEFAULT 0",
+    # 成長段階: 同じ人物の年齢ごとのキャラシート(新生児・1歳 など)を、元のキャラにつなぐ。
+    # growth_of は元のキャラの ID(元のキャラ自身は NULL)、growth_label は段階の名前、growth_order は並べる順
+    "growth_of": "INTEGER",
+    "growth_label": "TEXT",
+    "growth_order": "INTEGER",
+    # 年齢(歳)。入れてあれば、18 歳未満は未成年・18 歳以上は成人として扱う(年齢区分をこれに合わせる)
+    "age": "INTEGER",
 }
 
 
@@ -1141,7 +1148,7 @@ def update_character_reference(conn: sqlite3.Connection, character_id: int, imag
 
 CHARACTER_SHEET_FIELDS = (
     "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
-    "is_minor",
+    "is_minor", "growth_of", "growth_label", "growth_order", "age",
 )
 
 

@@ -908,6 +908,12 @@ class CharacterResponse(BaseModel):
     is_adult: bool = False
     # 未成年キャラ(定義してあれば、性的な場面には出さない)
     is_minor: bool = False
+    # 成長段階: 元のキャラの ID(元のキャラ自身は None)・段階の名前・並べる順
+    growth_of: Optional[int] = None
+    growth_label: Optional[str] = None
+    growth_order: Optional[int] = None
+    # 年齢(歳)。入れてあれば年齢区分(未成年/成人)はこれで決まる
+    age: Optional[int] = None
 
 
 class CharacterSheetRequest(BaseModel):
@@ -923,6 +929,14 @@ class CharacterSheetRequest(BaseModel):
     seed: Optional[int] = Field(None, ge=0, le=4294967295)
     is_adult: Optional[bool] = Field(None, description="成人キャラ。未成年を示すタグがあると付けられない")
     is_minor: Optional[bool] = Field(None, description="未成年キャラ。外すにはコンテンツガードのパスワードが要る")
+    growth_of: Optional[int] = Field(
+        None, description="成長段階にする元のキャラの ID(null で段階から外す)。元のキャラが未成年なら、段階も未成年になる"
+    )
+    growth_label: Optional[str] = Field(None, max_length=40, description="成長段階の名前(新生児・1歳 など)")
+    growth_order: Optional[int] = Field(None, ge=0, le=10000, description="成長段階を並べる順(小さいほど幼い)")
+    age: Optional[int] = Field(
+        None, ge=0, le=200, description="年齢(歳)。18 歳未満は未成年、18 歳以上は成人になる(null で年齢なし)"
+    )
 
 
 class CharacterSplitRequest(BaseModel):
