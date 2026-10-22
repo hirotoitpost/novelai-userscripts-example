@@ -1,0 +1,111 @@
+/* コマの重ね(文字・写真)の編集 */
+.ove-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(5, 5, 15, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.ove-panel {
+  background: #14142a;
+  color: #e8e8ff;
+  border: 1px solid #2a2a50;
+  border-radius: 10px;
+  padding: 0.75rem;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ove-head { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.ove-head h3 { margin: 0; font-size: 1rem; }
+.ove-note { margin: 0; font-size: 0.75rem; color: #9a9ac0; }
+.ove-error { margin: 0; font-size: 0.8rem; color: #ff9a9a; }
+
+.ove-body { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-start; }
+
+.ove-stage {
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  line-height: 0;
+}
+
+.ove-stage img {
+  display: block;
+  max-width: min(60vw, 640px);
+  max-height: 70vh;
+}
+
+.ove-stage > svg:first-of-type {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ove-quad {
+  fill: rgba(123, 92, 246, 0.15);
+  stroke: #7b5cf6;
+  stroke-width: 0.004;
+  cursor: move;
+}
+
+.ove-quad--on { fill: rgba(255, 255, 255, 0.2); stroke: #fff; }
+
+.ove-handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  cursor: grab;
+}
+
+.ove-handle circle { fill: #fff; stroke: #7b5cf6; stroke-width: 2; }
+
+.ove-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 260px;
+  max-width: 360px;
+  font-size: 0.8rem;
+}
+
+.ove-preview { max-width: 100%; border: 1px solid #2a2a50; border-radius: 6px; }
+.ove-row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.ove-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.ove-fields { display: flex; flex-direction: column; gap: 0.4rem; }
+.ove-fields label { display: flex; flex-direction: column; gap: 0.2rem; }
+.ove-row label { flex-direction: row; align-items: center; }
+
+.ove-panel button {
+  background: #1e1e3a;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #e8e8ff;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+
+.ove-panel button:disabled { opacity: 0.45; cursor: not-allowed; }
+.ove-panel .ove-chip--on { border-color: #7b5cf6; background: #2c2560; }
+.ove-panel .ove-primary { background: #7b5cf6; border-color: #7b5cf6; color: #fff; }
+.ove-panel .ove-danger { border-color: #8a3a4a; }
+
+.ove-panel textarea,
+.ove-panel select {
+  background: #0e0e22;
+  color: #e8e8ff;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+}

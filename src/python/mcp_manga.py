@@ -84,6 +84,23 @@ async def _call(method: str, path: str, body: Any = None, timeout: float = 120) 
     return response.json() if response.content else None
 
 
+async def _overlay_preview(scene_id: int, max_size: int) -> ImageContent:
+    """重ねを貼ったコマの絵(バックエンドが PNG で返す)を、縮めた JPEG にする。"""
+    async with httpx.AsyncClient(base_url=_backend(), timeout=120, verify=_verify()) as client:
+        response = await client.get(
+            f"/api/manga-v2/scenes/{scene_id}/overlay-preview",
+            params={"max_size": max_size},
+            cookies=mcp_identity.backend_cookies(),
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(f"重ねの確認ができません({response.status_code}): {response.text[:300]}")
+    with Image.open(io.BytesIO(response.content)) as src:
+        image = src.convert("RGB")
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=85)
+    return ImageContent(type="image", data=base64.b64encode(buf.getvalue()).decode(), mime_type="image/jpeg")
+
+
 def _image_content(path: Path, max_size: int) -> ImageContent:
     """画像を縮めて JPEG で返す(元の大きさだと応答が重くなる)。"""
     with Image.open(path) as src:
@@ -478,6 +495,42 @@ def register_manga_tools(mcp: MCPServer) -> None:
         コマの形が変わるので、写した後は manga_generate_panels で描き直してから manga_compose する。
         """
         return await _call("PUT", f"/api/manga-v2/{story_id}/page-layouts", {"import_id": import_id})
+
+    @mcp.tool()
+    async def manga_set_overlays(scene_id: int, overlays: list[dict[str, Any]], max_size: int = 768) -> list[TextContent | ImageContent]:
+        """
+        コマの絵に重ねるもの(重ね)を決め、貼った絵を返す(丸ごと置き換え。空の並びで消す)。合成のたびに貼る。
+        AI では読める字にならない文字(命名書・手紙・看板)や、写真立てに入れる写真(別のコマの絵)に使う。
+        各要素: {"kind": "text" | "panel", "quad": [[x, y]×4](左上・右上・右下・左下。コマの絵に対する割合 0〜1)}
+          text: "text"(改行で列・行を分ける), "font"(フォントID), "color"("#rrggbb"), "vertical"(縦書き),
+                "stroke_color", "stroke_width"(縁取り。文字の大きさに対する割合), "keep_aspect"(既定 true。文字の形を保つ)
+          panel: "scene_id"(写真にする同じ物語のシーンID), "frame"(白い縁。短い辺に対する割合)
+          共通: "opacity"(0〜1)
+        四隅に合わせて拡大・縮小・回転・遠近の変形をする(写真立ての枠の四隅に合わせると、斜めの写真立てにも嵌まる)。
+        四隅の位置は、まず manga_get_panel_image でコマの絵を見て決める。
+        """
+        await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/overlays", {"overlays": overlays})
+        return [
+            TextContent(type="text", text=f"シーン {scene_id} に重ねを {len(overlays)} 個決めました(次の合成から貼ります)"),
+            await _overlay_preview(scene_id, max_size),
+        ]
+
+    @mcp.tool()
+    async def manga_preview_overlays(scene_id: int, max_size: int = 768) -> ImageContent:
+        """コマの絵に、決めてある重ねを貼った絵を見る(吹き出しなし)。"""
+        return await _overlay_preview(scene_id, max_size)
+
+    @mcp.tool()
+    async def manga_set_growth(story_id: int, age: float | None = None, stages: dict[int, int] | None = None) -> dict[str, Any]:
+        """
+        この巻で使う成長段階(同じ人物の年齢ごとのキャラシート)を決める。シーンに入れたキャラがその人物(元のキャラか
+        どの段階)なら、選んだ段階の見た目で描く(名前・話し手はそのまま)。
+        stages: {人物のID(元のキャラ): 段階のキャラID} で直接選ぶ。age(歳)を入れると、選んでいない人物はその年齢以下で
+        一番大きい段階を使う。返り値の people に、物語に出る人物ごとの段階の候補と、使う段階(chosen_id)が入る。
+        決めた後に描いたコマから効く(描いてあるコマは manga_generate_panels で描き直す)。
+        """
+        body = {"age": age, "stages": {str(k): v for k, v in (stages or {}).items()}}
+        return await _call("PUT", f"/api/manga-v2/{story_id}/growth", body)
 
     @mcp.tool()
     async def manga_set_recap(story_id: int, recap: str) -> str:

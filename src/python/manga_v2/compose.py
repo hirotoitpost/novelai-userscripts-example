@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from .detect import detect_heads
+from .overlay import OverlayPiece, draw_pieces
 from .speakers import CastMember, identify_heads
 from .layout import (
     PAGE_HEIGHT,
@@ -80,6 +81,8 @@ class PanelContent:
     # 動くコマ(うごイラ)の、いま貼るコマの絵。頭の検出・話し手の見分け・寄りの切り抜きは image_path(元の絵)で
     # 決め、貼る絵だけこれに替える(コマごとに吹き出しの位置が揺れないように)
     picture_path: Path | None = None
+    # コマの絵に重ねるもの(文字・別のコマの絵)。overlay.py
+    overlays: list[OverlayPiece] = field(default_factory=list)
 
 
 @dataclass
@@ -532,10 +535,14 @@ def _draw_picture(
         if content.picture_path is not None and content.picture_path.is_file():
             with Image.open(content.picture_path) as frame:
                 image = frame.convert("RGB").resize(image.size, Image.Resampling.LANCZOS)
+        if cutout is not None and content.picture_path is None:
+            # AI で拡大した絵があれば、そちらを使う(頭の位置も同じ倍率にする)
+            image, source_heads = _upscaled(image, content.image_path, source_heads)
+        if content.overlays:
+            # 重ね(文字・写真)は元の絵に貼ってから切り抜く(どう切り抜いても、絵の中の同じ所に付いてくる)
+            size = image.size
+            draw_pieces(image, content.overlays, lambda x, y: (x * size[0], y * size[1]))
         if cutout is not None:
-            if content.picture_path is None:
-                # AI で拡大した絵があれば、そちらを使う(頭の位置も同じ倍率にする)
-                image, source_heads = _upscaled(image, content.image_path, source_heads)
             image = _with_cutout(image, content.image_path)
         if cutout is not None and image.mode == "RGBA" and cutout.get("fit") == "contain":
             picture, scale, left, top = _contain(image, width, height)

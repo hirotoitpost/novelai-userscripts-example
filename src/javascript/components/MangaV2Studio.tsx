@@ -6,6 +6,8 @@ import { SceneCharacter } from './StoryCharacters'
 import MangaV2PageEditor, { MangaV2Element } from './MangaV2PageEditor'
 import MangaV2SfxFonts from './MangaV2SfxFonts'
 import MangaV2Stamps from './MangaV2Stamps'
+import GrowthPicker from './GrowthPicker'
+import OverlayEditor from './OverlayEditor'
 import PageLayoutEditor from './PageLayoutEditor'
 
 /** 漫画v2で使うシーンの項目(Story ページの StoryScene の一部)。 */
@@ -20,6 +22,8 @@ export interface MangaV2Scene {
   /** null は未設定(AI作成の対象)、空文字は「ナレーションなし」。 */
   narration: string | null
   characters: SceneCharacter[]
+  /** コマの絵に重ねるもの(文字・別のコマの絵) */
+  overlays?: unknown[]
 }
 
 interface FontOption {
@@ -154,6 +158,8 @@ export default function MangaV2Studio({
   const [sfxFontsKey, setSfxFontsKey] = useState(0)
 
   const [template, setTemplate] = useLocalStorage('nai_manga_v2_template', 'grid4')
+  // 重ね(文字・写真)を編集しているシーン
+  const [overlayScene, setOverlayScene] = useState<MangaV2Scene | null>(null)
   const [font, setFont] = useLocalStorage('nai_manga_v2_font', 'yu-mincho-demibold')
   const [sfxFont, setSfxFont] = useLocalStorage('nai_manga_v2_sfx_font', 'hg-soei-kakugothic-ub')
   const [opacity, setOpacity] = useLocalStorage('nai_manga_v2_bubble_opacity', 100)
@@ -603,6 +609,11 @@ export default function MangaV2Studio({
       </div>
 
       <details className="story-characters-block">
+        <summary>成長段階(この巻で使う人物の年齢ごとのキャラシート)</summary>
+        <GrowthPicker apiOrigin={apiOrigin} storyId={storyId} busy={busy} />
+      </details>
+
+      <details className="story-characters-block">
         <summary>ページのコマ割り(確認・変更)</summary>
         <PageLayoutEditor apiOrigin={apiOrigin} storyId={storyId} template={template} scenes={scenes} busy={busy}
           onSaved={() => loadPanels()} fileUrl={fileUrl} />
@@ -742,6 +753,19 @@ export default function MangaV2Studio({
         </button>
       </div>
 
+      {overlayScene && panelByScene.get(overlayScene.id) && (
+        <OverlayEditor
+          apiOrigin={apiOrigin}
+          sceneId={overlayScene.id}
+          sceneLabel={`シーン${overlayScene.scene_index + 1}`}
+          imageUrl={fileUrl(panelByScene.get(overlayScene.id)!.image_path)}
+          photoScenes={scenes
+            .filter(s => s.id !== overlayScene.id && panelByScene.has(s.id))
+            .map(s => ({ id: s.id, label: `シーン${s.scene_index + 1}${s.draft_title ? `: ${s.draft_title}` : ''}` }))}
+          fonts={fonts}
+          onClose={() => { setOverlayScene(null); void onChanged() }}
+        />
+      )}
       <ul className="mv2-grid">
         {targetScenes.map(scene => {
           const panel = panelByScene.get(scene.id)
@@ -827,6 +851,12 @@ export default function MangaV2Studio({
                   <button type="button" onClick={() => redrawPanel(scene)} disabled={busy}>
                     {panel ? '描き直す' : '描く'}
                   </button>
+                  {panel && (
+                    <button type="button" className="story-secondary" disabled={busy} onClick={() => setOverlayScene(scene)}
+                      title="読める文字(命名書・手紙など)や、別のコマの絵(写真)を、四隅を決めてこのコマに貼ります">
+                      重ね(文字・写真){(scene.overlays?.length ?? 0) > 0 ? `(${scene.overlays?.length})` : ''}
+                    </button>
+                  )}
                   {scene.sfx !== null && (
                     <button type="button" className="story-secondary" disabled={busy}
                       onClick={() => saveSfx(scene, null)}>

@@ -1025,6 +1025,8 @@ class StorySceneResponse(BaseModel):
     sfx: list[str] | None = None
     # 漫画v2のナレーション。None は未設定、空文字はなし。
     narration: str | None = None
+    # 漫画v2でコマの絵に重ねるもの(文字・別のコマの絵)
+    overlays: list[dict[str, Any]] = []
     characters: list[SceneCharacterResponse] = []
 
 
@@ -1281,6 +1283,44 @@ class MangaV2PageLayoutItem(BaseModel):
     style: Optional[dict[str, Any]] = None
     # tree のページに重ねて置くコマ: [{"rect": [x0, y0, x1, y1](ページに対する割合), "after": 読む順の位置, "z": 重なり順, 形・枠線}]
     floats: Optional[list[dict[str, Any]]] = None
+
+
+class MangaV2Overlay(BaseModel):
+    """
+    コマの絵に重ねるもの(重ね)。kind=text は文字を単体で作って、kind=panel は別のコマの絵を写真として貼る。
+    quad は貼る四隅(コマの絵に対する割合 [[x, y], ...]。左上・右上・右下・左下)。四隅に合わせて拡大・縮小・回転・遠近の
+    変形をする。
+    """
+
+    kind: Literal["text", "panel"]
+    quad: list[list[float]] = Field(min_length=4, max_length=4)
+    # 文字
+    text: Optional[str] = Field(None, max_length=300)
+    font: Optional[str] = None
+    color: Optional[str] = Field(None, max_length=9)
+    vertical: bool = False
+    stroke_color: Optional[str] = Field(None, max_length=9)
+    stroke_width: float = Field(0.0, ge=0.0, le=0.3)
+    # 文字の形を保つ(四隅の中に、縦横比を変えずに一番大きく置く)。False なら四隅いっぱいに伸ばす
+    keep_aspect: bool = True
+    # 写真(別のコマの絵)。frame は白い縁の太さ(短い辺に対する割合)
+    scene_id: Optional[int] = None
+    frame: float = Field(0.0, ge=0.0, le=0.25)
+    opacity: float = Field(1.0, ge=0.0, le=1.0)
+
+
+class MangaV2OverlaysRequest(BaseModel):
+    overlays: list[MangaV2Overlay] = Field(default_factory=list, max_length=20)
+
+
+class MangaV2GrowthRequest(BaseModel):
+    """
+    この巻で使う成長段階。stages は {人物のID(元のキャラ): 段階のキャラID} で直接選ぶ。age(歳)を入れると、選んで
+    いない人物は、その年齢以下で一番大きい段階を使う。どちらも空なら、シーンに入れたキャラのまま描く。
+    """
+
+    age: Optional[float] = Field(None, ge=0, le=200)
+    stages: dict[str, int] = Field(default_factory=dict)
 
 
 class MangaV2PageLayoutEditRequest(BaseModel):

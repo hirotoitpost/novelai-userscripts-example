@@ -13,6 +13,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import random
 import re
 import unicodedata
@@ -40,6 +41,10 @@ from ..db import (
     get_manga_v2_page_layouts,
     get_manga_v2_sfx_fonts,
     get_manga_v2_ugoira,
+    get_story_growth,
+    growth_choices,
+    set_scene_overlays,
+    set_story_growth,
     set_manga_v2_ugoira,
     get_manga_v2_sfx_stamps,
     set_manga_v2_page_layouts,
@@ -114,6 +119,7 @@ from ..manga_v2.layout import (
     tree_rects,
 )
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
+from ..manga_v2.overlay import OverlayPiece, draw_pieces, fit_aspect, normalize_quad, photo_print, render_text
 from ..manga_v2.panel_shapes import trace_page
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
 from ..manga_v2.speakers import CastMember, attribute_speakers, cast_members
@@ -136,6 +142,8 @@ from ..models import (
     MangaV2RedrawStatesRequest,
     PanelRedrawStateRequest,
     MangaV2MakeRequest,
+    MangaV2GrowthRequest,
+    MangaV2OverlaysRequest,
     MangaV2PageLayoutEditRequest,
     MangaV2PageLayoutsRequest,
     MangaV2ComposeResponse,
@@ -1379,9 +1387,48 @@ def _compose_inputs(
                 narration=s.get("narration") or "",
                 speakers=speakers,
                 cast=cast,
+                overlays=overlay_pieces(s, panels),
             )
         )
     return contents, style, {str(s["id"]): s["scene_index"] for s in scenes}
+
+
+def overlay_pieces(scene: dict[str, Any], panels: dict[int, dict[str, Any]]) -> list[OverlayPiece]:
+    """
+    シーンの重ね(文字・別のコマの絵)を、貼る画像にする。貼れないもの(絵の無いコマ・消えたフォント)は飛ばす
+    (合成は止めない)。
+    """
+    pieces: list[OverlayPiece] = []
+    for item in scene.get("overlays") or []:
+        try:
+            quad = normalize_quad(item.get("quad"))
+            if item.get("kind") == "text":
+                if not (item.get("text") or "").strip():
+                    continue
+                image = render_text(
+                    item["text"],
+                    resolve_font(item.get("font")),
+                    color=item.get("color"),
+                    vertical=bool(item.get("vertical")),
+                    stroke_color=item.get("stroke_color"),
+                    stroke_width=float(item.get("stroke_width") or 0),
+                )
+                if item.get("keep_aspect", True):
+                    image = fit_aspect(image, quad)
+            elif item.get("kind") == "panel":
+                source = panels.get(item.get("scene_id"))
+                path = _PROJECT_ROOT / source["image_path"] if source else None
+                if path is None or not path.is_file():
+                    continue
+                with Image.open(path) as src:
+                    image = photo_print(src, float(item.get("frame") or 0))
+            else:
+                continue
+        except (ValueError, OSError):
+            logging.getLogger(__name__).warning("重ねを貼れませんでした: %s", item, exc_info=True)
+            continue
+        pieces.append(OverlayPiece(image, quad, float(item.get("opacity", 1.0))))
+    return pieces
 
 
 def _page_layouts(story_id: int) -> list[Any]:
@@ -1527,6 +1574,160 @@ async def get_page_layout(story_id: int, template: str = "grid4") -> dict[str, A
     finally:
         conn.close()
     return _page_layout_view(story, template, layouts)
+
+
+# ---- 重ね(コマの絵に文字・別のコマの絵を貼る) ----
+
+
+def _scene_and_story(conn: Any, scene_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    row = conn.execute("SELECT story_id FROM story_scenes WHERE id = ?", (scene_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="scene not found")
+    story = get_story(conn, row["story_id"])
+    scene = next(s for s in story["scenes"] if s["id"] == scene_id)
+    return scene, story
+
+
+@router.get("/scenes/{scene_id}/overlays")
+async def get_scene_overlays(scene_id: int) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        scene, _ = _scene_and_story(conn, scene_id)
+    finally:
+        conn.close()
+    return scene.get("overlays") or []
+
+
+@router.put("/scenes/{scene_id}/overlays")
+async def put_scene_overlays(scene_id: int, req: MangaV2OverlaysRequest) -> list[dict[str, Any]]:
+    """
+    コマの重ねを丸ごと置き換える(空の並びで消す)。写真にする別のコマは、同じ物語のほかのシーン。
+    絵は描き直さない(次に合成したときから貼る)。
+    """
+    conn = get_connection()
+    try:
+        _, story = _scene_and_story(conn, scene_id)
+        ids = {s["id"] for s in story["scenes"]}
+        items = []
+        for overlay in req.overlays:
+            try:
+                normalize_quad(overlay.quad)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            if overlay.kind == "text" and not (overlay.text or "").strip():
+                raise HTTPException(status_code=422, detail="文字の重ねには text を入れてください。")
+            if overlay.kind == "panel" and (overlay.scene_id not in ids or overlay.scene_id == scene_id):
+                raise HTTPException(status_code=422, detail="写真にするコマは、同じ物語のほかのシーンを選んでください。")
+            items.append(overlay.model_dump(exclude_none=True))
+        set_scene_overlays(conn, scene_id, items)
+    finally:
+        conn.close()
+    return items
+
+
+def _overlay_preview_image(scene_id: int) -> Image.Image:
+    """コマの絵(生成した元の絵)に、重ねを貼った絵。置き場所を確かめる用(吹き出しは描かない)。"""
+    conn = get_connection()
+    try:
+        scene, story = _scene_and_story(conn, scene_id)
+        panels = {p["scene_id"]: p for p in list_manga_panels(conn, story["id"])}
+    finally:
+        conn.close()
+    if scene_id not in panels:
+        raise HTTPException(status_code=400, detail="先にこのコマの絵を生成してください。")
+    with Image.open(_PROJECT_ROOT / panels[scene_id]["image_path"]) as src:
+        image = src.convert("RGB")
+    size = image.size
+    draw_pieces(image, overlay_pieces(scene, panels), lambda x, y: (x * size[0], y * size[1]))
+    return image
+
+
+@router.get("/scenes/{scene_id}/overlay-preview")
+def get_overlay_preview(scene_id: int, max_size: int = 1024) -> Response:
+    image = _overlay_preview_image(scene_id)
+    image.thumbnail((max(64, min(max_size, 2048)),) * 2)
+    return Response(page_png(image), media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/overlay-text-preview")
+def post_overlay_text_preview(req: MangaV2OverlaysRequest) -> Response:
+    """文字の重ね(最初の1つ)を単体で作った画像(透明の地の PNG)。"""
+    item = next((o for o in req.overlays if o.kind == "text" and (o.text or "").strip()), None)
+    if item is None:
+        raise HTTPException(status_code=422, detail="文字の重ねを1つ送ってください。")
+    image = render_text(
+        item.text or "", resolve_font(item.font), color=item.color, vertical=item.vertical,
+        stroke_color=item.stroke_color, stroke_width=item.stroke_width,
+    )
+    return Response(page_png(image), media_type="image/png")
+
+
+# ---- 成長段階(この巻で使う人物の年齢ごとのキャラシート) ----
+
+
+def _growth_view(conn: Any, story_id: int) -> dict[str, Any]:
+    """この巻の成長段階の設定と、物語に出る人物ごとの段階の候補・使う段階。"""
+    growth = get_story_growth(conn, story_id)
+    chosen = growth_choices(conn, story_id)
+    rows = conn.execute(
+        """
+        SELECT DISTINCT c.id, c.growth_of FROM scene_characters sc
+        JOIN story_scenes s ON s.id = sc.scene_id JOIN characters c ON c.id = sc.character_id
+        WHERE s.story_id = ?
+        """,
+        (story_id,),
+    ).fetchall()
+    people = sorted({row["growth_of"] or row["id"] for row in rows})
+    result = []
+    for person_id in people:
+        stages = conn.execute(
+            "SELECT id, name, growth_label, growth_order, age FROM characters WHERE growth_of = ? ORDER BY age, growth_order",
+            (person_id,),
+        ).fetchall()
+        if not stages:
+            continue
+        person = get_character(conn, person_id)
+        result.append({
+            "person_id": person_id,
+            "name": person["name"] if person else str(person_id),
+            "stages": [dict(s) for s in stages],
+            "chosen_id": chosen[person_id]["id"] if person_id in chosen else None,
+        })
+    return {"age": growth["age"], "stages": {str(k): v for k, v in growth["stages"].items()}, "people": result}
+
+
+@router.get("/{story_id}/growth")
+async def get_growth(story_id: int) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        if get_story(conn, story_id) is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        return _growth_view(conn, story_id)
+    finally:
+        conn.close()
+
+
+@router.put("/{story_id}/growth")
+async def put_growth(story_id: int, req: MangaV2GrowthRequest) -> dict[str, Any]:
+    """
+    この巻で使う成長段階を決める。シーンに入れたキャラがその人物(元のキャラかどの段階)なら、選んだ段階の見た目
+    (容姿・服装・ネガティブ・参照画像・年齢区分)で描く。名前と話し手はシーンのキャラのまま。
+    絵は描き直さない(描き直すと選んだ段階で描く)。
+    """
+    conn = get_connection()
+    try:
+        if get_story(conn, story_id) is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        stages: dict[int, int] = {}
+        for person, stage_id in req.stages.items():
+            stage = get_character(conn, stage_id)
+            if stage is None or stage.get("growth_of") != int(person):
+                raise HTTPException(status_code=422, detail=f"キャラ {stage_id} は人物 {person} の成長段階ではありません。")
+            stages[int(person)] = stage_id
+        set_story_growth(conn, story_id, req.age, stages)
+        return _growth_view(conn, story_id)
+    finally:
+        conn.close()
 
 
 def _save_page_layouts(story_id: int, template: str, layouts: list[Any] | None) -> int:
