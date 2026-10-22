@@ -22,6 +22,12 @@ export interface Character {
   is_adult?: boolean
   /** 未成年キャラ。性的な場面には描かない(外すにはコンテンツガードのパスワードが要る) */
   is_minor?: boolean
+  /** 成長段階: 元のキャラの ID(元のキャラ自身は null)・段階の名前・並べる順 */
+  growth_of?: number | null
+  growth_label?: string | null
+  growth_order?: number | null
+  /** 年齢(歳)。入れてあれば年齢区分はこれで決まる(18 歳未満は未成年) */
+  age?: number | null
 }
 
 export interface SceneCharacter {

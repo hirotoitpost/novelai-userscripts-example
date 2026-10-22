@@ -134,10 +134,19 @@ def register_manga_tools(mcp: MCPServer) -> None:
 
     @mcp.tool()
     async def manga_list_characters() -> list[dict[str, Any]]:
-        """キャラシートの一覧(ID・名前・容姿/服装タグ・基準シード・参照画像の有無・成人フラグ)。"""
+        """
+        キャラシートの一覧(ID・名前・容姿/服装タグ・基準シード・参照画像の有無・成人/未成年フラグ)。
+        成長段階(同じ人物の年齢ごとのキャラシート)は growth_of(元のキャラの ID)・growth_label・growth_order を持つ。
+        元のキャラには、その段階の一覧(stages)を付ける。巻の時期に合う段階のキャラをシーンに入れる。
+        """
         characters = await _call("GET", "/api/story/characters")
-        return [
-            {
+        stages: dict[int, list[dict[str, Any]]] = {}
+        for c in characters:
+            if c.get("growth_of") is not None:
+                stages.setdefault(c["growth_of"], []).append(c)
+        result = []
+        for c in characters:
+            item = {
                 "id": c["id"],
                 "name": c["name"],
                 "appearance_tags": c["appearance_tags"],
@@ -145,10 +154,64 @@ def register_manga_tools(mcp: MCPServer) -> None:
                 "seed": c.get("seed"),
                 "has_reference_image": bool(c.get("reference_image_path")),
                 "is_adult": c.get("is_adult", False),
+                "is_minor": c.get("is_minor", False),
+                "age": c.get("age"),
                 "notes": c.get("notes"),
             }
-            for c in characters
-        ]
+            if c.get("growth_of") is not None:
+                item.update(growth_of=c["growth_of"], growth_label=c.get("growth_label"), growth_order=c.get("growth_order"))
+            if c["id"] in stages:
+                ordered = sorted(
+                    stages[c["id"]],
+                    key=lambda s: (s.get("age") is None, s.get("age") or 0, s.get("growth_order") is None, s.get("growth_order") or 0),
+                )
+                item["stages"] = [
+                    {"id": s["id"], "name": s["name"], "growth_label": s.get("growth_label"), "age": s.get("age")} for s in ordered
+                ]
+            result.append(item)
+        return result
+
+    @mcp.tool()
+    async def manga_create_character(
+        name: str,
+        appearance_tags: str = "",
+        outfit_tags: str | None = None,
+        negative_tags: str | None = None,
+        notes: str | None = None,
+        is_adult: bool | None = None,
+        is_minor: bool | None = None,
+        growth_of: int | None = None,
+        growth_label: str | None = None,
+        growth_order: int | None = None,
+        age: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        キャラシートを新しく作る(同じ名前があれば作らない)。age(歳)を入れると、18 歳未満は未成年・以上は成人になる。
+        appearance_tags は変えない容姿(顔・髪・目)、outfit_tags はふだんの服装(シーンの character_outfits で差し替えられる。
+        眼鏡のように外す場面がある物はこちらに入れる)。is_minor は未成年(性的な場面には描かない)、is_adult は成人。
+        growth_of に元のキャラの ID を渡すと、その人物の成長段階(growth_label: 新生児・1歳 など、growth_order: 幼い順の番号)
+        になる。元のキャラが未成年なら段階も未成年になる。
+        """
+        body: dict[str, Any] = {"name": name, "appearance_tags": appearance_tags}
+        for key, value in (
+            ("outfit_tags", outfit_tags), ("negative_tags", negative_tags), ("notes", notes), ("is_adult", is_adult),
+            ("is_minor", is_minor), ("growth_of", growth_of), ("growth_label", growth_label), ("growth_order", growth_order),
+            ("age", age),
+        ):
+            if value is not None:
+                body[key] = value
+        return await _call("POST", "/api/story/characters/new", body)
+
+    @mcp.tool()
+    async def manga_update_character(character_id: int, sheet: dict[str, Any]) -> dict[str, Any]:
+        """
+        キャラシートを書き換える(sheet に渡した項目だけ)。項目: appearance_tags・outfit_tags・body_tags・style_tags・
+        negative_tags・seed・is_adult・is_minor・growth_of(null で成長段階から外す)・growth_label・growth_order・
+        age(歳。入れると年齢区分はそれで決まる)。
+        未成年の定義を外すこと(年齢を 18 歳以上に上げることを含む)はここではできない(コンテンツガードのパスワードが
+        要るので、画面で行う)。
+        """
+        return await _call("PUT", f"/api/story/characters/{character_id}/sheet", sheet)
 
     @mcp.tool()
     async def manga_list_series() -> list[dict[str, Any]]:

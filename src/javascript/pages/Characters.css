@@ -154,6 +154,22 @@
   color: #d0f0ff;
 }
 
+.chars-badge--age {
+  background: #3a3a5a;
+  color: #e0e0ff;
+}
+
+/* 成長段階(元のキャラの後ろに並ぶ)。左の線で、元のキャラにつながっていることを示す */
+.chars-card--stage {
+  border-left: 4px solid #7b5cf6;
+}
+
+.chars-growth {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #b8a8ff;
+}
+
 .chars-notes {
   margin: 0;
   font-size: 0.85rem;

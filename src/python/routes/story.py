@@ -2278,7 +2278,7 @@ async def create_new_character(req: CharacterNewRequest) -> dict[str, Any]:
                 status_code=409, detail=f"「{name}」という名前のキャラは既にあります(上書きするなら、そのキャラを選んでください)。"
             )
         fields = req.model_dump(exclude_unset=True, exclude={"name", "notes"})
-        sheet = _checked_sheet({"name": name}, fields)
+        sheet = _checked_sheet({"name": name}, _checked_growth(conn, None, fields))
         created = save_character(conn, name, str(sheet.pop("appearance_tags", "") or ""), req.notes)
         return update_character_sheet(conn, created["id"], sheet) or created
     finally:
@@ -2296,10 +2296,61 @@ async def put_character_sheet(
         if current is None:
             raise HTTPException(status_code=404, detail="character not found")
         # seed は null で「基準シードなし」に戻せるよう、送られたものはそのまま反映する
-        sheet = _checked_sheet(current, req.model_dump(exclude_unset=True), token)
-        return update_character_sheet(conn, character_id, sheet) or {}
+        sheet = _checked_sheet(current, _checked_growth(conn, character_id, req.model_dump(exclude_unset=True), current), token)
+        updated = update_character_sheet(conn, character_id, sheet) or {}
+        # 元のキャラを未成年にしたら、年齢の入っていない成長段階も未成年にする(段階のほうから守りが外れないように)
+        if sheet.get("is_minor"):
+            for stage in list_characters(conn):
+                if stage.get("growth_of") == character_id and stage.get("age") is None and not stage.get("is_minor"):
+                    update_character_sheet(conn, stage["id"], {"is_minor": 1, "is_adult": 0})
+        return updated
     finally:
         conn.close()
+
+
+# この年齢から成人として扱う
+ADULT_AGE = 18
+
+
+def _checked_growth(
+    conn: Any, character_id: int | None, sheet: dict[str, Any], current: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """
+    年齢と成長段階を検査する(character_id は新しく作るキャラなら None)。
+    年齢が入っていれば、年齢区分はそれで決まる(18 歳未満は未成年、18 歳以上は成人)。未成年を外すことになる変更は、
+    このあと _checked_sheet でパスワードの合言葉を求める(年齢を上げるだけで守りが外れないように)。
+    成長段階をつなげる先は元のキャラ(それ自身は段階でないキャラ)だけで、段階を持つキャラは他のキャラの段階に
+    できない(つながりは1段だけ)。年齢の入っていない段階は、元のキャラが未成年なら未成年にする。
+    """
+    sheet = dict(sheet)
+    if "growth_label" in sheet:
+        sheet["growth_label"] = (sheet["growth_label"] or "").strip() or None
+    age = sheet["age"] if "age" in sheet else (current or {}).get("age")
+    if age is not None:
+        sheet["is_minor"] = age < ADULT_AGE
+        sheet["is_adult"] = age >= ADULT_AGE
+    base_id = sheet["growth_of"] if "growth_of" in sheet else (current or {}).get("growth_of")
+    if base_id is None:
+        return sheet
+    base = get_character(conn, base_id)
+    if "growth_of" in sheet:
+        if base is None:
+            raise HTTPException(status_code=422, detail=f"元のキャラ(ID {base_id})が見つかりません。")
+        if base_id == character_id:
+            raise HTTPException(status_code=422, detail="自分自身の成長段階にはできません。")
+        if base.get("growth_of") is not None:
+            raise HTTPException(
+                status_code=422, detail=f"「{base['name']}」は成長段階なので、元のキャラにできません(元のキャラを選んでください)。"
+            )
+        if character_id is not None and any(c.get("growth_of") == character_id for c in list_characters(conn)):
+            raise HTTPException(status_code=422, detail="このキャラには成長段階があるので、他のキャラの成長段階にはできません。")
+    if base and base.get("is_minor") and age is None:
+        if sheet.get("is_adult"):
+            raise HTTPException(
+                status_code=422, detail=f"元のキャラ「{base['name']}」が未成年なので、成長段階を成人にはできません。"
+            )
+        sheet["is_minor"] = True
+    return sheet
 
 
 def _checked_sheet(current: dict[str, Any], sheet: dict[str, Any], token: str | None = None) -> dict[str, Any]:
@@ -2353,14 +2404,17 @@ async def duplicate_character(
             key: source.get(key)
             for key in (
                 "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
-                "is_minor",
+                "is_minor", "growth_of", "growth_label", "growth_order", "age",
             )
         }
         overrides = req.sheet.model_dump(exclude_unset=True) if req.sheet else {}
-        # 未成年の定義も引き継ぐ(別名で保存して定義を外せないように)
+        # 未成年の定義も引き継ぐ(別名で保存して定義を外せないように)。成長段階のつながりも引き継ぐ(段階を
+        # 別名保存すると同じ人物の別の段階になる)。元のキャラから段階を作るときは sheet で growth_of を渡す
         sheet = _checked_sheet(
             source,
-            {**copied, "is_adult": bool(copied["is_adult"]), "is_minor": bool(copied["is_minor"]), **overrides},
+            _checked_growth(
+                conn, None, {**copied, "is_adult": bool(copied["is_adult"]), "is_minor": bool(copied["is_minor"]), **overrides}
+            ),
             token,
         )
         # トリガーワードはデータセットの保存先フォルダにも使うので、既存キャラと同じだと画像が混ざる

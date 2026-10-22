@@ -21,6 +21,26 @@ interface Character {
   outfit_tags: string | null
   is_adult: boolean
   is_minor: boolean
+  /** 成長段階: 元のキャラの ID(元のキャラ自身は null)・段階の名前・並べる順 */
+  growth_of: number | null
+  growth_label: string | null
+  growth_order: number | null
+  /** 年齢(歳)。入れてあれば年齢区分はこれで決まる */
+  age: number | null
+}
+
+/** 元のキャラのすぐ後ろに、その成長段階を幼い順に並べる(元のキャラが見つからない段階は、ふつうのキャラと同じ扱い) */
+function withStagesGrouped(list: Character[]): Character[] {
+  const ids = new Set(list.map(c => c.id))
+  const isStage = (c: Character) => c.growth_of !== null && ids.has(c.growth_of)
+  const stagesOf = new Map<number, Character[]>()
+  for (const c of list) {
+    if (isStage(c)) stagesOf.set(c.growth_of!, [...(stagesOf.get(c.growth_of!) ?? []), c])
+  }
+  const big = Number.MAX_SAFE_INTEGER
+  const byOrder = (a: Character, b: Character) =>
+    (a.age ?? big) - (b.age ?? big) || (a.growth_order ?? big) - (b.growth_order ?? big)
+  return list.filter(c => !isStage(c)).flatMap(c => [c, ...(stagesOf.get(c.id) ?? []).sort(byOrder)])
 }
 
 interface Work {
@@ -88,11 +108,17 @@ export default function Characters() {
 
   const shown = useMemo(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-    return characters.filter(c => {
-      const text = `${c.name} ${c.notes ?? ''} ${c.appearance_tags} ${c.trigger_word ?? ''}`.toLowerCase()
+    return withStagesGrouped(characters).filter(c => {
+      const text = `${c.name} ${c.notes ?? ''} ${c.appearance_tags} ${c.trigger_word ?? ''} ${c.growth_label ?? ''}`.toLowerCase()
       return words.every(w => text.includes(w))
     })
   }, [characters, query])
+  const nameOf = useMemo(() => new Map(characters.map(c => [c.id, c.name])), [characters])
+  const stageCount = useMemo(() => {
+    const counts = new Map<number, number>()
+    for (const c of characters) if (c.growth_of !== null) counts.set(c.growth_of, (counts.get(c.growth_of) ?? 0) + 1)
+    return counts
+  }, [characters])
 
   const openDataset = (id: number) => setSearchParams({ dataset: String(id) }, { state: { fromCards: true } })
   const closeDataset = () => {
@@ -149,7 +175,7 @@ export default function Characters() {
               const list = works[String(c.id)] ?? []
               const count = counts[String(c.id)] ?? 0
               return (
-                <article key={c.id} className="chars-card">
+                <article key={c.id} className={c.growth_of !== null && nameOf.has(c.growth_of) ? 'chars-card chars-card--stage' : 'chars-card'}>
                   {c.reference_image_path ? (
                     <button type="button" className="chars-ref" onClick={() => setZoomRef(c)} title="参照画像を拡大">
                       <img src={thumbUrl(c.reference_image_path, 360)} alt={`${c.name}の参照画像`} loading="lazy" />
@@ -160,9 +186,16 @@ export default function Characters() {
                   <div className="chars-body">
                     <h2>
                       {c.name}
+                      {c.age !== null && <span className="chars-badge chars-badge--age">{c.age}歳</span>}
                       {c.is_adult && <span className="chars-badge">成人</span>}
                       {c.is_minor && <span className="chars-badge chars-badge--minor">未成年</span>}
                     </h2>
+                    {c.growth_of !== null && nameOf.has(c.growth_of) && (
+                      <p className="chars-growth">{nameOf.get(c.growth_of)} の成長段階{c.growth_label ? `: ${c.growth_label}` : ''}</p>
+                    )}
+                    {(stageCount.get(c.id) ?? 0) > 0 && (
+                      <p className="chars-growth">成長段階 {stageCount.get(c.id)} 件(この後ろに並んでいます)</p>
+                    )}
                     {c.notes && <p className="chars-notes">{c.notes}</p>}
                     <p className="chars-tags">{[c.appearance_tags, c.outfit_tags].filter(Boolean).join(', ')}</p>
                     <div className="chars-actions">
