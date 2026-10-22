@@ -870,6 +870,9 @@ _STORIES_EXTRA_COLUMNS = {
     # 入れてあれば、細かい方(コマ > ページ > 物語 > 生成の設定)を使う
     "manga_v2_negative": "TEXT",
     "manga_v2_page_negatives": "TEXT",
+    # 成長段階: この巻で使う人物の年齢ごとのキャラシート。JSON {"age": 歳 か null, "stages": {人物のID: 段階のキャラID}}。
+    # シーンの登場キャラがその人物(元のキャラかどの段階)なら、選んだ段階の見た目で描く(characters_by_scene)
+    "manga_v2_growth": "TEXT",
 }
 
 
@@ -904,8 +907,10 @@ def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
 # 本文の「」から取り出し、話し手も推定する(従来どおり)。
 # panel_size は漫画v2のコマの生成サイズ(portrait / landscape / square)。NULL なら入る枠の形から自動で決める。
 # negative_prompt はそのコマを描くときのネガティブ。入れてあればページ・物語のネガティブより優先する。
+# overlays は漫画v2でコマの絵に重ねるもの(文字・別のコマの絵)。JSON [{kind, quad, ...}](manga_v2/overlay.py)
 _STORY_SCENES_EXTRA_COLUMNS = {
     "sfx": "TEXT", "narration": "TEXT", "dialogue": "TEXT", "panel_size": "TEXT", "negative_prompt": "TEXT",
+    "overlays": "TEXT",
 }
 
 
@@ -1932,6 +1937,7 @@ def list_story_scenes(conn: sqlite3.Connection, story_id: int) -> list[dict[str,
             **dict(row),
             "sfx": json.loads(row["sfx"]) if row["sfx"] is not None else None,
             "dialogue": json.loads(row["dialogue"]) if row["dialogue"] is not None else None,
+            "overlays": json.loads(row["overlays"]) if row["overlays"] else [],
             "characters": by_scene.get(row["id"], []),
         }
         for row in rows
@@ -2006,6 +2012,63 @@ def set_manga_v2_negatives(conn: sqlite3.Connection, story_id: int, story: str |
         ((story or "").strip() or None, json.dumps(cleaned, ensure_ascii=False) if cleaned else None, story_id),
     )
     conn.commit()
+
+
+def set_scene_overlays(conn: sqlite3.Connection, scene_id: int, overlays: list[dict[str, Any]]) -> None:
+    conn.execute(
+        "UPDATE story_scenes SET overlays = ? WHERE id = ?",
+        (json.dumps(overlays, ensure_ascii=False) if overlays else None, scene_id),
+    )
+    conn.commit()
+
+
+def get_story_growth(conn: sqlite3.Connection, story_id: int) -> dict[str, Any]:
+    """この巻の成長段階の選び方。{"age": 歳 か None, "stages": {人物のID: 段階のキャラID}}。"""
+    row = conn.execute("SELECT manga_v2_growth FROM stories WHERE id = ?", (story_id,)).fetchone()
+    data = json.loads(row["manga_v2_growth"]) if row and row["manga_v2_growth"] else {}
+    return {"age": data.get("age"), "stages": {int(k): int(v) for k, v in (data.get("stages") or {}).items()}}
+
+
+def set_story_growth(conn: sqlite3.Connection, story_id: int, age: float | None, stages: dict[int, int]) -> None:
+    value = {"age": age, "stages": {str(k): v for k, v in stages.items()}} if age is not None or stages else None
+    conn.execute(
+        "UPDATE stories SET manga_v2_growth = ? WHERE id = ?",
+        (json.dumps(value, ensure_ascii=False) if value else None, story_id),
+    )
+    conn.commit()
+
+
+def growth_choices(conn: sqlite3.Connection, story_id: int) -> dict[int, dict[str, Any]]:
+    """
+    人物のID → この巻で使う段階のキャラ(キャラシートの行)。段階を直接選んでいればそれ、無ければ年齢(age)以下で
+    一番大きい段階(同じ年齢なら順番の大きい方)。どちらも無い人物は入れない。
+    """
+    growth = get_story_growth(conn, story_id)
+    if growth["age"] is None and not growth["stages"]:
+        return {}
+    characters = {row["id"]: dict(row) for row in conn.execute("SELECT * FROM characters")}
+    stages_of: dict[int, list[dict[str, Any]]] = {}
+    for character in characters.values():
+        if character.get("growth_of") is not None:
+            stages_of.setdefault(character["growth_of"], []).append(character)
+    chosen: dict[int, dict[str, Any]] = {}
+    for person_id, stages in stages_of.items():
+        picked = growth["stages"].get(person_id)
+        if picked is not None and picked in characters and characters[picked].get("growth_of") == person_id:
+            chosen[person_id] = characters[picked]
+            continue
+        if growth["age"] is not None:
+            fitting = [s for s in stages if s.get("age") is not None and s["age"] <= growth["age"]]
+            if fitting:
+                chosen[person_id] = max(fitting, key=lambda s: (s["age"], s.get("growth_order") or 0))
+    return chosen
+
+
+# 成長段階の見た目として段階のキャラシートから写す項目(名前・ID はシーンのキャラのまま。話し手の判定が変わらないように)
+_GROWTH_LOOK_FIELDS = (
+    "appearance_tags", "body_tags", "outfit_tags", "style_tags", "negative_tags", "seed", "reference_image_path",
+    "is_adult", "is_minor", "age",
+)
 
 
 def get_scene(conn: sqlite3.Connection, scene_id: int) -> dict[str, Any] | None:
@@ -2229,10 +2292,19 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     from .character_sheet import look_tags
 
     states = {state["id"]: state for state in list_dataset_states(conn)}
+    # この巻で使う成長段階(人物のID → 段階のキャラ)
+    growth = growth_choices(conn, story_id)
     result: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
         character = dict(row)
         del character["scene_id"]
+        # 成長段階: その人物(元のキャラかどの段階)なら、この巻で選んだ段階の見た目にする(その場面の服装・状態は後で当てる)
+        stage = growth.get(character.get("growth_of") or character["id"])
+        if stage is not None and stage["id"] != character["id"]:
+            for key in _GROWTH_LOOK_FIELDS:
+                character[key] = stage.get(key)
+            character["growth_stage_id"] = stage["id"]
+            character["growth_stage_label"] = stage.get("growth_label")
         # そのシーンでのこのキャラの表情・動作(キャラシートの列と名前がぶつからないよう別名で取り出す)
         character["action_tags"] = character.pop("scene_action_tags")
         # その場面の服装(水着・浴衣など)があれば、ふだんの服装の代わりに使う(コマの生成・確かめ・描き直しのどれにも効く)
