@@ -20,6 +20,7 @@ import asyncio
 import base64
 import io
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,64 @@ async def _call(method: str, path: str, body: Any = None, timeout: float = 120) 
             detail = response.text
         raise RuntimeError(f"{method} {path} が失敗しました({response.status_code}): {detail}")
     return response.json() if response.content else None
+
+
+async def _call_bytes(method: str, path: str, body: Any = None, timeout: float = 600) -> bytes:
+    """JSON でない応答(PDF など)を受け取る。"""
+    async with httpx.AsyncClient(base_url=_backend(), timeout=timeout, verify=_verify()) as client:
+        response = await client.request(method, path, json=body, cookies=mcp_identity.backend_cookies())
+        if response.status_code == 401 and mcp_identity.user_id() is not None:
+            response = await client.request(method, path, json=body, cookies=mcp_identity.backend_cookies(renew=True))
+    if response.status_code >= 400:
+        raise RuntimeError(f"{method} {path} が失敗しました({response.status_code}): {response.text[:300]}")
+    return response.content
+
+
+# 物語の編集画面の内容(GET /edit のシーン)を、保存(PUT /edit)に送る形にするときに写す項目
+_EDIT_KEYS = ("id", "title", "text", "prompt_tags", "narration", "sfx", "page_index", "characters", "panel_size")
+
+
+def _edit_item(scene: dict[str, Any]) -> dict[str, Any]:
+    """GET /edit のシーンを PUT /edit の形に(決めていたセリフ・コマのネガティブはそのまま送り直す)。"""
+    item = {k: scene[k] for k in _EDIT_KEYS}
+    item["dialogue"] = scene["dialogue"] if scene["dialogue_custom"] else None
+    if "negative_prompt" in scene:
+        item["negative_prompt"] = scene["negative_prompt"]
+    return item
+
+
+def _script_to_edit(scene: dict[str, Any], page_index: int) -> dict[str, Any]:
+    """台本の形のシーン(manga_create_scripted_story)を、PUT /edit の新しいシーンにする。"""
+    actions = {int(k): v for k, v in (scene.get("character_actions") or {}).items()}
+    outfits = {int(k): v for k, v in (scene.get("character_outfits") or {}).items()}
+    item: dict[str, Any] = {
+        "id": None,
+        "title": scene.get("title"),
+        "text": scene.get("text") or "",
+        "prompt_tags": scene.get("prompt_tags") or "",
+        "narration": scene.get("narration"),
+        "sfx": scene.get("sfx") or [],
+        "page_index": page_index,
+        "panel_size": None,
+        "dialogue": scene.get("dialogue"),
+        "characters": [
+            {"id": cid, "action_tags": actions.get(cid, ""), "outfit_tags": outfits.get(cid, ""), "state_id": None}
+            for cid in scene.get("character_ids") or []
+        ],
+    }
+    if scene.get("negative_prompt"):
+        item["negative_prompt"] = scene["negative_prompt"]
+    return item
+
+
+async def _put_edit(story_id: int, data: dict[str, Any], scenes: list[dict[str, Any]]) -> dict[str, Any]:
+    body = {
+        "title": data["title"],
+        "panels_per_page": data["panels_per_page"],
+        "custom_pages": data["custom_pages"],
+        "scenes": scenes,
+    }
+    return await _call("PUT", f"/api/story/{story_id}/edit", body)
 
 
 def _image_content(path: Path, max_size: int) -> ImageContent:
@@ -543,6 +602,107 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "scenes": body_scenes,
         }
         return await _call("PUT", f"/api/story/{story_id}/edit", body)
+
+    @mcp.tool()
+    async def manga_insert_scenes(story_id: int, after_index: int, scenes: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        巻の途中にシーン(コマ)を差し込む。after_index のシーンの後ろに入れる(-1 で先頭)。既存のシーンと絵はそのまま。
+        scenes の各要素は manga_create_scripted_story と同じ形(title・text・prompt_tags・character_ids・character_actions・
+        character_outfits・narration・sfx・dialogue・negative_prompt)。差し込んだシーンの絵は manga_generate_panels で描く。
+        ページのコマ割りを決めてある巻は、コマ数が変わるので manga_save_page_layout で割り直す。
+        """
+        data = await _call("GET", f"/api/story/{story_id}/edit")
+        current = [_edit_item(s) for s in data["scenes"]]
+        if not -1 <= after_index < len(current):
+            raise ValueError(f"after_index は -1〜{len(current) - 1} で指定してください")
+        page = current[after_index]["page_index"] if after_index >= 0 else 0
+        new = [_script_to_edit(s, page) for s in scenes]
+        body_scenes = current[: after_index + 1] + new + current[after_index + 1 :]
+        result = await _put_edit(story_id, data, body_scenes)
+        return {**result, "inserted_scene_indexes": list(range(after_index + 1, after_index + 1 + len(new)))}
+
+    @mcp.tool()
+    async def manga_reorder_scenes(story_id: int, order: list[int]) -> dict[str, Any]:
+        """
+        シーンの並びを変える。order は今のシーン番号(0始まり)を新しい順に全部並べたもの。絵はシーンについて動く
+        (入る枠の形が変わったコマは描き直し待ちになる)。
+        """
+        data = await _call("GET", f"/api/story/{story_id}/edit")
+        current = [_edit_item(s) for s in data["scenes"]]
+        if sorted(order) != list(range(len(current))):
+            raise ValueError(f"order には 0〜{len(current) - 1} を1回ずつ並べてください")
+        return await _put_edit(story_id, data, [current[i] for i in order])
+
+    @mcp.tool()
+    async def manga_remove_scenes(story_id: int, scene_indexes: list[int]) -> dict[str, Any]:
+        """シーン(コマ)を消す。scene_indexes は今のシーン番号(0始まり)。コマの絵はこの物語から外れる(画像ファイルは残る)。"""
+        data = await _call("GET", f"/api/story/{story_id}/edit")
+        current = [_edit_item(s) for s in data["scenes"]]
+        drop = set(scene_indexes)
+        if not drop <= set(range(len(current))):
+            raise ValueError(f"scene_indexes は 0〜{len(current) - 1} で指定してください")
+        if len(drop) >= len(current):
+            raise ValueError("全部のシーンは消せません")
+        return await _put_edit(story_id, data, [s for i, s in enumerate(current) if i not in drop])
+
+    @mcp.tool()
+    async def manga_reorder_volumes(series_id: int, story_ids: list[int]) -> list[dict[str, Any]]:
+        """
+        シリーズの巻番号を付け直す。story_ids(シリーズの巻の物語IDをすべて)の順に 1巻・2巻… にする。
+        後から作った巻を途中に入れるときは、最後の巻として作ってからこれで並べ替える。
+        """
+        series = await _call("PUT", f"/api/series/{series_id}/volume-order", {"story_ids": story_ids})
+        return [{"volume_no": v["volume_no"], "story_id": v["story_id"], "title": v["title"]} for v in series["volumes"]]
+
+    @mcp.tool()
+    async def manga_export_pdf(story_id: int) -> str:
+        """
+        合成したページ(最後に合成したときの設定)を PDF にして保存し、そのパスを返す(outputs/manga/exports/)。
+        先に manga_compose しておく。
+        """
+        content = await _call_bytes("POST", f"/api/manga-v2/{story_id}/download", {"format": "pdf", "contents": ["pages"]})
+        story = await _call("GET", f"/api/story/{story_id}")
+        name = re.sub(r'[\\/:*?"<>|\s]+', "_", (story.get("title") or "").strip())[:60] or "manga"
+        folder = _USER_ROOT / "outputs" / "manga" / "exports"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"story{story_id}_{name}.pdf"
+        path.write_bytes(content)
+        return str(path)
+
+    @mcp.tool()
+    async def manga_check_panels(
+        story_id: int,
+        max_redraws: int = 2,
+        color: bool = False,
+        use_character_reference: bool = False,
+        reference_strength: float = 1.0,
+        template: str | None = None,
+        timeout_seconds: int = 1800,
+    ) -> str:
+        """
+        コマの絵を自動で確かめ、外れたコマを描き直して合成し直す(NovelAI の Anlas を使う)。作画タグのうち判定モデルで
+        見分けられるもの(人物の有無・表情・物など)と、描く人数(三つ子・描き忘れ)を確かめ、外れたコマは描かれなかった
+        タグを強めてシードを変えて描き直す(よくなったときだけ置き換える)。結果の要約を返す。
+        color・use_character_reference・reference_strength は描いたときと同じにする。
+        """
+        story = await _call("GET", f"/api/story/{story_id}")
+        compose = dict(story.get("manga_v2_compose_settings") or {})
+        chosen = template or compose.get("template") or "grid4"
+        compose["template"] = chosen
+        panels = {
+            "template": chosen,
+            "skip_existing": False,
+            "color": color,
+            "use_character_reference": use_character_reference,
+            "reference_strength": reference_strength,
+        }
+        await _call(
+            "POST", f"/api/manga-v2/{story_id}/check-panels", {"panels": panels, "compose": compose, "max_redraws": max_redraws}
+        )
+        job = await _wait_job(story_id, timeout_seconds)
+        if job.get("status") == "error":
+            raise RuntimeError(f"確かめに失敗しました: {job.get('detail')}")
+        return str(job.get("message", ""))
 
     @mcp.tool()
     async def manga_layout_patterns(count: int) -> list[dict[str, Any]]:
