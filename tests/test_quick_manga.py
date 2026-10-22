@@ -136,7 +136,12 @@ def _fake_writer(monkeypatch: pytest.MonkeyPatch) -> dict:
     async def fake_panels(job, story_id, req, api_key, targets):
         seen["panels"] = (req.template, req.color, req.use_character_reference, len(targets))
 
+    async def fake_review(api_key, episode, panels):
+        # 台本の見直しも文章モデルを呼ぶので、テストでは台本をそのまま返す(呼ぶと CI でネットワークにつなぎに行く)
+        return panels
+
     monkeypatch.setattr(quick_manga, "_ask_json", fake_ask)
+    monkeypatch.setattr("python.panel_check.review_script", fake_review)
     monkeypatch.setattr(manga_draft, "generate_outlines", fake_outlines)
     monkeypatch.setattr(manga_draft, "generate_episode", fake_episode)
     monkeypatch.setattr("python.cast.auto_reference", fake_reference)

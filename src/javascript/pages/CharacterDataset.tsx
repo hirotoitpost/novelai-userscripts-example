@@ -20,6 +20,7 @@ import ImagePreview from '../components/ImagePreview'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import VariationImportDialog, { AXES } from '../components/VariationImportDialog'
 import DatasetScenes from '../components/DatasetScenes'
+import FaceSheet from '../components/FaceSheet'
 import type { DatasetState, Situation } from '../components/DatasetScenes'
 import type { Axis, Variations } from '../components/VariationImportDialog'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
@@ -62,6 +63,8 @@ const SHEET_CLASSES: SheetEditorClasses = {
 
 export default function CharacterDataset() {
   const { token } = useAuth()
+  // キャラ一覧の「顔・表情」から開いたとき(#faces)は、顔・表情シートを開いておく
+  const [faceSheetOpen, setFaceSheetOpen] = useState(() => window.location.hash === '#faces')
   const location = useLocation()
 
   const [characters, setCharacters] = useState<Character[]>([])
@@ -487,6 +490,13 @@ export default function CharacterDataset() {
               >
                 {editingSheet ? 'キャラシートの編集を閉じる' : 'キャラシートを編集'}
               </button>
+            )}
+            {character && (
+              <details className="chards-faces" open={faceSheetOpen} onToggle={e => setFaceSheetOpen((e.target as HTMLDetailsElement).open)}>
+                <summary>顔・表情シート(向き・表情を描いて見る)</summary>
+                <FaceSheet characterId={character.id} characterName={character.name} token={token} rootName={rootName}
+                  disabled={isRunning} />
+              </details>
             )}
 
             <label className="lora-label" htmlFor="chards-root">出力ルート(outputs/ 配下)</label>

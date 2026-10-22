@@ -158,6 +158,30 @@ async def _overlay_preview(scene_id: int, max_size: int) -> ImageContent:
     return ImageContent(type="image", data=base64.b64encode(buf.getvalue()).decode(), mime_type="image/jpeg")
 
 
+def _face_grid(entries: list[dict[str, Any]], tile: int) -> ImageContent:
+    """顔・表情シートの絵を、名前つきで格子に並べた1枚にする。"""
+    from .manga_v2.lettering import resolve_font
+    from PIL import ImageDraw, ImageFont
+
+    tile = max(128, min(tile, 512))
+    columns = min(6, max(1, len(entries)))
+    rows = (len(entries) + columns - 1) // columns
+    label_h = 28
+    sheet = Image.new("RGB", (columns * tile, rows * (tile + label_h)), (255, 255, 255))
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.truetype(str(resolve_font(None)), 18)
+    for index, entry in enumerate(entries):
+        x, y = (index % columns) * tile, (index // columns) * (tile + label_h)
+        with Image.open(_project_file(entry["path"])) as src:
+            image = src.convert("RGB")
+        image.thumbnail((tile, tile))
+        sheet.paste(image, (x + (tile - image.width) // 2, y + label_h + (tile - image.height) // 2))
+        draw.text((x + 6, y + 4), entry["label"], fill=(0, 0, 0), font=font)
+    buf = io.BytesIO()
+    sheet.save(buf, format="JPEG", quality=85)
+    return ImageContent(type="image", data=base64.b64encode(buf.getvalue()).decode(), mime_type="image/jpeg")
+
+
 def _image_content(path: Path, max_size: int) -> ImageContent:
     """画像を縮めて JPEG で返す(元の大きさだと応答が重くなる)。"""
     with Image.open(path) as src:
@@ -619,6 +643,49 @@ def register_manga_tools(mcp: MCPServer) -> None:
         """
         body = {"age": age, "stages": {str(k): v for k, v in (stages or {}).items()}}
         return await _call("PUT", f"/api/manga-v2/{story_id}/growth", body)
+
+    @mcp.tool()
+    async def manga_face_sheet(
+        character_id: int,
+        keys: list[str] | None = None,
+        group: str | None = None,
+        use_reference: bool = False,
+        tile_size: int = 256,
+    ) -> list[TextContent | ImageContent]:
+        """
+        キャラシートの顔・表情シートを描き(NovelAI の Anlas を使う)、一覧の画像を返す。
+        keys: 描く項目(manga_face_sheet_presets のキー)。省略なら group の項目全部。group: "angle"(顔の向き) /
+        "expression"(表情) / 省略で全部。描いてある項目は描き直す。キャラの描き分けを、漫画に使う前に確かめる用。
+        """
+        presets = await _call("GET", "/api/lora-dataset/face-sheet/presets")
+        chosen = keys or [p["key"] for p in presets if group is None or p["group"] == group]
+        async with httpx.AsyncClient(base_url=_backend(), timeout=1800, verify=_verify()) as client:
+            response = await client.post(
+                f"/api/lora-dataset/character/{character_id}/face-sheet",
+                json={"keys": chosen, "use_reference": use_reference},
+                cookies=mcp_identity.backend_cookies(),
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"顔・表情シートを描けませんでした({response.status_code}): {response.text[:300]}")
+        errors = [line for line in response.text.splitlines() if '"status": "error"' in line]
+        entries = await _call("GET", f"/api/lora-dataset/character/{character_id}/face-sheet")
+        shown = [e for e in entries if e["key"] in chosen and e["path"]]
+        note = f"{len(shown)}/{len(chosen)} 枚を描きました" + (f"(失敗 {len(errors)} 枚)" if errors else "")
+        return [TextContent(type="text", text=note), _face_grid(shown, tile_size)]
+
+    @mcp.tool()
+    async def manga_view_face_sheet(character_id: int, group: str | None = None, tile_size: int = 256) -> list[TextContent | ImageContent]:
+        """描いてある顔・表情シートを一覧の画像で見る(描かない)。group: "angle" / "expression" / 省略で全部。"""
+        entries = await _call("GET", f"/api/lora-dataset/character/{character_id}/face-sheet")
+        shown = [e for e in entries if e["path"] and (group is None or e["group"] == group)]
+        if not shown:
+            return [TextContent(type="text", text="まだ描いた項目はありません(manga_face_sheet で描けます)")]
+        return [TextContent(type="text", text=f"{len(shown)} 枚"), _face_grid(shown, tile_size)]
+
+    @mcp.tool()
+    async def manga_face_sheet_presets() -> list[dict[str, str]]:
+        """顔・表情シートの項目(キー・名前・顔の向き angle か表情 expression か・足すタグ)。"""
+        return await _call("GET", "/api/lora-dataset/face-sheet/presets")
 
     @mcp.tool()
     async def manga_set_recap(story_id: int, recap: str) -> str:

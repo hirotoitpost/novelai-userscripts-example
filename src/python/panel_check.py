@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 from .manga_draft import _ask_json, _clean_tags
 
 # 描かれているとみなす確率と、点数で判断するのに要る、確かめるタグの数
@@ -164,12 +166,12 @@ def apply_review(data: Any, panels: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 async def review_script(api_key: str, episode: str, panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """1話分の台本を見直して、作画タグを足す。うまく答えが得られなければ、元の台本のまま。"""
+    """1話分の台本を見直して、作画タグを足す。うまく答えが得られなければ(つながらないときも)、元の台本のまま。"""
     system, user = review_prompts(episode, panels)
     for _ in range(2):
         try:
             return apply_review(await _ask_json(api_key, system, user, max_tokens=1200, temperature=0.2), panels)
-        except (ValueError, RuntimeError):
+        except (ValueError, RuntimeError, httpx.HTTPError):
             continue
     return panels
 
