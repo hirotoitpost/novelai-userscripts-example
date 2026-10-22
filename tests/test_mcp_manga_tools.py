@@ -103,3 +103,38 @@ def test_generate_panels_passes_manga_style(tools: _FakeMCP) -> None:
     asyncio.run(tools.tools["manga_generate_panels"](2, manga_style=False, color=True))
     post = next(c for c in tools.calls if c[0] == "POST")  # type: ignore[attr-defined]
     assert post[2]["manga_style"] is False and post[2]["color"] is True
+
+
+def _edit_data() -> dict[str, Any]:
+    base = {
+        "title": "s", "text": "", "prompt_tags": "", "narration": None, "sfx": [], "characters": [], "panel_size": None,
+        "dialogue": [], "dialogue_custom": False,
+    }
+    return {
+        "title": "t", "panels_per_page": 4, "custom_pages": False,
+        "scenes": [{**base, "id": i + 10, "page_index": i // 2} for i in range(4)],
+    }
+
+
+def test_insert_reorder_remove_scenes(tools: _FakeMCP) -> None:
+    tools.responses[("GET", "/api/story/5/edit")] = _edit_data()  # type: ignore[attr-defined]
+    new = {"text": "ひなたが笑った。", "character_ids": [171], "character_outfits": {171: "frog swimsuit"},
+           "dialogue": [{"text": "がおー！", "speaker_id": 171}]}
+    result = asyncio.run(tools.tools["manga_insert_scenes"](5, 1, [new]))
+    assert result["inserted_scene_indexes"] == [2]
+    body = tools.calls[-1][2]  # type: ignore[attr-defined]
+    ids = [s["id"] for s in body["scenes"]]
+    assert ids == [10, 11, None, 12, 13]
+    inserted = body["scenes"][2]
+    assert inserted["page_index"] == 0 and inserted["dialogue"] == [{"text": "がおー！", "speaker_id": 171}]
+    assert inserted["characters"] == [{"id": 171, "action_tags": "", "outfit_tags": "frog swimsuit", "state_id": None}]
+
+    asyncio.run(tools.tools["manga_reorder_scenes"](5, [3, 2, 1, 0]))
+    assert [s["id"] for s in tools.calls[-1][2]["scenes"]] == [13, 12, 11, 10]  # type: ignore[attr-defined]
+    with pytest.raises(ValueError):
+        asyncio.run(tools.tools["manga_reorder_scenes"](5, [0, 1, 2]))
+
+    asyncio.run(tools.tools["manga_remove_scenes"](5, [1, 3]))
+    assert [s["id"] for s in tools.calls[-1][2]["scenes"]] == [10, 12]  # type: ignore[attr-defined]
+    with pytest.raises(ValueError):
+        asyncio.run(tools.tools["manga_remove_scenes"](5, [0, 1, 2, 3]))
