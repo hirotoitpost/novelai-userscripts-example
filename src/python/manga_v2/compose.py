@@ -155,6 +155,8 @@ def _cover(
     if zoom_step == 0:
         left = (resized.width - width) // 2
         top = round((resized.height - height) * _CROP_VERTICAL_BIAS)
+        if heads:
+            left, top = _face_crop(heads, scale, resized.size, width, height, left, top)
     else:
         if heads:
             if focused:
@@ -170,6 +172,34 @@ def _cover(
         left = min(max(round(fx - width / 2), 0), resized.width - width)
         top = min(max(round(fy - height / 2), 0), resized.height - height)
     return resized.crop((left, top, left + width, top + height)), scale, left, top
+
+
+def _face_crop(
+    heads: list[Rect], scale: float, size: tuple[int, int], width: int, height: int, left: int, top: int
+) -> tuple[int, int]:
+    """
+    枠より絵がはみ出すときの切り抜き位置を、頭(顔)が入るように決める。既定の位置で全員の頭が収まるならそのまま。
+    収まらなければ頭の範囲の真ん中に寄せ、それでも入りきらない(顔のアップを横長の枠に入れる など)ときは、
+    目元が入る高さで切る(口元だけが残って何の絵か分からなくならないように)。
+    """
+    x0 = min(h[0] for h in heads) * scale
+    y0 = min(h[1] for h in heads) * scale
+    x1 = max(h[2] for h in heads) * scale
+    y1 = max(h[3] for h in heads) * scale
+
+    def place(start: int, lo: float, hi: float, span: int, total: int, keep_top: bool) -> int:
+        if lo >= start and hi <= start + span:
+            return start
+        if hi - lo <= span:
+            wanted = (lo + hi) / 2 - span / 2
+        elif keep_top:
+            # 目の高さ(頭の範囲の上から 45% ほど)が、枠の上から 45% に来るように切る(目元と鼻が入る)
+            wanted = lo + (hi - lo) * 0.45 - span * 0.45
+        else:
+            wanted = (lo + hi) / 2 - span / 2
+        return int(min(max(round(wanted), 0), total - span))
+
+    return place(left, x0, x1, width, size[0], False), place(top, y0, y1, height, size[1], True)
 
 
 def split_dense_panels(panels: list[PanelContent], max_lines: int) -> list[PanelContent]:
