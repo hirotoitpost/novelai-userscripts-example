@@ -143,6 +143,33 @@ async def _put_edit(story_id: int, data: dict[str, Any], scenes: list[dict[str, 
         "scenes": scenes,
     }
     return await _call("PUT", f"/api/story/{story_id}/edit", body)
+async def _scene_id(scene_id: int | None, story_id: int | None, scene_index: int | None) -> int:
+    """
+    シーンの指定(scene_id か、story_id + scene_index(0始まり))を scene_id にする。両方渡したときは食い違いを確かめる
+    (scene_id を推し量って別の物語のシーンを書き換えないように。2026-10 実機で起きた)。
+    """
+    if story_id is None:
+        if scene_id is None:
+            raise ValueError("scene_id か、story_id と scene_index を渡してください")
+        if scene_index is not None:
+            raise ValueError("scene_index を使うときは story_id も渡してください")
+        return scene_id
+    story = await _call("GET", f"/api/story/{story_id}")
+    scenes = story.get("scenes") or []
+    if scene_index is None:
+        if scene_id is None:
+            raise ValueError("story_id には scene_index(0始まり)を添えてください")
+        if all(s["id"] != scene_id for s in scenes):
+            raise ValueError(f"シーン {scene_id} は物語 {story_id} のシーンではありません")
+        return scene_id
+    found = next((s["id"] for s in scenes if s["scene_index"] == scene_index), None)
+    if found is None:
+        raise ValueError(f"物語 {story_id} にシーン番号 {scene_index}(0始まり)はありません(全 {len(scenes)} シーン)")
+    if scene_id is not None and scene_id != found:
+        raise ValueError(f"物語 {story_id} のシーン番号 {scene_index} は シーン {found} です(scene_id {scene_id} と食い違います)")
+    return found
+
+
 async def _overlay_preview(scene_id: int, max_size: int) -> ImageContent:
     """重ねを貼ったコマの絵(バックエンドが PNG で返す)を、縮めた JPEG にする。"""
     async with httpx.AsyncClient(base_url=_backend(), timeout=120, verify=_verify()) as client:
@@ -399,7 +426,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
 
     @mcp.tool()
     async def manga_update_scene(
-        scene_id: int,
+        scene_id: int | None = None,
         title: str | None = None,
         text: str | None = None,
         prompt_tags: str | None = None,
@@ -411,9 +438,12 @@ def register_manga_tools(mcp: MCPServer) -> None:
         character_states: dict[int, int | None] | None = None,
         negative_prompt: str | None = None,
         absent_tags: str | None = None,
+        story_id: int | None = None,
+        scene_index: int | None = None,
     ) -> str:
         """
-        シーンを手直しする(渡した項目だけ)。narration を空文字にするとナレーションを消す。
+        シーンを手直しする(渡した項目だけ)。シーンは scene_id か、story_id + scene_index(0始まり)で指定する
+        (両方渡すと食い違いを確かめる)。narration を空文字にするとナレーションを消す。
         negative_prompt はこのコマのネガティブ(ページ・物語より優先。空文字で未設定に戻す)。
         absent_tags はこのコマに出てはいけない物(英語タグ。ネガティブに足し、manga_check_panels で確かめる)。
         character_actions(キャラID → 表情・動作の英語タグ)を変えるときは character_ids も渡す。
@@ -424,6 +454,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         per_character = (character_actions, character_outfits, character_states)
         if any(v is not None for v in per_character) and character_ids is None:
             raise ValueError("キャラごとの項目を変えるときは character_ids も渡してください")
+        scene_id = await _scene_id(scene_id, story_id, scene_index)
         fields = {"title": title, "text": text, "prompt_tags": prompt_tags}
         if any(v is not None for v in fields.values()):
             await _call("PATCH", f"/api/story/scenes/{scene_id}", {k: v for k, v in fields.items() if v is not None})
@@ -649,18 +680,37 @@ def register_manga_tools(mcp: MCPServer) -> None:
         return await _call("PUT", f"/api/manga-v2/{story_id}/page-layouts", {"import_id": import_id})
 
     @mcp.tool()
-    async def manga_set_overlays(scene_id: int, overlays: list[dict[str, Any]], max_size: int = 768) -> list[TextContent | ImageContent]:
+    async def manga_set_overlays(
+        overlays: list[dict[str, Any]],
+        scene_id: int | None = None,
+        story_id: int | None = None,
+        scene_index: int | None = None,
+        max_size: int = 768,
+    ) -> list[TextContent | ImageContent]:
         """
         コマの絵に重ねるもの(重ね)を決め、貼った絵を返す(丸ごと置き換え。空の並びで消す)。合成のたびに貼る。
+        シーンは scene_id か、story_id + scene_index(0始まり)で指定する。
         AI では読める字にならない文字(命名書・手紙・看板)や、写真立てに入れる写真(別のコマの絵)に使う。
         各要素: {"kind": "text" | "panel", "quad": [[x, y]×4](左上・右上・右下・左下。コマの絵に対する割合 0〜1)}
           text: "text"(改行で列・行を分ける), "font"(フォントID), "color"("#rrggbb"), "vertical"(縦書き),
                 "stroke_color", "stroke_width"(縁取り。文字の大きさに対する割合), "keep_aspect"(既定 true。文字の形を保つ)
-          panel: "scene_id"(写真にする同じ物語のシーンID), "frame"(白い縁。短い辺に対する割合)
+          panel: "scene_id"(写真にする同じ物語のシーンID。story_id を渡したときは "scene_index"(0始まり)でもよい),
+                 "frame"(白い縁。短い辺に対する割合)
           共通: "opacity"(0〜1)
         四隅に合わせて拡大・縮小・回転・遠近の変形をする(写真立ての枠の四隅に合わせると、斜めの写真立てにも嵌まる)。
-        四隅の位置は、まず manga_get_panel_image でコマの絵を見て決める。
+        四隅の位置は、まず manga_get_panel_image でコマの絵を見て決める。quad を省くと、コマの絵の白い空白(写真立て・額・
+        紙の枠の中)を探して合わせる("near": [x, y] でその点に近い空白。候補は manga_blank_regions)。
+        写真を嵌めるなら、枠の中を白く空けて描く(作画タグに "blank photo frame, white photo" など)と見つけやすい。
         """
+        scene_id = await _scene_id(scene_id, story_id, scene_index)
+        if story_id is not None:
+            items = []
+            for overlay in overlays:
+                overlay = dict(overlay)
+                if "scene_index" in overlay:
+                    overlay["scene_id"] = await _scene_id(overlay.get("scene_id"), story_id, overlay.pop("scene_index"))
+                items.append(overlay)
+            overlays = items
         await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/overlays", {"overlays": overlays})
         return [
             TextContent(type="text", text=f"シーン {scene_id} に重ねを {len(overlays)} 個決めました(次の合成から貼ります)"),
@@ -668,9 +718,36 @@ def register_manga_tools(mcp: MCPServer) -> None:
         ]
 
     @mcp.tool()
-    async def manga_preview_overlays(scene_id: int, max_size: int = 768) -> ImageContent:
-        """コマの絵に、決めてある重ねを貼った絵を見る(吹き出しなし)。"""
-        return await _overlay_preview(scene_id, max_size)
+    async def manga_preview_overlays(
+        scene_id: int | None = None, story_id: int | None = None, scene_index: int | None = None, max_size: int = 768
+    ) -> ImageContent:
+        """コマの絵に、決めてある重ねを貼った絵を見る(吹き出しなし)。シーンは scene_id か、story_id + scene_index(0始まり)。"""
+        return await _overlay_preview(await _scene_id(scene_id, story_id, scene_index), max_size)
+
+    @mcp.tool()
+    async def manga_blank_regions(
+        scene_id: int | None = None, story_id: int | None = None, scene_index: int | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        コマの絵の白い空白(写真立て・額・紙などの枠の中)の四隅を、大きい順に返す({quad, area, center}。割合 0〜1)。
+        manga_set_overlays の quad にそのまま使える。シーンは scene_id か、story_id + scene_index(0始まり)。
+        """
+        scene_id = await _scene_id(scene_id, story_id, scene_index)
+        return await _call("GET", f"/api/manga-v2/scenes/{scene_id}/blank-regions")
+
+    @mcp.tool()
+    async def manga_mirror_panel(
+        scene_id: int | None = None, story_id: int | None = None, scene_index: int | None = None
+    ) -> str:
+        """
+        コマの絵を左右反転する(片側だけの髪型・持ち手・向きを、ほかのコマにそろえる)。元の絵は残り、反転した絵を
+        もう一度反転すると元に戻る。重ねの四隅も一緒に反転する。人物の左右が入れ替わるので、合成して吹き出しを確かめる。
+        シーンは scene_id か、story_id + scene_index(0始まり)。反映は次の manga_compose から。
+        """
+        scene_id = await _scene_id(scene_id, story_id, scene_index)
+        result = await _call("POST", f"/api/manga-v2/scenes/{scene_id}/mirror")
+        state = "左右反転しました(元の絵は残っています)" if result["mirrored"] else "元の向きに戻しました"
+        return f"シーン {scene_id} の絵を{state}: {result['image_path']}"
 
     @mcp.tool()
     async def manga_set_growth(story_id: int, age: float | None = None, stages: dict[int, int] | None = None) -> dict[str, Any]:
@@ -751,12 +828,20 @@ def register_manga_tools(mcp: MCPServer) -> None:
         }
 
     @mcp.tool()
-    async def manga_apply_situation(scene_id: int, situation_id: int, choices: dict[str, str] | None = None) -> str:
+    async def manga_apply_situation(
+        situation_id: int,
+        scene_id: int | None = None,
+        choices: dict[str, str] | None = None,
+        story_id: int | None = None,
+        scene_index: int | None = None,
+    ) -> str:
         """
         シチュエーションのタグをシーンに書き込む(構図・場所はシーンのタグに、服装は登場キャラ全員のこの場面の服装に、
         ポーズ・表情は全員の動作に足す)。choices で軸(framings/poses/outfits/expressions/locations)ごとの値を選ぶ
         (省略した軸は最初の値)。書き込んだあとは manga_update_scene で直せる。
+        シーンは scene_id か、story_id + scene_index(0始まり)。
         """
+        scene_id = await _scene_id(scene_id, story_id, scene_index)
         await _call("POST", f"/api/story/scenes/{scene_id}/situation", {"situation_id": situation_id, "choices": choices or {}})
         return f"シーン {scene_id} にシチュエーションを書き込みました"
 
@@ -943,14 +1028,21 @@ def register_manga_tools(mcp: MCPServer) -> None:
         return await _call("DELETE", f"/api/manga-v2/{story_id}/page-layout?template={template}")
 
     @mcp.tool()
-    async def manga_cutout(scene_id: int, method: str = "local", max_size: int = 512) -> list[TextContent | ImageContent]:
+    async def manga_cutout(
+        scene_id: int | None = None,
+        method: str = "local",
+        max_size: int = 512,
+        story_id: int | None = None,
+        scene_index: int | None = None,
+    ) -> list[TextContent | ImageContent]:
         """
         シーンのコマの絵の背景を消した結果を作って見せる(ページのコマ割りで cutout を付けたコマに使われる)。
         method: "local"(この PC、無料。合成のときにも無ければ作る) / "novelai"(NovelAI の背景の削除。約 65 Anlas、
-        Opus でも無料にならない。作ると local より優先される)。
+        Opus でも無料にならない。作ると local より優先される)。シーンは scene_id か、story_id + scene_index(0始まり)。
         """
         if method not in ("local", "novelai"):
             raise ValueError("method は local か novelai です")
+        scene_id = await _scene_id(scene_id, story_id, scene_index)
         path = f"/api/manga-v2/scenes/{scene_id}/cutout" + ("/novelai" if method == "novelai" else "")
         result = await _call("POST", path, timeout=600)
         return [
@@ -959,11 +1051,14 @@ def register_manga_tools(mcp: MCPServer) -> None:
         ]
 
     @mcp.tool()
-    async def manga_upscale_panel(scene_id: int) -> str:
+    async def manga_upscale_panel(
+        scene_id: int | None = None, story_id: int | None = None, scene_index: int | None = None
+    ) -> str:
         """
         シーンのコマの絵を AI で2倍に拡大して残す(この PC、無料、1枚40秒ほど)。背景を消したコマ(cutout)を合成するときに
-        使われ、大きく貼っても輪郭がくっきりする。
+        使われ、大きく貼っても輪郭がくっきりする。シーンは scene_id か、story_id + scene_index(0始まり)。
         """
+        scene_id = await _scene_id(scene_id, story_id, scene_index)
         result = await _call("POST", f"/api/manga-v2/scenes/{scene_id}/upscale", timeout=600)
         return f"拡大しました: {result['upscaled_path']}"
 

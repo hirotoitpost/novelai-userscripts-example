@@ -107,6 +107,24 @@ export default function OverlayEditor({ apiOrigin, sceneId, sceneLabel, imageUrl
     change(d.index, { quad })
   }
 
+  /** 選んだ重ねを、コマの絵の白い空白(写真立ての枠の中など)に合わせる。押すたびに、今の位置に近い順で次の空白へ */
+  async function fitBlank(index: number) {
+    setError(null)
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/blank-regions`)
+    const regions: { quad: Quad; center: [number, number] }[] = res.ok ? await res.json() : []
+    if (regions.length === 0) {
+      setError('白い空白(枠の中)が見つかりませんでした。四隅をドラッグして合わせてください。')
+      return
+    }
+    const quad = overlays[index].quad
+    const cx = quad.reduce((a, [x]) => a + x, 0) / 4
+    const cy = quad.reduce((a, [, y]) => a + y, 0) / 4
+    const ranked = [...regions].sort((a, b) => Math.hypot(a.center[0] - cx, a.center[1] - cy) - Math.hypot(b.center[0] - cx, b.center[1] - cy))
+    const same = (q: Quad) => q.every(([x, y], i) => Math.abs(x - quad[i][0]) < 0.005 && Math.abs(y - quad[i][1]) < 0.005)
+    const at = ranked.findIndex(r => same(r.quad))
+    change(index, { quad: ranked[at >= 0 ? (at + 1) % ranked.length : 0].quad })
+  }
+
   async function save() {
     setError(null)
     const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${sceneId}/overlays`, {
@@ -223,6 +241,10 @@ export default function OverlayEditor({ apiOrigin, sceneId, sceneLabel, imageUrl
                     onChange={e => change(selected, { opacity: Number(e.target.value) / 100 })} />
                 </label>
                 <div className="ove-row">
+                  <button type="button" onClick={() => void fitBlank(selected)}
+                    title="絵の中の白い空白(写真立て・額・紙の枠の中)を探して四隅を合わせます。もう一度押すと次の空白へ">
+                    白い枠に合わせる
+                  </button>
                   <button type="button" onClick={() => change(selected, { quad: DEFAULT_QUAD })}>位置を戻す</button>
                   <button type="button" className="ove-danger" onClick={() => remove(selected)}>この重ねを消す</button>
                 </div>

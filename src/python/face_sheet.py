@@ -24,6 +24,9 @@ class FaceItem:
 
 
 _PORTRAIT = "portrait, close-up, looking at viewer"
+# 顔・表情シートの1枚に足すネガティブ。1枚に同じキャラが何人も並ぶ設定画(三面図など)になりやすいので抑える
+# (2026-10 実機: 『灯台とボルト』のキャラで、正面・笑顔が三面図になった)
+NEGATIVE = "multiple views, character sheet, reference sheet, turnaround, split screen, multiple girls, multiple boys"
 
 ANGLES: tuple[FaceItem, ...] = (
     FaceItem("front", "正面", "front view, facing viewer, looking at viewer, upper body", "angle"),

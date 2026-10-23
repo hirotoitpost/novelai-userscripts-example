@@ -27,7 +27,7 @@ from uuid import uuid4
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
-from PIL import Image
+from PIL import Image, ImageOps
 from novelai import AsyncNovelAI
 
 from ..client import get_client
@@ -45,6 +45,7 @@ from ..db import (
     set_manga_v2_negatives,
     get_story_growth,
     growth_choices,
+    set_manga_panel_image,
     set_scene_overlays,
     set_story_growth,
     set_manga_v2_ugoira,
@@ -122,7 +123,9 @@ from ..manga_v2.layout import (
     tree_rects,
 )
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
-from ..manga_v2.overlay import OverlayPiece, draw_pieces, fit_aspect, normalize_quad, photo_print, render_text
+from ..manga_v2.overlay import (
+    OverlayPiece, blank_regions, draw_pieces, fit_aspect, mirror_quad, normalize_quad, photo_print, pick_blank, render_text,
+)
 from ..manga_v2.panel_shapes import trace_page
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
 from ..manga_v2.speakers import CastMember, attribute_speakers, cast_members
@@ -1705,14 +1708,25 @@ async def get_scene_overlays(scene_id: int) -> list[dict[str, Any]]:
 async def put_scene_overlays(scene_id: int, req: MangaV2OverlaysRequest) -> list[dict[str, Any]]:
     """
     コマの重ねを丸ごと置き換える(空の並びで消す)。写真にする別のコマは、同じ物語のほかのシーン。
+    quad を省いた重ねは、コマの絵の白い空白(写真立ての枠の中など)を探して四隅を決める(near があれば、その点に近い空白)。
     絵は描き直さない(次に合成したときから貼る)。
     """
     conn = get_connection()
     try:
         _, story = _scene_and_story(conn, scene_id)
         ids = {s["id"] for s in story["scenes"]}
+        regions: list[dict[str, Any]] | None = None
         items = []
         for overlay in req.overlays:
+            if overlay.quad is None:
+                if regions is None:
+                    regions = _blank_regions_of(scene_id)
+                chosen = pick_blank(regions, overlay.near)
+                if chosen is None:
+                    raise HTTPException(
+                        status_code=422, detail="コマの絵に白い空白(枠の中)が見つかりません。quad で四隅を指定してください。"
+                    )
+                overlay = overlay.model_copy(update={"quad": chosen["quad"]})
             try:
                 normalize_quad(overlay.quad)
             except ValueError as exc:
@@ -1721,11 +1735,56 @@ async def put_scene_overlays(scene_id: int, req: MangaV2OverlaysRequest) -> list
                 raise HTTPException(status_code=422, detail="文字の重ねには text を入れてください。")
             if overlay.kind == "panel" and (overlay.scene_id not in ids or overlay.scene_id == scene_id):
                 raise HTTPException(status_code=422, detail="写真にするコマは、同じ物語のほかのシーンを選んでください。")
-            items.append(overlay.model_dump(exclude_none=True))
+            items.append(overlay.model_dump(exclude_none=True, exclude={"near"}))
         set_scene_overlays(conn, scene_id, items)
     finally:
         conn.close()
     return items
+
+
+def _blank_regions_of(scene_id: int) -> list[dict[str, Any]]:
+    with Image.open(_scene_panel_image(scene_id)) as src:
+        return blank_regions(src.convert("RGB"))
+
+
+@router.get("/scenes/{scene_id}/blank-regions")
+async def get_blank_regions(scene_id: int) -> list[dict[str, Any]]:
+    """
+    コマの絵の白い空白(写真立て・額・紙などの枠の中)の四隅を、大きい順に返す({quad, area, center})。
+    重ねの quad にそのまま使える(重ねで quad を省いても、ここから選ぶ)。
+    """
+    return await asyncio.to_thread(_blank_regions_of, scene_id)
+
+
+@router.post("/scenes/{scene_id}/mirror")
+async def mirror_scene_panel(scene_id: int) -> dict[str, Any]:
+    """
+    コマの絵を左右反転する(片側だけの髪型・持ち手などを、ほかのコマにそろえる)。元の絵は残し、反転した絵を
+    <元の名前>.mirrored.png に作って差し替える。反転した絵をもう一度反転すると、元の絵に戻す。
+    重ねの四隅も一緒に反転する(文字は裏返さない)。人物の左右が入れ替わるので、話し手の吹き出しの向きも確かめる。
+    """
+    path = _scene_panel_image(scene_id)
+    original = path.with_name(path.name.replace(".mirrored", "", 1))
+    if path.stem.endswith(".mirrored") and original.is_file():
+        target, mirrored = original, False
+    else:
+        target, mirrored = path.with_name(f"{path.stem}.mirrored{path.suffix}"), True
+
+        def flip() -> None:
+            with Image.open(path) as src:
+                ImageOps.mirror(src).save(target)
+
+        await asyncio.to_thread(flip)
+    conn = get_connection()
+    try:
+        scene, _ = _scene_and_story(conn, scene_id)
+        set_manga_panel_image(conn, scene_id, target.relative_to(_PROJECT_ROOT).as_posix())
+        overlays = scene.get("overlays") or []
+        if overlays:
+            set_scene_overlays(conn, scene_id, [{**o, "quad": mirror_quad(o["quad"])} for o in overlays])
+    finally:
+        conn.close()
+    return {"image_path": target.relative_to(_PROJECT_ROOT).as_posix(), "mirrored": mirrored}
 
 
 def _overlay_preview_image(scene_id: int) -> Image.Image:
