@@ -1412,6 +1412,12 @@ class MangaV2CheckRequest(BaseModel):
     check_gaze: bool = True
 
 
+class MangaV2FlowReviewRequest(BaseModel):
+    """話のつながりの見直し(つなぎのコマの案)。limit は案を出す場所の数の上限。"""
+
+    limit: int = Field(6, ge=1, le=12)
+
+
 class PanelRedrawStateRequest(BaseModel):
     """描き直しで作る人物の状態。match_tags に当たる動作のタグの人物を、コマを描いたあとに redraw_tags で描き直す。"""
 

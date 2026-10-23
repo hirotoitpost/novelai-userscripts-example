@@ -29,6 +29,8 @@ interface ViewPage {
 interface View { explicit: boolean; template: string; scenes: number; pages: ViewPage[] }
 
 interface Pattern { id: string; label: string; tree: Tree }
+/** ページに入るコマの絵の縦横比に合う候補(mismatch は枠と絵のずれ。0.4 を超えると絵の 3 割以上が切れる) */
+interface FitPage { scene_ids: number[]; current_mismatch: number; suggestions: (Pattern & { mismatch: number })[] }
 
 /** 画面で直している1ページ。tree が無いのは取り込んだ作品から写したページ(斜めの枠など。形はそのまま) */
 interface DraftPage { tree: Tree | null; layout: number | null; panels: Point[][]; gaps: Gaps; style: PageStyle; floats: FloatPanel[] }
@@ -254,6 +256,7 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
   const [pages, setPages] = useState<DraftPage[]>([])
   const [selected, setSelected] = useState(0)
   const [patterns, setPatterns] = useState<Record<number, Pattern[]>>({})
+  const [fits, setFits] = useState<FitPage[] | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -278,6 +281,11 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
     setSelected(s => Math.min(s, Math.max(0, data.pages.length - 1)))
     setSelection(null)
     setDirty(false)
+    // 絵に合わせた候補は、出せなくてもコマ割りの編集はできる
+    fetch(`${apiOrigin}/api/manga-v2/${storyId}/layout-suggestions?template=${encodeURIComponent(template)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { pages: FitPage[] } | null) => setFits(d?.pages ?? null))
+      .catch(() => setFits(null))
   }, [apiOrigin, storyId, template])
 
   useEffect(() => {
@@ -892,6 +900,23 @@ export default function PageLayoutEditor({ apiOrigin, storyId, template, scenes,
               </div>
             )}
 
+            {fits?.[selected] && fits[selected].scene_ids.length === gridCount && fits[selected].suggestions.length > 0 && (
+              <>
+                <p className="story-muted">
+                  コマの絵の形に合う候補(保存してあるコマ割りでの、枠と絵のずれ {fits[selected].current_mismatch.toFixed(2)}。
+                  0.4 を超えると絵の 3 割以上が切れます)
+                </p>
+                <div className="ple-patterns">
+                  {fits[selected].suggestions.map(p => (
+                    <button key={p.id} type="button" className="ple-pattern" disabled={off} title={p.label}
+                      onClick={() => { editCurrent({ tree: p.tree, layout: null, panels: [] }); setSelection(null) }}>
+                      <PageSvg page={{ ...current, tree: p.tree, layout: null, panels: [] }} labels={[]} width={52} />
+                      <span>{p.label}(ずれ {p.mismatch.toFixed(2)})</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <div className="ple-patterns">
               {(patterns[gridCount] ?? []).map(p => (
                 <button key={p.id} type="button" className="ple-pattern" disabled={off} title={p.label}

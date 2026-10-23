@@ -898,6 +898,33 @@ def register_manga_tools(mcp: MCPServer) -> None:
         return {**result, "inserted_scene_indexes": list(range(after_index + 1, after_index + 1 + len(new)))}
 
     @mcp.tool()
+    async def manga_review_flow(story_id: int, apply: bool = False, limit: int = 6) -> dict[str, Any]:
+        """
+        台本を文章AIに読ませ、場所・時間・話題が説明なく飛ぶところ(唐突な場面転換・人物の紹介なし・回想の出入り)に
+        入れる「つなぎのコマ」の案を返す。suggestions: [{after_index(0始まり), reason, scenes(台本の形)}]。
+        apply=True で、案のシーンをすべて差し込む(後ろから入れるので、after_index は今の番号のまま)。案を選ぶなら
+        apply=False で見てから manga_insert_scenes で入れる。差し込んだコマは manga_generate_panels で描き、
+        ページのコマ割りを決めてある巻は manga_suggest_layouts などで割り直す。
+        """
+        result = await _call("POST", f"/api/manga-v2/{story_id}/review-flow", {"limit": limit}, timeout=300)
+        suggestions = result.get("suggestions") or []
+        if not apply or not suggestions:
+            return {"suggestions": suggestions}
+        data = await _call("GET", f"/api/story/{story_id}/edit")
+        current = [_edit_item(s) for s in data["scenes"]]
+        for item in sorted(suggestions, key=lambda s: s["after_index"], reverse=True):
+            at = item["after_index"]
+            new = [_script_to_edit(s, current[at]["page_index"]) for s in item["scenes"]]
+            current = current[: at + 1] + new + current[at + 1 :]
+        saved = await _put_edit(story_id, data, current)
+        inserted, shift = [], 0
+        for item in sorted(suggestions, key=lambda s: s["after_index"]):
+            start = item["after_index"] + 1 + shift
+            inserted += list(range(start, start + len(item["scenes"])))
+            shift += len(item["scenes"])
+        return {"suggestions": suggestions, "inserted_scene_indexes": inserted, **saved}
+
+    @mcp.tool()
     async def manga_reorder_scenes(story_id: int, order: list[int]) -> dict[str, Any]:
         """
         シーンの並びを変える。order は今のシーン番号(0始まり)を新しい順に全部並べたもの。絵はシーンについて動く
@@ -1021,6 +1048,42 @@ def register_manga_tools(mcp: MCPServer) -> None:
                   "z": 重なり順(既定 1。前面), 葉と同じ形・枠線・cutout}]。cutout(背景を消す)なら人物だけを見せる
         """
         return await _call("PUT", f"/api/manga-v2/{story_id}/page-layout", {"template": template, "pages": pages})
+
+    @mcp.tool()
+    async def manga_suggest_layouts(story_id: int, template: str | None = None, apply: bool = False) -> dict[str, Any]:
+        """
+        ページごとに、コマの絵の縦横比に合うコマ割りを探す(ページの区切りは今のまま)。ページごとに今のずれ
+        (current_mismatch)と候補(tree・mismatch、小さい順)を返す。ずれ 0.4 超は絵の 3 割以上が切り落とされる
+        (横長の絵を縦に細い枠へ入れると口元だけ残る など)。apply=True で、各ページを一番ずれの小さい候補にして保存する
+        (今より良くなるページだけ。間隔・地の色・重ねたコマはそのまま)。保存後は manga_compose で確かめる。
+        """
+        story = await _call("GET", f"/api/story/{story_id}")
+        chosen = template or (story.get("manga_v2_compose_settings") or {}).get("template") or "grid4"
+        result = await _call("GET", f"/api/manga-v2/{story_id}/layout-suggestions?template={chosen}")
+        pages = [
+            {
+                "page": index,
+                "scene_ids": page["scene_ids"],
+                "current_mismatch": page["current_mismatch"],
+                "suggestions": [{k: s[k] for k in ("label", "mismatch", "tree")} for s in page["suggestions"]],
+            }
+            for index, page in enumerate(result["pages"])
+        ]
+        if not apply:
+            return {"template": chosen, "pages": pages}
+        view = await _call("GET", f"/api/manga-v2/{story_id}/page-layout?template={chosen}")
+        body, changed = [], []
+        for index, (page, current) in enumerate(zip(result["pages"], view["pages"])):
+            best = page["suggestions"][0] if page["suggestions"] else None
+            if best is not None and best["mismatch"] < page["current_mismatch"]:
+                body.append({"tree": best["tree"], "gaps": current["gaps"], "style": current["style"], "floats": current["floats"]})
+                changed.append(index)
+            elif current["tree"] is not None:
+                body.append({"tree": current["tree"], "gaps": current["gaps"], "style": current["style"], "floats": current["floats"]})
+            else:
+                body.append({"layout": current["layout"]})
+        saved = await _call("PUT", f"/api/manga-v2/{story_id}/page-layout", {"template": chosen, "pages": body}) if changed else {}
+        return {"template": chosen, "pages": pages, "changed_pages": changed, "stale_panels": saved.get("stale_panels", 0)}
 
     @mcp.tool()
     async def manga_reset_page_layout(story_id: int, template: str = "grid4") -> dict[str, Any]:

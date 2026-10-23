@@ -113,6 +113,8 @@ from ..manga_v2.layout import (
     PANEL_SIZES,
     TEMPLATE_TREES,
     TEMPLATES,
+    aspect_layouts,
+    aspect_mismatch,
     layout_patterns,
     layout_size,
     normalize_gaps,
@@ -144,6 +146,7 @@ from ..models import (
     MangaV2ReferenceCandidate,
     MangaV2ReferenceCandidatesRequest,
     MangaV2CheckRequest,
+    MangaV2FlowReviewRequest,
     MangaV2ComposeRequest,
     MangaV2RedrawStatesRequest,
     PanelRedrawStateRequest,
@@ -1641,6 +1644,54 @@ async def get_page_layout(story_id: int, template: str = "grid4") -> dict[str, A
     return _page_layout_view(story, template, layouts)
 
 
+# コマの絵がまだ無いシーンの縦横比(生成サイズの種類から)
+_SIZE_ASPECTS = {"portrait": 832 / 1216, "landscape": 1216 / 832, "square": 1.0}
+
+
+@router.get("/{story_id}/layout-suggestions")
+async def get_layout_suggestions(story_id: int, template: str = "grid4", limit: int = 3) -> dict[str, Any]:
+    """
+    ページごとに、入るコマの絵の縦横比に合うコマ割りの候補を返す(枠と絵のずれ mismatch の小さい順)。ページの区切り
+    (ページごとのコマ数)は今のまま。今のコマ割りのずれ(current_mismatch)も付ける。0.4 を超えると、絵の 3 割以上が
+    切り落とされる(横長の絵を縦に細い枠に入れて、口元だけ残る など)。候補の tree は PUT page-layout にそのまま使える。
+    """
+    _require_template(template)
+    limit = max(1, min(limit, 8))
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        layouts = get_manga_v2_page_layouts(conn, story_id)
+        panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
+    finally:
+        conn.close()
+    known = {sid: p["width"] / p["height"] for sid, p in panels.items() if p.get("width") and p.get("height")}
+    fallback = sorted(known.values())[len(known) // 2] if known else 1.0
+    aspects = {
+        s["id"]: known.get(s["id"]) or _SIZE_ASPECTS.get(s.get("panel_size") or "", fallback) for s in story["scenes"]
+    }
+    view = _page_layout_view(story, template, layouts)
+
+    def suggest(page: dict[str, Any]) -> dict[str, Any]:
+        pictures = [aspects[sid] for sid in page["scene_ids"]]
+        width = PAGE_WIDTH * (2 if page["spread"] else 1)
+        frames = [
+            (max(x for x, _ in poly) - min(x for x, _ in poly)) * width
+            / max((max(y for _, y in poly) - min(y for _, y in poly)) * PAGE_HEIGHT, 1.0)
+            for poly in page["panels"]
+        ]
+        return {
+            "scene_ids": page["scene_ids"],
+            "pictures": [round(a, 3) for a in pictures],
+            "current_mismatch": round(aspect_mismatch(frames, pictures), 4),
+            "suggestions": aspect_layouts(pictures, limit, page.get("gaps")) if pictures else [],
+        }
+
+    pages = await asyncio.to_thread(lambda: [suggest(page) for page in view["pages"]])
+    return {"template": template, "pages": pages}
+
+
 @router.get("/{story_id}/negatives", response_model=MangaV2NegativesResponse)
 async def get_negatives(story_id: int) -> dict[str, Any]:
     """コマを描くときのネガティブ(物語・ページごと・コマごと)。入れてあれば細かい方(コマ > ページ > 物語)を使う。"""
@@ -2509,6 +2560,55 @@ async def redraw_states(story_id: int, req: MangaV2RedrawStatesRequest, client: 
         job.message = redraw_summary_text(summary) or "状態の人物のいるコマはありませんでした"
 
     return _job_response(_start_job(story_id, "redraw_states", runner))
+
+
+def flow_panels(story: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """話のつながりの見直し(panel_check.review_flow)に渡すコマの並びと、登場人物の名前 → キャラID。"""
+    names: dict[str, int] = {}
+    panels = []
+    for scene in story["scenes"]:
+        cast = scene.get("characters") or []
+        by_id = {c["id"]: c["name"] for c in cast}
+        for c in cast:
+            names.setdefault(c["name"], c["id"])
+        if scene.get("dialogue") is not None:
+            lines = [{"speaker": by_id.get(line.get("speaker_id")), "text": line["text"]} for line in _edited_lines(scene)]
+        else:
+            lines = [{"speaker": None, "text": text} for text in _lettering(scene)[0]]
+        panels.append({
+            "characters": [c["name"] for c in cast],
+            "lines": lines,
+            "narration": scene.get("narration") or "",
+            "text": DIALOGUE_RE.sub("", _scene_text(scene)).strip(),
+            "prompt_tags": scene["draft_prompt_tags"] or "",
+        })
+    return panels, names
+
+
+@router.post("/{story_id}/review-flow")
+async def review_story_flow(story_id: int, req: MangaV2FlowReviewRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    台本(シーンの並び)を文章AIに読ませ、場所・時間・話題が説明なく飛ぶところに入れる「つなぎのコマ」の案を返す
+    (書き込まない)。suggestions: [{after_index(0始まり。このシーンの後ろに入れる), reason, scenes: [台本の形のシーン]}]。
+    """
+    from ..panel_check import review_flow
+
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+    finally:
+        conn.close()
+    if story is None:
+        raise HTTPException(status_code=404, detail="story not found")
+    if len(story["scenes"]) < 2:
+        return {"suggestions": []}
+    panels, names = flow_panels(story)
+    episode = " / ".join(t for t in (story.get("title"), story.get("premise")) if t)
+    try:
+        suggestions = await review_flow(client.api_key, episode, panels, names, req.limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"suggestions": suggestions}
 
 
 @router.post("/{story_id}/check-panels", response_model=StoryJobResponse)
