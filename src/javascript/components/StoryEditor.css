@@ -111,6 +111,16 @@
 
 .sed-thumb img { width: 100%; height: 100%; object-fit: cover; }
 
+.sed-mirror {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  padding: 0 0.35rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  opacity: 0.85;
+}
+
 .sed-badge {
   position: absolute;
   left: 4px;

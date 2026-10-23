@@ -48,6 +48,89 @@ def normalize_quad(value: Any) -> tuple[Point, Point, Point, Point]:
     return points[0], points[1], points[2], points[3]
 
 
+def mirror_quad(quad: Sequence[Sequence[float]]) -> list[list[float]]:
+    """左右反転した絵での四隅(左上・右上・右下・左下の順を保つので、左右の点が入れ替わる)。"""
+    (x0, y0), (x1, y1), (x2, y2), (x3, y3) = quad
+    return [[1 - x1, y1], [1 - x0, y0], [1 - x3, y3], [1 - x2, y2]]
+
+
+# 空白(白い枠の中)とみなす明るさと、探すときに縮める大きさ
+_BLANK_LEVEL = 235
+_BLANK_SCAN = 512
+# 空白とみなす大きさ(絵に対する割合)と、四隅を結んだ形をどれだけ埋めているか(四角い枠なら 1 に近い。服の白などは低い)
+_BLANK_MIN_AREA = 0.004
+_BLANK_MIN_FILL = 0.7
+
+
+def blank_regions(image: Image.Image, limit: int = 5) -> list[dict[str, Any]]:
+    """
+    絵の中の白い空白(写真立て・額・紙など、描いた枠の中)を探し、四隅(割合)を大きい順に返す。
+    {"quad", "area"(絵に対する割合), "center"}。絵の縁に接する白(背景の空・余白)と、四角くない白は除く。
+    「写真を入れる枠を白く空けて描いて」から、その枠に重ねを合わせる用。
+    """
+    from scipy import ndimage
+
+    gray = image.convert("L")
+    scale = min(1.0, _BLANK_SCAN / max(gray.size))
+    if scale < 1.0:
+        gray = gray.resize((max(1, round(gray.width * scale)), max(1, round(gray.height * scale))), Image.Resampling.BILINEAR)
+    blank = ndimage.binary_opening(np.asarray(gray) >= _BLANK_LEVEL, iterations=2)
+    labels, _ = ndimage.label(blank)
+    height, width = blank.shape
+    found = []
+    for index, box in enumerate(ndimage.find_objects(labels), start=1):
+        if box is None:
+            continue
+        rows, cols = box
+        if rows.start == 0 or cols.start == 0 or rows.stop == height or cols.stop == width:
+            continue
+        ys, xs = np.nonzero(labels[box] == index)
+        area = len(xs)
+        if area < _BLANK_MIN_AREA * width * height:
+            continue
+        xs = xs + cols.start + 0.5
+        ys = ys + rows.start + 0.5
+        corners = [
+            (xs[i], ys[i])
+            for i in (np.argmin(xs + ys), np.argmax(xs - ys), np.argmax(xs + ys), np.argmax(ys - xs))
+        ]
+        if _polygon_area(corners) <= 0 or area / _polygon_area(corners) < _BLANK_MIN_FILL:
+            continue
+        found.append({
+            "quad": [[round(x / width, 4), round(y / height, 4)] for x, y in corners],
+            "area": round(area / (width * height), 4),
+            "center": [round(float(xs.mean()) / width, 4), round(float(ys.mean()) / height, 4)],
+        })
+    found.sort(key=lambda r: r["area"], reverse=True)
+    return found[:limit]
+
+
+def _polygon_area(points: Sequence[Point]) -> float:
+    return abs(sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(points, [*points[1:], points[0]]))) / 2
+
+
+def pick_blank(regions: list[dict[str, Any]], near: Sequence[float] | None) -> dict[str, Any] | None:
+    """空白の中から1つ選ぶ。near(割合の点)があれば、それを含む四隅か、中心が一番近いもの。無ければ一番大きいもの。"""
+    if not regions:
+        return None
+    if near is None:
+        return regions[0]
+    x, y = float(near[0]), float(near[1])
+    inside = [r for r in regions if _contains(r["quad"], (x, y))]
+    if inside:
+        return inside[0]
+    return min(regions, key=lambda r: (r["center"][0] - x) ** 2 + (r["center"][1] - y) ** 2)
+
+
+def _contains(quad: Sequence[Sequence[float]], point: Point) -> bool:
+    """点が四隅(時計回り)の内側か。"""
+    x, y = point
+    for (x0, y0), (x1, y1) in zip(quad, [*quad[1:], quad[0]]):
+        if (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0) < 0:
+            return False
+    return True
+
+
 def hex_color(value: str | None, default: tuple[int, int, int]) -> tuple[int, int, int]:
     text = (value or "").strip().lstrip("#")
     if len(text) != 6:

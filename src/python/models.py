@@ -1358,7 +1358,9 @@ class MangaV2Overlay(BaseModel):
     """
 
     kind: Literal["text", "panel"]
-    quad: list[list[float]] = Field(min_length=4, max_length=4)
+    # 省略すると、コマの絵の白い空白(写真立ての枠の中など)を探して合わせる(near があればその点に近い空白)
+    quad: Optional[list[list[float]]] = Field(None, min_length=4, max_length=4)
+    near: Optional[list[float]] = Field(None, min_length=2, max_length=2)
     # 文字
     text: Optional[str] = Field(None, max_length=300)
     font: Optional[str] = None

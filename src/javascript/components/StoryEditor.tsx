@@ -329,6 +329,17 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
     setNote(parts.join('。'))
   })
 
+  /** コマの絵を左右反転する(元の絵は残る。反転した絵をもう一度反転すると元に戻る)。下書きの内容は変えない */
+  const mirror = (index: number) => run(async () => {
+    const scene = scenes[index]
+    if (scene.id === null) return
+    const res = await fetch(`${apiOrigin}/api/manga-v2/scenes/${scene.id}/mirror`, { method: 'POST' })
+    if (!res.ok) throw new Error(await errorDetail(res))
+    const result: { image_path: string; mirrored: boolean } = await res.json()
+    setScenes(prev => prev.map(s => (s.key === scene.key && s.panel ? { ...s, panel: { ...s.panel, image_path: result.image_path } } : s)))
+    setNote(`コマ${index + 1}の絵を${result.mirrored ? '左右反転しました(元の絵は残っています)' : '元の向きに戻しました'}。ページは合成し直すと変わります`)
+  })
+
   const saveAs = () => run(async () => {
     const name = (saveAsTitle ?? '').trim()
     if (!name) throw new Error('新しい物語の題名を入れてください。')
@@ -433,6 +444,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
                     onMove={to => moveScene(i, to)}
                     onAdd={() => addScene(i)}
                     onRemove={() => removeScene(i)}
+                    onMirror={() => void mirror(i)}
                     trackCaret={trackCaret}
                   />
                 </li>
@@ -474,11 +486,12 @@ interface CardProps {
   onMove: (to: number) => void
   onAdd: () => void
   onRemove: () => void
+  onMirror: () => void
   trackCaret: TrackCaret
 }
 
 function SceneCard({
-  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove, trackCaret,
+  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove, onMirror, trackCaret,
 }: CardProps) {
   /** チャンクの入れ先にできる欄に付けるもの(フォーカス・カーソル移動で入れ先にする) */
   function tagField(field: TagField, label: string) {
@@ -528,6 +541,11 @@ function SceneCard({
         <div className="sed-thumb">
           {scene.panel ? <img src={fileUrl(scene.panel.image_path)} alt={`コマ${index + 1}の絵`} /> : <span>絵なし</span>}
           {scene.panel && (changed || scene.panel.stale) && <span className="sed-badge">描き直し待ち</span>}
+          {scene.panel && scene.id !== null && (
+            <button type="button" className="sed-mirror" disabled={busy} onClick={onMirror}
+              title="コマの絵を左右反転します(片側だけの髪型などをそろえる。元の絵は残り、もう一度押すと戻ります)"
+              aria-label={`コマ${index + 1}の絵を左右反転`}>⇋</button>
+          )}
         </div>
 
         <div className="sed-fields">

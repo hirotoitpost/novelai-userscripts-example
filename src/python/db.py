@@ -2493,6 +2493,12 @@ def upsert_manga_panel(
     conn.commit()
 
 
+def set_manga_panel_image(conn: sqlite3.Connection, scene_id: int, image_path: str) -> None:
+    """コマの絵のファイルだけを差し替える(左右反転など。シード・大きさ・描き直し待ちの印はそのまま)。"""
+    conn.execute("UPDATE manga_panels SET image_path = ? WHERE scene_id = ?", (image_path, scene_id))
+    conn.commit()
+
+
 def list_manga_panels(conn: sqlite3.Connection, story_id: int) -> list[dict[str, Any]]:
     """シーン順のコマ画像。scene_index も付けて返す。"""
     rows = conn.execute(

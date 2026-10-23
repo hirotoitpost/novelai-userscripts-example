@@ -34,6 +34,7 @@ from ..character_sheet import (
 from ..client import get_client
 from ..face_sheet import BACKGROUND as FACE_BACKGROUND
 from ..face_sheet import ITEMS as FACE_ITEMS
+from ..face_sheet import NEGATIVE as FACE_NEGATIVE
 from ..face_sheet import SIZES as FACE_SIZES
 from ..face_sheet import presets as face_presets
 from ..dataset_variations import clean_value
@@ -782,7 +783,7 @@ async def generate_face_sheet(character_id: int, req: FaceSheetRequest, client: 
             model=req.model,
             steps=req.steps,
             scale=req.scale,
-            negative_prompt=sheet_negative(character),
+            negative_prompt=sheet_negative(character, extra=FACE_NEGATIVE),
             seed=character.get("seed") if character.get("seed") is not None else req.seed,
             character_references=references,
         )
