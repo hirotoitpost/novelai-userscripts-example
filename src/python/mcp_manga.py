@@ -458,14 +458,16 @@ def register_manga_tools(mcp: MCPServer) -> None:
         absent_tags: str | None = None,
     ) -> str:
         """
-        シーンの範囲(from_scene〜to_scene。1始まり、両端を含む)にまとめて書き込み、続き具合をそろえる。
+        シーンの範囲(from_scene〜to_scene。ほかのツールと同じ 0 始まりのシーン番号、両端を含む)にまとめて書き込み、
+        続き具合をそろえる。
         - state_id: character_id のキャラの状態(manga_list_scene_presets)。clear_state=True で状態なしに戻す
         - outfit: character_id のキャラの服装(英語タグ。空文字でふだんの服装)
         - absent_tags: 範囲の全シーンの「出てはいけない物」(例: もらう前の小物。空文字で無し)。
           描くときネガティブに足し、manga_check_panels で描かれていないかを確かめる
         状態・服装は、そのキャラが出ているシーンだけ。書き換えたら manga_generate_panels(skip_existing=False)で描き直す。
         """
-        body: dict[str, Any] = {"from_scene": from_scene, "to_scene": to_scene, "character_id": character_id}
+        # API は画面と同じ 1 始まり
+        body: dict[str, Any] = {"from_scene": from_scene + 1, "to_scene": to_scene + 1, "character_id": character_id}
         if state_id is not None or clear_state:
             body["state_id"] = None if clear_state else state_id
         if outfit is not None:
