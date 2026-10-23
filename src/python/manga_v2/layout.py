@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -784,3 +785,140 @@ TEMPLATE_TREES: dict[str, LayoutTree] = {
     "stack2": _rows((1, 1)),
     "single1": PANEL,
 }
+
+
+# ---- 絵の縦横比に合わせたコマ割り ----
+
+# 段の高さの下限・上限(本文の高さに対する割合)。これを外れる案は出さない
+_MIN_ROW = 0.12
+_MAX_ROW = 0.8
+
+
+def frame_aspects(tree: LayoutTree, gaps: Mapping[str, Any] | None = None) -> list[float]:
+    """木のコマの枠の縦横比(幅/高さ)を読む順に。間隔・余白はページの既定(または gaps)で引く。"""
+    g = normalize_gaps(gaps)
+    content_w = PAGE_WIDTH - g["margin"] * 2
+    content_h = PAGE_HEIGHT - g["margin"] * 2
+    result = []
+    for x0, y0, x1, y1 in tree_rects(tree):
+        # 内側の辺は、間隔の半分ずつ狭まる
+        width = (x1 - x0) * content_w - g["gutter_x"] / 2 * ((x0 > 0) + (x1 < 1))
+        height = (y1 - y0) * content_h - g["gutter_y"] / 2 * ((y0 > 0) + (y1 < 1))
+        result.append(max(width, 1.0) / max(height, 1.0))
+    return result
+
+
+def aspect_mismatch(frames: Sequence[float], pictures: Sequence[float]) -> float:
+    """
+    枠と絵の縦横比のずれ(コマごとの |log(枠/絵)| の平均)。0 なら絵がそのまま入る。0.4 を超えると、絵の 3 割以上が
+    切り落とされる(横長の絵を縦に細い枠へ入れて、口元だけ残るなど)。
+    """
+    pairs = list(zip(frames, pictures))
+    return sum(abs(math.log(f / p)) for f, p in pairs) / len(pairs) if pairs else 0.0
+
+
+# 1つの段の中の、コマの幅の下限(段の幅に対する割合)。絵の縦横比に合わせて幅を変えるときも、これより細くしない
+_MIN_COL = 0.25
+# 段の高さを細かく詰める案の数(大まかなずれで絞ってから詰める。全部詰めると数秒かかる)
+_REFINE = 6
+
+
+def _fit_tree(plan: Sequence[int], widths: Sequence[Sequence[float]], heights: Sequence[float]) -> LayoutTree:
+    """段ごとのコマ数・コマの幅(段ごとの割合)・段の高さから木を作る。"""
+    items: list[LayoutTree] = [
+        PANEL if n == 1 else {"dir": "cols", "sizes": [round(w, 4) for w in row], "items": [PANEL] * n}
+        for n, row in zip(plan, widths)
+    ]
+    if len(items) == 1:
+        return items[0]
+    total = sum(heights)
+    return {"dir": "rows", "sizes": [round(h / total, 4) for h in heights], "items": items}
+
+
+def _row_widths(row: Sequence[float]) -> list[float]:
+    """段の中のコマの幅。絵の縦横比に比例させる(縦長の絵は細く、横長の絵は広く)。細すぎるコマは _MIN_COL にする。"""
+    widths = [a / sum(row) for a in row]
+    if len(row) > 1 and min(widths) < _MIN_COL:
+        thin = [w < _MIN_COL for w in widths]
+        rest = 1 - _MIN_COL * sum(thin)
+        wide = sum(w for w, t in zip(widths, thin) if not t)
+        widths = [_MIN_COL if t else w * rest / wide for w, t in zip(widths, thin)]
+    return widths
+
+
+def _fit_heights(
+    plan: Sequence[int],
+    widths: Sequence[Sequence[float]],
+    ideal: Sequence[float],
+    pictures: Sequence[float],
+    gaps: Mapping[str, Any] | None,
+) -> list[float]:
+    """
+    段の高さ(合計 1)を、枠と絵のずれ(aspect_mismatch)が一番小さくなるように決める。ideal(その段の絵がそのまま入る
+    高さ)の比から始めて、間隔の分も含めて詰める。
+    """
+    if len(plan) == 1:
+        return [1.0]
+    from scipy.optimize import minimize
+
+    def shares(z: Sequence[float]) -> list[float]:
+        top = max(z)
+        e = [math.exp(v - top) for v in z]
+        return [v / sum(e) for v in e]
+
+    def cost(z: Sequence[float]) -> float:
+        rows = shares(z)
+        penalty = sum(max(0.0, _MIN_ROW - r) + max(0.0, r - _MAX_ROW) for r in rows) * 10
+        return aspect_mismatch(frame_aspects(_fit_tree(plan, widths, rows), gaps), pictures) + penalty
+
+    best = minimize(cost, [math.log(h) for h in ideal], method="Nelder-Mead", options={"xatol": 5e-3, "fatol": 1e-4, "maxiter": 300})
+    return [round(r, 4) for r in shares(best.x)]
+
+
+def aspect_layouts(pictures: Sequence[float], limit: int = 3, gaps: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """
+    ページに入る絵の縦横比(読む順)に合う、コマ割りの候補(id・名前・木・ずれ)をずれの小さい順に。段ごとに 1〜3 コマで、
+    コマの幅は段の中の絵の縦横比に比例させ、段の高さはずれが一番小さくなるように決める。
+    パターン(layout_patterns)も同じ物差しで比べる。
+    """
+    count = len(pictures)
+    g = normalize_gaps(gaps)
+    ratio = (PAGE_WIDTH - g["margin"] * 2) / (PAGE_HEIGHT - g["margin"] * 2)
+    rough: list[tuple[float, tuple[int, ...], list[list[float]], list[float]]] = []
+    for rows in range(1, min(count, 5) + 1):
+        for plan in _compositions(count, rows, 3):
+            widths, ideal, start = [], [], 0
+            for n in plan:
+                row = pictures[start : start + n]
+                start += n
+                widths.append(_row_widths(row))
+                # 段の中の絵が、そのまま入る高さ(本文の高さに対する割合)
+                ideal.append(ratio / sum(row))
+            total = sum(ideal)
+            tree = _fit_tree(plan, widths, [h / total for h in ideal])
+            rough.append((aspect_mismatch(frame_aspects(tree, gaps), pictures), plan, widths, ideal))
+    rough.sort(key=lambda r: r[0])
+    candidates: list[dict[str, Any]] = []
+    for _, plan, widths, ideal in rough[:_REFINE]:
+        shares = _fit_heights(plan, widths, ideal, pictures, gaps)
+        if min(shares) < _MIN_ROW or max(shares) > _MAX_ROW:
+            continue
+        counts = "・".join(str(n) for n in plan)
+        candidates.append({
+            "id": "fit-" + "-".join(map(str, plan)),
+            "label": f"{len(plan)}段({counts})・絵に合わせた大きさ",
+            "tree": normalize_tree(_fit_tree(plan, widths, shares)),
+        })
+    if count <= MAX_TREE_PANELS:
+        candidates += layout_patterns(count)
+    for candidate in candidates:
+        candidate["mismatch"] = round(aspect_mismatch(frame_aspects(candidate["tree"], gaps), pictures), 4)
+    candidates.sort(key=lambda c: c["mismatch"])
+    seen: set[str] = set()
+    result = []
+    for candidate in candidates:
+        key = json.dumps(candidate["tree"], sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            result.append(candidate)
+    return result[:limit]

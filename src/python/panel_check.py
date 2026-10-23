@@ -260,3 +260,90 @@ def redraw_tags(check: PanelCheck, people: int, attempt: int) -> list[str]:
         tags.append(f"-{weight:g}::{_VIEWER}::")
     tags += [f"-{attempt}::{t}::" for t in check.unwanted]
     return tags
+
+
+# ---- 生成の前: 話のつながりの見直し ----
+
+_FLOW_SYSTEM = """あなたは漫画の編集者です。台本のコマの並びを読み、前のコマから次のコマへ、読者が置いていかれる飛び(場所・時間が
+説明なく変わる、話題が急に変わる、初めて出る人物の紹介が無い、回想の出入りが分からない)を探してください。
+飛びごとに、間に入れる「つなぎのコマ」を1〜2コマ考えます。JSONだけを返してください(前置きや```は不要):
+{"bridges":[{"after":3,"reason":"教室から家へ、時間の説明なく移っている",
+  "panels":[{"text":"地の文やセリフ(「」で囲む)","narration":"ナレーション(短く。無ければ空)","prompt_tags":"英語のdanbooruタグ",
+  "characters":["登場人物の名前"]}]}]}
+- after は、つなぎを入れる直前のコマの番号(渡したコマの番号。1始まり)
+- 飛びが無ければ {"bridges":[]}。つなぎは本当に要るところだけ(多くて{limit}か所)
+- つなぎのコマは、到着・移動・時間の経過(夕焼け、時計、季節)・人物の紹介・回想の入りや戻りを見せる
+- prompt_tags には場所・時間帯・構図(人物がいなければ no humans, scenery など)を書く。人物の髪・目・服装は書かない
+- characters は渡した登場人物の名前だけ。人物のいないコマは空
+- 会話のコマでは、人物は相手を見る(prompt_tags に looking at another などを入れる)"""
+
+_MAX_BRIDGES = 6
+_MAX_BRIDGE_PANELS = 2
+
+
+def flow_prompts(episode: str, panels: list[dict[str, Any]], limit: int = _MAX_BRIDGES) -> tuple[str, str]:
+    rows = [f"この話の筋: {episode or '(なし)'}"]
+    for index, panel in enumerate(panels, start=1):
+        lines = " / ".join(f"{line.get('speaker') or '?'}「{line.get('text')}」" for line in panel.get("lines") or [])
+        rows.append(
+            f"{index}コマ目: 人物 {', '.join(panel.get('characters') or []) or 'なし'} | ナレーション {panel.get('narration') or 'なし'} | "
+            f"セリフ {lines or 'なし'} | 本文 {(panel.get('text') or '')[:120] or 'なし'} | 作画タグ {panel.get('prompt_tags') or 'なし'}"
+        )
+    return _FLOW_SYSTEM.replace("{limit}", str(limit)), "\n".join(rows)
+
+
+def apply_flow(data: Any, panels: list[dict[str, Any]], names: dict[str, int], limit: int = _MAX_BRIDGES) -> list[dict[str, Any]]:
+    """
+    見直しの答えを、差し込むシーンの案にする: [{after_index(0始まり), reason, scenes: [台本の形のシーン]}]。
+    番号が範囲外の案・中身の無いコマは捨てる。名前の分からない人物は入れない。形が崩れていれば ValueError。
+    """
+    from . import content_guard
+
+    raw = data.get("bridges") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        raise ValueError("bridges がありません")
+    result: dict[int, dict[str, Any]] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            after = int(item.get("after"))
+        except (TypeError, ValueError):
+            continue
+        # 最後のコマの後ろ(after == コマ数)は、つなぎではないので入れない
+        if not 1 <= after < len(panels) or after - 1 in result:
+            continue
+        scenes = []
+        for panel in (item.get("panels") or [])[:_MAX_BRIDGE_PANELS]:
+            if not isinstance(panel, dict):
+                continue
+            text = str(panel.get("text") or "").strip()
+            narration = str(panel.get("narration") or "").strip()[:80]
+            if not text and not narration:
+                continue
+            tags = content_guard.sanitize_scene_tags(_clean_tags(str(panel.get("prompt_tags") or "")), adult=False)
+            cast = [names[n] for n in panel.get("characters") or [] if isinstance(n, str) and n in names]
+            scenes.append({
+                "title": "つなぎ",
+                "text": text or narration,
+                "prompt_tags": tags,
+                "narration": narration or None,
+                "character_ids": list(dict.fromkeys(cast)),
+            })
+        if scenes:
+            result[after - 1] = {"after_index": after - 1, "reason": str(item.get("reason") or "").strip(), "scenes": scenes}
+    return [result[k] for k in sorted(result)][:limit]
+
+
+async def review_flow(
+    api_key: str, episode: str, panels: list[dict[str, Any]], names: dict[str, int], limit: int = _MAX_BRIDGES
+) -> list[dict[str, Any]]:
+    """1話分の台本の、場面・話題の飛びを探し、つなぎのコマの案を返す。答えが得られなければ RuntimeError。"""
+    system, user = flow_prompts(episode, panels, limit)
+    last: Exception | None = None
+    for _ in range(2):
+        try:
+            return apply_flow(await _ask_json(api_key, system, user, max_tokens=2000, temperature=0.3), panels, names, limit)
+        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+            last = exc
+    raise RuntimeError(f"つながりの見直しができませんでした: {last}")
