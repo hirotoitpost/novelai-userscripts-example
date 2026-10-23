@@ -101,11 +101,12 @@ _EDIT_KEYS = ("id", "title", "text", "prompt_tags", "narration", "sfx", "page_in
 
 
 def _edit_item(scene: dict[str, Any]) -> dict[str, Any]:
-    """GET /edit のシーンを PUT /edit の形に(決めていたセリフ・コマのネガティブはそのまま送り直す)。"""
+    """GET /edit のシーンを PUT /edit の形に(決めていたセリフ・コマのネガティブ・出てはいけない物はそのまま送り直す)。"""
     item = {k: scene[k] for k in _EDIT_KEYS}
     item["dialogue"] = scene["dialogue"] if scene["dialogue_custom"] else None
-    if "negative_prompt" in scene:
-        item["negative_prompt"] = scene["negative_prompt"]
+    for key in ("negative_prompt", "absent_tags"):
+        if key in scene:
+            item[key] = scene[key]
     return item
 
 
@@ -128,8 +129,9 @@ def _script_to_edit(scene: dict[str, Any], page_index: int) -> dict[str, Any]:
             for cid in scene.get("character_ids") or []
         ],
     }
-    if scene.get("negative_prompt"):
-        item["negative_prompt"] = scene["negative_prompt"]
+    for key in ("negative_prompt", "absent_tags"):
+        if scene.get(key):
+            item[key] = scene[key]
     return item
 
 
@@ -374,6 +376,9 @@ def register_manga_tools(mcp: MCPServer) -> None:
           dialogue: [{"text": "…", "speaker_id": キャラID か null}, …]。あれば本文の「」の代わりにこれを吹き出しにし、
               話し手を推定しない。地の文に名前が出ない話し手(幼い子など)のセリフに使う。（…）で囲むと心の声
           negative_prompt: このコマのネガティブ(ページ・物語のネガティブより優先。manga_set_negatives)
+          absent_tags: このコマに出てはいけない物の英語タグ(もらう前の小物など。ネガティブに足し、確かめでも見る)
+        会話のコマは、相手を見る目線(looking to the side / looking at each other など)を character_actions に書く
+        (書かないと、こちらを見る絵になりやすい)。場面・時間が飛ぶときは、つなぎのコマを入れる。
         話し手は「〜が言った/〜は笑った」などの地の文・呼びかけ・会話の交互から判定する。地の文は吹き出しにならない。
         series_id と volume_no を渡すと、そのシリーズの巻にする。
         """
@@ -405,10 +410,12 @@ def register_manga_tools(mcp: MCPServer) -> None:
         character_outfits: dict[int, str] | None = None,
         character_states: dict[int, int | None] | None = None,
         negative_prompt: str | None = None,
+        absent_tags: str | None = None,
     ) -> str:
         """
         シーンを手直しする(渡した項目だけ)。narration を空文字にするとナレーションを消す。
         negative_prompt はこのコマのネガティブ(ページ・物語より優先。空文字で未設定に戻す)。
+        absent_tags はこのコマに出てはいけない物(英語タグ。ネガティブに足し、manga_check_panels で確かめる)。
         character_actions(キャラID → 表情・動作の英語タグ)を変えるときは character_ids も渡す。
         character_outfits(キャラID → この場面の服装の英語タグ。空ならキャラシートのふだんの服装)と
         character_states(キャラID → 状態の ID。manga_list_scene_presets。null でふだん)も同じ。
@@ -435,7 +442,40 @@ def register_manga_tools(mcp: MCPServer) -> None:
             await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/sfx", {"sfx": sfx})
         if negative_prompt is not None:
             await _call("PATCH", f"/api/story/scenes/{scene_id}", {"negative_prompt": negative_prompt})
+        if absent_tags is not None:
+            await _call("PATCH", f"/api/story/scenes/{scene_id}", {"absent_tags": absent_tags})
         return f"シーン {scene_id} を更新しました"
+
+    @mcp.tool()
+    async def manga_apply_scene_range(
+        story_id: int,
+        from_scene: int,
+        to_scene: int,
+        character_id: int | None = None,
+        state_id: int | None = None,
+        clear_state: bool = False,
+        outfit: str | None = None,
+        absent_tags: str | None = None,
+    ) -> str:
+        """
+        シーンの範囲(from_scene〜to_scene。ほかのツールと同じ 0 始まりのシーン番号、両端を含む)にまとめて書き込み、
+        続き具合をそろえる。
+        - state_id: character_id のキャラの状態(manga_list_scene_presets)。clear_state=True で状態なしに戻す
+        - outfit: character_id のキャラの服装(英語タグ。空文字でふだんの服装)
+        - absent_tags: 範囲の全シーンの「出てはいけない物」(例: もらう前の小物。空文字で無し)。
+          描くときネガティブに足し、manga_check_panels で描かれていないかを確かめる
+        状態・服装は、そのキャラが出ているシーンだけ。書き換えたら manga_generate_panels(skip_existing=False)で描き直す。
+        """
+        # API は画面と同じ 1 始まり
+        body: dict[str, Any] = {"from_scene": from_scene + 1, "to_scene": to_scene + 1, "character_id": character_id}
+        if state_id is not None or clear_state:
+            body["state_id"] = None if clear_state else state_id
+        if outfit is not None:
+            body["outfit"] = outfit
+        if absent_tags is not None:
+            body["absent_tags"] = absent_tags
+        result = await _call("POST", f"/api/story/{story_id}/scene-range", body)
+        return f"{len(result['scene_ids'])}シーンを書き換えました(シーンID: {result['scene_ids']})"
 
     @mcp.tool()
     async def manga_set_negatives(
@@ -824,6 +864,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
     async def manga_check_panels(
         story_id: int,
         max_redraws: int = 2,
+        check_gaze: bool = True,
         color: bool = False,
         use_character_reference: bool = False,
         reference_strength: float = 1.0,
@@ -834,6 +875,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
         コマの絵を自動で確かめ、外れたコマを描き直して合成し直す(NovelAI の Anlas を使う)。作画タグのうち判定モデルで
         見分けられるもの(人物の有無・表情・物など)と、描く人数(三つ子・描き忘れ)を確かめ、外れたコマは描かれなかった
         タグを強めてシードを変えて描き直す(よくなったときだけ置き換える)。結果の要約を返す。
+        check_gaze なら、会話のコマで人物がこちらを見ていないか(目線)も確かめる(作画タグに looking at viewer・pov が
+        あるコマは除く)。シーンの absent_tags と、状態で外したタグ(シュシュ など)が描かれていないかも見る。
         color・use_character_reference・reference_strength は描いたときと同じにする。
         """
         story = await _call("GET", f"/api/story/{story_id}")
@@ -848,7 +891,9 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "reference_strength": reference_strength,
         }
         await _call(
-            "POST", f"/api/manga-v2/{story_id}/check-panels", {"panels": panels, "compose": compose, "max_redraws": max_redraws}
+            "POST",
+            f"/api/manga-v2/{story_id}/check-panels",
+            {"panels": panels, "compose": compose, "max_redraws": max_redraws, "check_gaze": check_gaze},
         )
         job = await _wait_job(story_id, timeout_seconds)
         if job.get("status") == "error":

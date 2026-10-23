@@ -86,6 +86,7 @@ def _snapshot_scene(scene: dict[str, Any], panel: dict[str, Any] | None, auto_si
         "page_index": scene["page_index"],
         "panel_size": scene.get("panel_size"),
         "negative_prompt": scene.get("negative_prompt"),
+        "absent_tags": scene.get("absent_tags"),
         "auto_size": auto_size,
         "characters": [
             {
@@ -236,7 +237,8 @@ def _write_scene(
                 "UPDATE story_scenes SET draft_text = ?, novelai_text = ? WHERE id = ?", (scene.text, scene.text, scene_id)
             )
     conn.execute(
-        "UPDATE story_scenes SET negative_prompt = ? WHERE id = ?", ((scene.negative_prompt or "").strip() or None, scene_id)
+        "UPDATE story_scenes SET negative_prompt = ?, absent_tags = ? WHERE id = ?",
+        ((scene.negative_prompt or "").strip() or None, (scene.absent_tags or "").strip() or None, scene_id),
     )
     return int(scene_id)
 

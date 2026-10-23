@@ -1300,6 +1300,8 @@ async def _run_panels(
                 build_panel_negative(negatives.get(scene["id"]) or settings.negative_prompt, color=req.color, sexual=sexual),
                 guard_negative,
                 "" if multiple else characters_negative(scene_characters),
+                # 出てはいけない物(まだもらっていない小物など)は、どのネガティブを使うときも足す
+                scene.get("absent_tags") or "",
             ),
             model=_REFERENCE_MODEL if references else settings.model,
             width=width,
@@ -2173,14 +2175,19 @@ def _attachment_header(story_id: int, title: str | None, extension: str) -> str:
 
 
 async def _check_and_redraw(
-    job: Any, story_id: int, req: MangaV2PanelsRequest, api_key: str, max_redraws: int
+    job: Any, story_id: int, req: MangaV2PanelsRequest, api_key: str, max_redraws: int, check_gaze: bool = True
 ) -> dict[str, Any]:
     """
     コマの絵を確かめ、外れたコマを描き直す(よくなったときだけ置き換える)。戻り値は {checked, flagged, fixed, unresolved}。
-    unresolved は描き直してもそろわなかったコマ(シーン番号と、描かれなかったタグ)。
+    unresolved は描き直してもそろわなかったコマ(シーン番号と、描かれなかったタグ・目線・出てはいけない物)。
+    確かめるのは、作画タグ・人数に加えて、会話のコマの目線(こちらを見ていないか)と、シーンのネガティブ・状態で外した
+    タグが描かれていないか。
     """
     from ..character_sheet import join_tags
-    from ..panel_check import check_panel, checkable_tags, is_person, redraw_tags, tag_probabilities, tagger_vocabulary
+    from ..panel_check import (
+        check_panel, checkable_tags, is_conversation, is_person, redraw_tags, tag_probabilities, tagger_vocabulary,
+        unwanted_tags,
+    )
 
     from ..panel_states import state_match_tags
 
@@ -2195,10 +2202,10 @@ async def _check_and_redraw(
     finally:
         conn.close()
 
-    async def check(path: str, expected: list[str], people: int):
+    async def check(path: str, expected: list[str], people: int, conversation: bool, absent: list[str]):
         with Image.open(_PROJECT_ROOT / path) as image:
             probabilities = await asyncio.to_thread(tag_probabilities, image.convert("RGB"))
-        return check_panel(probabilities, expected, people)
+        return check_panel(probabilities, expected, people, conversation, absent)
 
     targets = [s for s in scenes if s["id"] in panels]
     summary: dict[str, Any] = {"checked": len(targets), "flagged": 0, "fixed": 0, "unresolved": []}
@@ -2209,8 +2216,15 @@ async def _check_and_redraw(
             scene["draft_prompt_tags"] or "", [m.get("action_tags") or "" for m in members], vocabulary, state_tags
         )
         people = sum(1 for m in members if is_person(m.get("appearance_tags") or ""))
+        negative = scene.get("negative_prompt") or ""
+        drawn_tags = ", ".join([scene["draft_prompt_tags"] or "", *(m.get("action_tags") or "" for m in members)])
+        # シーンのネガティブで「こちらを見ない」と決めたコマは、セリフが無くても目線を確かめる
+        conversation = check_gaze and (
+            is_conversation(bool(_lettering(scene)[0]), people, drawn_tags) or "looking at viewer" in negative.lower()
+        )
+        absent = unwanted_tags(scene.get("absent_tags") or "", [m.get("state_remove_tags") or "" for m in members], vocabulary)
         best_panel = panels[scene["id"]]
-        best = await check(best_panel["image_path"], expected, people)
+        best = await check(best_panel["image_path"], expected, people, conversation, absent)
         if best.ok:
             continue
         summary["flagged"] += 1
@@ -2226,7 +2240,7 @@ async def _check_and_redraw(
                 drawn = next(p for p in list_manga_panels(conn, story_id) if p["scene_id"] == scene["id"])
             finally:
                 conn.close()
-            result = await check(drawn["image_path"], expected, people)
+            result = await check(drawn["image_path"], expected, people, conversation, absent)
             if result.key() > best.key():
                 best, best_panel = result, drawn
             else:
@@ -2244,7 +2258,7 @@ async def _check_and_redraw(
         if best.ok:
             summary["fixed"] += 1
         else:
-            summary["unresolved"].append({"scene": scene["scene_index"] + 1, "missing": best.missing, "people_ok": best.people_ok})
+            summary["unresolved"].append({"scene": scene["scene_index"] + 1, "missing": best.problems(), "people_ok": best.people_ok})
     return summary
 
 
@@ -2448,7 +2462,7 @@ async def check_panels(story_id: int, req: MangaV2CheckRequest, client: ClientDe
     api_key = client.api_key
 
     async def runner(job: _Job) -> None:
-        summary = await _check_and_redraw(job, story_id, req.panels, api_key, req.max_redraws)
+        summary = await _check_and_redraw(job, story_id, req.panels, api_key, req.max_redraws, req.check_gaze)
         job.message = "ページに合成しています"
         await asyncio.to_thread(compose, story_id, req.compose)
         job.message = check_summary_text(summary)

@@ -62,6 +62,7 @@ from ..db import (
     set_story_title,
     update_character_reference,
     update_character_sheet,
+    update_scene_absent,
     update_scene_content,
     update_scene_narration,
     update_scene_negative,
@@ -115,6 +116,7 @@ from ..models import (
     StoryAutoMangaRequest,
     StorySplitRequest,
     StorySummary,
+    SceneRangeRequest,
     SetSceneCharactersRequest,
 )
 from ..novelai_image_v5 import _DEFAULT_NEGATIVE_PROMPT, DIALOGUE_RE, generate_manga_page
@@ -725,6 +727,8 @@ async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
                 conn.commit()
             if scene.negative_prompt:
                 update_scene_negative(conn, row["id"], scene.negative_prompt)
+            if scene.absent_tags:
+                update_scene_absent(conn, row["id"], scene.absent_tags)
             # 効果音は未設定(None)だとAI提案の対象になるので、台本で無しなら空にしておく
             update_scene_sfx(conn, row["id"], [s.strip() for s in scene.sfx or [] if s.strip()])
         update_story_status(conn, story["id"], "written")
@@ -739,7 +743,7 @@ async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
 
 @router.patch("/scenes/{scene_id}", status_code=204)
 async def patch_scene(scene_id: int, req: SceneUpdateRequest) -> None:
-    """シーンのタイトル・本文・作画タグを手直しする(送った項目だけ)。"""
+    """シーンのタイトル・本文・作画タグ・ネガティブ・出てはいけない物を手直しする(送った項目だけ)。"""
     conn = get_connection()
     try:
         if get_scene(conn, scene_id) is None:
@@ -749,6 +753,8 @@ async def patch_scene(scene_id: int, req: SceneUpdateRequest) -> None:
         )
         if req.negative_prompt is not None:
             update_scene_negative(conn, scene_id, req.negative_prompt)
+        if req.absent_tags is not None:
+            update_scene_absent(conn, scene_id, req.absent_tags)
     finally:
         conn.close()
 
@@ -2547,6 +2553,60 @@ async def put_scene_characters(scene_id: int, req: SetSceneCharactersRequest) ->
         set_scene_characters(conn, scene_id, req.character_ids, req.actions, req.outfits, req.states)
     finally:
         conn.close()
+
+
+@router.post("/{story_id}/scene-range")
+async def apply_scene_range(story_id: int, req: SceneRangeRequest) -> dict[str, Any]:
+    """
+    シーンの範囲(from_scene〜to_scene。1始まり、両端を含む)に、まとめて書き込む(続き具合をそろえる)。
+    state_id・outfit は character_id のキャラが出ているシーンだけ(送った項目だけ。null で状態なし・ふだんの服装)。
+    absent_tags はその範囲の全シーンの「出てはいけない物」を置き換える(空文字で無し)。
+    書き換えたシーンのIDを返す。絵に効くので、描き直しは manga_generate_panels / check-panels で。
+    """
+    fields = req.model_fields_set
+    per_character = {"state_id", "outfit"} & fields
+    if per_character and req.character_id is None:
+        raise HTTPException(status_code=422, detail="状態・服装を書き込むときは character_id を指定してください。")
+    if not per_character and "absent_tags" not in fields:
+        raise HTTPException(status_code=422, detail="state_id・outfit・absent_tags のどれかを指定してください。")
+    if req.to_scene < req.from_scene:
+        raise HTTPException(status_code=422, detail="to_scene は from_scene 以上にしてください。")
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        if "state_id" in fields and req.state_id is not None:
+            state = get_dataset_state(conn, req.state_id)
+            if state is None:
+                raise HTTPException(status_code=404, detail="その状態が見つかりません。")
+            character = get_character(conn, req.character_id)
+            if character is None:
+                raise HTTPException(status_code=404, detail="character not found")
+            _check_adult_only([character], state["add_tags"])
+        changed: list[int] = []
+        for scene in story["scenes"][req.from_scene - 1 : req.to_scene]:
+            touched = False
+            cast = [c["id"] for c in scene["characters"]]
+            if per_character and req.character_id in cast:
+                set_scene_characters(
+                    conn,
+                    scene["id"],
+                    cast,
+                    outfits={**{c["id"]: c.get("scene_outfit_tags") or "" for c in scene["characters"]},
+                             req.character_id: req.outfit or ""} if "outfit" in fields else None,
+                    states={**{c["id"]: c.get("state_id") for c in scene["characters"]},
+                            req.character_id: req.state_id} if "state_id" in fields else None,
+                )
+                touched = True
+            if "absent_tags" in fields:
+                update_scene_absent(conn, scene["id"], req.absent_tags)
+                touched = True
+            if touched:
+                changed.append(scene["id"])
+    finally:
+        conn.close()
+    return {"scene_ids": changed}
 
 
 _SITUATION_AXES = ("framings", "poses", "outfits", "expressions", "locations")
