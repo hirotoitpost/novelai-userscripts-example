@@ -580,6 +580,8 @@ class ScriptSceneInput(BaseModel):
     dialogue: Optional[list[ScriptDialogueLine]] = Field(None, max_length=20)
     # このコマを描くときのネガティブ。入れてあれば、ページ・物語のネガティブより優先する
     negative_prompt: Optional[str] = Field(None, max_length=4000)
+    # このコマに出てはいけない物(まだもらっていない小物など。英語タグ)。ネガティブに足し、コマの確かめで見る
+    absent_tags: Optional[str] = Field(None, max_length=1000)
 
 
 class ScriptedStoryRequest(BaseModel):
@@ -601,6 +603,8 @@ class SceneUpdateRequest(BaseModel):
     prompt_tags: Optional[str] = None
     # コマのネガティブ(空文字で未設定に戻す)
     negative_prompt: Optional[str] = Field(None, max_length=4000)
+    # コマに出てはいけない物(英語タグ。空文字で無しに戻す)
+    absent_tags: Optional[str] = Field(None, max_length=1000)
 
 
 class MangaImportFile(BaseModel):
@@ -1033,6 +1037,20 @@ class SetSceneCharactersRequest(BaseModel):
     states: Optional[dict[int, Optional[int]]] = None
 
 
+class SceneRangeRequest(BaseModel):
+    """
+    シーンの範囲にまとめて書き込む(続き具合: 「この話の4コマ目までは髪を下ろす」「もらう前はシュシュを出さない」)。
+    送った項目だけ書き換える。state_id は null で状態なし、outfit は空でふだんの服装、absent_tags は空で無し。
+    """
+
+    from_scene: int = Field(ge=1)
+    to_scene: int = Field(ge=1)
+    character_id: Optional[int] = None
+    state_id: Optional[int] = None
+    outfit: Optional[str] = Field(None, max_length=1000)
+    absent_tags: Optional[str] = Field(None, max_length=1000)
+
+
 class ApplySceneSituationRequest(BaseModel):
     """シチュエーションのタグを、シーンのタグとキャラごとの服装・動作に書き込む(書き込んだあとは手で直せる)。"""
 
@@ -1388,6 +1406,8 @@ class MangaV2CheckRequest(BaseModel):
     compose: MangaV2ComposeRequest = Field(default_factory=lambda: MangaV2ComposeRequest())
     # 1コマを描き直す回数の上限
     max_redraws: int = Field(2, ge=1, le=3)
+    # 会話のコマで、人物がこちらを見ていないかも確かめる
+    check_gaze: bool = True
 
 
 class PanelRedrawStateRequest(BaseModel):
@@ -1595,6 +1615,8 @@ class StoryEditScene(BaseModel):
     panel_size: Optional[Literal["portrait", "landscape", "square"]] = None
     # このコマを描くときのネガティブ。空ならページ・物語のネガティブを使う
     negative_prompt: Optional[str] = Field(None, max_length=4000)
+    # このコマに出てはいけない物(英語タグ)。ネガティブに足し(置き換えない)、コマの確かめで描かれていないかを見る
+    absent_tags: Optional[str] = Field(None, max_length=1000)
     # custom_pages のときだけ使う。前のシーンより小さい番号は前のシーンと同じページになる
     page_index: int = Field(0, ge=0)
     characters: list[StoryEditCharacter] = Field(default_factory=list, max_length=12)

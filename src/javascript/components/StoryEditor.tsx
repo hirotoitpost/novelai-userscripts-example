@@ -48,6 +48,8 @@ interface EditScene {
   panel_size: PanelSize | null
   /** このコマを描くときのネガティブ。空ならページ・物語のネガティブ(漫画スタジオ)を使う */
   negative_prompt: string | null
+  /** このコマに出てはいけない物(英語タグ)。ネガティブに足し、コマの確かめで描かれていないかを見る */
+  absent_tags: string | null
   /** 保存してある並びでの自動のサイズ(新しく足したシーンは保存するまで分からない) */
   auto_size: PanelSize | null
   characters: CastRow[]
@@ -258,7 +260,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
       id: null, key: nextKey(), title: '', text: '', prompt_tags: '', narration: null, sfx: null,
       dialogue: [], dialogue_custom: false, dialogue_touched: true,
       page_index: base ? base.page_index : 0,
-      panel_size: null, negative_prompt: null, auto_size: null,
+      panel_size: null, negative_prompt: null, absent_tags: base ? base.absent_tags : null, auto_size: null,
       characters: base ? base.characters.map(c => ({ ...c, action_tags: '', outfit_tags: c.outfit_tags, state_id: c.state_id })) : [],
       panel: null,
     }
@@ -294,6 +296,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
         page_index: pages[i],
         panel_size: s.panel_size,
         negative_prompt: s.negative_prompt?.trim() || null,
+        absent_tags: s.absent_tags?.trim() || null,
         characters: s.characters.map(c => ({ id: c.id, action_tags: c.action_tags, outfit_tags: c.outfit_tags, state_id: c.state_id })),
       })),
     }
@@ -536,6 +539,11 @@ function SceneCard({
             このコマのネガティブ(任意)
             <textarea rows={1} value={scene.negative_prompt ?? ''} disabled={busy} placeholder="空ならページ・物語のネガティブ"
               onChange={e => onChange({ negative_prompt: e.target.value })} />
+          </label>
+          <label className="sed-label" title="まだもらっていない小物など。どのネガティブを使うときも足し、「絵を確かめる」で描かれていたら描き直します">
+            このコマに出てはいけない物(任意)
+            <textarea rows={1} value={scene.absent_tags ?? ''} disabled={busy} placeholder="例: pink scrunchie"
+              onChange={e => onChange({ absent_tags: e.target.value })} />
           </label>
 
           <div className="sed-label">登場人物

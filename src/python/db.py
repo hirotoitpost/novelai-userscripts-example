@@ -908,9 +908,11 @@ def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
 # panel_size は漫画v2のコマの生成サイズ(portrait / landscape / square)。NULL なら入る枠の形から自動で決める。
 # negative_prompt はそのコマを描くときのネガティブ。入れてあればページ・物語のネガティブより優先する。
 # overlays は漫画v2でコマの絵に重ねるもの(文字・別のコマの絵)。JSON [{kind, quad, ...}](manga_v2/overlay.py)
+# absent_tags はそのコマに出てはいけない物(まだもらっていない小物など。英語タグ)。描くときにネガティブへ足し
+# (コマのネガティブと違い、ページ・物語のネガティブを置き換えない)、コマの確かめで描かれていないかを見る。
 _STORY_SCENES_EXTRA_COLUMNS = {
     "sfx": "TEXT", "narration": "TEXT", "dialogue": "TEXT", "panel_size": "TEXT", "negative_prompt": "TEXT",
-    "overlays": "TEXT",
+    "overlays": "TEXT", "absent_tags": "TEXT",
 }
 
 
@@ -1994,6 +1996,12 @@ def update_scene_negative(conn: sqlite3.Connection, scene_id: int, negative: str
     conn.commit()
 
 
+def update_scene_absent(conn: sqlite3.Connection, scene_id: int, tags: str | None) -> None:
+    """コマに出てはいけない物(英語タグ)。空なら無し。"""
+    conn.execute("UPDATE story_scenes SET absent_tags = ? WHERE id = ?", ((tags or "").strip() or None, scene_id))
+    conn.commit()
+
+
 def get_manga_v2_negatives(conn: sqlite3.Connection, story_id: int) -> dict[str, Any]:
     """物語とページごとのネガティブ。{"story": 文 か None, "pages": {ページ番号(0始まり): 文}}。"""
     row = conn.execute(
@@ -2317,6 +2325,8 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
         state = states.get(character.pop("scene_state_id"))
         character["state_id"] = state["id"] if state else None
         character["state_name"] = state["name"] if state else None
+        # 状態で外したタグ(髪を下ろす → シュシュ など)。コマの確かめで、描かれていないかを見る
+        character["state_remove_tags"] = state["remove_tags"] if state else ""
         if state:
             character["appearance_tags"] = look_tags(character, state)
             character["body_tags"] = ""
