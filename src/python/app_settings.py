@@ -97,6 +97,17 @@ SETTINGS: tuple[Setting, ...] = (
         "morphing face, worst quality, low quality, jpeg artifacts, text, watermark, subtitles",
     ),
     Setting(
+        "body_base.check_attempts",
+        "素体",
+        "自動チェックで描く回数",
+        "素体の部位を自動チェックで描くとき、合わなければシードを変えて描き直す。最初の1枚も含めた、1部位あたりの最大の回数"
+        "(1 なら描き直さない)。描くたびに Anlas を使う。",
+        "int",
+        3,
+        1,
+        6,
+    ),
+    Setting(
         "blender.path",
         "素体の2Dモデル(Blender)",
         "Blender の実行ファイル",

@@ -189,3 +189,28 @@ def test_run_blender_passes_the_motion_file(tmp_path: Path, monkeypatch: pytest.
     assert seen["args"][-1] == str(tmp_path / "motion.json") and len(result["frames"]) == 1
     with pytest.raises(body_rig.RigError):
         body_rig.run_blender("blender.exe", tmp_path, "fly")
+
+
+def test_frame_quality_finds_fragments_and_slits(tmp_path: Path) -> None:
+    def frame(name: str, slit: bool = False, fragment: bool = False) -> Path:
+        alpha = np.zeros((200, 120), np.uint8)
+        cv2.rectangle(alpha, (40, 20), (80, 180), 255, -1)
+        if slit:
+            alpha[100:103, 45:75] = 0  # 胴の中の細い横のすき間
+        if fragment:
+            alpha[5:15, 5:15] = 255  # 本体から離れたかけら
+        path = tmp_path / f"{name}.png"
+        Image.fromarray(np.dstack([np.full_like(alpha, 128)] * 3 + [alpha]), "RGBA").save(path)
+        return path
+
+    clean = body_rig.frame_quality([frame("a"), frame("b")])
+    assert clean["ok"] and clean["frames"] == [] and clean["gap_frames"] == []
+    report = body_rig.frame_quality([frame("c"), frame("d", slit=True), frame("e", fragment=True)])
+    assert not report["ok"] and report["frames"] == [3] and report["gap_frames"] == [2]
+    # 太い穴(腕と胴の間が囲まれただけ)は細い穴として数えない
+    alpha = np.zeros((200, 120), np.uint8)
+    cv2.rectangle(alpha, (20, 20), (100, 180), 255, -1)
+    alpha[60:120, 40:80] = 0
+    path = tmp_path / "wide.png"
+    Image.fromarray(np.dstack([np.full_like(alpha, 128)] * 3 + [alpha]), "RGBA").save(path)
+    assert body_rig.frame_quality([frame("f"), path])["gap_frames"] == []

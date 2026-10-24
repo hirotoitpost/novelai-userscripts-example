@@ -488,3 +488,60 @@ def outfit_inpaint_mask(image: Image.Image) -> tuple[Image.Image, dict[str, np.n
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
     region &= _head_share(xs, ys, j) < 0.5
     return Image.fromarray((region * 255).astype(np.uint8)).convert("RGB"), points
+
+
+# 描き出したコマの品質: 休みの姿勢(1コマ目)より増えた穴・かけらの大きさが、人物の面積のこの割合を超えたら問題とみなす
+_GAP_RATIO = 0.002
+_FRAGMENT_PIXELS = 24
+# 関節のすき間とみなす穴の太さ(中心から縁までの画素)の上限
+_SLIT_WIDTH = 4.0
+
+
+def _silhouette_issues(alpha: np.ndarray) -> tuple[int, int]:
+    """(人物の形の中の穴の画素数, 本体から離れたかけらの画素数)。alpha は 0〜255。"""
+    solid = (alpha > 128).astype(np.uint8)
+    count, comp, stats, _ = cv2.connectedComponentsWithStats(solid, connectivity=8)
+    if count <= 1:
+        return 0, 0
+    main = 1 + int(stats[1:, cv2.CC_STAT_AREA].argmax())
+    fragments = int(sum(a for i, a in enumerate(stats[:, cv2.CC_STAT_AREA]) if i not in (0, main) and a >= _FRAGMENT_PIXELS))
+    # 穴: 背景(外側)につながっていない透明の画素のうち、細い筋(いちばん太い所が _SLIT_WIDTH 以下)だけ。腕が腰に触れたり
+    # 脚が寄ったりして囲まれた、ふつうのすき間(太い)は数えない
+    background = (1 - solid).astype(np.uint8)
+    count_bg, comp_bg, stats_bg, _ = cv2.connectedComponentsWithStats(background, connectivity=4)
+    border = set(np.unique(np.concatenate([comp_bg[0], comp_bg[-1], comp_bg[:, 0], comp_bg[:, -1]])).tolist())
+    distance = cv2.distanceTransform(background, cv2.DIST_L2, 3)
+    holes = 0
+    for i in range(1, count_bg):
+        if i in border or stats_bg[i, cv2.CC_STAT_AREA] < _FRAGMENT_PIXELS:
+            continue
+        if float(distance[comp_bg == i].max()) <= _SLIT_WIDTH:
+            holes += int(stats_bg[i, cv2.CC_STAT_AREA])
+    return holes, fragments
+
+
+def frame_quality(frames: list[Path]) -> dict:
+    """
+    描き出したコマの品質。休みの姿勢(1コマ目)と比べて、動かしたときに増えた、本体から離れたかけら(はみ出した筋・取り残された
+    縁)と、人物の形の中の細い穴(関節のすき間)を数える。かけらは問題(ok が False)。細い穴は、腕と胴の間が囲まれただけの
+    こともあるので、確かめる候補として返すだけ(gap_frames)。
+    {"ok", "worst_gap", "worst_fragment", "frames": かけらの出たコマ, "gap_frames": 細い穴の出たコマ}(コマは 1 から)。
+    """
+    if not frames:
+        return {"ok": True, "worst_gap": 0.0, "worst_fragment": 0, "frames": [], "gap_frames": []}
+    alphas = [np.asarray(Image.open(f).convert("RGBA"))[..., 3] for f in frames]
+    area = max(int((alphas[0] > 128).sum()), 1)
+    rest_holes, rest_fragments = _silhouette_issues(alphas[0])
+    worst_gap, worst_fragment, bad, gaps = 0.0, 0, [], []
+    for index, alpha in enumerate(alphas, start=1):
+        holes, fragments = _silhouette_issues(alpha)
+        gap = max(0, holes - rest_holes) / area
+        fragment = max(0, fragments - rest_fragments)
+        worst_gap, worst_fragment = max(worst_gap, gap), max(worst_fragment, fragment)
+        if fragment > 0:
+            bad.append(index)
+        if gap > _GAP_RATIO:
+            gaps.append(index)
+    return {
+        "ok": not bad, "worst_gap": round(worst_gap, 5), "worst_fragment": worst_fragment, "frames": bad, "gap_frames": gaps,
+    }

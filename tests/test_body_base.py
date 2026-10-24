@@ -19,7 +19,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from python import body_base, db  # noqa: E402
+from python import body_base, body_check, db  # noqa: E402
 from python.client import get_client  # noqa: E402
 from python.routes import library as library_routes  # noqa: E402
 from python.routes import lora_dataset as lora_routes  # noqa: E402
@@ -81,6 +81,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     monkeypatch.setattr(lora_routes, "generate_one", fake_generate)
     monkeypatch.setattr(lora_routes.asyncio, "sleep", lambda *_: _noop())
+    # 自動チェック(タグの判定のモデル)は呼ばず、いつも合格にする。描き直しのテストでは差し替える
+    monkeypatch.setattr(body_check, "check", lambda part, image: body_check.CheckResult(True, 1.0))
     app = FastAPI()
     app.include_router(story_routes.router)
     app.include_router(lora_routes.router)
@@ -306,3 +308,59 @@ def test_outfit_is_drawn_over_the_a_pose(client: TestClient, tmp_path: Path, mon
     prompt, negative = client.calls[-1]  # type: ignore[attr-defined]
     assert "navy skirt" in prompt and "a-pose" in prompt and "bodysuit" not in prompt
     assert "bodysuit" in negative and "nude" in negative
+
+
+def test_auto_check_redraws_until_it_passes(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    character = _character(client, "test")
+    base = _base(client)
+    client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]})
+    results = iter([
+        body_check.CheckResult(False, -0.5, ["振り返っている"]),
+        body_check.CheckResult(True, 0.9),
+    ])
+    monkeypatch.setattr(body_check, "check", lambda part, image: next(results))
+    url = f"/api/lora-dataset/character/{character['id']}/body-base"
+    res = client.post(url, json={"keys": ["back"], "seed": 100})
+    assert '"status": "retry"' in res.text and "振り返っている" in res.text
+    assert len(client.calls) == 2  # type: ignore[attr-defined]
+    entry = {p["key"]: p for p in client.get(url).json()["parts"]}["back"]
+    assert entry["auto_check"]["passed"] is True and entry["auto_check"]["attempts"] == 2
+    assert "肩甲骨" in entry["check"]  # 確かめる点(人体の構造)はそのまま
+
+
+def test_auto_check_keeps_the_best_when_none_pass(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    character = _character(client, "test")
+    base = _base(client)
+    client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]})
+    scores = iter([-1.0, 0.4, -0.2])
+    monkeypatch.setattr(body_check, "check", lambda part, image: body_check.CheckResult(False, next(scores), ["x"]))
+    url = f"/api/lora-dataset/character/{character['id']}/body-base"
+    client.post(url, json={"keys": ["hand_palm"]})
+    entry = {p["key"]: p for p in client.get(url).json()["parts"]}["hand_palm"]
+    assert entry["auto_check"]["passed"] is False and entry["auto_check"]["score"] == 0.4 and entry["auto_check"]["attempts"] == 3
+    # 自動チェックを切れば1回だけ描き、結果も残さない
+    calls = len(client.calls)  # type: ignore[attr-defined]
+    client.post(url, json={"keys": ["hand_palm"], "auto_check": False})
+    assert len(client.calls) == calls + 1  # type: ignore[attr-defined]
+    entry = {p["key"]: p for p in client.get(url).json()["parts"]}["hand_palm"]
+    assert entry["auto_check"] is None
+
+
+def test_outfit_retries_while_the_pose_drifts(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import body_rig
+
+    character = _character(client, "test", is_adult=1, age=25)
+    base = _base(client)
+    client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]})
+    client.post(f"/api/lora-dataset/character/{character['id']}/body-base", json={"keys": ["a_pose"]})
+    points = {"left_shoulder": np.array([500.0, 260.0]), "right_shoulder": np.array([300.0, 260.0])}
+    moved = {k: v + np.array([40.0, 0.0]) for k, v in points.items()}  # 肩幅 200 の 20% ずれ
+    detected = iter([moved, points])
+    monkeypatch.setattr(body_rig, "outfit_inpaint_mask", lambda img: (Image.new("RGB", img.size, "white"), points))
+    monkeypatch.setattr(body_rig, "detect", lambda img: (None, next(detected)))
+    calls = len(client.calls)  # type: ignore[attr-defined]
+    res = client.post(f"/api/lora-dataset/character/{character['id']}/body-outfit", json={"outfit_tags": "white blouse"})
+    outfit = res.json()["outfit"]
+    # 1回目はずれが大きいので描き直し、2回目(強さを下げた)を残す
+    assert len(client.calls) == calls + 2  # type: ignore[attr-defined]
+    assert outfit["drift"] == 0 and outfit["attempts"] == 2 and not outfit["drift_warn"]

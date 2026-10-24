@@ -70,3 +70,9 @@
 .bdb-outfit-thumb { width: 120px; border-radius: 6px; background: #fff; }
 .bdb-outfit-form { flex: 1; min-width: min(100%, 260px); display: flex; flex-direction: column; gap: 0.4rem; }
 .bdb-outfit-form .lora-label { display: flex; flex-direction: column; gap: 0.2rem; }
+
+/* 自動チェックの結果 */
+.bdb-auto { font-size: 0.7rem; overflow-wrap: anywhere; }
+.bdb-auto--ok { color: #7fd39b; }
+.bdb-auto--ng { color: #f0b46a; }
+.bdb-quality { margin: 0; padding-left: 1.1rem; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.15rem; }

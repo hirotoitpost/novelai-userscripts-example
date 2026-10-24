@@ -41,6 +41,8 @@ interface Part {
   available: boolean
   path: string | null
   updated: number | null
+  /** 自動チェックの結果(チェックせずに描いた絵は null) */
+  auto_check: { passed: boolean; score: number; reasons: string[]; attempts: number } | null
 }
 
 interface CharacterBody {
@@ -61,8 +63,15 @@ interface RigInfo {
   /** 作った2Dモデルに服の層を重ねたか */
   with_outfit?: boolean
   /** 服を着せた Aポーズの絵(服の層に使う)。drift は素体の絵からの関節のずれ(肩幅に対する割合) */
-  outfit: { path: string; updated: number; outfit_tags: string; drift: number | null; drift_warn: boolean } | null
+  outfit: { path: string; updated: number; outfit_tags: string; drift: number | null; drift_warn: boolean; attempts?: number } | null
   default_outfit_tags?: string
+  /** 作ったときの品質の確かめ(Aポーズの骨格・服の層のずれ・描き出したコマのかけら/細い穴) */
+  quality?: {
+    a_pose_problems: string[]
+    outfit_drift: number | null
+    outfit_drift_warn: boolean
+    frames: { ok: boolean; frames: number[]; gap_frames: number[]; worst_fragment: number }
+  } | null
 }
 
 interface Props {
@@ -92,6 +101,8 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [editing, setEditing] = useState<(Omit<Base, 'id'> & { id?: number }) | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [useReference, setUseReference] = useState(false)
+  // 自動チェック: 描いた絵を調べ、合わなければシードを変えて描き直す(回数は開発管理者の設定)
+  const [autoCheck, setAutoCheck] = useState(true)
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -260,7 +271,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       const res = await fetch(`/api/lora-dataset/character/${characterId}/body-base`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ keys: [...picked], root_name: rootName, use_reference: useReference }),
+        body: JSON.stringify({ keys: [...picked], root_name: rootName, use_reference: useReference, auto_check: autoCheck }),
       })
       if (!res.ok || !res.body) {
         setStatus(`描けませんでした: ${await detail(res)}`)
@@ -278,8 +289,14 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
         buffer = lines.pop() ?? ''
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
-          const event = JSON.parse(line.slice(6)) as { current?: number; total?: number; label?: string; status?: string }
+          const event = JSON.parse(line.slice(6)) as {
+            current?: number; total?: number; label?: string; status?: string; attempt?: number; reasons?: string[]
+          }
           if (event.status === 'error') failed++
+          if (event.status === 'retry') {
+            setStatus(`${event.current}/${event.total}: ${event.label} を描き直しています(${event.attempt}回目: ${event.reasons?.join('・')})`)
+            continue
+          }
           if (event.current && event.total) {
             setStatus(`${event.current}/${event.total}: ${event.label}${event.status === 'error' ? '(失敗)' : ''}`)
             if (event.status === 'ok') loadBody()
@@ -425,6 +442,13 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
                   <input type="checkbox" checked={picked.has(p.key)} disabled={busy || !p.available} onChange={() => toggle(p.key)} />
                   {p.label}
                 </label>
+                {p.path && p.auto_check && (
+                  <span className={p.auto_check.passed ? 'bdb-auto bdb-auto--ok' : 'bdb-auto bdb-auto--ng'}
+                    title={p.auto_check.passed ? '自動チェックに合格' : `合格する絵が出なかったので、いちばん良い絵を残しました: ${p.auto_check.reasons.join('・')}`}>
+                    {p.auto_check.passed ? '✓ チェック済み' : `⚠ ${p.auto_check.reasons.join('・')}`}
+                    {p.auto_check.attempts > 1 && `(${p.auto_check.attempts}回)`}
+                  </span>
+                )}
                 <details className="bdb-check">
                   <summary>確かめる点</summary>
                   <p>{p.check}</p>
@@ -437,6 +461,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
 
       {body?.base && (
         <div className="fsh-actions">
+          <label className="fsh-label" title="振り返り・2人並び・手の突き出し・足裏の構図・Aポーズの崩れを調べ、合わなければシードを変えて描き直します(回数は開発管理者の設定。描くたびに Anlas を使います)">
+            <input type="checkbox" checked={autoCheck} disabled={busy} onChange={e => setAutoCheck(e.target.checked)} />
+            自動チェック(合わなければ描き直す)
+          </label>
           <label className="fsh-label">
             <input type="checkbox" checked={useReference} disabled={busy} onChange={e => setUseReference(e.target.checked)} />
             参照画像も使う(V4.5・顔を寄せる。体型も寄るので、素体の体型を確かめるときは外す)
@@ -485,6 +513,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
                   {rig.outfit?.drift != null && (
                     <span className={rig.outfit.drift_warn ? 'lora-error' : 'lora-hint'}>
                       関節のずれ {(rig.outfit.drift * 100).toFixed(1)}%{rig.outfit.drift_warn ? '(大きめ)' : ''}
+                      {(rig.outfit.attempts ?? 1) > 1 && `・${rig.outfit.attempts}回描いていちばんずれの小さい絵`}
                     </span>
                   )}
                 </div>
@@ -509,6 +538,26 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
             {!body.parts.find(p => p.key === 'a_pose')?.path && <span className="lora-hint">先に「Aポーズ(関節の確認)」を描いてください。</span>}
             {rigStatus && <span className="lora-hint">{rigStatus}</span>}
           </div>
+          {rig.quality && (
+            <ul className="bdb-quality">
+              <li className={rig.quality.a_pose_problems.length ? 'bdb-auto--ng' : 'bdb-auto--ok'}>
+                Aポーズ: {rig.quality.a_pose_problems.length ? `⚠ ${rig.quality.a_pose_problems.join('・')}` : '✓ 腕が体から離れ、足首まで写っています'}
+              </li>
+              {rig.quality.outfit_drift != null && (
+                <li className={rig.quality.outfit_drift_warn ? 'bdb-auto--ng' : 'bdb-auto--ok'}>
+                  服の層の関節のずれ: {(rig.quality.outfit_drift * 100).toFixed(1)}%{rig.quality.outfit_drift_warn ? ' ⚠ 大きめ(服を着せ直すと減ります)' : ' ✓'}
+                </li>
+              )}
+              <li className={rig.quality.frames.ok ? 'bdb-auto--ok' : 'bdb-auto--ng'}>
+                動き: {rig.quality.frames.ok ? '✓ はみ出したかけらはありません' : `⚠ 本体から離れたかけらが出たコマ ${rig.quality.frames.frames.join(', ')}`}
+              </li>
+              {rig.quality.frames.gap_frames.length > 0 && (
+                <li className="lora-hint">
+                  細いすき間が見えるコマ {rig.quality.frames.gap_frames.join(', ')}(腕と胴の間が閉じただけのこともあります。GIF で確かめてください)
+                </li>
+              )}
+            </ul>
+          )}
           {(rig.files['overlay.png'] || rig.files['preview.gif']) && (
             <div className="bdb-rig-views">
               {rig.files['overlay.png'] && (
