@@ -219,3 +219,14 @@ def test_guard_values_come_from_the_db(client: TestClient) -> None:
     assert "mannequin" in body_base.prompt(adult, {"kind": "nude"}, part)
     content_guard.reset("body_base.nude_tags")
     assert "barbie doll anatomy" in body_base.prompt(adult, {"kind": "nude"}, part)
+
+
+def test_rear_parts_describe_the_chest_from_behind() -> None:
+    # 真後ろの部位では、正面の胸のタグ(large breasts)の代わりに、後ろから見える形のタグにする
+    base = {"kind": "suit", "chest": "large", "build": "curvy"}
+    character = {"appearance_tags": "1girl, brown hair"}
+    back = body_base.prompt(character, base, body_base.ITEMS["back"])
+    assert "sideboob" in back and "breasts peek" in back and "large breasts" not in back
+    assert "large breasts" in body_base.prompt(character, base, body_base.ITEMS["front"])
+    # 控えめに描くキャラは、真後ろでも胸の設定を使わない
+    assert "sideboob" not in body_base.prompt(character, base, body_base.ITEMS["back"], modest=True)

@@ -38,6 +38,8 @@ class BodyPart:
     nude: bool = True
     # この部位だけに足すネガティブ
     negative: str = ""
+    # 真後ろから描く部位。胸の設定は後ろから見える形のタグ(REAR_CHEST)に置き換える
+    rear: bool = False
 
 
 GROUPS: tuple[tuple[str, str], ...] = (
@@ -51,7 +53,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
 _STAND = "full body, standing, arms at sides, expressionless"
 # 真後ろ。頭も向こうを向かせる(振り返って顔を見せないように)。重みなしでは、振り返り・正面・前後の2人並びが
 # 出た(2026-10 実機)ので、強調の重みを付ける
-_FROM_BEHIND = "solo, 1.4::from behind::, 1.3::facing away::, back view, back of head, head facing away"
+_FROM_BEHIND = "solo, 1.4::from behind::, 1.3::facing away::, straight-back, back view, back of head, head facing away"
 _BACK_NEGATIVE = (
     "1.3::looking back::, looking at viewer, looking over shoulder, front view, facing viewer, face, profile, "
     "turning head, 1.4::multiple views::, 1.3::turnaround::, two views, front and back, 2girls"
@@ -70,7 +72,7 @@ PARTS: tuple[BodyPart, ...] = (
     BodyPart("back", "背面(真後ろ)", f"{_STAND}, {_FROM_BEHIND}", "whole",
              "後頭部は頭の高さの下1/3で首へ細くなり、外後頭隆起の下に項のくぼみ。肩甲骨は第2〜7肋骨の高さ、内側の縁は脊柱から"
              "指3本分。腰のくぼみ(ヴィーナスのえくぼ)は上後腸骨棘の位置",
-             "portrait", negative=_BACK_NEGATIVE),
+             "portrait", negative=_BACK_NEGATIVE, rear=True),
     BodyPart("three_quarter", "斜め", f"{_STAND}, three-quarter view", "whole",
              "胸郭と骨盤が同じ向きにねじれずに並ぶか。奥の肩・腰は手前より細く見える", "portrait"),
     BodyPart("a_pose", "Aポーズ(関節の確認)",
@@ -85,7 +87,7 @@ PARTS: tuple[BodyPart, ...] = (
     BodyPart("head_back", "頭部(後面・後頭部)", f"upper body, close-up, {_FROM_BEHIND}, nape, hair", "head",
              "後頭部は丸く、頭頂から外後頭隆起へ張り出す(絶壁になっていないか)。耳は後ろから見ると頭の幅から少し出る。"
              "首の付け根(項)は頭の幅より細く、僧帽筋で肩へ広がる。髪の分け目・つむじの位置",
-             negative=_BACK_NEGATIVE),
+             negative=_BACK_NEGATIVE, rear=True),
     BodyPart("neck_shoulder", "頸部・肩(鎖骨)", "upper body, front view, facing viewer, collarbone, neck, shoulders, expressionless",
              "head",
              "胸鎖乳突筋が耳の後ろから鎖骨の内端へ斜めに走る。鎖骨はほぼ水平でゆるいS字。首の太さは顔の幅の半分強", nude=False),
@@ -95,7 +97,7 @@ PARTS: tuple[BodyPart, ...] = (
              "臍は腸骨稜(骨盤の上縁)のやや上。腹直筋は臍の上下に分かれて見える。脇腹は外腹斜筋のふくらみ", nude=False),
     BodyPart("upper_back", "背部(肩甲骨・脊柱)", f"upper body, {_FROM_BEHIND}, back, shoulder blades, spine", "trunk",
              "脊柱は真ん中のくぼみとして通る。肩甲骨は腕の動きでずれる三角の板。僧帽筋が首から肩へなだらかに下がる",
-             negative=_BACK_NEGATIVE),
+             negative=_BACK_NEGATIVE, rear=True),
     BodyPart("pelvis", "骨盤・腰", "cowboy shot, front view, facing viewer, hips, waist, arms at sides, expressionless", "trunk",
              "女性は骨盤が広く、腰のくびれは臍の高さ。男性は肩幅に対して骨盤が狭い。股の高さは身長のほぼ半分", nude=False),
     BodyPart("arm", "上腕・肘", "arm focus, upper arm, elbow, arm extended to side, close-up", "upper_limb",
@@ -209,14 +211,23 @@ def presets() -> list[dict[str, Any]]:
 
 # 未成年の手がかりがあるキャラ(minor_coded)には使わない設定(胸・体格の曲線)
 _MODEST_SKIP = {("chest", None), ("build", "curvy")}
+# 真後ろの部位での胸の設定。large breasts などの正面の胸のタグは、絵を正面・振り返りに引き戻す(2026-10 実機: 栄子の背面)。
+# 後ろから脇に見える形で書く(小さめ・胸筋は後ろからは見えないので外す)
+REAR_CHEST = {"medium": "breasts peek", "large": "sideboob, breasts peek"}
 
 
-def body_tags(base: dict[str, Any], *, modest: bool = False) -> str:
-    """素体の体のタグ(性別・肌の色・体格・身長・プロポーション・胸・筋肉+足すタグ)。modest は胸・曲線の設定を外す。"""
+def body_tags(base: dict[str, Any], *, modest: bool = False, rear: bool = False) -> str:
+    """
+    素体の体のタグ(性別・肌の色・体格・身長・プロポーション・胸・筋肉+足すタグ)。modest は胸・曲線の設定を外す。
+    rear(真後ろの部位)は、胸の設定を後ろから見える形(REAR_CHEST)に置き換える。
+    """
     tags = []
     for field in FIELDS:
         value = base.get(field) or ""
         if modest and ((field, None) in _MODEST_SKIP or (field, value) in _MODEST_SKIP):
+            continue
+        if rear and field == "chest":
+            tags.append(REAR_CHEST.get(value, ""))
             continue
         tags.append(OPTIONS[field].get(value, ("", ""))[1])
     return join_tags(*tags, base.get("extra_tags"))
@@ -247,7 +258,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, *, m
     adult = (r18_positive() if base.get("sex") != "male" else "adult, mature male") if nude else ""
     return join_tags(
         face_tags(character, base),
-        body_tags(base, modest=modest),
+        body_tags(base, modest=modest, rear=part.rear),
         adult,
         content_guard.text("body_base.nude_tags") if nude else MODEST_SUIT_TAGS if modest else SUIT_TAGS,
         part.tags,

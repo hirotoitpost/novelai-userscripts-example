@@ -1068,7 +1068,7 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
                 path = folder / f"{base['id']}_{part.key}.png"
                 image.save(path, "PNG")
                 caption = join_tags(
-                    character.get("trigger_word"), body_base.face_tags(character, base), body_base.body_tags(base, modest=modest),
+                    character.get("trigger_word"), body_base.face_tags(character, base), body_base.body_tags(base, modest=modest, rear=part.rear),
                     part.tags,
                 )
                 path.with_suffix(".txt").write_text(caption, encoding="utf-8")
