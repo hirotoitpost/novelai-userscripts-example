@@ -330,7 +330,8 @@ class BodyBaseOptionOrderRequest(BaseModel):
 class BodyRigRequest(BaseModel):
     """素体の Aポーズの絵から2Dアニメ用のモデルを作る(body_rig.py)。motion は確かめ用に付ける動き。"""
 
-    motion: Literal["wave", "idle", "walk"] = "wave"
+    # 動きの種類(body_motions.MOTIONS のキー。wave / idle / walk / cheer / jump / sway / point)
+    motion: str = Field("wave", max_length=40)
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
     # 服を着た Aポーズの絵(POST .../body-outfit)があれば、服の層を重ねる
     with_outfit: bool = True

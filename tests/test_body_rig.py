@@ -156,3 +156,36 @@ def test_joint_drift() -> None:
     moved = {k: v + np.array([8.0, 0.0], np.float32) for k, v in points.items()}
     assert body_rig.joint_drift(points, points) == 0
     assert body_rig.joint_drift(points, moved) == pytest.approx(8 / 80)
+
+
+def test_motions_are_well_formed() -> None:
+    from python import body_motions
+
+    names = {b.name for b in body_rig.BONES}
+    assert set(body_rig.MOTIONS) == set(body_motions.MOTIONS) >= {"wave", "idle", "walk", "cheer", "jump", "sway", "point"}
+    for key, motion in body_motions.MOTIONS.items():
+        for bone, points in [*motion.rotate.items(), *motion.translate.items()]:
+            assert bone in names, (key, bone)
+            frames = [p[0] for p in points]
+            assert frames == sorted(frames) and frames[0] == 1 and frames[-1] <= motion.frames, (key, bone)
+            # くり返しても途切れないように、最初と最後は休みの姿勢
+            assert all(v == 0 for v in points[0][1:]) and all(v == 0 for v in points[-1][1:]), (key, bone)
+
+
+def test_run_blender_passes_the_motion_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = {}
+
+    def fake_run(args, **kwargs):  # noqa: ANN001
+        seen["args"] = args
+        (tmp_path / "rig.blend").write_bytes(b"blend")
+        (tmp_path / "frames").mkdir()
+        (tmp_path / "frames" / "f_0001.png").write_bytes(b"png")
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(body_rig.subprocess, "run", fake_run)
+    result = body_rig.run_blender("blender.exe", tmp_path, "jump")
+    motion = json.loads((tmp_path / "motion.json").read_text(encoding="utf-8"))
+    assert motion["name"] == "jump" and motion["translate"]["torso"][1] == [10, 0, 110]
+    assert seen["args"][-1] == str(tmp_path / "motion.json") and len(result["frames"]) == 1
+    with pytest.raises(body_rig.RigError):
+        body_rig.run_blender("blender.exe", tmp_path, "fly")

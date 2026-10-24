@@ -27,6 +27,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from . import body_motions
+
 
 @dataclass(frozen=True)
 class Bone:
@@ -404,7 +406,8 @@ def _overlay(image: Image.Image, rig: dict) -> Image.Image:
 # ---- Blender ----
 
 _BLENDER_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "blender" / "build_rig.py"
-MOTIONS = {"wave": "手を振る", "idle": "待機(呼吸・揺れ)", "walk": "その場で歩く"}
+# 動きの名前(body_motions.py に中身。Blender へは motion.json で渡す)
+MOTIONS = body_motions.labels()
 
 
 def find_blender(configured: str | None = None) -> str | None:
@@ -420,11 +423,15 @@ def run_blender(blender: str, rig_dir: Path, motion: str, *, timeout: float = 60
     rig_dir の rig.json から Blender でリグを組み、動きを付けて描き出す(画面は出さない)。
     rig.blend(Blender のファイル)と frames/*.png(描き出したコマ)ができる。
     """
-    if motion not in MOTIONS:
+    if motion not in body_motions.MOTIONS:
         raise RigError(f"動きの種類が違います: {motion}")
+    motion_file = rig_dir / "motion.json"
+    motion_file.write_text(
+        json.dumps({"name": motion, **body_motions.MOTIONS[motion].to_json()}, ensure_ascii=False), encoding="utf-8",
+    )
     result = subprocess.run(
         [blender, "--background", "--factory-startup", "--python", str(_BLENDER_SCRIPT), "--",
-         str(rig_dir), motion],
+         str(rig_dir), str(motion_file)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
     )
     if result.returncode != 0 or not (rig_dir / "rig.blend").is_file():

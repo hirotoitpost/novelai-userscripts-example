@@ -1,7 +1,7 @@
 """
 Blender の中で動かすスクリプト(body_rig.run_blender から、画面なしで呼ぶ)。
 
-    blender --background --factory-startup --python scripts/blender/build_rig.py -- <rig_dir> <motion>
+    blender --background --factory-startup --python scripts/blender/build_rig.py -- <rig_dir> <motion.json>
 
 rig_dir/rig.json(body_rig.build が書く)のメッシュ(絵の形に合わせた平らな素体)を、絵と同じ位置に作り、絵(texture.png)を
 テクスチャとして貼る(UV は絵の画素の位置そのまま)。関節に骨(アーマチュア)を入れ、頂点の重み(頂点グループ)とアーマチュアの
@@ -117,55 +117,26 @@ def bind(arm: bpy.types.Object, meshes: list) -> None:
         modifier.use_vertex_groups = True
 
 
-# 動き: 骨 → [(コマ, 角度[度])]。角度は絵の面の中の回転(キャラの左右に関係なく、絵の上で反時計回りが正)
-def motion_keys(motion: str) -> tuple[int, dict]:
-    if motion == "wave":
-        # 右手(絵の左側)を上げて、前腕を左右に振る
-        frames = 48
-        keys = {
-            "upper_arm.R": [(1, 0), (12, -125), (36, -125), (48, 0)],
-            "forearm.R": [(1, 0), (12, -30), (18, -55), (24, -20), (30, -55), (36, -30), (48, 0)],
-            "hand.R": [(1, 0), (18, -10), (24, 10), (30, -10), (48, 0)],
-            "head": [(1, 0), (18, 6), (36, 6), (48, 0)],
-            "torso": [(1, 0), (24, 2), (48, 0)],
-        }
-    elif motion == "walk":
-        # その場で脚を前後に(正面の絵なので、脚を横に開き閉じする動きで見せる)と、腕の振り
-        frames = 32
-        keys = {
-            "thigh.L": [(1, 0), (9, 8), (17, 0), (25, -3), (33, 0)],
-            "shin.L": [(1, 0), (9, -10), (17, 0), (33, 0)],
-            "thigh.R": [(1, 0), (9, 3), (17, 0), (25, -8), (33, 0)],
-            "shin.R": [(1, 0), (25, 10), (17, 0), (33, 0)],
-            "upper_arm.L": [(1, 0), (9, -10), (17, 0), (25, 10), (33, 0)],
-            "upper_arm.R": [(1, 0), (9, -10), (17, 0), (25, 10), (33, 0)],
-            "torso": [(1, 0), (9, 1.5), (17, 0), (25, -1.5), (33, 0)],
-            "head": [(1, 0), (9, -1.5), (17, 0), (25, 1.5), (33, 0)],
-        }
-    else:
-        # 待機: 呼吸に合わせて体と頭がわずかに揺れ、腕が遅れて付いてくる
-        frames = 48
-        keys = {
-            "torso": [(1, 0), (24, 1.5), (48, 0)],
-            "head": [(1, 0), (14, -2), (38, 2), (48, 0)],
-            "upper_arm.L": [(1, 0), (28, 3), (48, 0)],
-            "upper_arm.R": [(1, 0), (28, -3), (48, 0)],
-            "forearm.L": [(1, 0), (32, 4), (48, 0)],
-            "forearm.R": [(1, 0), (32, -4), (48, 0)],
-        }
-    return frames, keys
-
-
-def animate(arm: bpy.types.Object, motion: str) -> int:
-    frames, keys = motion_keys(motion)
-    for name, points in keys.items():
+def animate(arm: bpy.types.Object, motion: dict) -> int:
+    """
+    motion.json(body_motions.Motion.to_json)のキーを打つ。rotate は絵の面の中の回転(度。骨の Z 回転)、translate は
+    骨の移動(絵の画素。x は絵の右、y は絵の上。胴の骨は上向きなので、骨の X・Y がそのまま絵の右・上になる)。
+    """
+    for name, points in motion["rotate"].items():
         pose_bone = arm.pose.bones.get(name)
         if pose_bone is None:
             continue
         for frame, degrees in points:
             pose_bone.rotation_euler = (0.0, 0.0, math.radians(degrees))
             pose_bone.keyframe_insert("rotation_euler", frame=frame)
-    return frames
+    for name, points in motion.get("translate", {}).items():
+        pose_bone = arm.pose.bones.get(name)
+        if pose_bone is None:
+            continue
+        for frame, dx, dy in points:
+            pose_bone.location = (dx * SCALE, dy * SCALE, 0.0)
+            pose_bone.keyframe_insert("location", frame=frame)
+    return int(motion["frames"])
 
 
 def setup_render(width: int, height: int, frames: int, out_dir: Path) -> None:
@@ -202,7 +173,7 @@ def setup_render(width: int, height: int, frames: int, out_dir: Path) -> None:
 
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:]
-    rig_dir, motion = Path(args[0]), args[1]
+    rig_dir, motion = Path(args[0]), json.loads(Path(args[1]).read_text(encoding="utf-8"))
     rig = json.loads((rig_dir / "rig.json").read_text(encoding="utf-8"))
     width, height = rig["size"]
 
