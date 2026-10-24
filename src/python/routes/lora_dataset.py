@@ -17,7 +17,7 @@ from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
-from .. import body_base, body_rig, content_guard
+from .. import body_base, body_export, body_rig, content_guard
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -1192,6 +1192,8 @@ _RIG_FILES = {
     "preview.gif": "動きの確かめ",
     "rig.blend": "Blender のファイル",
     "rig.zip": "テクスチャ+rig.json(メッシュ・重み)+Blender のファイル",
+    "spine.zip": "Spine 用(skeleton.json・アトラス・テクスチャ。動きは全部)",
+    "model.psd": "Live2D(Cubism Editor)用の PSD(部位ごとのレイヤー)",
 }
 
 
@@ -1256,7 +1258,7 @@ async def get_body_rig_file(character_id: int, name: str, root_name: str = "trai
     path = _rig_dir(character, base, root_name) / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    download = f"{_safe_name(character['name'])}_{base['id']}_{name}" if path.suffix in (".blend", ".zip") else None
+    download = f"{_safe_name(character['name'])}_{base['id']}_{name}" if path.suffix in (".blend", ".zip", ".psd") else None
     return FileResponse(path, filename=download)
 
 
@@ -1353,6 +1355,7 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
         body_rig.build(source, folder, outfit if with_outfit else None)
         result = body_rig.run_blender(blender, folder, req.motion)
         body_rig.frames_to_gif(result["frames"], folder / "preview.gif")
+        body_export.export_all(folder)
         body_rig.package(folder)
         (folder / "meta.json").write_text(json.dumps({"motion": req.motion, "with_outfit": with_outfit}), encoding="utf-8")
 

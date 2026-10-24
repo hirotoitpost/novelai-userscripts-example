@@ -454,7 +454,8 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
           <p className="lora-hint">
             「Aポーズ(関節の確認)」の絵の形に合わせた平らなメッシュ(2Dの素体)を作り、絵をテクスチャとして貼って、関節に骨を入れた
             Blender のファイルを作ります。メッシュは骨の重みで皮膚のように曲がります(体で1枚、左右の腕で1枚ずつ)。確かめ用に動きを
-            付けて描き出します。zip にはテクスチャと rig.json(骨・メッシュの頂点・重み)も入ります。
+            付けて描き出します。zip にはテクスチャと rig.json(骨・メッシュの頂点・重み)も入ります。Spine(4.1 の JSON・重み付きメッシュ・
+            動き全部)と、Live2D の Cubism Editor に読み込む PSD(部位ごとのレイヤー)も書き出します。
           </p>
           <div className="bdb-outfit">
             <h5>服の層</h5>
@@ -524,6 +525,18 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
           <div className="fsh-actions">
             {rig.files['rig.blend'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.blend')} download>Blender のファイル(.blend)</a>}
             {rig.files['rig.zip'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.zip')} download>テクスチャ+rig.json(.zip)</a>}
+            {rig.files['spine.zip'] && (
+              <a className="lora-btn lora-btn--secondary" href={rigUrl('spine.zip')} download
+                title="Spine 4.1 の skeleton.json・アトラス・テクスチャ。重み付きメッシュと、動き全部がアニメーションとして入ります">
+                Spine 用(.zip)
+              </a>
+            )}
+            {rig.files['model.psd'] && (
+              <a className="lora-btn lora-btn--secondary" href={rigUrl('model.psd')} download
+                title="Live2D Cubism Editor に読み込む PSD。部位ごとのレイヤー(体と服の層はフォルダ分け)">
+                Live2D 用 PSD
+              </a>
+            )}
           </div>
         </div>
       )}
