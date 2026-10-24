@@ -20,6 +20,7 @@ dependencies = [
     "pywebpush>=2.5.0",
     "rapidocr>=3.9.2",
     "pypdfium2>=5.14.0",
+    "psd-tools>=1.24.0",
 ]
 
 [build-system]

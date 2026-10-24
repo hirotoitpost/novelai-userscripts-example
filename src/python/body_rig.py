@@ -370,6 +370,8 @@ def build(source: Path, out_dir: Path, outfit: Path | None = None) -> dict:
         "texture": "texture.png",
         "outfit": outfit.name if outfit is not None else None,
         "outfit_drift": round(drift, 4) if drift is not None else None,
+        # 関節の点(絵の画素)。書き出し(body_export の PSD)で、メッシュと同じ部位の割り当てをするのに使う
+        "joints": {k: [round(float(v[0]), 2), round(float(v[1]), 2)] for k, v in j.items()},
         "bones": [
             {"name": b.name, "label": b.label, "parent": b.parent,
              "head": [float(v) for v in j[b.head]], "tail": [float(v) for v in j[b.tail]]}
