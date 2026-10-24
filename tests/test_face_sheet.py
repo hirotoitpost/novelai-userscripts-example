@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from python import db  # noqa: E402
 from python.client import get_client  # noqa: E402
 from python.face_sheet import ANGLES, EXPRESSIONS, ITEMS  # noqa: E402
+from python.routes import library as library_routes  # noqa: E402
 from python.routes import lora_dataset as lora_routes  # noqa: E402
 from python.routes import story as story_routes  # noqa: E402
 
@@ -76,3 +77,17 @@ def test_face_sheet_is_drawn_saved_and_listed(client: TestClient, tmp_path: Path
     assert caption.startswith("yura, 1girl, brown hair") and "tongue out" in caption
     # 無い項目は描かない
     assert client.post(f"/api/lora-dataset/character/{character['id']}/face-sheet", json={"keys": ["nope"]}).status_code == 422
+
+
+def test_face_sheet_image_is_served(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 画面のサムネイルは /api/library/file で見る(face_sheet/ を配信しないと 403 で出なかった)
+    monkeypatch.setattr(library_routes, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(library_routes, "_OUTPUTS", tmp_path / "outputs")
+    client.app.include_router(library_routes.router)  # type: ignore[attr-defined]
+    character = client.post("/api/story/characters/new", json={"name": "ゆら", "trigger_word": "yura"}).json()
+    client.post(f"/api/lora-dataset/character/{character['id']}/face-sheet", json={"keys": ["front"]})
+    path = client.get(f"/api/lora-dataset/character/{character['id']}/face-sheet").json()[0]["path"]
+    res = client.get("/api/library/file", params={"path": path})
+    assert res.status_code == 200 and res.headers["content-type"] == "image/png"
+    # キャプションなど png 以外は出さない
+    assert client.get("/api/library/file", params={"path": path.replace(".png", ".txt")}).status_code == 403
