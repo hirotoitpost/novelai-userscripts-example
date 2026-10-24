@@ -36,7 +36,8 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
   const [useReference, setUseReference] = useState(false)
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
-  const [zoom, setZoom] = useState<Entry | null>(null)
+  // 拡大して見ている項目のキー。左右で、描いてある項目を画面の並び順に前後する
+  const [zoomKey, setZoomKey] = useState<string | null>(null)
 
   function load() {
     fetch(`/api/lora-dataset/character/${characterId}/face-sheet?root_name=${encodeURIComponent(rootName)}`)
@@ -45,6 +46,7 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
       .catch(() => setEntries([]))
   }
   useEffect(load, [characterId, rootName])
+  useEffect(() => setZoomKey(null), [characterId])
 
   function toggle(key: string) {
     const next = new Set(picked)
@@ -105,6 +107,9 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
   }
 
   const busy = disabled || running
+  const drawn = GROUPS.flatMap(group => entries.filter(e => e.group === group.id && e.path))
+  const zoomIndex = drawn.findIndex(e => e.key === zoomKey)
+  const zoom = zoomIndex >= 0 ? drawn[zoomIndex] : null
 
   return (
     <section className="fsh">
@@ -124,7 +129,7 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
             {entries.filter(e => e.group === group.id).map(e => (
               <div key={e.key} className={picked.has(e.key) ? 'fsh-cell fsh-cell--on' : 'fsh-cell'}>
                 {e.path ? (
-                  <button type="button" className="fsh-thumb" onClick={() => setZoom(e)} title="拡大">
+                  <button type="button" className="fsh-thumb" onClick={() => setZoomKey(e.key)} title="拡大">
                     <img src={`${fileUrl(e.path)}&v=${e.updated ?? 0}`} alt={e.label} loading="lazy" />
                   </button>
                 ) : (
@@ -149,7 +154,16 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
         </button>
         {status && <span className="lora-hint">{status}</span>}
       </div>
-      {zoom?.path && <FullscreenViewer src={fileUrl(zoom.path)} alt={zoom.label} onClose={() => setZoom(null)} />}
+      {zoom?.path && (
+        <FullscreenViewer
+          src={`${fileUrl(zoom.path)}&v=${zoom.updated ?? 0}`}
+          alt={zoom.label}
+          counter={`${zoomIndex + 1} / ${drawn.length} ・ ${zoom.label}`}
+          onPrev={zoomIndex > 0 ? () => setZoomKey(drawn[zoomIndex - 1].key) : undefined}
+          onNext={zoomIndex < drawn.length - 1 ? () => setZoomKey(drawn[zoomIndex + 1].key) : undefined}
+          onClose={() => setZoomKey(null)}
+        />
+      )}
     </section>
   )
 }
