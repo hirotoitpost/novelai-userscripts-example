@@ -286,6 +286,59 @@ class FaceSheetRequest(BaseModel):
     reference_strength: float = Field(0.7, ge=0.0, le=1.0)
 
 
+class BodyBaseSaveRequest(BaseModel):
+    """
+    素体(body_base.py)を作る・書き換える。kind は suit(素体スーツ) / nude(裸の素体・成人キャラだけ)。
+    sex 以下の選択肢の値は GET /api/lora-dataset/body-bases/options にある(空は指定しない)。
+    """
+
+    name: str = Field(min_length=1, max_length=80)
+    kind: Literal["suit", "nude"] = "suit"
+    sex: Literal["female", "male"] = "female"
+    skin_tone: str = ""
+    build: str = ""
+    height: str = ""
+    proportion: str = ""
+    chest: str = ""
+    muscle: str = ""
+    extra_tags: str = Field("", max_length=1000)
+    negative_tags: str = Field("", max_length=1000)
+    notes: str = Field("", max_length=2000)
+
+
+class BodyBaseOptionRequest(BaseModel):
+    """
+    素体の設定の選択肢(プルダウンの1行)。field は項目(sex / skin_tone / build / height / proportion / chest / muscle)。
+    value は素体が持つ値(足すときだけ。省けば振る)。rear_tags は真後ろの部位で tags の代わりに使うタグ
+    (None なら tags のまま、空なら何も入れない)。
+    """
+
+    field: str
+    value: Optional[str] = Field(None, max_length=40)
+    label: str = Field(min_length=1, max_length=40)
+    tags: str = Field("", max_length=500)
+    rear_tags: Optional[str] = Field(None, max_length=500)
+
+
+class BodyBaseOptionOrderRequest(BaseModel):
+    """項目の選択肢の並べる順(選択肢の id の並び)。"""
+
+    field: str
+    ids: list[int] = Field(max_length=200)
+
+
+class CharacterBodyBaseRequest(BaseModel):
+    """キャラに当てる素体(None で素体なし)。"""
+
+    body_base_id: Optional[int] = None
+
+
+class BodyBaseSheetRequest(FaceSheetRequest):
+    """
+    キャラに当てた素体で、部位(body_base.PARTS のキー)を1枚ずつ描く。描いてある部位は描き直す(上書き)。
+    """
+
+
 class CharacterDatasetRequest(BaseModel):
     """キャラシートを元に、ポーズ/服装/表情/場所を差し替えたデータセットを作る。"""
 

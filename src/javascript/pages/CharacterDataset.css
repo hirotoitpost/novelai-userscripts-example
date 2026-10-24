@@ -98,3 +98,18 @@
 .chards-variation-tools { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
 .chards-chip--tidy { border-style: dashed; border-color: #ff8a9a; color: #ffb0c8; }
+
+/* 右側のタブ(データセット / 素体) */
+.chards-tabs { display: flex; gap: 0.3rem; margin-left: auto; }
+
+.chards-tab {
+  padding: 0.3rem 0.9rem;
+  border: 1px solid var(--nai-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nai-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.chards-tab--on { border-color: var(--nai-accent); background: rgba(123, 92, 246, 0.18); color: var(--nai-text); }

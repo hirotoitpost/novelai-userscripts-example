@@ -21,6 +21,7 @@ import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import VariationImportDialog, { AXES } from '../components/VariationImportDialog'
 import DatasetScenes from '../components/DatasetScenes'
 import FaceSheet from '../components/FaceSheet'
+import BodyBase from '../components/BodyBase'
 import type { DatasetState, Situation } from '../components/DatasetScenes'
 import type { Axis, Variations } from '../components/VariationImportDialog'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
@@ -29,6 +30,12 @@ import './CharacterDataset.css'
 
 
 type Phase = 'idle' | 'running' | 'complete' | 'error' | 'cancelled'
+
+type TabId = 'dataset' | 'body'
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'dataset', label: 'データセット' },
+  { id: 'body', label: '素体' },
+]
 
 // キャラ参照(Character Reference)は NovelAI が V4.5 系でしか受け付けない
 const REFERENCE_MODELS = new Set(['nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
@@ -65,6 +72,8 @@ export default function CharacterDataset() {
   const { token } = useAuth()
   // キャラ一覧の「顔・表情」から開いたとき(#faces)は、顔・表情シートを開いておく
   const [faceSheetOpen, setFaceSheetOpen] = useState(() => window.location.hash === '#faces')
+  // 右側のタブ。キャラ一覧の「素体」から開いたとき(#body)は素体のタブ
+  const [tab, setTab] = useState<TabId>(() => (window.location.hash === '#body' ? 'body' : 'dataset'))
   const location = useLocation()
 
   const [characters, setCharacters] = useState<Character[]>([])
@@ -406,6 +415,14 @@ export default function CharacterDataset() {
       <header className="lora-header">
         <BackButton className="lora-back" />
         <span className="lora-header-title">キャラ別データセット</span>
+        <nav className="chards-tabs" role="tablist">
+          {TABS.map(t => (
+            <button key={t.id} type="button" role="tab" aria-selected={tab === t.id}
+              className={tab === t.id ? 'chards-tab chards-tab--on' : 'chards-tab'} onClick={() => setTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
       <div className="lora-body">
@@ -698,6 +715,13 @@ export default function CharacterDataset() {
           </section>
         </aside>
 
+        {tab === 'body' ? (
+          <main className="lora-main">
+            {character
+              ? <BodyBase characterId={character.id} characterName={character.name} token={token} rootName={rootName} disabled={isRunning} />
+              : <p className="lora-hint">キャラクターを選んでください。</p>}
+          </main>
+        ) : (
         <main className="lora-main">
           {token && (
             <DatasetScenes
@@ -857,6 +881,7 @@ export default function CharacterDataset() {
             {importMsg && <p className="lora-hint">{importMsg}</p>}
           </section>
         </main>
+        )}
       </div>
 
       {importing && token && (

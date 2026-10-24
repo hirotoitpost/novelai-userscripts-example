@@ -207,6 +207,10 @@ export default function Characters() {
                         onClick={() => navigate(`/character-dataset?character=${c.id}#faces`, { state: BACK })}>
                         顔・表情シート
                       </button>
+                      <button type="button" className="chars-small"
+                        onClick={() => navigate(`/character-dataset?character=${c.id}#body`, { state: BACK })}>
+                        素体
+                      </button>
                       <button type="button" className="chars-small" disabled={count === 0} onClick={() => openDataset(c.id)}>
                         生成したデータ({count}枚)
                       </button>
