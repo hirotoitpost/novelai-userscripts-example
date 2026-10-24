@@ -62,6 +62,8 @@ _SERVED_DIRS = (_OUTPUTS / "history", _OUTPUTS / "manga", _OUTPUTS / "ugoira")
 # キャラ別データセットの画像フォルダ: outputs/<ルート>/<キャラのフォルダ>/<この名前>/*.png
 # 引き直しの外れ(rejected)はギャラリーに出さない。
 _DATASET_SUBDIRS = ("generated", "generated_r18", "manual", "manual_r18")
+# 配信だけするデータセットのフォルダ(顔・表情シート face_sheet.py)。ギャラリーの一覧・削除には出さない
+_SERVED_ONLY_SUBDIRS = ("face_sheet",)
 _THUMB_DIR = _OUTPUTS / ".thumbs"
 _THUMB_WIDTHS = (240, 360, 480, 720)
 _PDF_RESOLUTION = 150.0
@@ -77,7 +79,7 @@ Rating = Literal["all", "general", "adult"]
 # ---- 共通 ----
 
 
-def _is_dataset_file(full: Path) -> bool:
+def _is_dataset_file(full: Path, subdirs: tuple[str, ...] = _DATASET_SUBDIRS) -> bool:
     """キャラ別データセットの画像か(outputs/<ルート>/<キャラ>/<generated等>/<名前>.png の形だけ)。"""
     try:
         parts = full.relative_to(_OUTPUTS.resolve()).parts
@@ -86,13 +88,15 @@ def _is_dataset_file(full: Path) -> bool:
     return (
         len(parts) == 4
         and not parts[0].startswith(".")
-        and parts[2] in _DATASET_SUBDIRS
+        and parts[2] in subdirs
         and full.suffix.lower() == ".png"
     )
 
 
 def _is_served(full: Path) -> bool:
-    return any(full.is_relative_to(d.resolve()) for d in _SERVED_DIRS) or _is_dataset_file(full)
+    return any(full.is_relative_to(d.resolve()) for d in _SERVED_DIRS) or _is_dataset_file(
+        full, (*_DATASET_SUBDIRS, *_SERVED_ONLY_SUBDIRS)
+    )
 
 
 def _served_path(path: str) -> Path:
