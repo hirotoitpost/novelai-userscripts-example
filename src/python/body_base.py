@@ -237,6 +237,22 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
     )
 
 
+# 服を着せるとき(素体の Aポーズの絵の首から下を描き直す)、素体スーツに戻らないように抑える
+OUTFIT_NEGATIVE = "plain grey bodysuit, full-body suit, skin-tight, bodysuit, nude"
+
+
+def outfit_prompt(character: dict[str, Any], base: dict[str, Any], outfit_tags: str, options: Options, *, modest: bool = False) -> str:
+    """素体の Aポーズの絵に服を着せるときのプロンプト(素体スーツ・裸のタグの代わりに服のタグ。姿勢は Aポーズのまま)。"""
+    return join_tags(
+        face_tags(character, base),
+        body_tags(base, options, modest=modest),
+        outfit_tags,
+        ITEMS["a_pose"].tags,
+        BACKGROUND,
+        character.get("style_tags"),
+    )
+
+
 def negative(base: dict[str, Any], part: BodyPart | None = None, *, modest: bool = False) -> str:
     """素体の種類・部位ごとに足すネガティブ(キャラシートのネガティブ・年齢区分の安全タグは別に入る)。"""
     extra = part.negative if part else ""

@@ -17,7 +17,7 @@ from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
-from .. import body_base, body_rig
+from .. import body_base, body_rig, content_guard
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -88,6 +88,7 @@ from ..lora_dataset import (
     run_dataset,
 )
 from ..models import (
+    BodyOutfitRequest,
     BodyRigRequest,
     BodyBaseOptionOrderRequest,
     BodyBaseOptionRequest,
@@ -1199,10 +1200,30 @@ def _rig_dir(character: dict, base: dict, root_name: str) -> Path:
     return _character_root(root_name, character) / folder / str(base["id"])
 
 
+def _outfit_paths(character: dict, base: dict, root_name: str) -> tuple[Path, Path]:
+    """服を着た Aポーズの絵と、その記録(服のタグ・関節のずれ)。素体の絵と同じフォルダ。"""
+    folder = _body_dir(character, base, root_name)
+    return folder / f"{base['id']}_a_pose_outfit.png", folder / f"{base['id']}_a_pose_outfit.json"
+
+
+def _outfit_entry(character: dict, base: dict, root_name: str) -> dict[str, Any] | None:
+    image, meta = _outfit_paths(character, base, root_name)
+    if not image.is_file():
+        return None
+    info = json.loads(meta.read_text(encoding="utf-8")) if meta.is_file() else {}
+    return {
+        "path": image.relative_to(_PROJECT_ROOT).as_posix(),
+        "updated": image.stat().st_mtime,
+        "outfit_tags": info.get("outfit_tags", ""),
+        "drift": info.get("drift"),
+        "drift_warn": info.get("drift") is not None and info["drift"] > body_rig.OUTFIT_DRIFT_WARN,
+    }
+
+
 def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
     base = _character_base(character)
     if base is None:
-        return {"base_id": None, "files": {}, "motion": None, "motions": body_rig.MOTIONS}
+        return {"base_id": None, "files": {}, "motion": None, "motions": body_rig.MOTIONS, "outfit": None}
     folder = _rig_dir(character, base, root_name)
     meta_path = folder / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
@@ -1210,7 +1231,11 @@ def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
         name: {"label": label, "updated": (folder / name).stat().st_mtime}
         for name, label in _RIG_FILES.items() if (folder / name).is_file()
     }
-    return {"base_id": base["id"], "files": files, "motion": meta.get("motion"), "motions": body_rig.MOTIONS}
+    return {
+        "base_id": base["id"], "files": files, "motion": meta.get("motion"), "motions": body_rig.MOTIONS,
+        "with_outfit": bool(meta.get("with_outfit")), "outfit": _outfit_entry(character, base, root_name),
+        "default_outfit_tags": character.get("outfit_tags") or "",
+    }
 
 
 @router.get("/character/{character_id}/body-rig")
@@ -1233,6 +1258,64 @@ async def get_body_rig_file(character_id: int, name: str, root_name: str = "trai
         raise HTTPException(status_code=404, detail="not found")
     download = f"{_safe_name(character['name'])}_{base['id']}_{name}" if path.suffix in (".blend", ".zip") else None
     return FileResponse(path, filename=download)
+
+
+@router.post("/character/{character_id}/body-outfit")
+async def draw_body_outfit(character_id: int, req: BodyOutfitRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    素体の Aポーズの絵に服を着せた絵を描く(2Dモデルの服の層に使う)。首から下を、服のタグで描き直す(インペイント)ので、
+    姿勢・位置は素体の絵にほぼそろう。描いたあと関節を取り直し、素体の絵からのずれ(肩幅に対する割合)を記録する。
+    服のタグは全年齢で検査する(裸の素体に着せるときも)。1枚ぶんの Anlas を使う。
+    """
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    reason, modest = _age_checks(character)
+    if base["kind"] == "nude" and reason:
+        raise HTTPException(status_code=403, detail=reason)
+    source = _body_dir(character, base, req.root_name) / f"{base['id']}_a_pose.png"
+    if not source.is_file():
+        raise HTTPException(status_code=422, detail="素体の「Aポーズ(関節の確認)」をまだ描いていません。先に描いてください。")
+    outfit_tags = (req.outfit_tags if req.outfit_tags is not None else character.get("outfit_tags") or "").strip()
+    if not outfit_tags:
+        raise HTTPException(status_code=422, detail="服のタグを入れてください(キャラシートの普段の服装が空です)。")
+    found = sorted(set(blocked_tags(outfit_tags)) | set(body_base.option_problems(outfit_tags)))
+    if found:
+        raise HTTPException(status_code=422, detail=f"服のタグに入れられないタグです: {', '.join(found)}")
+    prompt = body_base.outfit_prompt(character, base, outfit_tags, _options(), modest=modest)
+    _check_tags(character, prompt, _load_guard(None), False)
+
+    image = Image.open(source).convert("RGB")
+    try:
+        mask, base_points = await asyncio.to_thread(body_rig.outfit_inpaint_mask, image)
+    except body_rig.RigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    negative = join_tags(
+        body_base.NEGATIVE, body_base.OUTFIT_NEGATIVE, content_guard.text("body_base.modest_negative") if modest else "",
+    )
+    seed = character.get("seed") if character.get("seed") is not None else req.seed
+    try:
+        cfg = GenConfig(
+            output_root=source.parent, model=req.model, steps=req.steps, scale=req.scale,
+            negative_prompt=sheet_negative(character, extra=negative), seed=seed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    params = InpaintParams(image=_png(image), mask=_png(mask), strength=req.strength, seed=seed or 0)
+    drawn = await generate_one(client, prompt, image.size, cfg, seed=seed, inpaint=params)
+    drawn = drawn.convert("RGB").resize(image.size) if drawn.size != image.size else drawn.convert("RGB")
+
+    out, meta = _outfit_paths(character, base, req.root_name)
+    drawn.save(out, "PNG")
+    try:
+        _, outfit_points = await asyncio.to_thread(body_rig.detect, drawn)
+        drift = round(body_rig.joint_drift(base_points, outfit_points), 4)
+    except body_rig.RigError:
+        drift = None
+    meta.write_text(json.dumps({"outfit_tags": outfit_tags, "drift": drift, "strength": req.strength}, ensure_ascii=False),
+                    encoding="utf-8")
+    return _rig_entries(character, req.root_name)
 
 
 @router.post("/character/{character_id}/body-rig")
@@ -1263,13 +1346,15 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
             detail="Blender が見つかりません。開発管理者のページの「Blender の実行ファイル」に blender.exe の場所を入れてください。",
         )
     folder = _rig_dir(character, base, req.root_name)
+    outfit, _ = _outfit_paths(character, base, req.root_name)
+    with_outfit = req.with_outfit and outfit.is_file()
 
     def work() -> None:
-        body_rig.build(source, folder)
+        body_rig.build(source, folder, outfit if with_outfit else None)
         result = body_rig.run_blender(blender, folder, req.motion)
         body_rig.frames_to_gif(result["frames"], folder / "preview.gif")
         body_rig.package(folder)
-        (folder / "meta.json").write_text(json.dumps({"motion": req.motion}), encoding="utf-8")
+        (folder / "meta.json").write_text(json.dumps({"motion": req.motion, "with_outfit": with_outfit}), encoding="utf-8")
 
     try:
         await asyncio.to_thread(work)

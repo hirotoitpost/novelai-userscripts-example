@@ -20,8 +20,9 @@ from mathutils import Vector
 
 # 1 画素 = 0.01(Blender の単位)。絵の高さが 1216 なら 12.16
 SCALE = 0.01
-# 重ねる順 1 つあたりの奥行きの差(手前ほど -Y)
-DEPTH = 0.01
+# 重ねる順 1 つあたりの奥行きの差(手前ほど -Y)。透過のマテリアルは、オブジェクトの原点の近さで描く順が決まるので、
+# 奥行きは頂点ではなくオブジェクトの位置に付ける(原点がみな同じだと、服の層が体の裏に描かれた)
+DEPTH = 0.05
 FPS = 24
 # 描き出す範囲の余白(絵の大きさに対する割合)。腕を上げると絵の外に出るので広く取る
 MARGIN = 0.25
@@ -36,8 +37,8 @@ def clear_scene() -> None:
 
 
 def make_material(image_path: Path) -> bpy.types.Material:
-    """絵の色をそのまま出す(光を当てない)透過のマテリアル。メッシュ全部で1つを使う。"""
-    mat = bpy.data.materials.new("texture")
+    """絵の色をそのまま出す(光を当てない)透過のマテリアル。テクスチャ(体・服の層)ごとに1つ。"""
+    mat = bpy.data.materials.new(image_path.stem)
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
@@ -62,9 +63,10 @@ def make_material(image_path: Path) -> bpy.types.Material:
     return mat
 
 
-def make_mesh(data: dict, material: bpy.types.Material, width: int, height: int) -> bpy.types.Object:
+def make_mesh(data: dict, material: bpy.types.Material, width: int, height: int,
+              collection: bpy.types.Collection) -> bpy.types.Object:
     """絵の形に合わせたメッシュ。UV は頂点の絵の位置、頂点グループは骨ごとの重み。"""
-    verts = [tuple(to_world(x, y, height, data["z"])) for x, y in data["vertices"]]
+    verts = [tuple(to_world(x, y, height)) for x, y in data["vertices"]]
     mesh = bpy.data.meshes.new(data["name"])
     mesh.from_pydata(verts, [], [tuple(t) for t in data["triangles"]])
     mesh.update()
@@ -75,7 +77,8 @@ def make_mesh(data: dict, material: bpy.types.Material, width: int, height: int)
             uv.data[loop_index].uv = (x / width, 1.0 - y / height)
     mesh.materials.append(material)
     obj = bpy.data.objects.new(data["name"], mesh)
-    bpy.context.collection.objects.link(obj)
+    obj.location = (0.0, -data["z"] * DEPTH, 0.0)
+    collection.objects.link(obj)
     groups = [obj.vertex_groups.new(name=bone) for bone in data["bones"]]
     for index, row in enumerate(data["weights"]):
         for group, weight in zip(groups, row):
@@ -204,8 +207,19 @@ def main() -> None:
     width, height = rig["size"]
 
     clear_scene()
-    material = make_material(rig_dir / rig["texture"])
-    meshes = [make_mesh(data, material, width, height) for data in rig["meshes"]]
+    # 服の層は別のコレクションに入れる(Blender で表示を切り替えれば、素体だけ・服を着た姿を見比べられる)
+    collections = {"body": bpy.context.scene.collection}
+    if any(data["name"].startswith("outfit.") for data in rig["meshes"]):
+        collections["outfit"] = bpy.data.collections.new("outfit")
+        bpy.context.scene.collection.children.link(collections["outfit"])
+    materials: dict = {}
+    meshes = []
+    for data in rig["meshes"]:
+        texture = data.get("texture", rig["texture"])
+        if texture not in materials:
+            materials[texture] = make_material(rig_dir / texture)
+        layer = "outfit" if data["name"].startswith("outfit.") else "body"
+        meshes.append(make_mesh(data, materials[texture], width, height, collections[layer]))
     arm = make_armature(rig["bones"], height)
     bind(arm, meshes)
     frames = animate(arm, motion)

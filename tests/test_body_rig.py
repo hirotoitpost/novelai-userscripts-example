@@ -126,3 +126,33 @@ def test_find_blender(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BLENDER_PATH", str(exe))
     assert body_rig.find_blender("") == str(exe)
     assert body_rig.find_blender(str(tmp_path / "none.exe")) == str(exe)
+
+
+def test_outfit_layer_is_the_changed_part_and_gets_its_own_meshes() -> None:
+    image, mask, points = _doll()
+    # 服を着た絵: 胴を青く塗り、スカートを素体の形の外まで広げる。頭は同じ
+    outfit = np.asarray(image).copy()
+    outfit[130:290, 160:241] = (40, 60, 160)
+    skirt = np.zeros(mask.shape, np.uint8)
+    cv2.fillPoly(skirt, [np.array([(165, 285), (235, 285), (260, 340), (140, 340)], np.int32)], 1)
+    outfit[skirt.astype(bool)] = (40, 60, 160)
+    person = mask | skirt.astype(bool)
+    j = body_rig.joints(points, mask)
+    region = body_rig.outfit_region(image, Image.fromarray(outfit), mask, person, j)
+    assert region[200, 200] and region[330, 150]  # 胴の服と、素体の形の外のスカート
+    assert not region[60, 200]  # 頭は入れない
+    assert not region[230, 285]  # 変わっていない腕は入れない
+
+    _, groups = body_rig.build_meshes(mask, points, region)
+    names = {g["name"]: g for g in groups}
+    assert "outfit.body" in names and names["outfit.body"]["texture"] == "outfit.png"
+    assert names["outfit.body"]["z"] == names["body"]["z"] + 1
+    # 服の無い腕のメッシュは作らない(肩の付け根に服がかからなければ)
+    assert all(g["texture"] == "outfit.png" for g in groups if g["name"].startswith("outfit."))
+
+
+def test_joint_drift() -> None:
+    _, _, points = _doll()
+    moved = {k: v + np.array([8.0, 0.0], np.float32) for k, v in points.items()}
+    assert body_rig.joint_drift(points, points) == 0
+    assert body_rig.joint_drift(points, moved) == pytest.approx(8 / 80)
