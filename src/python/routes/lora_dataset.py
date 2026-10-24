@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
-from .. import body_base
+from .. import body_base, body_rig
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -88,6 +88,7 @@ from ..lora_dataset import (
     run_dataset,
 )
 from ..models import (
+    BodyRigRequest,
     BodyBaseOptionOrderRequest,
     BodyBaseOptionRequest,
     BodyBaseSaveRequest,
@@ -1180,6 +1181,101 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- 素体の2Dモデル(body_rig.py。Blender で骨を入れる) ---
+
+# 配信するリグのファイル(名前 → 画面での説明)
+_RIG_FILES = {
+    "overlay.png": "メッシュと骨",
+    "preview.gif": "動きの確かめ",
+    "rig.blend": "Blender のファイル",
+    "rig.zip": "テクスチャ+rig.json(メッシュ・重み)+Blender のファイル",
+}
+
+
+def _rig_dir(character: dict, base: dict, root_name: str) -> Path:
+    folder = "body_rig_r18" if base["kind"] == "nude" else "body_rig"
+    return _character_root(root_name, character) / folder / str(base["id"])
+
+
+def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
+    base = _character_base(character)
+    if base is None:
+        return {"base_id": None, "files": {}, "motion": None, "motions": body_rig.MOTIONS}
+    folder = _rig_dir(character, base, root_name)
+    meta_path = folder / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+    files = {
+        name: {"label": label, "updated": (folder / name).stat().st_mtime}
+        for name, label in _RIG_FILES.items() if (folder / name).is_file()
+    }
+    return {"base_id": base["id"], "files": files, "motion": meta.get("motion"), "motions": body_rig.MOTIONS}
+
+
+@router.get("/character/{character_id}/body-rig")
+async def get_body_rig(character_id: int, root_name: str = "training_data") -> dict[str, Any]:
+    """キャラに当てた素体の2Dモデル(作ったファイルと、動きの種類)。"""
+    return _rig_entries(_load_character(character_id), root_name)
+
+
+@router.get("/character/{character_id}/body-rig/file")
+async def get_body_rig_file(character_id: int, name: str, root_name: str = "training_data") -> FileResponse:
+    """2Dモデルのファイル(_RIG_FILES の名前だけ)。.blend と .zip は保存用の名前を付けて返す。"""
+    if name not in _RIG_FILES:
+        raise HTTPException(status_code=404, detail="not found")
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=404, detail="not found")
+    path = _rig_dir(character, base, root_name) / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    download = f"{_safe_name(character['name'])}_{base['id']}_{name}" if path.suffix in (".blend", ".zip") else None
+    return FileResponse(path, filename=download)
+
+
+@router.post("/character/{character_id}/body-rig")
+async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, Any]:
+    """
+    キャラに当てた素体の Aポーズの絵から、2Dアニメ用のモデルを作る: 絵の形に合わせたメッシュと骨の重みを作り(body_rig.build)、
+    Blender で絵をテクスチャに貼って骨を入れ、動きを付け(scripts/blender/build_rig.py)、確かめ用の GIF と、Blender のファイル・
+    テクスチャ・rig.json をまとめた zip を置く。
+    Aポーズの絵が無ければ、素体のタブで先に描く。裸の素体は、裸の素体を当てられるキャラだけ。
+    """
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    if base["kind"] == "nude":
+        reason, _ = _age_checks(character)
+        if reason:
+            raise HTTPException(status_code=403, detail=reason)
+    source = _body_dir(character, base, req.root_name) / f"{base['id']}_a_pose.png"
+    if not source.is_file():
+        raise HTTPException(status_code=422, detail="素体の「Aポーズ(関節の確認)」をまだ描いていません。先に描いてください。")
+    from .. import app_settings
+
+    blender = body_rig.find_blender(str(app_settings.get("blender.path") or ""))
+    if blender is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Blender が見つかりません。開発管理者のページの「Blender の実行ファイル」に blender.exe の場所を入れてください。",
+        )
+    folder = _rig_dir(character, base, req.root_name)
+
+    def work() -> None:
+        body_rig.build(source, folder)
+        result = body_rig.run_blender(blender, folder, req.motion)
+        body_rig.frames_to_gif(result["frames"], folder / "preview.gif")
+        body_rig.package(folder)
+        (folder / "meta.json").write_text(json.dumps({"motion": req.motion}), encoding="utf-8")
+
+    try:
+        await asyncio.to_thread(work)
+    except body_rig.RigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return _rig_entries(character, req.root_name)
 
 
 @router.post("/character/{character_id}/import")

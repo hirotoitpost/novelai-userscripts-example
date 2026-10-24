@@ -53,3 +53,12 @@
 .bdb .fsh-group-head .lora-btn,
 .bdb-item .lora-btn { flex: 0 0 auto; min-height: 30px; padding: 0.3rem 0.8rem; }
 .bdb-item-name { flex: 1; }
+
+/* 2Dモデル(Blender) */
+.bdb-rig { display: flex; flex-direction: column; gap: 0.5rem; padding-top: 0.6rem; border-top: 1px solid #22224a; }
+.bdb-rig .lora-btn { flex: 0 0 auto; text-decoration: none; }
+.bdb-rig-motion { max-width: 14rem; }
+.bdb-rig-views { display: flex; flex-wrap: wrap; gap: 0.8rem; }
+.bdb-rig-views figure { margin: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.bdb-rig-views img { max-height: 420px; max-width: min(100%, 320px); border-radius: 6px; background: #fff; }
+.bdb-rig-views figcaption { font-size: 0.75rem; color: #a0a0c0; }

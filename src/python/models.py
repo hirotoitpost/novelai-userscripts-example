@@ -327,6 +327,13 @@ class BodyBaseOptionOrderRequest(BaseModel):
     ids: list[int] = Field(max_length=200)
 
 
+class BodyRigRequest(BaseModel):
+    """素体の Aポーズの絵から2Dアニメ用のモデルを作る(body_rig.py)。motion は確かめ用に付ける動き。"""
+
+    motion: Literal["wave", "idle", "walk"] = "wave"
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+
+
 class CharacterBodyBaseRequest(BaseModel):
     """キャラに当てる素体(None で素体なし)。"""
 
