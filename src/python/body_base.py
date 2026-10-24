@@ -49,6 +49,13 @@ GROUPS: tuple[tuple[str, str], ...] = (
 )
 
 _STAND = "full body, standing, arms at sides, expressionless"
+# 真後ろ。頭も向こうを向かせる(振り返って顔を見せないように)。重みなしでは、振り返り・正面・前後の2人並びが
+# 出た(2026-10 実機)ので、強調の重みを付ける
+_FROM_BEHIND = "solo, 1.4::from behind::, 1.3::facing away::, back view, back of head, head facing away"
+_BACK_NEGATIVE = (
+    "1.3::looking back::, looking at viewer, looking over shoulder, front view, facing viewer, face, profile, "
+    "turning head, 1.4::multiple views::, 1.3::turnaround::, two views, front and back, 2girls"
+)
 # 手は、こちらへ突き出すと遠近で縮んで指の長さが分からない(2026-10 実機)。顔の横に平らに上げた手にする
 _HAND = "hand focus, close-up, open hand, hand up, flat hand, fingers together"
 _HAND_NEGATIVE = "foreshortening, reaching towards viewer, outstretched hand, extra fingers, fused fingers, multiple views"
@@ -59,9 +66,11 @@ PARTS: tuple[BodyPart, ...] = (
     BodyPart("side", "側面(矢状面)", f"{_STAND}, from side, profile", "whole",
              "耳・肩・大転子・膝・外くるぶしがほぼ一直線(重心線)。脊柱は頸と腰で前に、胸で後ろに弯曲(S字)。"
              "胸郭は前後に厚く、骨盤は前に傾く", "portrait"),
-    BodyPart("back", "背面", f"{_STAND}, from behind, back view, facing away", "whole",
-             "肩甲骨は第2〜7肋骨の高さ、内側の縁は脊柱から指3本分。腰のくぼみ(ヴィーナスのえくぼ)は上後腸骨棘の位置",
-             "portrait"),
+    # from behind だけだと振り返って顔を見せやすい(2026-10 実機)。頭も真後ろを向かせ、振り返りをネガティブで抑える
+    BodyPart("back", "背面(真後ろ)", f"{_STAND}, {_FROM_BEHIND}", "whole",
+             "後頭部は頭の高さの下1/3で首へ細くなり、外後頭隆起の下に項のくぼみ。肩甲骨は第2〜7肋骨の高さ、内側の縁は脊柱から"
+             "指3本分。腰のくぼみ(ヴィーナスのえくぼ)は上後腸骨棘の位置",
+             "portrait", negative=_BACK_NEGATIVE),
     BodyPart("three_quarter", "斜め", f"{_STAND}, three-quarter view", "whole",
              "胸郭と骨盤が同じ向きにねじれずに並ぶか。奥の肩・腰は手前より細く見える", "portrait"),
     BodyPart("a_pose", "Aポーズ(関節の確認)",
@@ -73,6 +82,10 @@ PARTS: tuple[BodyPart, ...] = (
              "目は頭の高さのほぼ中ほど。目と目の間は目1つ分。耳は眉から鼻の下までの高さ"),
     BodyPart("head_side", "頭部(側面)", "portrait, close-up, from side, profile, expressionless", "head",
              "耳は頭の前後の中ほどより後ろ。下顎角から耳の下へ顎のラインがつながる。後頭部が平らになっていないか"),
+    BodyPart("head_back", "頭部(後面・後頭部)", f"upper body, close-up, {_FROM_BEHIND}, nape, hair", "head",
+             "後頭部は丸く、頭頂から外後頭隆起へ張り出す(絶壁になっていないか)。耳は後ろから見ると頭の幅から少し出る。"
+             "首の付け根(項)は頭の幅より細く、僧帽筋で肩へ広がる。髪の分け目・つむじの位置",
+             negative=_BACK_NEGATIVE),
     BodyPart("neck_shoulder", "頸部・肩(鎖骨)", "upper body, front view, facing viewer, collarbone, neck, shoulders, expressionless",
              "head",
              "胸鎖乳突筋が耳の後ろから鎖骨の内端へ斜めに走る。鎖骨はほぼ水平でゆるいS字。首の太さは顔の幅の半分強", nude=False),
@@ -80,8 +93,9 @@ PARTS: tuple[BodyPart, ...] = (
              "胸郭は卵形で、下へ広がる。胸骨の下端(みぞおち)は肘の高さより少し上", nude=False),
     BodyPart("abdomen", "腹部", "midriff, navel, abdomen, cropped torso, front view", "trunk",
              "臍は腸骨稜(骨盤の上縁)のやや上。腹直筋は臍の上下に分かれて見える。脇腹は外腹斜筋のふくらみ", nude=False),
-    BodyPart("upper_back", "背部(肩甲骨・脊柱)", "upper body, from behind, back, shoulder blades, spine, facing away", "trunk",
-             "脊柱は真ん中のくぼみとして通る。肩甲骨は腕の動きでずれる三角の板。僧帽筋が首から肩へなだらかに下がる"),
+    BodyPart("upper_back", "背部(肩甲骨・脊柱)", f"upper body, {_FROM_BEHIND}, back, shoulder blades, spine", "trunk",
+             "脊柱は真ん中のくぼみとして通る。肩甲骨は腕の動きでずれる三角の板。僧帽筋が首から肩へなだらかに下がる",
+             negative=_BACK_NEGATIVE),
     BodyPart("pelvis", "骨盤・腰", "cowboy shot, front view, facing viewer, hips, waist, arms at sides, expressionless", "trunk",
              "女性は骨盤が広く、腰のくびれは臍の高さ。男性は肩幅に対して骨盤が狭い。股の高さは身長のほぼ半分", nude=False),
     BodyPart("arm", "上腕・肘", "arm focus, upper arm, elbow, arm extended to side, close-up", "upper_limb",
@@ -117,21 +131,9 @@ NEGATIVE = "multiple views, character sheet, reference sheet, turnaround, split 
 
 KINDS = {"suit": "素体スーツ(全年齢)", "nude": "裸の素体(成人キャラだけ)"}
 SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, high collar, skin-tight, barefoot"
-SUIT_NEGATIVE = (
-    "cleavage, see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout"
-)
 # 未成年の手がかりがあるキャラ(minor_coded)の素体スーツ。体の線は出すが、胸・腰を強調しない。素体の胸の設定は使わない
 MODEST_SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, high collar, barefoot"
-MODEST_NEGATIVE = (
-    "ass focus, breast focus, from below, curvy, wide hips, large breasts, huge breasts, skin-tight, sexualized, "
-    "seductive, sexy pose"
-)
-# 裸の素体は、デッサン人形の程度にする(乳首・性器を描かない)
-NUDE_TAGS = "nude, completely nude, barbie doll anatomy, featureless breasts, featureless crotch, no nipples"
-NUDE_NEGATIVE = (
-    "nipples, areolae, pussy, penis, testicles, pubic hair, genitals, sex, cum, aroused, seductive smile, "
-    "spread legs, sexually suggestive, blush"
-)
+# 守りにかかわるタグ(裸の素体のタグ・ネガティブ、未成年を示すタグ)は、コンテンツガード(DB)の body_base.* にある
 
 # 設定の選択肢: 値 → (画面の名前, タグ)。空のタグは「指定しない」
 OPTIONS: dict[str, dict[str, tuple[str, str]]] = {
@@ -247,7 +249,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, *, m
         face_tags(character, base),
         body_tags(base, modest=modest),
         adult,
-        NUDE_TAGS if nude else MODEST_SUIT_TAGS if modest else SUIT_TAGS,
+        content_guard.text("body_base.nude_tags") if nude else MODEST_SUIT_TAGS if modest else SUIT_TAGS,
         part.tags,
         BACKGROUND,
         character.get("style_tags"),
@@ -258,31 +260,33 @@ def negative(base: dict[str, Any], part: BodyPart | None = None, *, modest: bool
     """素体の種類・部位ごとに足すネガティブ(キャラシートのネガティブ・年齢区分の安全タグは別に入る)。"""
     extra = part.negative if part else ""
     if base.get("kind") == "nude":
-        return join_tags(NEGATIVE, NUDE_NEGATIVE, r18_negative(), extra, base.get("negative_tags"))
-    return join_tags(NEGATIVE, SUIT_NEGATIVE, MODEST_NEGATIVE if modest else "", extra, base.get("negative_tags"))
+        return join_tags(NEGATIVE, content_guard.text("body_base.nude_negative"), r18_negative(), extra, base.get("negative_tags"))
+    return join_tags(
+        NEGATIVE,
+        content_guard.text("body_base.suit_negative"),
+        content_guard.text("body_base.modest_negative") if modest else "",
+        extra,
+        base.get("negative_tags"),
+    )
 
 
-# 裸の素体の判定に使う、未成年を示す語。コンテンツガードの dataset.minor_tags は設定で空にもできるので、
-# 裸の素体はそれに加えて、ここに固定した語でも見る(設定で外せない)
-_MINOR_RE = re.compile(
-    r"(?<![\w-])(jk|joshi ?kousei|school ?uniform|serafuku|gym uniform|school ?swimsuit|randoseru|kindergarten"
-    r"|(high|middle|elementary) school|school ?(girl|boy)s?|students?|loli|shota|child(ren)?|kids?|teen(age|ager)?"
-    r"|underage|minor|young|aged down|toddler|little girl|little boy|baby|infant)(?![\w-])",
-    re.IGNORECASE,
-)
 _SHEET_TEXT_FIELDS = ("name", "trigger_word", "appearance_tags", "body_tags", "outfit_tags", "style_tags")
 
 
 def minor_words(text: str) -> list[str]:
-    """未成年を示す語(固定の一覧)。"""
-    return sorted({m.group(0).lower() for m in _MINOR_RE.finditer(text or "")})
+    """
+    未成年を示す語(コンテンツガードの body_base.minor_tags)。キャラ別データセットの dataset.minor_tags とは別に持つ
+    (あちらを空にしても、素体はこちらで判定する)。
+    """
+    return content_guard.find("body_base.minor_tags", text or "")
 
 
 def nude_block_reason(character: dict[str, Any], family: list[dict[str, Any]]) -> str | None:
     """
     裸の素体を当てられない理由(当てられれば None)。成人フラグがあり、年齢が 18 歳以上と入れてあり、未成年の定義・
-    未成年を示すタグ(コンテンツガードの設定と、固定の一覧の両方)が無いことに加え、同じ人物の成長段階(family: 元のキャラと、
-    その段階のキャラ全部)に未成年の段階があれば当てない(未成年の段階と同じ顔・同じシードで描かれる人物のため)。
+    未成年を示すタグ(コンテンツガードの dataset.minor_tags と body_base.minor_tags)が無いことに加え、同じ人物の成長段階
+    (family: 元のキャラと、その段階のキャラ全部)に未成年の段階があれば当てない(未成年の段階と同じ顔・同じシードで描かれる
+    人物のため)。
     """
     if not character.get("is_adult"):
         return "裸の素体は、成人キャラ(キャラシートの成人フラグ)にだけ当てられます。"
