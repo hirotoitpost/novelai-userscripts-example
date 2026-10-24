@@ -134,14 +134,19 @@ def spine_skeleton(rig: dict) -> dict:
             "vertices": data,
         }}
 
+    from . import body_physics
+
     animations = {}
+    wind = float(rig.get("physics", {}).get("wind", 0.0))
     for key, motion in body_motions.MOTIONS.items():
+        # 揺れもの(髪・胸)の揺れを足し、移動は Spine の形(親の骨から見た移動)に直す
+        baked = body_physics.bake(rig, motion.to_json(), wind=wind)
         timelines: dict[str, dict] = {}
-        for bone, points in motion.rotate.items():
+        for bone, points in baked["rotate"].items():
             timelines.setdefault(bone, {})["rotate"] = [
                 {"time": round((f - 1) / body_motions.FPS, 4), "value": v} for f, v in points
             ]
-        for bone, points in motion.translate.items():
+        for bone, points in body_physics.to_spine_translate(rig, baked).items():
             timelines.setdefault(bone, {})["translate"] = [
                 {"time": round((f - 1) / body_motions.FPS, 4), "x": dx, "y": dy} for f, dx, dy in points
             ]
@@ -216,6 +221,14 @@ def export_psd(rig_dir: Path, rig: dict) -> Path:
                 crop[..., 3] = np.where(own[y0:y1, x0:x1], crop[..., 3], 0)
                 # レイヤー名は英字だけ(PSD の古い形式の名前は日本語を入れられない)
                 folder.append(PixelLayer.frompil(Image.fromarray(crop, "RGBA"), psd, part, int(y0), int(x0)))
+    # 髪の層(垂れた髪。揺れものの骨で動かす)は、体・服のフォルダの手前に1枚で置く
+    if (rig_dir / "hair.png").is_file() and any(m["name"] == "hair" for m in rig["meshes"]):
+        hair = np.asarray(Image.open(rig_dir / "hair.png").convert("RGBA"))
+        ys, xs = np.nonzero(hair[..., 3] > 8)
+        if len(ys):
+            y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+            folder = Group.new(psd, "hair")
+            folder.append(PixelLayer.frompil(Image.fromarray(hair[y0:y1, x0:x1], "RGBA"), psd, "hair", int(y0), int(x0)))
     out = rig_dir / "model.psd"
     psd.save(out)
     return out

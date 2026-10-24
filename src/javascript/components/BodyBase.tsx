@@ -65,6 +65,10 @@ interface RigInfo {
   /** 服を着せた Aポーズの絵(服の層に使う)。drift は素体の絵からの関節のずれ(肩幅に対する割合) */
   outfit: { path: string; updated: number; outfit_tags: string; drift: number | null; drift_warn: boolean; attempts?: number } | null
   default_outfit_tags?: string
+  /** 作った2Dモデルの揺れもの(髪の鎖・胸・風の強さ) */
+  physics?: { hair: string[]; breasts: boolean; wind: number } | null
+  /** 胸の揺れを付けられるキャラか(成人キャラで、控えめに描くキャラでない) */
+  breast_allowed?: boolean
   /** 作ったときの品質の確かめ(Aポーズの骨格・服の層のずれ・描き出したコマのかけら/細い穴) */
   quality?: {
     a_pose_problems: string[]
@@ -116,6 +120,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [outfitTags, setOutfitTags] = useState('')
   const [outfitStrength, setOutfitStrength] = useState(0.85)
   const [withOutfit, setWithOutfit] = useState(true)
+  // 揺れもの: 髪・胸(成人キャラだけ)・風の強さ
+  const [hairPhysics, setHairPhysics] = useState(true)
+  const [breastPhysics, setBreastPhysics] = useState(true)
+  const [wind, setWind] = useState(0.3)
   const [outfitRunning, setOutfitRunning] = useState(false)
 
   function loadBases() {
@@ -182,7 +190,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       const res = await fetch(`/api/lora-dataset/character/${characterId}/body-rig`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ motion: rigMotion, root_name: rootName, with_outfit: withOutfit }),
+        body: JSON.stringify({
+          motion: rigMotion, root_name: rootName, with_outfit: withOutfit,
+          hair_physics: hairPhysics, breast_physics: breastPhysics && !!rig?.breast_allowed, wind,
+        }),
       })
       if (!res.ok) {
         setRigStatus(`作れませんでした: ${await detail(res)}`)
@@ -519,6 +530,28 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
                 </div>
               </div>
             </div>
+          </div>
+          <div className="fsh-actions bdb-physics">
+            <span className="lora-hint">揺れもの:</span>
+            <label className="fsh-label" title="目の高さより下に垂れた髪を髪の層に分け、ばねでつないだ骨で、動きや重力・風に遅れて揺らします">
+              <input type="checkbox" checked={hairPhysics} disabled={busy || rigRunning} onChange={e => setHairPhysics(e.target.checked)} />
+              髪の揺れ
+            </label>
+            <label className="fsh-label"
+              title={rig.breast_allowed ? '胸を、体の動きに遅れて揺らします' : '胸の揺れは、成人キャラ(未成年の手がかりの無いキャラ)だけに付けられます'}>
+              <input type="checkbox" checked={breastPhysics && !!rig.breast_allowed} disabled={busy || rigRunning || !rig.breast_allowed}
+                onChange={e => setBreastPhysics(e.target.checked)} />
+              胸の揺れ{!rig.breast_allowed && '(このキャラには付けられません)'}
+            </label>
+            <label className="fsh-label">風 {wind.toFixed(2)}
+              <input type="range" min={0} max={1} step={0.05} value={wind} disabled={busy || rigRunning || !hairPhysics}
+                onChange={e => setWind(Number(e.target.value))} />
+            </label>
+            {rig.physics && (
+              <span className="lora-hint">
+                (今のモデル: 髪 {rig.physics.hair.length ? rig.physics.hair.length + '本の鎖' : 'なし'}・胸 {rig.physics.breasts ? 'あり' : 'なし'}・風 {rig.physics.wind})
+              </span>
+            )}
           </div>
           <div className="fsh-actions">
             {rig.outfit && (
