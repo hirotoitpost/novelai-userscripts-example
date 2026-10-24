@@ -345,6 +345,8 @@ class BodyOutfitRequest(BaseModel):
 
     outfit_tags: Optional[str] = Field(None, max_length=1000)
     strength: float = Field(0.85, ge=0.3, le=1.0)
+    # 関節のずれが大きければ、強さを下げて描き直す(回数は設定 body_base.check_attempts)
+    auto_check: bool = True
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
     model: ImageModelLiteral = "nai-diffusion-4-5-full"
     steps: int = Field(23, ge=1, le=50)
@@ -361,7 +363,10 @@ class CharacterBodyBaseRequest(BaseModel):
 class BodyBaseSheetRequest(FaceSheetRequest):
     """
     キャラに当てた素体で、部位(body_base.PARTS のキー)を1枚ずつ描く。描いてある部位は描き直す(上書き)。
+    auto_check は描いた絵を自動で調べ(body_check.py)、合わなければシードを変えて描き直す(回数は設定 body_base.check_attempts)。
     """
+
+    auto_check: bool = True
 
 
 class CharacterDatasetRequest(BaseModel):

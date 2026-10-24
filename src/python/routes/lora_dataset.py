@@ -17,7 +17,7 @@ from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
-from .. import body_base, body_export, body_rig, content_guard
+from .. import app_settings, body_base, body_check, body_export, body_rig, content_guard
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -896,6 +896,10 @@ def _character_base(character: dict) -> dict | None:
         conn.close()
 
 
+# 自動チェックで描き直すときの、シードのずらし幅
+_CHECK_SEED_STEP = 7919
+
+
 def _body_dir(character: dict, base: dict, root_name: str) -> Path:
     return _character_root(root_name, character) / body_base.file_dir_name(base)
 
@@ -908,7 +912,10 @@ def _body_entries(character: dict, root_name: str) -> dict[str, Any]:
     for part in body_base.PARTS:
         path = _body_dir(character, base, root_name) / f"{base['id']}_{part.key}.png" if base else None
         drawn = path is not None and path.is_file()
+        check_path = path.with_suffix(".check.json") if path is not None else None
         parts.append({
+            # 自動チェックの結果(合否・理由・描いた回数。チェックせずに描いた絵は null)
+            "auto_check": json.loads(check_path.read_text(encoding="utf-8")) if drawn and check_path.is_file() else None,
             "key": part.key,
             "label": part.label,
             "group": part.group,
@@ -1153,6 +1160,7 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
 
         folder.mkdir(parents=True, exist_ok=True)
         succeeded = failed = 0
+        attempts = int(app_settings.get("body_base.check_attempts"))
         for index, part in enumerate(parts, start=1):
             event: dict[str, Any] = {"current": index, "total": len(parts), "key": part.key, "label": part.label}
             try:
@@ -1160,9 +1168,33 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
                 part_cfg = dataclasses.replace(
                     cfg, negative_prompt=join_tags(cfg.negative_prompt, part.negative)
                 ) if part.negative else cfg
-                image = await generate_one(client, prompts[part.key], body_base.SIZES[part.size], part_cfg, seed=cfg.seed)
+                # 自動チェック: 合わなければシードを変えて描き直し、合う絵が出なければ点数のいちばん高い絵を残す
+                best: tuple[Image.Image, body_check.CheckResult | None] | None = None
+                tries = attempts if req.auto_check else 1
+                for attempt in range(tries):
+                    seed = cfg.seed + attempt * _CHECK_SEED_STEP if cfg.seed is not None else None
+                    image = await generate_one(client, prompts[part.key], body_base.SIZES[part.size], part_cfg, seed=seed)
+                    result = await asyncio.to_thread(body_check.check, part.key, image) if req.auto_check else None
+                    if best is None or (result is not None and best[1] is not None and result.score > best[1].score):
+                        best = (image, result)
+                    if result is None or result.passed:
+                        break
+                    if attempt + 1 < tries:
+                        yield _sse("progress", {
+                            "current": index, "total": len(parts), "key": part.key, "label": part.label,
+                            "status": "retry", "attempt": attempt + 1, "reasons": result.reasons,
+                        })
+                        await asyncio.sleep(2)
+                image, result = best
                 path = folder / f"{base['id']}_{part.key}.png"
                 image.save(path, "PNG")
+                check_path = path.with_suffix(".check.json")
+                if result is not None:
+                    check_path.write_text(json.dumps({**result.to_json(), "attempts": attempt + 1}, ensure_ascii=False),
+                                          encoding="utf-8")
+                    event["auto_check"] = {**result.to_json(), "attempts": attempt + 1}
+                elif check_path.exists():
+                    check_path.unlink()
                 caption = join_tags(
                     character.get("trigger_word"), body_base.face_tags(character, base), body_base.body_tags(base, options, modest=modest, rear=part.rear),
                     part.tags,
@@ -1219,6 +1251,7 @@ def _outfit_entry(character: dict, base: dict, root_name: str) -> dict[str, Any]
         "outfit_tags": info.get("outfit_tags", ""),
         "drift": info.get("drift"),
         "drift_warn": info.get("drift") is not None and info["drift"] > body_rig.OUTFIT_DRIFT_WARN,
+        "attempts": info.get("attempts", 1),
     }
 
 
@@ -1236,6 +1269,7 @@ def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
     return {
         "base_id": base["id"], "files": files, "motion": meta.get("motion"), "motions": body_rig.MOTIONS,
         "with_outfit": bool(meta.get("with_outfit")), "outfit": _outfit_entry(character, base, root_name),
+        "quality": meta.get("quality"),
         "default_outfit_tags": character.get("outfit_tags") or "",
     }
 
@@ -1304,19 +1338,32 @@ async def draw_body_outfit(character_id: int, req: BodyOutfitRequest, client: Cl
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    params = InpaintParams(image=_png(image), mask=_png(mask), strength=req.strength, seed=seed or 0)
-    drawn = await generate_one(client, prompt, image.size, cfg, seed=seed, inpaint=params)
-    drawn = drawn.convert("RGB").resize(image.size) if drawn.size != image.size else drawn.convert("RGB")
+    # 関節のずれが大きければ、描き直しの強さを下げ、シードを変えて描き直す(回数は自動チェックと同じ設定)。
+    # いちばんずれの小さい絵を残す
+    tries = int(app_settings.get("body_base.check_attempts")) if req.auto_check else 1
+    best: tuple[Image.Image, float | None, float] | None = None
+    for attempt in range(tries):
+        strength = max(0.5, req.strength - 0.1 * attempt)
+        attempt_seed = seed + attempt * _CHECK_SEED_STEP if seed is not None else None
+        params = InpaintParams(image=_png(image), mask=_png(mask), strength=strength, seed=attempt_seed or 0)
+        drawn = await generate_one(client, prompt, image.size, cfg, seed=attempt_seed, inpaint=params)
+        drawn = drawn.convert("RGB").resize(image.size) if drawn.size != image.size else drawn.convert("RGB")
+        try:
+            _, outfit_points = await asyncio.to_thread(body_rig.detect, drawn)
+            drift = round(body_rig.joint_drift(base_points, outfit_points), 4)
+        except body_rig.RigError:
+            drift = None
+        if best is None or (drift is not None and (best[1] is None or drift < best[1])):
+            best = (drawn, drift, strength)
+        if drift is not None and drift <= body_rig.OUTFIT_DRIFT_WARN:
+            break
+    drawn, drift, strength = best
 
     out, meta = _outfit_paths(character, base, req.root_name)
     drawn.save(out, "PNG")
-    try:
-        _, outfit_points = await asyncio.to_thread(body_rig.detect, drawn)
-        drift = round(body_rig.joint_drift(base_points, outfit_points), 4)
-    except body_rig.RigError:
-        drift = None
-    meta.write_text(json.dumps({"outfit_tags": outfit_tags, "drift": drift, "strength": req.strength}, ensure_ascii=False),
-                    encoding="utf-8")
+    meta.write_text(json.dumps(
+        {"outfit_tags": outfit_tags, "drift": drift, "strength": strength, "attempts": attempt + 1}, ensure_ascii=False,
+    ), encoding="utf-8")
     return _rig_entries(character, req.root_name)
 
 
@@ -1339,8 +1386,6 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
     source = _body_dir(character, base, req.root_name) / f"{base['id']}_a_pose.png"
     if not source.is_file():
         raise HTTPException(status_code=422, detail="素体の「Aポーズ(関節の確認)」をまだ描いていません。先に描いてください。")
-    from .. import app_settings
-
     blender = body_rig.find_blender(str(app_settings.get("blender.path") or ""))
     if blender is None:
         raise HTTPException(
@@ -1352,12 +1397,21 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
     with_outfit = req.with_outfit and outfit.is_file()
 
     def work() -> None:
-        body_rig.build(source, folder, outfit if with_outfit else None)
+        rig = body_rig.build(source, folder, outfit if with_outfit else None)
         result = body_rig.run_blender(blender, folder, req.motion)
+        # 品質: Aポーズの骨格・服の層のずれ・描き出したコマ(かけら・細い穴)
+        _, points = body_rig.detect(Image.open(source).convert("RGB"))
+        quality = {
+            "a_pose_problems": body_check.a_pose_problems(points),
+            "outfit_drift": rig.get("outfit_drift"),
+            "outfit_drift_warn": rig.get("outfit_drift") is not None and rig["outfit_drift"] > body_rig.OUTFIT_DRIFT_WARN,
+            "frames": body_rig.frame_quality(result["frames"]),
+        }
         body_rig.frames_to_gif(result["frames"], folder / "preview.gif")
         body_export.export_all(folder)
         body_rig.package(folder)
-        (folder / "meta.json").write_text(json.dumps({"motion": req.motion, "with_outfit": with_outfit}), encoding="utf-8")
+        meta = {"motion": req.motion, "with_outfit": with_outfit, "quality": quality}
+        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     try:
         await asyncio.to_thread(work)
