@@ -332,6 +332,23 @@ class BodyRigRequest(BaseModel):
 
     motion: Literal["wave", "idle", "walk"] = "wave"
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    # 服を着た Aポーズの絵(POST .../body-outfit)があれば、服の層を重ねる
+    with_outfit: bool = True
+
+
+class BodyOutfitRequest(BaseModel):
+    """
+    素体の Aポーズの絵に服を着せた絵を描く(2Dモデルの服の層)。outfit_tags を省くとキャラシートの普段の服装。
+    strength は描き直しの強さ(低いほど素体の姿勢・位置に近く、高いほど服がはっきり変わる)。
+    """
+
+    outfit_tags: Optional[str] = Field(None, max_length=1000)
+    strength: float = Field(0.85, ge=0.3, le=1.0)
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    model: ImageModelLiteral = "nai-diffusion-4-5-full"
+    steps: int = Field(23, ge=1, le=50)
+    scale: float = Field(5.0, ge=0.0, le=10.0)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
 
 
 class CharacterBodyBaseRequest(BaseModel):

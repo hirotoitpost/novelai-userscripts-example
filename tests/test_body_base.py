@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -278,3 +279,30 @@ def test_option_tags_are_checked(client: TestClient) -> None:
     res = client.post("/api/lora-dataset/body-base-options", json={"field": "build", "label": "x", "tags": "slim", "rear_tags": "nude"})
     assert res.status_code == 422
     assert client.post("/api/lora-dataset/body-base-options", json={"field": "hair", "label": "x"}).status_code == 422
+
+
+def test_outfit_is_drawn_over_the_a_pose(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import body_rig
+
+    character = _character(client, "test", is_adult=1, age=25)
+    base = _base(client)
+    client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]})
+    url = f"/api/lora-dataset/character/{character['id']}/body-outfit"
+    # Aポーズを描く前は着せられない
+    assert client.post(url, json={"outfit_tags": "white blouse"}).status_code == 422
+    client.post(f"/api/lora-dataset/character/{character['id']}/body-base", json={"keys": ["a_pose"]})
+
+    points = {"left_shoulder": np.array([500.0, 260.0]), "right_shoulder": np.array([330.0, 260.0])}
+    monkeypatch.setattr(body_rig, "outfit_inpaint_mask", lambda img: (Image.new("RGB", img.size, "white"), points))
+    monkeypatch.setattr(body_rig, "detect", lambda img: (None, points))
+    # 全年齢で止めるタグ・未成年を示すタグは着せられない
+    assert client.post(url, json={"outfit_tags": "bikini"}).status_code == 422
+    assert client.post(url, json={"outfit_tags": "school uniform"}).status_code == 422
+    res = client.post(url, json={"outfit_tags": "white long-sleeved blouse, navy skirt"})
+    assert res.status_code == 200, res.text
+    outfit = res.json()["outfit"]
+    assert outfit["outfit_tags"] == "white long-sleeved blouse, navy skirt" and outfit["drift"] == 0
+    assert (tmp_path / outfit["path"]).is_file()
+    prompt, negative = client.calls[-1]  # type: ignore[attr-defined]
+    assert "navy skirt" in prompt and "a-pose" in prompt and "bodysuit" not in prompt
+    assert "bodysuit" in negative and "nude" in negative

@@ -73,9 +73,11 @@ class MeshGroup:
 MESH_GROUPS: tuple[MeshGroup, ...] = (
     MeshGroup("body", ("torso", "head", "thigh.L", "shin.L", "foot.L", "thigh.R", "shin.R", "foot.R"),
               ("torso", "head", "thigh.L", "shin.L", "foot.L", "thigh.R", "shin.R", "foot.R"), 0),
-    MeshGroup("arm.L", ("upper_arm.L", "forearm.L", "hand.L"), ("torso", "upper_arm.L", "forearm.L", "hand.L"), 1),
-    MeshGroup("arm.R", ("upper_arm.R", "forearm.R", "hand.R"), ("torso", "upper_arm.R", "forearm.R", "hand.R"), 1),
+    MeshGroup("arm.L", ("upper_arm.L", "forearm.L", "hand.L"), ("torso", "upper_arm.L", "forearm.L", "hand.L"), 2),
+    MeshGroup("arm.R", ("upper_arm.R", "forearm.R", "hand.R"), ("torso", "upper_arm.R", "forearm.R", "hand.R"), 2),
 )
+# 服の層のメッシュは、同じグループの体のメッシュのすぐ手前(z + 1)に置く。名前は "outfit." + グループ名
+OUTFIT_PREFIX = "outfit."
 
 # 格子の間隔(肩幅に対する割合)。細かいほど曲げがなめらかだが、頂点が増える
 _GRID = 0.045
@@ -88,6 +90,10 @@ _SHOULDER_CAP = 1.6
 # 頭への移り: 顎の線の上下のこの幅(肩幅に対する割合)で、首(胴)から頭へ重みを移す
 _NECK_BAND = 0.08
 _MIN_SCORE = 0.3
+# 服の層: 素体の絵と服を着た絵の色の差(Lab の距離)がこれより大きい画素を服とみなす
+_OUTFIT_DELTA = 12.0
+# 服を着た絵の関節が、素体の絵からこれ(肩幅に対する割合)より動いていたら、ずれとして知らせる
+OUTFIT_DRIFT_WARN = 0.06
 
 
 class RigError(ValueError):
@@ -223,10 +229,11 @@ def _region_mesh(region: np.ndarray, spacing: float) -> tuple[np.ndarray, np.nda
     return pts[used], remap[tri]
 
 
-def build_meshes(mask: np.ndarray, points: dict[str, np.ndarray]) -> tuple[dict[str, np.ndarray], list[dict]]:
-    """(骨の端の点, メッシュのグループごとの {name, z, bones, vertices, triangles, weights})。mask は人物(True)。"""
-    j = joints(points, mask)
-    labels = assign(mask, j)
+def _group_meshes(
+    mask: np.ndarray, labels: np.ndarray, j: dict[str, np.ndarray], *, prefix: str = "", z_offset: int = 0,
+    texture: str = "texture.png", skip_empty: bool = False,
+) -> list[dict]:
+    """人物(mask)と部位の割り当て(labels)から、MESH_GROUPS ごとのメッシュ。"""
     shoulder = float(np.linalg.norm(j["left_shoulder"] - j["right_shoulder"]))
     spacing = _GRID * shoulder
     # メッシュは人物の形より少し外まで覆う(輪郭は絵の透明で切れる。曲げたとき縁が欠けないように)
@@ -246,40 +253,121 @@ def build_meshes(mask: np.ndarray, points: dict[str, np.ndarray]) -> tuple[dict[
         # 広げるのは背景の側だけ(ほかのメッシュの人物の画素まで広げると、腕を動かしたとき腕の縁が胴に残った)
         region = cv2.dilate(region.astype(np.uint8), pad).astype(bool) & (region | ~mask)
         if not region.any():
+            if skip_empty:
+                continue
             raise RigError(f"{group.name} の画素がありませんでした(骨格の点がずれているかもしれません)")
         verts, tris = _region_mesh(region, spacing)
         wts = weights(verts[:, 0], verts[:, 1], j, group.bones, anchor)
         groups.append({
-            "name": group.name, "z": group.z, "bones": list(group.bones),
+            "name": prefix + group.name, "z": group.z + z_offset, "bones": list(group.bones), "texture": texture,
             "vertices": verts.round(1).tolist(), "triangles": tris.tolist(), "weights": wts.round(4).tolist(),
         })
+    return groups
+
+
+def build_meshes(
+    mask: np.ndarray, points: dict[str, np.ndarray], outfit_mask: np.ndarray | None = None,
+) -> tuple[dict[str, np.ndarray], list[dict]]:
+    """
+    (骨の端の点, メッシュのグループごとの {name, z, bones, texture, vertices, triangles, weights})。mask は人物(True)。
+    outfit_mask(服の層の画素)があれば、服のメッシュも作る(骨・重みの決め方は体と同じ。服の無いグループは作らない)。
+    """
+    j = joints(points, mask)
+    groups = _group_meshes(mask, assign(mask, j), j)
+    if outfit_mask is not None and outfit_mask.any():
+        groups += _group_meshes(
+            outfit_mask, assign(outfit_mask, j), j, prefix=OUTFIT_PREFIX, z_offset=1, texture="outfit.png", skip_empty=True,
+        )
     return j, groups
 
 
-def build(source: Path, out_dir: Path) -> dict:
-    """source(Aポーズの絵)から、out_dir に texture.png・rig.json・overlay.png(確かめ用)を書く。"""
+def outfit_region(base: Image.Image, outfit: Image.Image, base_mask: np.ndarray, outfit_mask: np.ndarray,
+                  j: dict[str, np.ndarray]) -> np.ndarray:
+    """
+    服の層の画素: 服を着た絵の人物のうち、素体の絵と色が違う所と、素体の形の外にはみ出した所(スカートの裾など)。
+    頭(顎の線より上)は入れない。細かい点は消し、服の中の小さな穴は埋める。
+    """
+    lab_a = cv2.cvtColor(np.asarray(base.convert("RGB")), cv2.COLOR_RGB2LAB).astype(np.float32)
+    lab_b = cv2.cvtColor(np.asarray(outfit.convert("RGB")), cv2.COLOR_RGB2LAB).astype(np.float32)
+    delta = np.linalg.norm(cv2.GaussianBlur(lab_a - lab_b, (5, 5), 0), axis=2)
+    region = outfit_mask & ((delta > _OUTFIT_DELTA) | ~base_mask)
+    h, w = region.shape
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    region &= _head_share(xs, ys, j) < 0.5
+    region = cv2.morphologyEx(region.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    region = cv2.morphologyEx(region, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+    # 小さなかけら(色の揺れ)を消し、服の中の小さな穴(柄が素体と同じ色の所)を埋める
+    area = int(outfit_mask.sum())
+    count, comp, stats, _ = cv2.connectedComponentsWithStats(region, connectivity=8)
+    keep = np.zeros(count, bool)
+    keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= area * 0.002
+    region = keep[comp]
+    holes = (~region).astype(np.uint8)
+    count, comp, stats, _ = cv2.connectedComponentsWithStats(holes, connectivity=4)
+    small = np.zeros(count, bool)
+    small[1:] = stats[1:, cv2.CC_STAT_AREA] < area * 0.01
+    region |= small[comp] & outfit_mask
+    return region
+
+
+def detect(image: Image.Image) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """(人物(True), 確からしい骨格の点)。"""
     from .anime_seg import person_mask
     from .ugoira_rig import KEYPOINTS, detect_pose
 
-    image = Image.open(source).convert("RGB")
     mask = person_mask(image) > 0.5
     if not mask.any():
         raise RigError("人物が見つかりませんでした。")
     ys, xs = np.nonzero(mask)
     skeleton = detect_pose(image, (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())))
-    points = {n: p for n, p, s in zip(KEYPOINTS, skeleton.points, skeleton.scores) if s >= _MIN_SCORE}
-    j, meshes = build_meshes(mask, points)
+    return mask, {n: p for n, p, s in zip(KEYPOINTS, skeleton.points, skeleton.scores) if s >= _MIN_SCORE}
+
+
+def joint_drift(base: dict[str, np.ndarray], other: dict[str, np.ndarray]) -> float:
+    """2枚の絵の関節(両方で取れた点)のずれの平均。肩幅に対する割合。"""
+    shoulder = float(np.linalg.norm(base["left_shoulder"] - base["right_shoulder"]))
+    common = [n for n in base if n in other]
+    if not common:
+        return float("inf")
+    return float(np.mean([np.linalg.norm(base[n] - other[n]) for n in common]) / shoulder)
+
+
+def build(source: Path, out_dir: Path, outfit: Path | None = None) -> dict:
+    """
+    source(Aポーズの絵)から、out_dir に texture.png・rig.json・overlay.png(確かめ用)を書く。outfit(同じ Aポーズで服を
+    着た絵)があれば、服の層(outfit.png と服のメッシュ)も作る。骨は素体の絵の関節で決める(服の層も同じ骨で動く)。
+    """
+    image = Image.open(source).convert("RGB")
+    mask, points = detect(image)
+    outfit_image = outfit_mask = None
+    visible = mask
+    drift = None
+    if outfit is not None:
+        outfit_image = Image.open(outfit).convert("RGB")
+        if outfit_image.size != image.size:
+            raise RigError("服を着た絵と素体の絵の大きさが違います。")
+        person, outfit_points = detect(outfit_image)
+        drift = joint_drift(points, outfit_points)
+        outfit_mask = outfit_region(image, outfit_image, mask, person, joints(points, mask))
+        # 服を着た絵で背景の所は、体の層も見せない(服が素体より細い所で、素体の縁が服の横にはみ出して見えた)
+        visible = mask & person
+    j, meshes = build_meshes(mask, points, outfit_mask)
 
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     # テクスチャ: 元の絵の背景を透明に(人物の縁は anime_seg の確からしさでなめらかに)
-    soft = cv2.GaussianBlur(mask.astype(np.float32), (3, 3), 0)
+    soft = cv2.GaussianBlur(visible.astype(np.float32), (3, 3), 0)
     Image.fromarray(np.dstack([np.asarray(image), (soft * 255).astype(np.uint8)]), "RGBA").save(out_dir / "texture.png")
+    if outfit_image is not None and outfit_mask is not None:
+        soft = cv2.GaussianBlur(outfit_mask.astype(np.float32), (3, 3), 0)
+        Image.fromarray(np.dstack([np.asarray(outfit_image), (soft * 255).astype(np.uint8)]), "RGBA").save(out_dir / "outfit.png")
     rig = {
         "source": source.name,
         "size": list(image.size),
         "texture": "texture.png",
+        "outfit": outfit.name if outfit is not None else None,
+        "outfit_drift": round(drift, 4) if drift is not None else None,
         "bones": [
             {"name": b.name, "label": b.label, "parent": b.parent,
              "head": [float(v) for v in j[b.head]], "tail": [float(v) for v in j[b.tail]]}
@@ -288,7 +376,7 @@ def build(source: Path, out_dir: Path) -> dict:
         "meshes": meshes,
     }
     (out_dir / "rig.json").write_text(json.dumps(rig, ensure_ascii=False), encoding="utf-8")
-    _overlay(image, rig).save(out_dir / "overlay.png")
+    _overlay(outfit_image or image, rig).save(out_dir / "overlay.png")
     return rig
 
 
@@ -375,3 +463,19 @@ def package(rig_dir: Path) -> Path:
             if path.is_file() and path.suffix != ".zip" and path.name not in ("preview.gif", "meta.json"):
                 archive.write(path, path.relative_to(rig_dir).as_posix())
     return out
+
+
+def outfit_inpaint_mask(image: Image.Image) -> tuple[Image.Image, dict[str, np.ndarray]]:
+    """
+    服を着せるときに描き直す範囲(白)と、その絵の骨格の点。人物の顎の線より下を、肩幅の 0.15 倍だけ外へ広げた範囲
+    (スカートや袖が体の形の外へ出られるように)。頭・髪は描き直さない(顔が変わらないように)。
+    """
+    mask, points = detect(image)
+    j = joints(points, mask)
+    shoulder = float(np.linalg.norm(j["left_shoulder"] - j["right_shoulder"]))
+    grow = max(3, int(shoulder * 0.15)) | 1
+    region = cv2.dilate(mask.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow))).astype(bool)
+    h, w = mask.shape
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    region &= _head_share(xs, ys, j) < 0.5
+    return Image.fromarray((region * 255).astype(np.uint8)).convert("RGB"), points

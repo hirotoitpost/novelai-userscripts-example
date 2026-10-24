@@ -58,6 +58,11 @@ interface RigInfo {
   files: Record<string, { label: string; updated: number }>
   motion: string | null
   motions: Record<string, string>
+  /** 作った2Dモデルに服の層を重ねたか */
+  with_outfit?: boolean
+  /** 服を着せた Aポーズの絵(服の層に使う)。drift は素体の絵からの関節のずれ(肩幅に対する割合) */
+  outfit: { path: string; updated: number; outfit_tags: string; drift: number | null; drift_warn: boolean } | null
+  default_outfit_tags?: string
 }
 
 interface Props {
@@ -96,6 +101,11 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [rigMotion, setRigMotion] = useState('wave')
   const [rigRunning, setRigRunning] = useState(false)
   const [rigStatus, setRigStatus] = useState<string | null>(null)
+  // 服の層: 着せる服のタグ(空ならキャラシートの普段の服装)・描き直しの強さ・2Dモデルに重ねるか
+  const [outfitTags, setOutfitTags] = useState('')
+  const [outfitStrength, setOutfitStrength] = useState(0.85)
+  const [withOutfit, setWithOutfit] = useState(true)
+  const [outfitRunning, setOutfitRunning] = useState(false)
 
   function loadBases() {
     fetch('/api/lora-dataset/body-bases').then(r => (r.ok ? r.json() : [])).then(setBases).catch(() => setBases([]))
@@ -119,6 +129,35 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       .catch(() => setRig(null))
   }
   useEffect(loadRig, [characterId, rootName, body?.base?.id])
+  // キャラを替えたら、服のタグは前に着せた服(無ければキャラシートの普段の服装)にする
+  useEffect(() => {
+    setOutfitTags(rig?.outfit?.outfit_tags || rig?.default_outfit_tags || '')
+  }, [rig?.base_id, rig?.outfit?.outfit_tags, rig?.default_outfit_tags])
+
+  async function drawOutfit() {
+    setOutfitRunning(true)
+    setRigStatus('素体の Aポーズに服を着せています…')
+    try {
+      const res = await fetch(`/api/lora-dataset/character/${characterId}/body-outfit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ outfit_tags: outfitTags, strength: outfitStrength, root_name: rootName }),
+      })
+      if (!res.ok) {
+        setRigStatus(`描けませんでした: ${await detail(res)}`)
+        return
+      }
+      const next: RigInfo = await res.json()
+      setRig(next)
+      setRigStatus(next.outfit?.drift_warn
+        ? '描けました。ただし姿勢が素体の絵からずれています(強さを下げて描き直すと、ずれが減ります)'
+        : '描けました。「2Dモデルを作る」で服の層を重ねます')
+    } catch (e) {
+      setRigStatus(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOutfitRunning(false)
+    }
+  }
 
   function rigUrl(name: string) {
     const updated = rig?.files[name]?.updated ?? 0
@@ -132,7 +171,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       const res = await fetch(`/api/lora-dataset/character/${characterId}/body-rig`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ motion: rigMotion, root_name: rootName }),
+        body: JSON.stringify({ motion: rigMotion, root_name: rootName, with_outfit: withOutfit }),
       })
       if (!res.ok) {
         setRigStatus(`作れませんでした: ${await detail(res)}`)
@@ -417,7 +456,47 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
             Blender のファイルを作ります。メッシュは骨の重みで皮膚のように曲がります(体で1枚、左右の腕で1枚ずつ)。確かめ用に動きを
             付けて描き出します。zip にはテクスチャと rig.json(骨・メッシュの頂点・重み)も入ります。
           </p>
+          <div className="bdb-outfit">
+            <h5>服の層</h5>
+            <p className="lora-hint">
+              素体の Aポーズの首から下を、服のタグで描き直した絵を作ります(1枚ぶんの Anlas)。素体の絵と違う所を服の層として、
+              同じ骨で動くメッシュにして体の手前に重ねます。Blender では「outfit」のコレクションで表示を切り替えられます。
+            </p>
+            <div className="bdb-outfit-row">
+              {rig.outfit && (
+                <img src={`${fileUrl(rig.outfit.path)}&v=${rig.outfit.updated}`} alt="服を着せた Aポーズ" className="bdb-outfit-thumb" />
+              )}
+              <div className="bdb-outfit-form">
+                <label className="lora-label">着せる服のタグ
+                  <textarea className="lora-textarea" rows={2} value={outfitTags} disabled={busy || outfitRunning}
+                    placeholder="white long-sleeved blouse, navy skirt など(空ならキャラシートの普段の服装)"
+                    onChange={e => setOutfitTags(e.target.value)} />
+                </label>
+                <label className="lora-label">描き直しの強さ {outfitStrength.toFixed(2)}(低いほど素体の姿勢に近く、高いほど服がはっきり変わる)
+                  <input type="range" min={0.5} max={1} step={0.05} value={outfitStrength} disabled={busy || outfitRunning}
+                    onChange={e => setOutfitStrength(Number(e.target.value))} />
+                </label>
+                <div className="fsh-actions">
+                  <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void drawOutfit()}
+                    disabled={busy || outfitRunning || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}>
+                    {outfitRunning ? '描いています…' : rig.outfit ? '服を着せ直す' : '服を着せた絵を描く'}
+                  </button>
+                  {rig.outfit?.drift != null && (
+                    <span className={rig.outfit.drift_warn ? 'lora-error' : 'lora-hint'}>
+                      関節のずれ {(rig.outfit.drift * 100).toFixed(1)}%{rig.outfit.drift_warn ? '(大きめ)' : ''}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
           <div className="fsh-actions">
+            {rig.outfit && (
+              <label className="fsh-label">
+                <input type="checkbox" checked={withOutfit} disabled={busy || rigRunning} onChange={e => setWithOutfit(e.target.checked)} />
+                服の層を重ねる
+              </label>
+            )}
             <select className="lora-select bdb-rig-motion" value={rigMotion} disabled={busy || rigRunning}
               onChange={e => setRigMotion(e.target.value)} aria-label="付ける動き">
               {Object.entries(rig.motions).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
@@ -437,7 +516,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
               {rig.files['preview.gif'] && (
                 <figure>
                   <img src={rigUrl('preview.gif')} alt="動きの確かめ" />
-                  <figcaption>動きの確かめ{rig.motion ? `(${rig.motions[rig.motion] ?? rig.motion})` : ''}</figcaption>
+                  <figcaption>動きの確かめ{rig.motion ? `(${rig.motions[rig.motion] ?? rig.motion}${rig.with_outfit ? '・服の層あり' : ''})` : ''}</figcaption>
                 </figure>
               )}
             </div>

@@ -62,3 +62,11 @@
 .bdb-rig-views figure { margin: 0; display: flex; flex-direction: column; gap: 0.2rem; }
 .bdb-rig-views img { max-height: 420px; max-width: min(100%, 320px); border-radius: 6px; background: #fff; }
 .bdb-rig-views figcaption { font-size: 0.75rem; color: #a0a0c0; }
+
+/* 服の層 */
+.bdb-outfit { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.5rem; border: 1px dashed #33335a; border-radius: 8px; }
+.bdb-outfit h5 { margin: 0; font-size: 0.85rem; }
+.bdb-outfit-row { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: flex-start; }
+.bdb-outfit-thumb { width: 120px; border-radius: 6px; background: #fff; }
+.bdb-outfit-form { flex: 1; min-width: min(100%, 260px); display: flex; flex-direction: column; gap: 0.4rem; }
+.bdb-outfit-form .lora-label { display: flex; flex-direction: column; gap: 0.2rem; }
