@@ -364,3 +364,27 @@ def test_outfit_retries_while_the_pose_drifts(client: TestClient, monkeypatch: p
     # 1回目はずれが大きいので描き直し、2回目(強さを下げた)を残す
     assert len(client.calls) == calls + 2  # type: ignore[attr-defined]
     assert outfit["drift"] == 0 and outfit["attempts"] == 2 and not outfit["drift_warn"]
+
+
+def test_breast_physics_only_for_adults(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import body_rig
+
+    seen: list[dict] = []
+
+    def fake_build(source, folder, outfit=None, **kwargs):  # noqa: ANN001, ANN003
+        seen.append(kwargs)
+        raise body_rig.RigError("止める")
+
+    monkeypatch.setattr(body_rig, "build", fake_build)
+    monkeypatch.setattr(body_rig, "find_blender", lambda *_: "blender.exe")
+    base = _base(client)
+    for name, sheet in (("adult", {"is_adult": 1, "age": 25}), ("student", {"is_adult": 1, "outfit_tags": "school uniform"}),
+                        ("kid", {"is_minor": 1, "age": 10})):
+        character = _character(client, name, **sheet)
+        client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]})
+        client.post(f"/api/lora-dataset/character/{character['id']}/body-base", json={"keys": ["a_pose"]})
+        res = client.post(f"/api/lora-dataset/character/{character['id']}/body-rig",
+                          json={"breast_physics": True, "wind": 0.5})
+        assert res.status_code == 422
+    assert [s["breasts"] for s in seen] == [True, False, False]
+    assert all(s["hair"] and s["wind"] == 0.5 for s in seen)

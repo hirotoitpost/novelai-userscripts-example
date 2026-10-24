@@ -183,6 +183,7 @@ def test_run_blender_passes_the_motion_file(tmp_path: Path, monkeypatch: pytest.
         return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     monkeypatch.setattr(body_rig.subprocess, "run", fake_run)
+    (tmp_path / "rig.json").write_text(json.dumps({"bones": []}), encoding="utf-8")
     result = body_rig.run_blender("blender.exe", tmp_path, "jump")
     motion = json.loads((tmp_path / "motion.json").read_text(encoding="utf-8"))
     assert motion["name"] == "jump" and motion["translate"]["torso"][1] == [10, 0, 110]

@@ -335,6 +335,10 @@ class BodyRigRequest(BaseModel):
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
     # 服を着た Aポーズの絵(POST .../body-outfit)があれば、服の層を重ねる
     with_outfit: bool = True
+    # 揺れもの(body_physics.py): 髪の揺れ・胸の揺れ(成人キャラで、控えめに描くキャラでないときだけ)・風の強さ(0〜1)
+    hair_physics: bool = True
+    breast_physics: bool = True
+    wind: float = Field(0.3, ge=0.0, le=1.0)
 
 
 class BodyOutfitRequest(BaseModel):

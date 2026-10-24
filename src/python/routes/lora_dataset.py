@@ -1270,6 +1270,9 @@ def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
         "base_id": base["id"], "files": files, "motion": meta.get("motion"), "motions": body_rig.MOTIONS,
         "with_outfit": bool(meta.get("with_outfit")), "outfit": _outfit_entry(character, base, root_name),
         "quality": meta.get("quality"),
+        "physics": meta.get("physics"),
+        # 胸の揺れを付けられるキャラか(成人フラグがあり、控えめに描くキャラでない)
+        "breast_allowed": bool(character.get("is_adult")) and not _age_checks(character)[1],
         "default_outfit_tags": character.get("outfit_tags") or "",
     }
 
@@ -1395,9 +1398,14 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
     folder = _rig_dir(character, base, req.root_name)
     outfit, _ = _outfit_paths(character, base, req.root_name)
     with_outfit = req.with_outfit and outfit.is_file()
+    # 胸の揺れは成人キャラ(成人フラグ)で、未成年の手がかりが無いキャラだけ
+    _, modest = _age_checks(character)
+    breasts = req.breast_physics and bool(character.get("is_adult")) and not modest
 
     def work() -> None:
-        rig = body_rig.build(source, folder, outfit if with_outfit else None)
+        rig = body_rig.build(
+            source, folder, outfit if with_outfit else None, hair=req.hair_physics, breasts=breasts, wind=req.wind,
+        )
         result = body_rig.run_blender(blender, folder, req.motion)
         # 品質: Aポーズの骨格・服の層のずれ・描き出したコマ(かけら・細い穴)
         _, points = body_rig.detect(Image.open(source).convert("RGB"))
@@ -1410,7 +1418,7 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
         body_rig.frames_to_gif(result["frames"], folder / "preview.gif")
         body_export.export_all(folder)
         body_rig.package(folder)
-        meta = {"motion": req.motion, "with_outfit": with_outfit, "quality": quality}
+        meta = {"motion": req.motion, "with_outfit": with_outfit, "quality": quality, "physics": rig.get("physics")}
         (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     try:
