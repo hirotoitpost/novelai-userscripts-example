@@ -96,6 +96,15 @@ SETTINGS: tuple[Setting, ...] = (
         "flicker, jitter, static, frozen, blurry, distorted, deformed, bad anatomy, extra fingers, fused fingers, "
         "morphing face, worst quality, low quality, jpeg artifacts, text, watermark, subtitles",
     ),
+    Setting(
+        "blender.path",
+        "素体の2Dモデル(Blender)",
+        "Blender の実行ファイル",
+        "素体から2Dアニメ用のモデルを組むときに使う Blender(4.2 以降)の blender.exe の場所。"
+        "空なら環境変数 BLENDER_PATH、PATH の blender の順に探す。",
+        "text",
+        "",
+    ),
 )
 
 _BY_KEY = {s.key: s for s in SETTINGS}

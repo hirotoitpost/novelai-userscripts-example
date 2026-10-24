@@ -53,6 +53,13 @@ interface CharacterBody {
   parts: Part[]
 }
 
+interface RigInfo {
+  base_id: number | null
+  files: Record<string, { label: string; updated: number }>
+  motion: string | null
+  motions: Record<string, string>
+}
+
 interface Props {
   characterId: number
   characterName: string
@@ -84,6 +91,11 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zoomKey, setZoomKey] = useState<string | null>(null)
+  // 2Dモデル(Blender で骨を入れたもの)
+  const [rig, setRig] = useState<RigInfo | null>(null)
+  const [rigMotion, setRigMotion] = useState('wave')
+  const [rigRunning, setRigRunning] = useState(false)
+  const [rigStatus, setRigStatus] = useState<string | null>(null)
 
   function loadBases() {
     fetch('/api/lora-dataset/body-bases').then(r => (r.ok ? r.json() : [])).then(setBases).catch(() => setBases([]))
@@ -99,6 +111,41 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
     loadBases()
   }, [])
   useEffect(loadBody, [characterId, rootName])
+
+  function loadRig() {
+    fetch(`/api/lora-dataset/character/${characterId}/body-rig?root_name=${encodeURIComponent(rootName)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(setRig)
+      .catch(() => setRig(null))
+  }
+  useEffect(loadRig, [characterId, rootName, body?.base?.id])
+
+  function rigUrl(name: string) {
+    const updated = rig?.files[name]?.updated ?? 0
+    return `/api/lora-dataset/character/${characterId}/body-rig/file?name=${name}&root_name=${encodeURIComponent(rootName)}&v=${updated}`
+  }
+
+  async function buildRig() {
+    setRigRunning(true)
+    setRigStatus('部位に分けて、Blender で骨を入れています(1分ほどかかります)…')
+    try {
+      const res = await fetch(`/api/lora-dataset/character/${characterId}/body-rig`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motion: rigMotion, root_name: rootName }),
+      })
+      if (!res.ok) {
+        setRigStatus(`作れませんでした: ${await detail(res)}`)
+        return
+      }
+      setRig(await res.json())
+      setRigStatus('できました')
+    } catch (e) {
+      setRigStatus(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRigRunning(false)
+    }
+  }
   useEffect(() => {
     setZoomKey(null)
     setPicked(new Set())
@@ -359,6 +406,46 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
             {running ? '描いています…' : `選んだ ${picked.size} 枚を描く`}
           </button>
           {status && <span className="lora-hint">{status}</span>}
+        </div>
+      )}
+
+      {body?.base && rig && (
+        <div className="bdb-rig">
+          <h4>2Dモデル(Blender)</h4>
+          <p className="lora-hint">
+            「Aポーズ(関節の確認)」の絵の形に合わせた平らなメッシュ(2Dの素体)を作り、絵をテクスチャとして貼って、関節に骨を入れた
+            Blender のファイルを作ります。メッシュは骨の重みで皮膚のように曲がります(体で1枚、左右の腕で1枚ずつ)。確かめ用に動きを
+            付けて描き出します。zip にはテクスチャと rig.json(骨・メッシュの頂点・重み)も入ります。
+          </p>
+          <div className="fsh-actions">
+            <select className="lora-select bdb-rig-motion" value={rigMotion} disabled={busy || rigRunning}
+              onChange={e => setRigMotion(e.target.value)} aria-label="付ける動き">
+              {Object.entries(rig.motions).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </select>
+            <button type="button" className="lora-btn" disabled={busy || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}
+              onClick={() => void buildRig()}>
+              {rigRunning ? '作っています…' : rig.files['rig.blend'] ? '2Dモデルを作り直す' : '2Dモデルを作る'}
+            </button>
+            {!body.parts.find(p => p.key === 'a_pose')?.path && <span className="lora-hint">先に「Aポーズ(関節の確認)」を描いてください。</span>}
+            {rigStatus && <span className="lora-hint">{rigStatus}</span>}
+          </div>
+          {(rig.files['overlay.png'] || rig.files['preview.gif']) && (
+            <div className="bdb-rig-views">
+              {rig.files['overlay.png'] && (
+                <figure><img src={rigUrl('overlay.png')} alt="メッシュと骨" /><figcaption>メッシュと骨(三角形の色がいちばん重い骨、白い線が骨、赤い点が回す軸)</figcaption></figure>
+              )}
+              {rig.files['preview.gif'] && (
+                <figure>
+                  <img src={rigUrl('preview.gif')} alt="動きの確かめ" />
+                  <figcaption>動きの確かめ{rig.motion ? `(${rig.motions[rig.motion] ?? rig.motion})` : ''}</figcaption>
+                </figure>
+              )}
+            </div>
+          )}
+          <div className="fsh-actions">
+            {rig.files['rig.blend'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.blend')} download>Blender のファイル(.blend)</a>}
+            {rig.files['rig.zip'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.zip')} download>テクスチャ+rig.json(.zip)</a>}
+          </div>
         </div>
       )}
 
