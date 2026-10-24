@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import binascii
 import io
 import json
@@ -16,6 +17,7 @@ from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
+from .. import body_base
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -44,6 +46,12 @@ from ..guard_password import guard_token
 from ..sessions import require_admin
 from ..db import (
     add_dataset_variations,
+    character_family,
+    delete_body_base,
+    get_body_base,
+    list_body_bases,
+    save_body_base,
+    set_character_body_base,
     delete_dataset_situation,
     delete_dataset_state,
     delete_dataset_variation,
@@ -73,6 +81,9 @@ from ..lora_dataset import (
     run_dataset,
 )
 from ..models import (
+    BodyBaseSaveRequest,
+    BodyBaseSheetRequest,
+    CharacterBodyBaseRequest,
     CharacterDatasetRequest,
     DatasetSituationRequest,
     DatasetStateRequest,
@@ -813,6 +824,262 @@ async def generate_face_sheet(character_id: int, req: FaceSheetRequest, client: 
             yield _sse("progress", event)
             await asyncio.sleep(2)
         yield _sse("complete", {"total": len(items), "succeeded": succeeded, "failed": failed})
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- 素体(body_base.py) ---
+
+
+def _check_body_base(req: BodyBaseSaveRequest) -> None:
+    for field in body_base.FIELDS:
+        if getattr(req, field) not in body_base.OPTIONS[field]:
+            raise HTTPException(status_code=422, detail=f"{field} に無い値です: {getattr(req, field)}")
+    found = body_base.clean_extra(req.extra_tags)
+    if found:
+        raise HTTPException(
+            status_code=422,
+            detail=f"素体の足すタグに、性的な場面のタグは入れられません(裸は種類で選びます): {', '.join(found)}",
+        )
+    if req.kind == "suit":
+        blocked = blocked_tags(req.extra_tags)
+        if blocked:
+            raise HTTPException(status_code=422, detail=f"素体スーツ(全年齢)では使えないタグです: {', '.join(blocked)}")
+    else:
+        minors = body_base.minor_words(req.extra_tags)
+        if minors:
+            raise HTTPException(status_code=422, detail=f"裸の素体には、未成年を示すタグは入れられません: {', '.join(minors)}")
+
+
+def _age_checks(character: dict) -> tuple[str | None, bool]:
+    """(裸の素体を当てられない理由, 素体スーツを控えめに描くか)。どちらも同じ人物の成長段階まで見る。"""
+    conn = get_connection()
+    try:
+        family = character_family(conn, character)
+    finally:
+        conn.close()
+    return body_base.nude_block_reason(character, family), body_base.minor_coded(character, family)
+
+
+def _character_base(character: dict) -> dict | None:
+    if character.get("body_base_id") is None:
+        return None
+    conn = get_connection()
+    try:
+        return get_body_base(conn, character["body_base_id"])
+    finally:
+        conn.close()
+
+
+def _body_dir(character: dict, base: dict, root_name: str) -> Path:
+    return _character_root(root_name, character) / body_base.file_dir_name(base)
+
+
+def _body_entries(character: dict, root_name: str) -> dict[str, Any]:
+    """キャラに当てた素体と、部位ごとの描いた絵のパス(描いていなければ null)。裸の素体を当てられるかも返す。"""
+    base = _character_base(character)
+    nude_reason, modest = _age_checks(character)
+    parts = []
+    for part in body_base.PARTS:
+        path = _body_dir(character, base, root_name) / f"{base['id']}_{part.key}.png" if base else None
+        drawn = path is not None and path.is_file()
+        parts.append({
+            "key": part.key,
+            "label": part.label,
+            "group": part.group,
+            "check": part.check,
+            "available": base is None or base["kind"] != "nude" or part.nude,
+            "path": path.relative_to(_PROJECT_ROOT).as_posix() if drawn else None,
+            "updated": path.stat().st_mtime if drawn else None,
+        })
+    return {
+        "base": base,
+        "body_tags": body_base.body_tags(base, modest=modest) if base else "",
+        "modest": modest,
+        "nude_allowed": nude_reason is None,
+        "nude_reason": nude_reason,
+        "parts": parts,
+    }
+
+
+@router.get("/body-bases/options")
+async def get_body_base_options() -> dict[str, Any]:
+    """素体の設定の選択肢・種類・部位(解剖学の区分と、確かめる点)。"""
+    return {
+        "options": body_base.options(),
+        "kinds": [{"value": k, "label": v} for k, v in body_base.KINDS.items()],
+        "groups": [{"id": k, "label": v} for k, v in body_base.GROUPS],
+        "parts": body_base.presets(),
+    }
+
+
+@router.get("/body-bases")
+async def get_body_bases() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return list_body_bases(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/body-bases")
+async def create_body_base(req: BodyBaseSaveRequest) -> dict[str, Any]:
+    _check_body_base(req)
+    conn = get_connection()
+    try:
+        return save_body_base(conn, None, req.model_dump())
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="同じ名前の素体があります。")
+    finally:
+        conn.close()
+
+
+@router.put("/body-bases/{base_id}")
+async def update_body_base(base_id: int, req: BodyBaseSaveRequest) -> dict[str, Any]:
+    """素体を書き換える。裸の素体に変えるときは、当てているキャラが全員、裸の素体を当てられるキャラでなければ止める。"""
+    _check_body_base(req)
+    conn = get_connection()
+    try:
+        if get_body_base(conn, base_id) is None:
+            raise HTTPException(status_code=404, detail="素体が見つかりません。")
+        if req.kind == "nude":
+            users = [dict(r) for r in conn.execute("SELECT * FROM characters WHERE body_base_id = ?", (base_id,))]
+            blocked = [c["name"] for c in users if body_base.nude_block_reason(c, character_family(conn, c))]
+            if blocked:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"裸の素体を当てられないキャラが、この素体を使っています: {', '.join(blocked)}",
+                )
+        return save_body_base(conn, base_id, req.model_dump())
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="同じ名前の素体があります。")
+    finally:
+        conn.close()
+
+
+@router.delete("/body-bases/{base_id}")
+async def remove_body_base(base_id: int) -> dict[str, bool]:
+    """素体を消す(当てていたキャラは素体なしに戻る。描いた絵は残す)。"""
+    conn = get_connection()
+    try:
+        if not delete_body_base(conn, base_id):
+            raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    finally:
+        conn.close()
+    return {"deleted": True}
+
+
+@router.get("/character/{character_id}/body-base")
+async def get_character_body_base(character_id: int, root_name: str = "training_data") -> dict[str, Any]:
+    return _body_entries(_load_character(character_id), root_name)
+
+
+@router.put("/character/{character_id}/body-base")
+async def assign_body_base(character_id: int, req: CharacterBodyBaseRequest, root_name: str = "training_data") -> dict[str, Any]:
+    """キャラに素体を当てる(None で外す)。裸の素体は、当てられるキャラだけ(body_base.nude_block_reason)。"""
+    character = _load_character(character_id)
+    if req.body_base_id is not None:
+        conn = get_connection()
+        try:
+            base = get_body_base(conn, req.body_base_id)
+        finally:
+            conn.close()
+        if base is None:
+            raise HTTPException(status_code=404, detail="素体が見つかりません。")
+        if base["kind"] == "nude":
+            reason, _ = _age_checks(character)
+            if reason:
+                raise HTTPException(status_code=403, detail=reason)
+    conn = get_connection()
+    try:
+        set_character_body_base(conn, character_id, req.body_base_id)
+    finally:
+        conn.close()
+    return _body_entries(_load_character(character_id), root_name)
+
+
+@router.post("/character/{character_id}/body-base")
+async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, client: ClientDep) -> StreamingResponse:
+    """
+    キャラに当てた素体で、部位を1枚ずつ描く(SSE で1枚ごとに知らせる)。キャラの顔・髪・目+素体の体+部位のタグ+無地の背景。
+    素体スーツは全年齢の検査、裸の素体は R18 の検査(成人キャラ・未成年を示すタグなし)と、成長段階の検査を通す。
+    描いた絵は <データセットのフォルダ>/body_base(_r18)/<素体のID>_<部位>.png に、キャプションと一緒に置く(上書き)。
+    """
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    unknown = [k for k in req.keys if k not in body_base.ITEMS]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"素体の部位に無い項目です: {unknown}")
+    nude = base["kind"] == "nude"
+    parts = [body_base.ITEMS[k] for k in dict.fromkeys(req.keys)]
+    reason, modest = _age_checks(character)
+    if nude:
+        if reason:
+            raise HTTPException(status_code=403, detail=reason)
+        skipped = [p.label for p in parts if not p.nude]
+        if skipped:
+            raise HTTPException(status_code=422, detail=f"裸の素体では描かない部位です(全身図で確かめます): {', '.join(skipped)}")
+    prompts = {p.key: body_base.prompt(character, base, p, modest=modest) for p in parts}
+    _check_tags(character, ", ".join(prompts.values()), _load_guard(None), nude)
+    minors = body_base.minor_words(", ".join(prompts.values())) if nude else []
+    if minors:
+        raise HTTPException(status_code=422, detail=f"裸の素体では、未成年を示すタグは使えません: {', '.join(minors)}")
+
+    references = None
+    ref_path = character.get("reference_image_path")
+    if req.use_reference and ref_path and (_PROJECT_ROOT / ref_path).is_file():
+        references = [CharacterReference(
+            image=(_PROJECT_ROOT / ref_path).read_bytes(), type="character", fidelity=1.0, strength=req.reference_strength,
+        )]
+    folder = _body_dir(character, base, req.root_name)
+    try:
+        cfg = GenConfig(
+            output_root=folder.parent,
+            model=req.model,
+            steps=req.steps,
+            scale=req.scale,
+            negative_prompt=sheet_negative(character, r18=nude, extra=body_base.negative(base, modest=modest)),
+            seed=character.get("seed") if character.get("seed") is not None else req.seed,
+            character_references=references,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    async def event_gen():
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        folder.mkdir(parents=True, exist_ok=True)
+        succeeded = failed = 0
+        for index, part in enumerate(parts, start=1):
+            event: dict[str, Any] = {"current": index, "total": len(parts), "key": part.key, "label": part.label}
+            try:
+                # 部位ごとのネガティブ(手を突き出さない など)を足す
+                part_cfg = dataclasses.replace(
+                    cfg, negative_prompt=join_tags(cfg.negative_prompt, part.negative)
+                ) if part.negative else cfg
+                image = await generate_one(client, prompts[part.key], body_base.SIZES[part.size], part_cfg, seed=cfg.seed)
+                path = folder / f"{base['id']}_{part.key}.png"
+                image.save(path, "PNG")
+                caption = join_tags(
+                    character.get("trigger_word"), body_base.face_tags(character, base), body_base.body_tags(base, modest=modest),
+                    part.tags,
+                )
+                path.with_suffix(".txt").write_text(caption, encoding="utf-8")
+                event |= {"status": "ok", "path": path.relative_to(_PROJECT_ROOT).as_posix()}
+                succeeded += 1
+            except Exception as exc:
+                event |= {"status": "error", "message": str(exc)}
+                failed += 1
+            yield _sse("progress", event)
+            await asyncio.sleep(2)
+        yield _sse("complete", {"total": len(parts), "succeeded": succeeded, "failed": failed})
 
     return StreamingResponse(
         event_gen(),

@@ -1,0 +1,50 @@
+/* キャラシートの素体。部位の一覧は FaceSheet.css(fsh-*)を共用し、ここは差分だけ。 */
+.bdb-assign { display: flex; flex-direction: column; gap: 0.3rem; max-width: 28rem; }
+
+.bdb-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+
+.bdb-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #22224a;
+  border-radius: 8px;
+  background: #12122a;
+}
+
+.bdb-item--on { border-color: #7b5cf6; }
+.bdb-item-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+
+.bdb-kind {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #1f2a40;
+  font-size: 0.72rem;
+}
+
+.bdb-kind--nude { background: #402030; }
+
+.bdb-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  border: 1px solid #7b5cf6;
+  border-radius: 8px;
+  background: #15132e;
+}
+
+.bdb-editor .lora-label { display: flex; flex-direction: column; gap: 0.2rem; }
+.bdb-kinds { display: flex; flex-wrap: wrap; gap: 0.8rem; }
+
+.bdb-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+  gap: 0.5rem;
+}
+
+.bdb-check { font-size: 0.72rem; color: #a0a0c0; }
+.bdb-check summary { cursor: pointer; }
+.bdb-check p { margin: 0.2rem 0 0; line-height: 1.4; }

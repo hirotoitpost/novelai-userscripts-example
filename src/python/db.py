@@ -766,6 +766,27 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # キャラシートの素体(body_base.py)。キャラは characters.body_base_id でどれか1つを当てる
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS body_bases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL DEFAULT 'suit',
+            sex TEXT NOT NULL DEFAULT 'female',
+            skin_tone TEXT NOT NULL DEFAULT '',
+            build TEXT NOT NULL DEFAULT '',
+            height TEXT NOT NULL DEFAULT '',
+            proportion TEXT NOT NULL DEFAULT '',
+            chest TEXT NOT NULL DEFAULT '',
+            muscle TEXT NOT NULL DEFAULT '',
+            extra_tags TEXT NOT NULL DEFAULT '',
+            negative_tags TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     # 状態で描き直す部位(body_parts.PARTS のキー。none はプロンプトだけで作る)
     if "part" not in {row["name"] for row in conn.execute("PRAGMA table_info(dataset_states)")}:
         conn.execute("ALTER TABLE dataset_states ADD COLUMN part TEXT NOT NULL DEFAULT 'none'")
@@ -962,6 +983,8 @@ _CHARACTERS_EXTRA_COLUMNS = {
     "growth_order": "INTEGER",
     # 年齢(歳)。入れてあれば、18 歳未満は未成年・18 歳以上は成人として扱う(年齢区分をこれに合わせる)
     "age": "INTEGER",
+    # 当てる素体(body_bases の id)。キャラシートの「素体」で選ぶ
+    "body_base_id": "INTEGER",
 }
 
 
@@ -3198,6 +3221,67 @@ def delete_dataset_state(conn: sqlite3.Connection, state_id: int) -> bool:
     cur = conn.execute("DELETE FROM dataset_states WHERE id = ?", (state_id,))
     conn.commit()
     return cur.rowcount > 0
+
+
+# ---- キャラシートの素体(body_base.py) ----
+
+BODY_BASE_FIELDS = (
+    "name", "kind", "sex", "skin_tone", "build", "height", "proportion", "chest", "muscle", "extra_tags", "negative_tags",
+    "notes",
+)
+
+
+def list_body_bases(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """素体の一覧と、それぞれを当てているキャラの数。"""
+    rows = conn.execute(
+        "SELECT b.*, (SELECT COUNT(*) FROM characters c WHERE c.body_base_id = b.id) AS used_by"
+        " FROM body_bases b ORDER BY b.id"
+    )
+    return [dict(row) for row in rows]
+
+
+def get_body_base(conn: sqlite3.Connection, base_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM body_bases WHERE id = ?", (base_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def save_body_base(conn: sqlite3.Connection, base_id: int | None, base: dict[str, Any]) -> dict[str, Any]:
+    """素体を作る(base_id が None)か、書き換える。同じ名前がほかにあれば sqlite3.IntegrityError。"""
+    values = [base.get(f) or "" for f in BODY_BASE_FIELDS]
+    if base_id is None:
+        cur = conn.execute(
+            f"INSERT INTO body_bases ({', '.join(BODY_BASE_FIELDS)}, created_at)"
+            f" VALUES ({', '.join('?' for _ in BODY_BASE_FIELDS)}, ?)",
+            (*values, datetime.now(timezone.utc).isoformat()),
+        )
+        base_id = int(cur.lastrowid or 0)
+    else:
+        conn.execute(
+            f"UPDATE body_bases SET {', '.join(f'{f} = ?' for f in BODY_BASE_FIELDS)} WHERE id = ?",
+            (*values, base_id),
+        )
+    conn.commit()
+    return get_body_base(conn, base_id) or {}
+
+
+def delete_body_base(conn: sqlite3.Connection, base_id: int) -> bool:
+    """素体を消す。当てていたキャラは、素体なしに戻す。"""
+    conn.execute("UPDATE characters SET body_base_id = NULL WHERE body_base_id = ?", (base_id,))
+    cur = conn.execute("DELETE FROM body_bases WHERE id = ?", (base_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_character_body_base(conn: sqlite3.Connection, character_id: int, base_id: int | None) -> None:
+    conn.execute("UPDATE characters SET body_base_id = ? WHERE id = ?", (base_id, character_id))
+    conn.commit()
+
+
+def character_family(conn: sqlite3.Connection, character: dict[str, Any]) -> list[dict[str, Any]]:
+    """同じ人物の成長段階(元のキャラと、その段階のキャラ全部。成長段階が無ければそのキャラだけ)。"""
+    root = character.get("growth_of") or character["id"]
+    rows = conn.execute("SELECT * FROM characters WHERE id = ? OR growth_of = ?", (root, root))
+    return [dict(row) for row in rows]
 
 
 # ---- 描き直しで作る人物の状態 ----

@@ -1,0 +1,326 @@
+"""
+キャラシートの「素体」: 服を着せる前の体(モデリングでいう素体)を、キャラの顔・髪・目のまま描いて、部位ごとに見られるようにする。
+
+素体は、キャラとは別に一覧で持つ(肌の色・体格・身長・プロポーション・胸・筋肉の付き方・足すタグ)。キャラシートでは、
+どの素体を当てるかを選ぶ。描くときは、キャラの容姿から体型と肌の色のタグを外し、素体のタグに置き換え、服装の代わりに
+素体の種類のタグを入れる。
+
+種類は2つ:
+- suit(素体スーツ): 体の線が分かる無地のボディスーツ。全年齢の扱いで、どのキャラにも使える。
+- nude(裸の素体): デッサン人形の程度(乳首・性器は描かない)。成人キャラだけに使える(nude_block_reason)。
+  胸・腹・骨盤・大腿の寄りの絵は描かない(全身図で確かめる。部位の nude が False のもの)。
+
+部位は解剖学の区分(全身・頭頸部・体幹・上肢・下肢)で並べ、1枚ごとに、人体の構造として確かめる点(check)を添える。
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from . import content_guard
+from .character_sheet import character_minor_tags, join_tags, r18_negative, r18_positive, split_body, split_tags
+
+
+@dataclass(frozen=True)
+class BodyPart:
+    key: str
+    label: str
+    # 足すタグ(構図を含む)
+    tags: str
+    # whole: 全身 / head: 頭頸部 / trunk: 体幹 / upper_limb: 上肢 / lower_limb: 下肢
+    group: str
+    # 人体の構造として確かめる点(画面に出す)
+    check: str
+    size: str = "square"
+    # 裸の素体でも描くか(胸・腹・骨盤・大腿の寄りは描かない)
+    nude: bool = True
+    # この部位だけに足すネガティブ
+    negative: str = ""
+
+
+GROUPS: tuple[tuple[str, str], ...] = (
+    ("whole", "全身"),
+    ("head", "頭頸部"),
+    ("trunk", "体幹"),
+    ("upper_limb", "上肢"),
+    ("lower_limb", "下肢"),
+)
+
+_STAND = "full body, standing, arms at sides, expressionless"
+# 手は、こちらへ突き出すと遠近で縮んで指の長さが分からない(2026-10 実機)。顔の横に平らに上げた手にする
+_HAND = "hand focus, close-up, open hand, hand up, flat hand, fingers together"
+_HAND_NEGATIVE = "foreshortening, reaching towards viewer, outstretched hand, extra fingers, fused fingers, multiple views"
+PARTS: tuple[BodyPart, ...] = (
+    BodyPart("front", "正面(解剖学的正位)", f"{_STAND}, front view, facing viewer, palms facing forward, feet together", "whole",
+             "成人で7〜7.5頭身。肩幅は頭幅の約2倍(女性は1.5〜2倍)。腕を下ろすと指先は大腿の中ほど、手首は大転子(股関節)の高さ。"
+             "臍は全身のほぼ中ほどより少し上", "portrait"),
+    BodyPart("side", "側面(矢状面)", f"{_STAND}, from side, profile", "whole",
+             "耳・肩・大転子・膝・外くるぶしがほぼ一直線(重心線)。脊柱は頸と腰で前に、胸で後ろに弯曲(S字)。"
+             "胸郭は前後に厚く、骨盤は前に傾く", "portrait"),
+    BodyPart("back", "背面", f"{_STAND}, from behind, back view, facing away", "whole",
+             "肩甲骨は第2〜7肋骨の高さ、内側の縁は脊柱から指3本分。腰のくぼみ(ヴィーナスのえくぼ)は上後腸骨棘の位置",
+             "portrait"),
+    BodyPart("three_quarter", "斜め", f"{_STAND}, three-quarter view", "whole",
+             "胸郭と骨盤が同じ向きにねじれずに並ぶか。奥の肩・腰は手前より細く見える", "portrait"),
+    BodyPart("a_pose", "Aポーズ(関節の確認)",
+             "full body, standing, front view, facing viewer, a-pose, arms slightly away from body, legs slightly apart, expressionless",
+             "whole",
+             "肩関節は鎖骨の外端の下。肘は臍の高さ、手首は股の高さ。膝蓋骨は脚の長さのほぼ中ほど。"
+             "腕を開いても鎖骨・三角筋の形が崩れないか", "portrait"),
+    BodyPart("head_front", "頭部(正面)", "portrait, close-up, front view, facing viewer, looking at viewer, expressionless", "head",
+             "目は頭の高さのほぼ中ほど。目と目の間は目1つ分。耳は眉から鼻の下までの高さ"),
+    BodyPart("head_side", "頭部(側面)", "portrait, close-up, from side, profile, expressionless", "head",
+             "耳は頭の前後の中ほどより後ろ。下顎角から耳の下へ顎のラインがつながる。後頭部が平らになっていないか"),
+    BodyPart("neck_shoulder", "頸部・肩(鎖骨)", "upper body, front view, facing viewer, collarbone, neck, shoulders, expressionless",
+             "head",
+             "胸鎖乳突筋が耳の後ろから鎖骨の内端へ斜めに走る。鎖骨はほぼ水平でゆるいS字。首の太さは顔の幅の半分強", nude=False),
+    BodyPart("chest", "胸郭", "upper body, front view, facing viewer, chest, ribcage, arms at sides, expressionless", "trunk",
+             "胸郭は卵形で、下へ広がる。胸骨の下端(みぞおち)は肘の高さより少し上", nude=False),
+    BodyPart("abdomen", "腹部", "midriff, navel, abdomen, cropped torso, front view", "trunk",
+             "臍は腸骨稜(骨盤の上縁)のやや上。腹直筋は臍の上下に分かれて見える。脇腹は外腹斜筋のふくらみ", nude=False),
+    BodyPart("upper_back", "背部(肩甲骨・脊柱)", "upper body, from behind, back, shoulder blades, spine, facing away", "trunk",
+             "脊柱は真ん中のくぼみとして通る。肩甲骨は腕の動きでずれる三角の板。僧帽筋が首から肩へなだらかに下がる"),
+    BodyPart("pelvis", "骨盤・腰", "cowboy shot, front view, facing viewer, hips, waist, arms at sides, expressionless", "trunk",
+             "女性は骨盤が広く、腰のくびれは臍の高さ。男性は肩幅に対して骨盤が狭い。股の高さは身長のほぼ半分", nude=False),
+    BodyPart("arm", "上腕・肘", "arm focus, upper arm, elbow, arm extended to side, close-up", "upper_limb",
+             "上腕の長さは肩から肘まで頭1つ半ほど。肘は外側へ少し反る(運搬角、女性で大きい)。上腕二頭筋は前、三頭筋は後ろ"),
+    BodyPart("forearm", "前腕・手首", "forearm focus, wrist, close-up", "upper_limb",
+             "前腕は肘側が太く手首側で細い。手首の幅は前腕の中ほどの約2/3。尺骨の頭が手首の小指側に出る"),
+    BodyPart("hand_palm", "手(手掌)", f"solo, {_HAND}, palm, palm facing viewer, five fingers", "upper_limb",
+             "指は5本。中指が最長で、手の長さは顔の顎から生え際の手前ほど。母指球・小指球のふくらみ。指の関節は3つ(親指は2つ)",
+             negative=_HAND_NEGATIVE),
+    BodyPart("hand_back", "手(手背)", f"solo, {_HAND}, back of hand, five fingers, fingernails", "upper_limb",
+             "指の付け根の関節(MP関節)は弧を描いて並ぶ。爪は指先の背側だけ。指の長さは中指>薬指≒人差し指>小指",
+             negative=_HAND_NEGATIVE),
+    BodyPart("thigh_knee", "大腿・膝", "lower body, knees, thighs, front view, standing", "lower_limb",
+             "大腿は股関節から膝へ内側に寄る(Q角、女性で大きい)。膝蓋骨は膝の前のやや上", nude=False),
+    BodyPart("calf", "下腿(すね・ふくらはぎ)", "lower legs focus, calves, shins, close-up, standing", "lower_limb",
+             "すね(脛骨)はまっすぐで皮膚の下に近い。ふくらはぎ(腓腹筋)は内側が低く大きい。内くるぶしは外くるぶしより高い"),
+    # 足の裏をこちらへ突き出す構図(soles, foot focus)は、形が縮んで分からず、性的な構図にもなりやすい。床に立った足を横から描く
+    BodyPart("foot", "足(内側・足背)",
+             "solo, barefoot, feet only, lower legs only, head out of frame, standing on floor, from side, ankles, toes, close-up",
+             "lower_limb",
+             "足の長さは前腕とほぼ同じ。内側から見ると土踏まず(内側縦アーチ)が浮き、踵・母指球・小指側の縁で接地する。"
+             "内くるぶしは外より高く前。親指が最も太く、指先は弧を描く",
+             negative="soles, feet up, foreshortening, sitting, lying, presenting foot, bent over, bending forward, full body, face"),
+)
+
+ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
+
+# 素体の背景(絵ごとの違いを部位だけにするため、無地にする)
+BACKGROUND = "simple background, grey background"
+SIZES = {"square": (1024, 1024), "portrait": (832, 1216)}
+# 1枚に同じキャラが何人も並ぶ設定画になりやすいので抑える(face_sheet.NEGATIVE と同じ理由)
+NEGATIVE = "multiple views, character sheet, reference sheet, turnaround, split screen, multiple girls, multiple boys"
+
+KINDS = {"suit": "素体スーツ(全年齢)", "nude": "裸の素体(成人キャラだけ)"}
+SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, high collar, skin-tight, barefoot"
+SUIT_NEGATIVE = (
+    "cleavage, see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout"
+)
+# 未成年の手がかりがあるキャラ(minor_coded)の素体スーツ。体の線は出すが、胸・腰を強調しない。素体の胸の設定は使わない
+MODEST_SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, high collar, barefoot"
+MODEST_NEGATIVE = (
+    "ass focus, breast focus, from below, curvy, wide hips, large breasts, huge breasts, skin-tight, sexualized, "
+    "seductive, sexy pose"
+)
+# 裸の素体は、デッサン人形の程度にする(乳首・性器を描かない)
+NUDE_TAGS = "nude, completely nude, barbie doll anatomy, featureless breasts, featureless crotch, no nipples"
+NUDE_NEGATIVE = (
+    "nipples, areolae, pussy, penis, testicles, pubic hair, genitals, sex, cum, aroused, seductive smile, "
+    "spread legs, sexually suggestive, blush"
+)
+
+# 設定の選択肢: 値 → (画面の名前, タグ)。空のタグは「指定しない」
+OPTIONS: dict[str, dict[str, tuple[str, str]]] = {
+    "sex": {
+        "female": ("女性", "1girl, female"),
+        "male": ("男性", "1boy, male"),
+    },
+    "skin_tone": {
+        "": ("キャラシートのまま", ""),
+        "pale": ("色白", "pale skin"),
+        "fair": ("明るい肌", "fair skin"),
+        "tan": ("小麦色", "tan, tanned skin"),
+        "olive": ("オリーブ", "olive skin"),
+        "brown": ("褐色", "brown skin, dark-skinned"),
+        "dark": ("濃い褐色", "dark skin, dark-skinned"),
+    },
+    "build": {
+        "": ("ふつう", ""),
+        "slender": ("細身", "slender, slim"),
+        "athletic": ("引き締まった", "athletic, toned"),
+        "muscular": ("筋肉質", "muscular, muscular build"),
+        "curvy": ("曲線的(メリハリ)", "curvy"),
+        "plump": ("ふくよか", "plump, soft body"),
+        "stocky": ("がっしり", "stocky, broad shoulders"),
+    },
+    "height": {
+        "": ("ふつう", ""),
+        "short": ("低め", "short stature"),
+        "tall": ("高め", "tall, long legs"),
+    },
+    "proportion": {
+        "": ("絵柄のまま", ""),
+        "realistic": ("写実(7.5頭身)", "realistic proportions"),
+        "model": ("モデル体型(8頭身)", "model proportions, long legs"),
+    },
+    "chest": {
+        "": ("指定しない", ""),
+        "small": ("小さめ", "small breasts"),
+        "medium": ("ふつう", "medium breasts"),
+        "large": ("大きめ", "large breasts"),
+        "pectorals": ("胸筋", "pectorals"),
+    },
+    "muscle": {
+        "": ("指定しない", ""),
+        "soft": ("柔らかい", "soft body"),
+        "toned": ("適度", "toned, slight muscle definition"),
+        "defined": ("はっきり", "defined muscles, abs"),
+    },
+}
+FIELDS = tuple(OPTIONS)
+
+# キャラの容姿から外す肌の色のタグ(素体で肌の色を決めたときだけ)
+_SKIN_COLOR_RE = re.compile(
+    r"\b(pale|fair|light|tan|tanned|olive|brown|dark|white|black)[ _-]?(skin|skinned)\b|^tan$|^tanned$|dark-skinned",
+    re.IGNORECASE,
+)
+
+
+def options() -> dict[str, list[dict[str, str]]]:
+    """画面の選択肢(項目ごとに 値・名前・タグ)。"""
+    return {
+        field: [{"value": value, "label": label, "tags": tags} for value, (label, tags) in choices.items()]
+        for field, choices in OPTIONS.items()
+    }
+
+
+def presets() -> list[dict[str, Any]]:
+    return [
+        {"key": p.key, "label": p.label, "group": p.group, "tags": p.tags, "check": p.check, "nude": p.nude}
+        for p in PARTS
+    ]
+
+
+# 未成年の手がかりがあるキャラ(minor_coded)には使わない設定(胸・体格の曲線)
+_MODEST_SKIP = {("chest", None), ("build", "curvy")}
+
+
+def body_tags(base: dict[str, Any], *, modest: bool = False) -> str:
+    """素体の体のタグ(性別・肌の色・体格・身長・プロポーション・胸・筋肉+足すタグ)。modest は胸・曲線の設定を外す。"""
+    tags = []
+    for field in FIELDS:
+        value = base.get(field) or ""
+        if modest and ((field, None) in _MODEST_SKIP or (field, value) in _MODEST_SKIP):
+            continue
+        tags.append(OPTIONS[field].get(value, ("", ""))[1])
+    return join_tags(*tags, base.get("extra_tags"))
+
+
+def clean_extra(text: str) -> list[str]:
+    """
+    素体の「足すタグ」に入れられないタグ(性的な場面のタグ)。素体は体の形を見るためのもので、性的な絵ではない。
+    裸は種類(nude)で決めるので、足すタグには書かせない。
+    """
+    return content_guard.find("scene.sexual_tags", text or "")
+
+
+def face_tags(character: dict[str, Any], base: dict[str, Any]) -> str:
+    """キャラの容姿から、体型(素体で置き換える)と、素体で決めるなら肌の色を外したもの(顔・髪・目)。"""
+    face, _ = split_body(character.get("appearance_tags") or "")
+    if base.get("skin_tone"):
+        face = ", ".join(t for t in split_tags(face) if not _SKIN_COLOR_RE.search(t.strip()))
+    return face
+
+
+def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, *, modest: bool = False) -> str:
+    """
+    1枚のプロンプト。modest(未成年の手がかりがあるキャラ)は、胸・曲線の設定を外し、体に貼り付けないスーツにする
+    (裸の素体はそもそも当てられない)。
+    """
+    nude = base.get("kind") == "nude"
+    adult = (r18_positive() if base.get("sex") != "male" else "adult, mature male") if nude else ""
+    return join_tags(
+        face_tags(character, base),
+        body_tags(base, modest=modest),
+        adult,
+        NUDE_TAGS if nude else MODEST_SUIT_TAGS if modest else SUIT_TAGS,
+        part.tags,
+        BACKGROUND,
+        character.get("style_tags"),
+    )
+
+
+def negative(base: dict[str, Any], part: BodyPart | None = None, *, modest: bool = False) -> str:
+    """素体の種類・部位ごとに足すネガティブ(キャラシートのネガティブ・年齢区分の安全タグは別に入る)。"""
+    extra = part.negative if part else ""
+    if base.get("kind") == "nude":
+        return join_tags(NEGATIVE, NUDE_NEGATIVE, r18_negative(), extra, base.get("negative_tags"))
+    return join_tags(NEGATIVE, SUIT_NEGATIVE, MODEST_NEGATIVE if modest else "", extra, base.get("negative_tags"))
+
+
+# 裸の素体の判定に使う、未成年を示す語。コンテンツガードの dataset.minor_tags は設定で空にもできるので、
+# 裸の素体はそれに加えて、ここに固定した語でも見る(設定で外せない)
+_MINOR_RE = re.compile(
+    r"(?<![\w-])(jk|joshi ?kousei|school ?uniform|serafuku|gym uniform|school ?swimsuit|randoseru|kindergarten"
+    r"|(high|middle|elementary) school|school ?(girl|boy)s?|students?|loli|shota|child(ren)?|kids?|teen(age|ager)?"
+    r"|underage|minor|young|aged down|toddler|little girl|little boy|baby|infant)(?![\w-])",
+    re.IGNORECASE,
+)
+_SHEET_TEXT_FIELDS = ("name", "trigger_word", "appearance_tags", "body_tags", "outfit_tags", "style_tags")
+
+
+def minor_words(text: str) -> list[str]:
+    """未成年を示す語(固定の一覧)。"""
+    return sorted({m.group(0).lower() for m in _MINOR_RE.finditer(text or "")})
+
+
+def nude_block_reason(character: dict[str, Any], family: list[dict[str, Any]]) -> str | None:
+    """
+    裸の素体を当てられない理由(当てられれば None)。成人フラグがあり、年齢が 18 歳以上と入れてあり、未成年の定義・
+    未成年を示すタグ(コンテンツガードの設定と、固定の一覧の両方)が無いことに加え、同じ人物の成長段階(family: 元のキャラと、
+    その段階のキャラ全部)に未成年の段階があれば当てない(未成年の段階と同じ顔・同じシードで描かれる人物のため)。
+    """
+    if not character.get("is_adult"):
+        return "裸の素体は、成人キャラ(キャラシートの成人フラグ)にだけ当てられます。"
+    if character.get("is_minor") or (character.get("age") is not None and int(character["age"]) < 18):
+        return "未成年と定義されたキャラには、裸の素体を当てられません。"
+    if character.get("age") is None:
+        return "裸の素体は、キャラシートに年齢(18 歳以上)を入れたキャラにだけ当てられます。"
+    text = ", ".join(str(character.get(k) or "") for k in _SHEET_TEXT_FIELDS)
+    found = sorted(set(character_minor_tags(character)) | set(minor_words(text)))
+    if found:
+        return f"キャラシートに未成年を示すタグがあるため、裸の素体を当てられません: {', '.join(found)}"
+    minors = _minor_stages(character, family)
+    if minors:
+        return f"同じ人物の成長段階に未成年の段階があるため、裸の素体を当てられません: {', '.join(minors)}"
+    return None
+
+
+def _is_minor(character: dict[str, Any]) -> bool:
+    return bool(character.get("is_minor")) or (character.get("age") is not None and int(character["age"]) < 18)
+
+
+def _minor_stages(character: dict[str, Any], family: list[dict[str, Any]]) -> list[str]:
+    return [c["name"] for c in family if c["id"] != character["id"] and _is_minor(c)]
+
+
+def minor_coded(character: dict[str, Any], family: list[dict[str, Any]]) -> bool:
+    """
+    未成年の手がかりがあるキャラか(未成年の定義・年齢・未成年を示すタグ・成長段階の未成年)。成人フラグの有無は見ない
+    (高校生のキャラに成人フラグが付いていることがある)。素体スーツを控えめに描くのに使う。
+    """
+    text = ", ".join(str(character.get(k) or "") for k in _SHEET_TEXT_FIELDS)
+    return (
+        _is_minor(character)
+        or bool(minor_words(text) or character_minor_tags(character))
+        or bool(_minor_stages(character, family))
+    )
+
+
+def file_dir_name(base: dict[str, Any]) -> str:
+    """描いた絵を置くデータセットのフォルダの名前(裸の素体は R18 のフォルダに分ける)。"""
+    return "body_base_r18" if base.get("kind") == "nude" else "body_base"

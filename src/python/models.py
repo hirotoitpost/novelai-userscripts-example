@@ -286,6 +286,38 @@ class FaceSheetRequest(BaseModel):
     reference_strength: float = Field(0.7, ge=0.0, le=1.0)
 
 
+class BodyBaseSaveRequest(BaseModel):
+    """
+    素体(body_base.py)を作る・書き換える。kind は suit(素体スーツ) / nude(裸の素体・成人キャラだけ)。
+    sex 以下の選択肢の値は GET /api/lora-dataset/body-bases/options にある(空は指定しない)。
+    """
+
+    name: str = Field(min_length=1, max_length=80)
+    kind: Literal["suit", "nude"] = "suit"
+    sex: Literal["female", "male"] = "female"
+    skin_tone: str = ""
+    build: str = ""
+    height: str = ""
+    proportion: str = ""
+    chest: str = ""
+    muscle: str = ""
+    extra_tags: str = Field("", max_length=1000)
+    negative_tags: str = Field("", max_length=1000)
+    notes: str = Field("", max_length=2000)
+
+
+class CharacterBodyBaseRequest(BaseModel):
+    """キャラに当てる素体(None で素体なし)。"""
+
+    body_base_id: Optional[int] = None
+
+
+class BodyBaseSheetRequest(FaceSheetRequest):
+    """
+    キャラに当てた素体で、部位(body_base.PARTS のキー)を1枚ずつ描く。描いてある部位は描き直す(上書き)。
+    """
+
+
 class CharacterDatasetRequest(BaseModel):
     """キャラシートを元に、ポーズ/服装/表情/場所を差し替えたデータセットを作る。"""
 

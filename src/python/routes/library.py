@@ -62,8 +62,8 @@ _SERVED_DIRS = (_OUTPUTS / "history", _OUTPUTS / "manga", _OUTPUTS / "ugoira")
 # キャラ別データセットの画像フォルダ: outputs/<ルート>/<キャラのフォルダ>/<この名前>/*.png
 # 引き直しの外れ(rejected)はギャラリーに出さない。
 _DATASET_SUBDIRS = ("generated", "generated_r18", "manual", "manual_r18")
-# 配信だけするデータセットのフォルダ(顔・表情シート face_sheet.py)。ギャラリーの一覧・削除には出さない
-_SERVED_ONLY_SUBDIRS = ("face_sheet",)
+# 配信だけするデータセットのフォルダ(顔・表情シート face_sheet.py、素体 body_base.py)。ギャラリーの一覧・削除には出さない
+_SERVED_ONLY_SUBDIRS = ("face_sheet", "body_base", "body_base_r18")
 _THUMB_DIR = _OUTPUTS / ".thumbs"
 _THUMB_WIDTHS = (240, 360, 480, 720)
 _PDF_RESOLUTION = 150.0
