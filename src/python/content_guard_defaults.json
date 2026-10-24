@@ -294,6 +294,23 @@
       "description": "未成年の手がかりがあるキャラの素体スーツに、さらに足すネガティブ(胸・腰を強調しない)。",
       "kind": "text",
       "value": "ass focus, breast focus, from below, curvy, wide hips, large breasts, huge breasts, skin-tight, sexualized, seductive, sexy pose"
+    },
+    {
+      "key": "body_base.modest_skip",
+      "group": "素体",
+      "label": "控えめな素体スーツで使わない設定",
+      "description": "未成年の手がかりがあるキャラの素体スーツで使わない、素体の設定。項目(chest など)なら、その項目の選択肢を全部使わない。項目:値(build:curvy など)なら、その選択肢だけ使わない。項目は sex / skin_tone / build / height / proportion / chest / muscle。",
+      "kind": "words",
+      "match": "exact",
+      "value": ["chest", "build:curvy"]
+    },
+    {
+      "key": "body_base.male_adult_tags",
+      "group": "素体",
+      "label": "裸の素体で足すタグ(男性)",
+      "description": "性別が男性(値 male)の裸の素体に、成人として描かせるために足すタグ。女性は「R18 で足すタグ」を使う。",
+      "kind": "text",
+      "value": "adult, mature male"
     }
   ]
 }

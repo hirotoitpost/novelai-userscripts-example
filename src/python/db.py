@@ -787,6 +787,36 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 素体の設定の選択肢(性別・肌の色・体格 などのプルダウン)。素体の設定のページで編集する。
+    # rear_tags は真後ろの部位で tags の代わりに使うタグ(NULL なら tags のまま、空なら何も入れない)。
+    # 初めて表を作るときだけ、はじめの選択肢を入れる(消したものが、起動のたびに戻らないように)
+    first_body_options = (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'body_base_options'").fetchone() is None
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS body_base_options (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            field TEXT NOT NULL,
+            value TEXT NOT NULL,
+            label TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '',
+            rear_tags TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE (field, value)
+        )
+        """
+    )
+    if first_body_options:
+        now = datetime.now(timezone.utc).isoformat()
+        for field, choices in DEFAULT_BODY_BASE_OPTIONS.items():
+            for order, (value, label, tags, rear_tags) in enumerate(choices):
+                conn.execute(
+                    "INSERT INTO body_base_options (field, value, label, tags, rear_tags, sort_order, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (field, value, label, tags, rear_tags, order, now),
+                )
     # 状態で描き直す部位(body_parts.PARTS のキー。none はプロンプトだけで作る)
     if "part" not in {row["name"] for row in conn.execute("PRAGMA table_info(dataset_states)")}:
         conn.execute("ALTER TABLE dataset_states ADD COLUMN part TEXT NOT NULL DEFAULT 'none'")
@@ -3229,6 +3259,100 @@ BODY_BASE_FIELDS = (
     "name", "kind", "sex", "skin_tone", "build", "height", "proportion", "chest", "muscle", "extra_tags", "negative_tags",
     "notes",
 )
+
+# 素体の設定の、はじめの選択肢: 項目 → [(値, 画面の名前, タグ, 真後ろの部位のタグ(None なら同じ))]。値の空は「指定しない」。
+# 胸は、正面の胸のタグ(large breasts など)が背面の絵を正面・振り返りに引き戻すので(2026-10 実機: 栄子の背面)、
+# 真後ろでは後ろから脇に見える形で書く(小さめ・胸筋は後ろからは見えないので入れない)
+DEFAULT_BODY_BASE_OPTIONS: dict[str, list[tuple[str, str, str, str | None]]] = {
+    "sex": [("female", "女性", "1girl, female", None), ("male", "男性", "1boy, male", None)],
+    "skin_tone": [
+        ("", "キャラシートのまま", "", None),
+        ("pale", "色白", "pale skin", None),
+        ("fair", "明るい肌", "fair skin", None),
+        ("tan", "小麦色", "tan, tanned skin", None),
+        ("olive", "オリーブ", "olive skin", None),
+        ("brown", "褐色", "brown skin, dark-skinned", None),
+        ("dark", "濃い褐色", "dark skin, dark-skinned", None),
+    ],
+    "build": [
+        ("", "ふつう", "", None),
+        ("slender", "細身", "slender, slim", None),
+        ("athletic", "引き締まった", "athletic, toned", None),
+        ("muscular", "筋肉質", "muscular, muscular build", None),
+        ("curvy", "曲線的(メリハリ)", "curvy", None),
+        ("plump", "ふくよか", "plump, soft body", None),
+        ("stocky", "がっしり", "stocky, broad shoulders", None),
+    ],
+    "height": [("", "ふつう", "", None), ("short", "低め", "short stature", None), ("tall", "高め", "tall, long legs", None)],
+    "proportion": [
+        ("", "絵柄のまま", "", None),
+        ("realistic", "写実(7.5頭身)", "realistic proportions", None),
+        ("model", "モデル体型(8頭身)", "model proportions, long legs", None),
+    ],
+    "chest": [
+        ("", "指定しない", "", None),
+        ("small", "小さめ", "small breasts", ""),
+        ("medium", "ふつう", "medium breasts", "breasts peek"),
+        ("large", "大きめ", "large breasts", "sideboob, breasts peek"),
+        ("pectorals", "胸筋", "pectorals", ""),
+    ],
+    "muscle": [
+        ("", "指定しない", "", None),
+        ("soft", "柔らかい", "soft body", None),
+        ("toned", "適度", "toned, slight muscle definition", None),
+        ("defined", "はっきり", "defined muscles, abs", None),
+    ],
+}
+
+
+def list_body_base_options(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """素体の設定の選択肢(項目ごと、並べる順)。"""
+    return [dict(row) for row in conn.execute("SELECT * FROM body_base_options ORDER BY field, sort_order, id")]
+
+
+def get_body_base_option(conn: sqlite3.Connection, option_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM body_base_options WHERE id = ?", (option_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_body_base_option(conn: sqlite3.Connection, field: str, value: str, label: str, tags: str, rear_tags: str | None) -> dict[str, Any]:
+    """選択肢を足す(その項目の最後に並べる)。同じ項目に同じ値があれば sqlite3.IntegrityError。"""
+    last = conn.execute("SELECT MAX(sort_order) FROM body_base_options WHERE field = ?", (field,)).fetchone()[0]
+    cur = conn.execute(
+        "INSERT INTO body_base_options (field, value, label, tags, rear_tags, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (field, value, label, tags, rear_tags, (last or 0) + 1, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return get_body_base_option(conn, int(cur.lastrowid or 0)) or {}
+
+
+def update_body_base_option(conn: sqlite3.Connection, option_id: int, label: str, tags: str, rear_tags: str | None) -> dict[str, Any] | None:
+    """選択肢の名前・タグを書き換える(値は、素体が使っているので変えない)。"""
+    conn.execute(
+        "UPDATE body_base_options SET label = ?, tags = ?, rear_tags = ? WHERE id = ?", (label, tags, rear_tags, option_id)
+    )
+    conn.commit()
+    return get_body_base_option(conn, option_id)
+
+
+def delete_body_base_option(conn: sqlite3.Connection, option_id: int) -> bool:
+    cur = conn.execute("DELETE FROM body_base_options WHERE id = ?", (option_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def reorder_body_base_options(conn: sqlite3.Connection, field: str, ids: list[int]) -> None:
+    """項目の選択肢を ids の順に並べる(ほかの項目の id は無視する)。"""
+    for order, option_id in enumerate(ids):
+        conn.execute("UPDATE body_base_options SET sort_order = ? WHERE id = ? AND field = ?", (order, option_id, field))
+    conn.commit()
+
+
+def body_bases_using(conn: sqlite3.Connection, field: str, value: str) -> list[str]:
+    """その選択肢を使っている素体の名前。"""
+    if field not in BODY_BASE_FIELDS:
+        return []
+    return [row["name"] for row in conn.execute(f"SELECT name FROM body_bases WHERE {field} = ? ORDER BY id", (value,))]
 
 
 def list_body_bases(conn: sqlite3.Connection) -> list[dict[str, Any]]:

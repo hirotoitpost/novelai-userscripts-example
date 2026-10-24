@@ -306,6 +306,27 @@ class BodyBaseSaveRequest(BaseModel):
     notes: str = Field("", max_length=2000)
 
 
+class BodyBaseOptionRequest(BaseModel):
+    """
+    素体の設定の選択肢(プルダウンの1行)。field は項目(sex / skin_tone / build / height / proportion / chest / muscle)。
+    value は素体が持つ値(足すときだけ。省けば振る)。rear_tags は真後ろの部位で tags の代わりに使うタグ
+    (None なら tags のまま、空なら何も入れない)。
+    """
+
+    field: str
+    value: Optional[str] = Field(None, max_length=40)
+    label: str = Field(min_length=1, max_length=40)
+    tags: str = Field("", max_length=500)
+    rear_tags: Optional[str] = Field(None, max_length=500)
+
+
+class BodyBaseOptionOrderRequest(BaseModel):
+    """項目の選択肢の並べる順(選択肢の id の並び)。"""
+
+    field: str
+    ids: list[int] = Field(max_length=200)
+
+
 class CharacterBodyBaseRequest(BaseModel):
     """キャラに当てる素体(None で素体なし)。"""
 

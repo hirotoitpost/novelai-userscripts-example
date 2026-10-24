@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { fileUrl } from '../library'
 import FullscreenViewer from './FullscreenViewer'
 import './FaceSheet.css'
@@ -15,6 +16,8 @@ type Field = 'sex' | 'skin_tone' | 'build' | 'height' | 'proportion' | 'chest' |
 interface Choice { value: string; label: string; tags: string }
 
 interface Options {
+  /** 設定の項目(プルダウン)。選択肢は DB にあり、素体の設定のページで編集する */
+  fields: { key: Field; label: string }[]
   options: Record<Field, Choice[]>
   kinds: { value: 'suit' | 'nude'; label: string }[]
   groups: { id: string; label: string }[]
@@ -58,16 +61,6 @@ interface Props {
   disabled?: boolean
 }
 
-const FIELDS: { key: Field; label: string }[] = [
-  { key: 'sex', label: '性別' },
-  { key: 'skin_tone', label: '肌の色' },
-  { key: 'build', label: '体格' },
-  { key: 'height', label: '身長' },
-  { key: 'proportion', label: 'プロポーション' },
-  { key: 'chest', label: '胸' },
-  { key: 'muscle', label: '筋肉の付き方' },
-]
-
 const EMPTY: Omit<Base, 'id'> = {
   name: '', kind: 'suit', sex: 'female', skin_tone: '', build: '', height: '', proportion: '', chest: '', muscle: '',
   extra_tags: '', negative_tags: '', notes: '',
@@ -79,6 +72,7 @@ async function detail(res: Response): Promise<string> {
 }
 
 export default function BodyBase({ characterId, characterName, token, rootName, disabled }: Props) {
+  const navigate = useNavigate()
   const [options, setOptions] = useState<Options | null>(null)
   const [bases, setBases] = useState<Base[]>([])
   const [body, setBody] = useState<CharacterBody | null>(null)
@@ -260,6 +254,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
           <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => setEditing({ ...EMPTY })}>
             新しい素体
           </button>
+          <button type="button" className="lora-btn lora-btn--secondary" onClick={() => navigate('/body-base-settings')}
+            title="性別・肌の色・体格 などのプルダウンの選択肢と、そのタグを編集します">
+            選択肢を編集
+          </button>
         </div>
         {bases.length === 0 && <p className="lora-hint">まだ素体がありません。</p>}
         <ul>
@@ -291,9 +289,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
             ))}
           </div>
           <div className="bdb-fields">
-            {FIELDS.map(f => (
+            {options.fields.map(f => (
               <label key={f.key} className="lora-label">{f.label}
                 <select className="lora-select" value={editing[f.key]} onChange={e => setEditing({ ...editing, [f.key]: e.target.value })}>
+                  {!options.options[f.key].some(c => c.value === '') && <option value="">指定しない</option>}
                   {options.options[f.key].map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </label>

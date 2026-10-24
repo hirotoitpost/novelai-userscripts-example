@@ -38,7 +38,7 @@ class BodyPart:
     nude: bool = True
     # この部位だけに足すネガティブ
     negative: str = ""
-    # 真後ろから描く部位。胸の設定は後ろから見える形のタグ(REAR_CHEST)に置き換える
+    # 真後ろから描く部位。選択肢に真後ろのタグ(rear_tags)があれば、そちらを使う
     rear: bool = False
 
 
@@ -137,55 +137,19 @@ SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, hi
 MODEST_SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, high collar, barefoot"
 # 守りにかかわるタグ(裸の素体のタグ・ネガティブ、未成年を示すタグ)は、コンテンツガード(DB)の body_base.* にある
 
-# 設定の選択肢: 値 → (画面の名前, タグ)。空のタグは「指定しない」
-OPTIONS: dict[str, dict[str, tuple[str, str]]] = {
-    "sex": {
-        "female": ("女性", "1girl, female"),
-        "male": ("男性", "1boy, male"),
-    },
-    "skin_tone": {
-        "": ("キャラシートのまま", ""),
-        "pale": ("色白", "pale skin"),
-        "fair": ("明るい肌", "fair skin"),
-        "tan": ("小麦色", "tan, tanned skin"),
-        "olive": ("オリーブ", "olive skin"),
-        "brown": ("褐色", "brown skin, dark-skinned"),
-        "dark": ("濃い褐色", "dark skin, dark-skinned"),
-    },
-    "build": {
-        "": ("ふつう", ""),
-        "slender": ("細身", "slender, slim"),
-        "athletic": ("引き締まった", "athletic, toned"),
-        "muscular": ("筋肉質", "muscular, muscular build"),
-        "curvy": ("曲線的(メリハリ)", "curvy"),
-        "plump": ("ふくよか", "plump, soft body"),
-        "stocky": ("がっしり", "stocky, broad shoulders"),
-    },
-    "height": {
-        "": ("ふつう", ""),
-        "short": ("低め", "short stature"),
-        "tall": ("高め", "tall, long legs"),
-    },
-    "proportion": {
-        "": ("絵柄のまま", ""),
-        "realistic": ("写実(7.5頭身)", "realistic proportions"),
-        "model": ("モデル体型(8頭身)", "model proportions, long legs"),
-    },
-    "chest": {
-        "": ("指定しない", ""),
-        "small": ("小さめ", "small breasts"),
-        "medium": ("ふつう", "medium breasts"),
-        "large": ("大きめ", "large breasts"),
-        "pectorals": ("胸筋", "pectorals"),
-    },
-    "muscle": {
-        "": ("指定しない", ""),
-        "soft": ("柔らかい", "soft body"),
-        "toned": ("適度", "toned, slight muscle definition"),
-        "defined": ("はっきり", "defined muscles, abs"),
-    },
+# 素体の設定の項目(プルダウン)と画面の名前。選択肢(値・名前・タグ)は DB(body_base_options)にあり、素体の設定のページで編集する
+FIELD_LABELS: dict[str, str] = {
+    "sex": "性別",
+    "skin_tone": "肌の色",
+    "build": "体格",
+    "height": "身長",
+    "proportion": "プロポーション",
+    "chest": "胸",
+    "muscle": "筋肉の付き方",
 }
-FIELDS = tuple(OPTIONS)
+FIELDS = tuple(FIELD_LABELS)
+# 選択肢の表: 項目 → 値 → 選択肢(label・tags・rear_tags)
+Options = dict[str, dict[str, dict[str, Any]]]
 
 # キャラの容姿から外す肌の色のタグ(素体で肌の色を決めたときだけ)
 _SKIN_COLOR_RE = re.compile(
@@ -194,12 +158,18 @@ _SKIN_COLOR_RE = re.compile(
 )
 
 
-def options() -> dict[str, list[dict[str, str]]]:
-    """画面の選択肢(項目ごとに 値・名前・タグ)。"""
-    return {
-        field: [{"value": value, "label": label, "tags": tags} for value, (label, tags) in choices.items()]
-        for field, choices in OPTIONS.items()
-    }
+def options_map(rows: list[dict[str, Any]]) -> Options:
+    """DB の選択肢の行(db.list_body_base_options)を、項目 → 値 → 選択肢 の表に。"""
+    table: Options = {field: {} for field in FIELDS}
+    for row in rows:
+        if row["field"] in table:
+            table[row["field"]][row["value"]] = row
+    return table
+
+
+def option_problems(text: str) -> list[str]:
+    """選択肢のタグ・足すタグに入れられないタグ(性的な場面のタグと、未成年を示すタグ)。"""
+    return sorted(set(clean_extra(text)) | set(minor_words(text)))
 
 
 def presets() -> list[dict[str, Any]]:
@@ -209,27 +179,27 @@ def presets() -> list[dict[str, Any]]:
     ]
 
 
-# 未成年の手がかりがあるキャラ(minor_coded)には使わない設定(胸・体格の曲線)
-_MODEST_SKIP = {("chest", None), ("build", "curvy")}
-# 真後ろの部位での胸の設定。large breasts などの正面の胸のタグは、絵を正面・振り返りに引き戻す(2026-10 実機: 栄子の背面)。
-# 後ろから脇に見える形で書く(小さめ・胸筋は後ろからは見えないので外す)
-REAR_CHEST = {"medium": "breasts peek", "large": "sideboob, breasts peek"}
+def _modest_skips(field: str, value: str) -> bool:
+    """控えめに描くとき、その設定を使わないか(コンテンツガードの body_base.modest_skip: 項目 か 項目:値)。"""
+    skips = content_guard.words("body_base.modest_skip")
+    return field in skips or f"{field}:{value}" in skips
 
 
-def body_tags(base: dict[str, Any], *, modest: bool = False, rear: bool = False) -> str:
+def body_tags(base: dict[str, Any], options: Options, *, modest: bool = False, rear: bool = False) -> str:
     """
-    素体の体のタグ(性別・肌の色・体格・身長・プロポーション・胸・筋肉+足すタグ)。modest は胸・曲線の設定を外す。
-    rear(真後ろの部位)は、胸の設定を後ろから見える形(REAR_CHEST)に置き換える。
+    素体の体のタグ(性別・肌の色・体格・身長・プロポーション・胸・筋肉+足すタグ)。選択肢に無い値は何も入れない。
+    modest(未成年の手がかりがあるキャラ)は body_base.modest_skip の設定を外す。rear(真後ろの部位)は、選択肢に
+    真後ろのタグ(rear_tags)があればそれを使う(胸の large breasts は、背面を正面・振り返りに引き戻すため)。
     """
     tags = []
     for field in FIELDS:
         value = base.get(field) or ""
-        if modest and ((field, None) in _MODEST_SKIP or (field, value) in _MODEST_SKIP):
+        if modest and _modest_skips(field, value):
             continue
-        if rear and field == "chest":
-            tags.append(REAR_CHEST.get(value, ""))
+        option = options.get(field, {}).get(value)
+        if option is None:
             continue
-        tags.append(OPTIONS[field].get(value, ("", ""))[1])
+        tags.append(option["rear_tags"] if rear and option.get("rear_tags") is not None else option["tags"])
     return join_tags(*tags, base.get("extra_tags"))
 
 
@@ -249,16 +219,16 @@ def face_tags(character: dict[str, Any], base: dict[str, Any]) -> str:
     return face
 
 
-def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, *, modest: bool = False) -> str:
+def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, options: Options, *, modest: bool = False) -> str:
     """
     1枚のプロンプト。modest(未成年の手がかりがあるキャラ)は、胸・曲線の設定を外し、体に貼り付けないスーツにする
     (裸の素体はそもそも当てられない)。
     """
     nude = base.get("kind") == "nude"
-    adult = (r18_positive() if base.get("sex") != "male" else "adult, mature male") if nude else ""
+    adult = (content_guard.text("body_base.male_adult_tags") if base.get("sex") == "male" else r18_positive()) if nude else ""
     return join_tags(
         face_tags(character, base),
-        body_tags(base, modest=modest, rear=part.rear),
+        body_tags(base, options, modest=modest, rear=part.rear),
         adult,
         content_guard.text("body_base.nude_tags") if nude else MODEST_SUIT_TAGS if modest else SUIT_TAGS,
         part.tags,

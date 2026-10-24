@@ -25,6 +25,16 @@ from python.routes import lora_dataset as lora_routes  # noqa: E402
 from python.routes import story as story_routes  # noqa: E402
 
 
+def _defaults() -> body_base.Options:
+    """はじめの選択肢(DB に入れる前の db.DEFAULT_BODY_BASE_OPTIONS)。"""
+    rows = [
+        {"field": field, "value": v, "label": label, "tags": tags, "rear_tags": rear}
+        for field, choices in db.DEFAULT_BODY_BASE_OPTIONS.items()
+        for v, label, tags, rear in choices
+    ]
+    return body_base.options_map(rows)
+
+
 def test_parts_follow_anatomical_regions() -> None:
     groups = {key for key, _ in body_base.GROUPS}
     assert {p.group for p in body_base.PARTS} == groups
@@ -216,17 +226,55 @@ def test_guard_values_come_from_the_db(client: TestClient) -> None:
     assert "maid outfit" in (body_base.nude_block_reason(adult, []) or "")
     content_guard.set_value("body_base.nude_tags", "nude, mannequin")
     part = body_base.ITEMS["front"]
-    assert "mannequin" in body_base.prompt(adult, {"kind": "nude"}, part)
+    assert "mannequin" in body_base.prompt(adult, {"kind": "nude"}, part, _defaults())
     content_guard.reset("body_base.nude_tags")
-    assert "barbie doll anatomy" in body_base.prompt(adult, {"kind": "nude"}, part)
+    assert "barbie doll anatomy" in body_base.prompt(adult, {"kind": "nude"}, part, _defaults())
 
 
 def test_rear_parts_describe_the_chest_from_behind() -> None:
     # 真後ろの部位では、正面の胸のタグ(large breasts)の代わりに、後ろから見える形のタグにする
     base = {"kind": "suit", "chest": "large", "build": "curvy"}
     character = {"appearance_tags": "1girl, brown hair"}
-    back = body_base.prompt(character, base, body_base.ITEMS["back"])
+    back = body_base.prompt(character, base, body_base.ITEMS["back"], _defaults())
     assert "sideboob" in back and "breasts peek" in back and "large breasts" not in back
-    assert "large breasts" in body_base.prompt(character, base, body_base.ITEMS["front"])
+    assert "large breasts" in body_base.prompt(character, base, body_base.ITEMS["front"], _defaults())
     # 控えめに描くキャラは、真後ろでも胸の設定を使わない
-    assert "sideboob" not in body_base.prompt(character, base, body_base.ITEMS["back"], modest=True)
+    assert "sideboob" not in body_base.prompt(character, base, body_base.ITEMS["back"], _defaults(), modest=True)
+
+
+def test_options_are_edited_in_the_db(client: TestClient) -> None:
+    data = client.get("/api/lora-dataset/body-bases/options").json()
+    assert [f["key"] for f in data["fields"]][:2] == ["sex", "skin_tone"]
+    skin = {o["value"]: o for o in data["options"]["skin_tone"]}
+    assert skin["tan"]["label"] == "小麦色"
+
+    # 足す(値は振る)・名前とタグを直す・並べ替える
+    added = client.post("/api/lora-dataset/body-base-options", json={"field": "skin_tone", "label": "灰色", "tags": "grey skin"}).json()
+    assert added["value"] == "opt1"
+    edited = client.put(f"/api/lora-dataset/body-base-options/{added['id']}",
+                        json={"field": "skin_tone", "label": "灰色の肌", "tags": "grey skin, colored skin"}).json()
+    assert edited["label"] == "灰色の肌" and edited["value"] == "opt1"
+    ids = [o["id"] for o in data["options"]["skin_tone"]]
+    client.put("/api/lora-dataset/body-base-options/order", json={"field": "skin_tone", "ids": [added["id"], *ids]})
+    first = client.get("/api/lora-dataset/body-bases/options").json()["options"]["skin_tone"][0]
+    assert first["id"] == added["id"]
+
+    # 素体で使うと、その選択肢のタグが入る。使っている選択肢は消せない
+    character = _character(client, "test")
+    base = _base(client, skin_tone="opt1")
+    info = client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]}).json()
+    assert "colored skin" in info["body_tags"]
+    assert client.delete(f"/api/lora-dataset/body-base-options/{added['id']}").status_code == 409
+    client.put(f"/api/lora-dataset/body-bases/{base['id']}", json={"name": "素体", "skin_tone": ""})
+    assert client.delete(f"/api/lora-dataset/body-base-options/{added['id']}").status_code == 200
+    # 選択肢に無い値の素体は作れない
+    assert client.post("/api/lora-dataset/body-bases", json={"name": "x", "skin_tone": "opt1"}).status_code == 422
+
+
+def test_option_tags_are_checked(client: TestClient) -> None:
+    for tags in ("nude", "nipples", "school uniform"):
+        res = client.post("/api/lora-dataset/body-base-options", json={"field": "build", "label": "x", "tags": tags})
+        assert res.status_code == 422, tags
+    res = client.post("/api/lora-dataset/body-base-options", json={"field": "build", "label": "x", "tags": "slim", "rear_tags": "nude"})
+    assert res.status_code == 422
+    assert client.post("/api/lora-dataset/body-base-options", json={"field": "hair", "label": "x"}).status_code == 422

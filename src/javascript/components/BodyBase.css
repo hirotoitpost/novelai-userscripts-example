@@ -48,3 +48,8 @@
 .bdb-check { font-size: 0.72rem; color: #a0a0c0; }
 .bdb-check summary { cursor: pointer; }
 .bdb-check p { margin: 0.2rem 0 0; line-height: 1.4; }
+
+/* lora-btn は横いっぱいに広がる(flex: 1)ので、一覧の行と見出しの中では中身の幅にする */
+.bdb .fsh-group-head .lora-btn,
+.bdb-item .lora-btn { flex: 0 0 auto; min-height: 30px; padding: 0.3rem 0.8rem; }
+.bdb-item-name { flex: 1; }

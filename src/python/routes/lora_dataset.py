@@ -45,7 +45,14 @@ from .. import guard_password
 from ..guard_password import guard_token
 from ..sessions import require_admin
 from ..db import (
+    add_body_base_option,
     add_dataset_variations,
+    body_bases_using,
+    delete_body_base_option,
+    get_body_base_option,
+    list_body_base_options,
+    reorder_body_base_options,
+    update_body_base_option,
     character_family,
     delete_body_base,
     get_body_base,
@@ -81,6 +88,8 @@ from ..lora_dataset import (
     run_dataset,
 )
 from ..models import (
+    BodyBaseOptionOrderRequest,
+    BodyBaseOptionRequest,
     BodyBaseSaveRequest,
     BodyBaseSheetRequest,
     CharacterBodyBaseRequest,
@@ -835,10 +844,20 @@ async def generate_face_sheet(character_id: int, req: FaceSheetRequest, client: 
 # --- 素体(body_base.py) ---
 
 
+def _options() -> body_base.Options:
+    conn = get_connection()
+    try:
+        return body_base.options_map(list_body_base_options(conn))
+    finally:
+        conn.close()
+
+
 def _check_body_base(req: BodyBaseSaveRequest) -> None:
+    options = _options()
     for field in body_base.FIELDS:
-        if getattr(req, field) not in body_base.OPTIONS[field]:
-            raise HTTPException(status_code=422, detail=f"{field} に無い値です: {getattr(req, field)}")
+        value = getattr(req, field)
+        if value and value not in options[field]:
+            raise HTTPException(status_code=422, detail=f"{body_base.FIELD_LABELS[field]}の選択肢に無い値です: {value}")
     found = body_base.clean_extra(req.extra_tags)
     if found:
         raise HTTPException(
@@ -898,7 +917,7 @@ def _body_entries(character: dict, root_name: str) -> dict[str, Any]:
         })
     return {
         "base": base,
-        "body_tags": body_base.body_tags(base, modest=modest) if base else "",
+        "body_tags": body_base.body_tags(base, _options(), modest=modest) if base else "",
         "modest": modest,
         "nude_allowed": nude_reason is None,
         "nude_reason": nude_reason,
@@ -908,13 +927,87 @@ def _body_entries(character: dict, root_name: str) -> dict[str, Any]:
 
 @router.get("/body-bases/options")
 async def get_body_base_options() -> dict[str, Any]:
-    """素体の設定の選択肢・種類・部位(解剖学の区分と、確かめる点)。"""
+    """素体の設定の項目と選択肢(DB)・種類・部位(解剖学の区分と、確かめる点)。"""
+    conn = get_connection()
+    try:
+        rows = list_body_base_options(conn)
+    finally:
+        conn.close()
     return {
-        "options": body_base.options(),
+        "fields": [{"key": k, "label": v} for k, v in body_base.FIELD_LABELS.items()],
+        "options": {field: [r for r in rows if r["field"] == field] for field in body_base.FIELDS},
         "kinds": [{"value": k, "label": v} for k, v in body_base.KINDS.items()],
         "groups": [{"id": k, "label": v} for k, v in body_base.GROUPS],
         "parts": body_base.presets(),
     }
+
+
+def _check_option(req: BodyBaseOptionRequest) -> None:
+    """選択肢のタグは素体スーツ(全年齢)にも入るので、全年齢で止めるタグ・性的な場面のタグ・未成年を示すタグは入れない。"""
+    for name, text in (("タグ", req.tags), ("真後ろのタグ", req.rear_tags or "")):
+        found = sorted(set(blocked_tags(text)) | set(body_base.option_problems(text)))
+        if found:
+            raise HTTPException(status_code=422, detail=f"選択肢の{name}に入れられないタグです: {', '.join(found)}")
+
+
+@router.post("/body-base-options")
+async def create_body_base_option(req: BodyBaseOptionRequest) -> dict[str, Any]:
+    """素体の設定の選択肢を足す。値を省くと opt1, opt2… を振る(値は素体が持つので、あとから変えない)。"""
+    if req.field not in body_base.FIELDS:
+        raise HTTPException(status_code=422, detail=f"素体の設定に無い項目です: {req.field}")
+    _check_option(req)
+    conn = get_connection()
+    try:
+        value = (req.value or "").strip()
+        if req.value is None:
+            taken = {r["value"] for r in list_body_base_options(conn) if r["field"] == req.field}
+            value = next(f"opt{n}" for n in range(1, len(taken) + 2) if f"opt{n}" not in taken)
+        return add_body_base_option(conn, req.field, value, req.label.strip(), req.tags.strip(), req.rear_tags)
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail=f"同じ値の選択肢があります: {req.value}")
+    finally:
+        conn.close()
+
+
+@router.put("/body-base-options/order")
+async def order_body_base_options(req: BodyBaseOptionOrderRequest) -> dict[str, bool]:
+    """項目の選択肢の並べる順(プルダウンの順)。"""
+    conn = get_connection()
+    try:
+        reorder_body_base_options(conn, req.field, req.ids)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@router.put("/body-base-options/{option_id}")
+async def update_body_base_option_route(option_id: int, req: BodyBaseOptionRequest) -> dict[str, Any]:
+    """選択肢の名前・タグ・真後ろのタグを書き換える(項目と値は変えない)。"""
+    _check_option(req)
+    conn = get_connection()
+    try:
+        if get_body_base_option(conn, option_id) is None:
+            raise HTTPException(status_code=404, detail="選択肢が見つかりません。")
+        return update_body_base_option(conn, option_id, req.label.strip(), req.tags.strip(), req.rear_tags) or {}
+    finally:
+        conn.close()
+
+
+@router.delete("/body-base-options/{option_id}")
+async def delete_body_base_option_route(option_id: int) -> dict[str, bool]:
+    """選択肢を消す。使っている素体があれば止める(素体の設定を変えてから消す)。"""
+    conn = get_connection()
+    try:
+        option = get_body_base_option(conn, option_id)
+        if option is None:
+            raise HTTPException(status_code=404, detail="選択肢が見つかりません。")
+        users = body_bases_using(conn, option["field"], option["value"])
+        if users:
+            raise HTTPException(status_code=409, detail=f"この選択肢を使っている素体があります: {', '.join(users)}")
+        delete_body_base_option(conn, option_id)
+    finally:
+        conn.close()
+    return {"deleted": True}
 
 
 @router.get("/body-bases")
@@ -1025,7 +1118,8 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
         skipped = [p.label for p in parts if not p.nude]
         if skipped:
             raise HTTPException(status_code=422, detail=f"裸の素体では描かない部位です(全身図で確かめます): {', '.join(skipped)}")
-    prompts = {p.key: body_base.prompt(character, base, p, modest=modest) for p in parts}
+    options = _options()
+    prompts = {p.key: body_base.prompt(character, base, p, options, modest=modest) for p in parts}
     _check_tags(character, ", ".join(prompts.values()), _load_guard(None), nude)
     minors = body_base.minor_words(", ".join(prompts.values())) if nude else []
     if minors:
@@ -1068,7 +1162,7 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
                 path = folder / f"{base['id']}_{part.key}.png"
                 image.save(path, "PNG")
                 caption = join_tags(
-                    character.get("trigger_word"), body_base.face_tags(character, base), body_base.body_tags(base, modest=modest, rear=part.rear),
+                    character.get("trigger_word"), body_base.face_tags(character, base), body_base.body_tags(base, options, modest=modest, rear=part.rear),
                     part.tags,
                 )
                 path.with_suffix(".txt").write_text(caption, encoding="utf-8")
