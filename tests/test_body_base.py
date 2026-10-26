@@ -128,7 +128,7 @@ def test_suit_base_is_edited_assigned_and_drawn(client: TestClient, tmp_path: Pa
     assert res.status_code == 200
     assert res.text.count('"status": "ok"') == 3
     prompt, negative = client.calls[0]  # type: ignore[attr-defined]
-    assert "brown hair" in prompt and "pale skin" in prompt and "slender" in prompt and "bodysuit" in prompt
+    assert "brown hair" in prompt and "pale skin" in prompt and "slender" in prompt and "bike shorts" in prompt
     # キャラの体型(large breasts)は素体で置き換える
     assert "large breasts" not in prompt and "nude" not in prompt
     assert "nude" in negative  # 全年齢のネガティブ
@@ -306,8 +306,8 @@ def test_outfit_is_drawn_over_the_a_pose(client: TestClient, tmp_path: Path, mon
     assert outfit["outfit_tags"] == "white long-sleeved blouse, navy skirt" and outfit["drift"] == 0
     assert (tmp_path / outfit["path"]).is_file()
     prompt, negative = client.calls[-1]  # type: ignore[attr-defined]
-    assert "navy skirt" in prompt and "a-pose" in prompt and "bodysuit" not in prompt
-    assert "bodysuit" in negative and "nude" in negative
+    assert "navy skirt" in prompt and "a-pose" in prompt and "bike shorts" not in prompt
+    assert "bike shorts" in negative and "nude" in negative
 
 
 def test_auto_check_redraws_until_it_passes(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

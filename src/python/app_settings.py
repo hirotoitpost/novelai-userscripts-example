@@ -108,6 +108,24 @@ SETTINGS: tuple[Setting, ...] = (
         6,
     ),
     Setting(
+        "body_base.suit_tags",
+        "素体",
+        "素体スーツのタグ",
+        "素体スーツ(全年齢)を描くときの服のタグ。上・腰・脚で色の濃さを変えたセパレートにしてある(see-through で層に分けるとき、"
+        "上下つながった全身スーツでは腰の層が出なかった。2026-10)。",
+        "text",
+        "plain grey turtleneck shirt, long sleeves, tight shirt, dark grey bike shorts, grey pantyhose, matte fabric, no shoes",
+    ),
+    Setting(
+        "body_base.modest_suit_tags",
+        "素体",
+        "素体スーツのタグ(控えめに描くキャラ)",
+        "未成年の手がかりがあるキャラの素体スーツのタグ。体の線は出すが、胸・腰を強調しない(体に貼り付くタグを入れない。ゆったりした服にすると体の線と腕が隠れたので、fitted にする)。",
+        "text",
+        "plain grey turtleneck shirt, long sleeves, fitted shirt, slim fit, tucked in shirt, dark grey bike shorts, grey pantyhose, "
+        "matte fabric, no shoes",
+    ),
+    Setting(
         "blender.path",
         "素体の2Dモデル(Blender)",
         "Blender の実行ファイル",
