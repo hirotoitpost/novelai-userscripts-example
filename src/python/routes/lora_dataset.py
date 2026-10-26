@@ -11,13 +11,15 @@ import sqlite3
 from pathlib import Path
 from typing import Annotated, Any
 
+import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
-from .. import app_settings, body_base, body_check, body_export, body_rig, content_guard
+from .. import app_settings, body_base, body_check, body_export, body_parsing, body_rig, content_guard
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -88,6 +90,7 @@ from ..lora_dataset import (
     run_dataset,
 )
 from ..models import (
+    BodyHairUnderRequest,
     BodyOutfitRequest,
     BodyRigRequest,
     BodyBaseOptionOrderRequest,
@@ -1234,6 +1237,25 @@ def _rig_dir(character: dict, base: dict, root_name: str) -> Path:
     return _character_root(root_name, character) / folder / str(base["id"])
 
 
+def _behind_hair_paths(character: dict, base: dict, root_name: str) -> tuple[Path, Path, Path]:
+    """髪の下を描き直した Aポーズの絵・そのときの髪の層の範囲(白黒)・記録(点の指定など)。素体の絵と同じフォルダ。"""
+    folder = _body_dir(character, base, root_name)
+    stem = f"{base['id']}_a_pose"
+    return folder / f"{stem}_nohair.png", folder / f"{stem}_hairmask.png", folder / f"{stem}_nohair.json"
+
+
+def _behind_hair_entry(character: dict, base: dict, root_name: str) -> dict[str, Any] | None:
+    image, region, meta = _behind_hair_paths(character, base, root_name)
+    if not image.is_file():
+        return None
+    info = json.loads(meta.read_text(encoding="utf-8")) if meta.is_file() else {}
+    return {
+        "path": image.relative_to(_PROJECT_ROOT).as_posix(), "updated": image.stat().st_mtime,
+        "region": region.relative_to(_PROJECT_ROOT).as_posix() if region.is_file() else None,
+        "points": info.get("points"),
+    }
+
+
 def _outfit_paths(character: dict, base: dict, root_name: str) -> tuple[Path, Path]:
     """服を着た Aポーズの絵と、その記録(服のタグ・関節のずれ)。素体の絵と同じフォルダ。"""
     folder = _body_dir(character, base, root_name)
@@ -1271,6 +1293,9 @@ def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
         "with_outfit": bool(meta.get("with_outfit")), "outfit": _outfit_entry(character, base, root_name),
         "quality": meta.get("quality"),
         "physics": meta.get("physics"),
+        "behind_hair": _behind_hair_entry(character, base, root_name),
+        # 体の部位分けのモデル(body_parsing)を置いてあるか。無ければ髪は色と点の自動の切り出し
+        "parsing_model": body_parsing.available(),
         # 胸の揺れを付けられるキャラか(成人フラグがあり、控えめに描くキャラでない)
         "breast_allowed": bool(character.get("is_adult")) and not _age_checks(character)[1],
         "default_outfit_tags": character.get("outfit_tags") or "",
@@ -1297,6 +1322,67 @@ async def get_body_rig_file(character_id: int, name: str, root_name: str = "trai
         raise HTTPException(status_code=404, detail="not found")
     download = f"{_safe_name(character['name'])}_{base['id']}_{name}" if path.suffix in (".blend", ".zip", ".psd") else None
     return FileResponse(path, filename=download)
+
+
+@router.post("/character/{character_id}/body-hair-under")
+async def draw_body_hair_under(character_id: int, req: BodyHairUnderRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    2Dモデルの髪の層の下(垂れた髪に隠れていた体)を、NovelAI のインペイントで描き直す。髪の層の範囲は、点の指定(points:
+    {"pos": [[x, y]…], "neg": [[x, y]…]} のまとまりの並び)があれば点で切り出し、無ければ自動で切り出す。描き直した絵と範囲を
+    残し、2Dモデルを作るとき体の絵に使う(まわりから埋める LaMa の代わり)。1枚ぶんの Anlas を使う。
+    """
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    reason, modest = _age_checks(character)
+    nude = base["kind"] == "nude"
+    if nude and reason:
+        raise HTTPException(status_code=403, detail=reason)
+    source = _body_dir(character, base, req.root_name) / f"{base['id']}_a_pose.png"
+    if not source.is_file():
+        raise HTTPException(status_code=422, detail="素体の「Aポーズ(関節の確認)」をまだ描いていません。先に描いてください。")
+    image = Image.open(source).convert("RGB")
+    prompts = [p.model_dump() for p in req.points] if req.points else None
+
+    def find() -> body_rig.HairSplit | None:
+        mask, points = body_rig.detect(image)
+        return body_rig.split_hair(image, mask, points, prompts=prompts)
+
+    try:
+        split = await asyncio.to_thread(find)
+    except body_rig.RigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if split is None:
+        raise HTTPException(status_code=422, detail="垂れた髪が見つかりませんでした(点で指すと見つかることがあります)。")
+    # 髪の下を、素体(スーツ・裸)のまま描き直す。長い髪をまた描かないよう、髪の長さのタグを外してネガティブに入れる
+    options = _options()
+    prompt = body_base.prompt(character, base, body_base.ITEMS["a_pose"], options, modest=modest)
+    prompt = join_tags(*(t for t in prompt.split(",") if not body_base.HAIR_LENGTH_RE.search(t)), body_base.BEHIND_HAIR_TAGS)
+    _check_tags(character, prompt, _load_guard(None), nude)
+    negative = join_tags(body_base.negative(base, modest=modest), body_base.BEHIND_HAIR_NEGATIVE)
+    seed = character.get("seed") if character.get("seed") is not None else req.seed
+    try:
+        cfg = GenConfig(
+            output_root=source.parent, model=req.model, steps=req.steps, scale=req.scale,
+            negative_prompt=sheet_negative(character, r18=nude, extra=negative), seed=seed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    # 髪を外してまわりから埋めた絵を元に、髪の下の所だけを弱めに描き直す(元の絵から強く描き直すと、頭から続く長い髪を
+    # また描いた。2026-10 実機)。描き直さない所は、埋めた絵のまま
+    hole = split.hanging & split.person
+    grown = cv2.dilate(hole.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))).astype(bool)
+    redraw = Image.fromarray((grown * 255).astype(np.uint8)).convert("RGB")
+    params = InpaintParams(image=_png(split.filled), mask=_png(redraw), strength=req.strength, seed=seed or 0)
+    drawn = await generate_one(client, prompt, image.size, cfg, seed=seed, inpaint=params)
+    drawn = drawn.convert("RGB").resize(image.size) if drawn.size != image.size else drawn.convert("RGB")
+    merged = np.where(grown[..., None], np.asarray(drawn), np.asarray(split.filled))
+    out, region, meta = _behind_hair_paths(character, base, req.root_name)
+    Image.fromarray(merged.astype(np.uint8)).save(out, "PNG")
+    Image.fromarray(((split.hanging | split.back) * 255).astype(np.uint8)).save(region, "PNG")
+    meta.write_text(json.dumps({"points": prompts}, ensure_ascii=False), encoding="utf-8")
+    return _rig_entries(character, req.root_name)
 
 
 @router.post("/character/{character_id}/body-outfit")
@@ -1403,8 +1489,10 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
     breasts = req.breast_physics and bool(character.get("is_adult")) and not modest
 
     def work() -> None:
+        behind, region, _ = _behind_hair_paths(character, base, req.root_name)
         rig = body_rig.build(
             source, folder, outfit if with_outfit else None, hair=req.hair_physics, breasts=breasts, wind=req.wind,
+            behind_hair=behind, hair_region=region,
         )
         result = body_rig.run_blender(blender, folder, req.motion)
         # 品質: Aポーズの骨格・服の層のずれ・描き出したコマ(かけら・細い穴)

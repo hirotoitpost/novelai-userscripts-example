@@ -188,6 +188,21 @@ _PSD_ORDER = (
 )
 
 
+def _hair_layer(psd, path: Path, name: str, used: bool) -> None:
+    """髪の層の絵を、その名前のフォルダに1枚のレイヤーで入れる(絵が無い・使っていなければ何もしない)。"""
+    from psd_tools.api.layers import Group, PixelLayer
+
+    if not used or not path.is_file():
+        return
+    hair = np.asarray(Image.open(path).convert("RGBA"))
+    ys, xs = np.nonzero(hair[..., 3] > 8)
+    if not len(ys):
+        return
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    folder = Group.new(psd, name)
+    folder.append(PixelLayer.frompil(Image.fromarray(hair[y0:y1, x0:x1], "RGBA"), psd, name, int(y0), int(x0)))
+
+
 def export_psd(rig_dir: Path, rig: dict) -> Path:
     """
     rig_dir/model.psd(Cubism Editor に読み込む、部位ごとのレイヤー)を書く。画素の部位は、メッシュを作ったときと同じ
@@ -202,6 +217,8 @@ def export_psd(rig_dir: Path, rig: dict) -> Path:
     labels_by_bone = {b.name: i for i, b in enumerate(BONES)}
     w, h = rig["size"]
     psd = PSDImage.new("RGBA", (w, h))
+    # 後ろ髪(体の後ろに垂れた髪)は、いちばん奥に置く(先に入れたものが下になる)
+    _hair_layer(psd, rig_dir / "hair_back.png", "hair.back", any(m["name"] == "hair.back" for m in rig["meshes"]))
     layers = [("body", rig["texture"])]
     if any(m["name"].startswith("outfit.") for m in rig["meshes"]):
         layers.append(("outfit", "outfit.png"))
@@ -222,13 +239,7 @@ def export_psd(rig_dir: Path, rig: dict) -> Path:
                 # レイヤー名は英字だけ(PSD の古い形式の名前は日本語を入れられない)
                 folder.append(PixelLayer.frompil(Image.fromarray(crop, "RGBA"), psd, part, int(y0), int(x0)))
     # 髪の層(垂れた髪。揺れものの骨で動かす)は、体・服のフォルダの手前に1枚で置く
-    if (rig_dir / "hair.png").is_file() and any(m["name"] == "hair" for m in rig["meshes"]):
-        hair = np.asarray(Image.open(rig_dir / "hair.png").convert("RGBA"))
-        ys, xs = np.nonzero(hair[..., 3] > 8)
-        if len(ys):
-            y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-            folder = Group.new(psd, "hair")
-            folder.append(PixelLayer.frompil(Image.fromarray(hair[y0:y1, x0:x1], "RGBA"), psd, "hair", int(y0), int(x0)))
+    _hair_layer(psd, rig_dir / "hair.png", "hair", any(m["name"] == "hair" for m in rig["meshes"]))
     out = rig_dir / "model.psd"
     psd.save(out)
     return out

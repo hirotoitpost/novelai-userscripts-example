@@ -69,6 +69,10 @@ interface RigInfo {
   physics?: { hair: string[]; breasts: boolean; wind: number } | null
   /** 胸の揺れを付けられるキャラか(成人キャラで、控えめに描くキャラでない) */
   breast_allowed?: boolean
+  /** 髪の下を NovelAI で描き直した Aポーズの絵(2Dモデルの体の絵に使う) */
+  behind_hair?: { path: string; updated: number; region: string | null; points: unknown } | null
+  /** 体の部位分けのモデル(see-through)を置いてあるか */
+  parsing_model?: boolean
   /** 作ったときの品質の確かめ(Aポーズの骨格・服の層のずれ・描き出したコマのかけら/細い穴) */
   quality?: {
     a_pose_problems: string[]
@@ -152,6 +156,42 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   useEffect(() => {
     setOutfitTags(rig?.outfit?.outfit_tags || rig?.default_outfit_tags || '')
   }, [rig?.base_id, rig?.outfit?.outfit_tags, rig?.default_outfit_tags])
+
+  // 髪の下の体の描き直し: 強さと、点の指定(任意。JSON)
+  const [underStrength, setUnderStrength] = useState(0.55)
+  const [underPoints, setUnderPoints] = useState('')
+  const [underRunning, setUnderRunning] = useState(false)
+
+  async function drawBehindHair() {
+    let points: unknown = null
+    if (underPoints.trim()) {
+      try {
+        points = JSON.parse(underPoints)
+      } catch {
+        setRigStatus('点の指定が JSON として読めません')
+        return
+      }
+    }
+    setUnderRunning(true)
+    setRigStatus('垂れた髪を見つけて、髪の下の体を描き直しています…')
+    try {
+      const res = await fetch(`/api/lora-dataset/character/${characterId}/body-hair-under`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ strength: underStrength, root_name: rootName, ...(points ? { points } : {}) }),
+      })
+      if (!res.ok) {
+        setRigStatus(`描き直せませんでした: ${await detail(res)}`)
+        return
+      }
+      setRig(await res.json())
+      setRigStatus('描き直しました。「2Dモデルを作る」で、この絵を体に使います')
+    } catch (e) {
+      setRigStatus(e instanceof Error ? e.message : String(e))
+    } finally {
+      setUnderRunning(false)
+    }
+  }
 
   async function drawOutfit() {
     setOutfitRunning(true)
@@ -527,6 +567,38 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
                       {(rig.outfit.attempts ?? 1) > 1 && `・${rig.outfit.attempts}回描いていちばんずれの小さい絵`}
                     </span>
                   )}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="bdb-outfit">
+            <h5>髪の層(長い髪)</h5>
+            <p className="lora-hint">
+              垂れた髪は髪の層に分けて揺らします。{rig.parsing_model
+                ? '髪は体の部位分けのモデル(see-through)で切り出します。'
+                : '体の部位分けのモデルが無いので、髪は色と形で切り出します(scripts/export_body_parsing.py で入れると正確になります)。'}
+              髪の下に隠れていた体は、ふだんはまわりから埋めます。下のボタンで NovelAI に描き直させると、きれいになります(1枚ぶんの Anlas)。
+            </p>
+            <div className="bdb-outfit-row">
+              {rig.behind_hair && (
+                <img src={`${fileUrl(rig.behind_hair.path)}&v=${rig.behind_hair.updated}`} alt="髪の下を描き直した Aポーズ" className="bdb-outfit-thumb" />
+              )}
+              <div className="bdb-outfit-form">
+                <label className="lora-label">描き直しの強さ {underStrength.toFixed(2)}(強すぎると長い髪をまた描きます)
+                  <input type="range" min={0.3} max={0.8} step={0.05} value={underStrength} disabled={busy || underRunning}
+                    onChange={e => setUnderStrength(Number(e.target.value))} />
+                </label>
+                <details>
+                  <summary className="lora-hint">点で髪を指す(任意)</summary>
+                  <textarea className="lora-textarea" rows={3} value={underPoints} disabled={busy || underRunning}
+                    placeholder='[{"pos": [[265,300],[250,400]], "neg": [[410,330]]}, {"pos": [[545,300]], "neg": [[410,330]]}]'
+                    onChange={e => setUnderPoints(e.target.value)} />
+                </details>
+                <div className="fsh-actions">
+                  <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void drawBehindHair()}
+                    disabled={busy || underRunning || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}>
+                    {underRunning ? '描き直しています…' : rig.behind_hair ? '髪の下の体を描き直す(やり直し)' : '髪の下の体を描き直す(NovelAI)'}
+                  </button>
                 </div>
               </div>
             </div>
