@@ -388,3 +388,28 @@ def test_breast_physics_only_for_adults(client: TestClient, monkeypatch: pytest.
         assert res.status_code == 422
     assert [s["breasts"] for s in seen] == [True, False, False]
     assert all(s["hair"] and s["wind"] == 0.5 for s in seen)
+
+
+def test_behind_hair_is_redrawn_without_long_hair(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import body_rig
+
+    character = _character(client, "test", is_adult=1, age=25, appearance_tags="1girl, long hair, brown hair")
+    base = _base(client)
+    client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]})
+    client.post(f"/api/lora-dataset/character/{character['id']}/body-base", json={"keys": ["a_pose"]})
+    hanging = np.zeros((1216, 832), bool)
+    hanging[300:600, 200:260] = True
+    split = body_rig.HairSplit(hanging=hanging, back=np.zeros_like(hanging), chains=[], core=None,
+                               filled=Image.new("RGB", (832, 1216), (90, 90, 90)), person=np.ones_like(hanging))
+    seen = {}
+    monkeypatch.setattr(body_rig, "detect", lambda img: (None, {}))
+    monkeypatch.setattr(body_rig, "split_hair", lambda image, mask, points, prompts=None, region=None: seen.update(prompts=prompts) or split)
+    points = [{"pos": [[230, 400]], "neg": [[400, 400]]}]
+    res = client.post(f"/api/lora-dataset/character/{character['id']}/body-hair-under", json={"points": points, "strength": 0.5})
+    assert res.status_code == 200, res.text
+    assert seen["prompts"] == [{"pos": [(230.0, 400.0)], "neg": [(400.0, 400.0)]}]
+    prompt, negative = client.calls[-1]  # type: ignore[attr-defined]
+    assert "long hair" not in prompt and "short hair" in prompt and "long hair" in negative
+    entry = res.json()["behind_hair"]
+    assert entry["path"].endswith("_a_pose_nohair.png") and entry["region"].endswith("_a_pose_hairmask.png")
+    assert (tmp_path / entry["region"]).is_file()

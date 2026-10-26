@@ -341,6 +341,28 @@ class BodyRigRequest(BaseModel):
     wind: float = Field(0.3, ge=0.0, le=1.0)
 
 
+class HairPointPrompt(BaseModel):
+    """点で指して髪を切り出すときの、1つのまとまり(左の髪など)の、入れたい点と外したい点(絵の画素)。"""
+
+    pos: list[tuple[float, float]] = Field(min_length=1, max_length=20)
+    neg: list[tuple[float, float]] = Field(default_factory=list, max_length=20)
+
+
+class BodyHairUnderRequest(BaseModel):
+    """
+    2Dモデルの髪の層の下(垂れた髪に隠れていた体)を描き直す。points を省くと髪を自動で切り出す。
+    """
+
+    points: Optional[list[HairPointPrompt]] = Field(None, max_length=6)
+    # 描き直しの強さ。髪を外して埋めた絵を元に描き直すので、強すぎると髪をまた描く
+    strength: float = Field(0.55, ge=0.2, le=1.0)
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    model: ImageModelLiteral = "nai-diffusion-4-5-full"
+    steps: int = Field(23, ge=1, le=50)
+    scale: float = Field(5.0, ge=0.0, le=10.0)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
+
+
 class BodyOutfitRequest(BaseModel):
     """
     素体の Aポーズの絵に服を着せた絵を描く(2Dモデルの服の層)。outfit_tags を省くとキャラシートの普段の服装。

@@ -335,6 +335,9 @@ def joint_drift(base: dict[str, np.ndarray], other: dict[str, np.ndarray]) -> fl
 
 
 HAIR_MESH = "hair"
+# 後ろ髪(腕と胴の間のすき間から見える、体の後ろに垂れた髪)の層。体の奥に置く
+HAIR_BACK_MESH = "hair.back"
+_HAIR_BACK_Z = -1
 # 体の太さ(骨からの距離/骨の太さ)がこれより外の人物の画素は、髪につながっていれば髪とみなす。胴の縁はおよそ 0.8、
 # 腕の縁はおよそ 0.8 なので、それより少し外(胴と腕の間に垂れた影の髪を拾うため、1.15 では取りこぼした)
 _HAIR_OUTSIDE = 0.95
@@ -367,6 +370,10 @@ def _hanging(hair_pixels: np.ndarray, person: np.ndarray, chains: list[dict], j:
     count, labels = cv2.connectedComponents(union, connectivity=8)
     keep = set(np.unique(labels[hair_pixels]).tolist()) - {0}
     grown = np.isin(labels, list(keep))
+    # 顔の上の前髪(顔の幅の中で、顎より上)は頭のまま(揺らすと顔が乱れる)
+    shoulder = float(np.linalg.norm(j["left_shoulder"] - j["right_shoulder"]))
+    chin = j["nose"][1] + 0.6 * (j["neck"][1] - j["nose"][1])
+    grown &= ~((np.abs(xs - j["nose"][0]) < 0.35 * shoulder) & (ys < chin))
     out = np.zeros_like(hair_pixels)
     for chain in chains:
         side = xs > j["nose"][0] if chain["chain"] == "hair.L" else xs < j["nose"][0]
@@ -374,27 +381,68 @@ def _hanging(hair_pixels: np.ndarray, person: np.ndarray, chains: list[dict], j:
     return out
 
 
-def _hair_mesh(hanging: np.ndarray, bones: list[dict], j: dict[str, np.ndarray]) -> dict:
-    """髪の層のメッシュ。根もとは頭の重み、下へ行くほど鎖の骨へ、鎖の中では毛先ほど2本目へ。"""
+def _body_core(image: Image.Image, j: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray] | None:
+    """
+    部位分けのモデル(body_parsing。置いてあれば)で、(髪でない体の画素, 腕と胴の間などのすき間)。すき間は、体の画素を
+    閉じた範囲から体の画素を除いた所(体に囲まれた、体でない所)。モデルが無ければ None。
+    """
+    from . import body_parsing
+
+    if not body_parsing.available():
+        return None
+    parts = body_parsing.parse(image)
+    core = np.zeros(next(iter(parts.values())).shape, bool)
+    for name in ("face", "eyes", "eyewear", "ears", "earwear", "nose", "mouth", "headwear", "neck", "neckwear", "topwear",
+                 "handwear", "bottomwear", "legwear", "footwear"):
+        core |= parts[name]
+    shoulder = float(np.linalg.norm(j["left_shoulder"] - j["right_shoulder"]))
+    k = max(3, int(shoulder * 0.3)) | 1
+    closed = cv2.morphologyEx(core.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    # すき間は肩より下で、腕(handwear)と胴(topwear)の両方に接するまとまりだけ(胸の前に垂れた髪は胴だけに囲まれるので、
+    # すき間にすると胸に穴が開いた。顔の中の目・鼻のまわりもすき間にしない)
+    below = np.mgrid[0:core.shape[0], 0:core.shape[1]][0] > j["neck"][1] + 0.1 * shoulder
+    enclosed = (closed.astype(bool) & ~core & below).astype(np.uint8)
+    arm = cv2.dilate(parts["handwear"].astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    torso = cv2.dilate((parts["topwear"] | parts["bottomwear"]).astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    count, labels = cv2.connectedComponents(enclosed, connectivity=8)
+    keep = [i for i in range(1, count) if (arm & (labels == i)).any() and (torso & (labels == i)).any()]
+    return core, np.isin(labels, keep)
+
+
+def _hair_mesh(hanging: np.ndarray, bones: list[dict], j: dict[str, np.ndarray], *, name: str = HAIR_MESH,
+               z: float = _HAIR_Z, texture: str = "hair.png", sway: bool = True) -> dict:
+    """
+    髪の層のメッシュ。根もとは頭の重み、下へ行くほど鎖の骨へ、鎖の中では毛先ほど2本目へ。顔のすぐ横の髪は、首より下から
+    少しずつ揺らす(顔の上へはみ出して見えた)。sway=False(後ろ髪)は揺らさず胴に付ける(体の奥で揺れると、腕の外へ
+    はみ出して黒いかけらに見えた)。
+    """
     shoulder = float(np.linalg.norm(j["left_shoulder"] - j["right_shoulder"]))
     region = cv2.dilate(hanging.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))).astype(bool)
     verts, tris = _region_mesh(region, _GRID * shoulder)
+    if not sway:
+        return {
+            "name": name, "z": z, "bones": ["torso"], "texture": texture,
+            "vertices": verts.round(1).tolist(), "triangles": tris.tolist(), "weights": [[1.0] for _ in verts],
+        }
     names = ["head"]
     columns = [np.ones(len(verts))]
+    near_face = np.clip((np.abs(verts[:, 0] - j["nose"][0]) - 0.3 * shoulder) / (0.15 * shoulder), 0.0, 1.0)
+    below_neck = np.clip((verts[:, 1] - j["neck"][1]) / (0.2 * shoulder), 0.0, 1.0)
+    calm = np.maximum(near_face, below_neck)
     for chain in sorted({b["chain"] for b in bones}):
         seg1 = next(b for b in bones if b["name"] == f"{chain}.1")
         seg2 = next(b for b in bones if b["name"] == f"{chain}.2")
         root, mid, tip = np.array(seg1["head"]), np.array(seg1["tail"]), np.array(seg2["tail"])
         side = (verts[:, 0] > j["nose"][0]) if chain == "hair.L" else (verts[:, 0] < j["nose"][0])
         length = max(tip[1] - root[1], 1.0)
-        share = np.clip((verts[:, 1] - root[1]) / (0.3 * length), 0.0, 1.0) * side
+        share = np.clip((verts[:, 1] - root[1]) / (0.3 * length), 0.0, 1.0) * side * calm
         along = np.clip((verts[:, 1] - mid[1]) / (0.4 * length) + 0.5, 0.0, 1.0)
         columns = [c * (1 - share) for c in columns] + [share * (1 - along), share * along]
         names += [seg1["name"], seg2["name"]]
     table = np.column_stack(columns)
     table /= table.sum(axis=1, keepdims=True)
     return {
-        "name": HAIR_MESH, "z": _HAIR_Z, "bones": names, "texture": "hair.png",
+        "name": name, "z": z, "bones": names, "texture": texture,
         "vertices": verts.round(1).tolist(), "triangles": tris.tolist(), "weights": table.round(4).tolist(),
     }
 
@@ -421,23 +469,42 @@ def _add_breasts(meshes: list[dict], j: dict[str, np.ndarray]) -> list[dict]:
     return bones
 
 
-def _fill_behind_hair(image: Image.Image, person: np.ndarray, hanging: np.ndarray, j: dict[str, np.ndarray]
-                      ) -> tuple[Image.Image, np.ndarray]:
+def _fill_behind_hair(image: Image.Image, person: np.ndarray, hanging: np.ndarray, j: dict[str, np.ndarray],
+                      core: np.ndarray | None = None) -> tuple[Image.Image, np.ndarray]:
     """
-    髪の層を外したあとの絵と人物の範囲。髪の下にあった所は、まわりから描いて埋める(LaMa)。体の内側(骨からの距離が体の
-    太さの中・顔の幅の中)は人物のまま、外側(体の横に垂れていた髪の所)は背景にする(髪が動くと、体の横は背景が見える)。
+    髪の層を外したあとの絵と人物の範囲。髪の下にあった所は、まわりから描いて埋める(LaMa)。体の内側は人物のまま、外側
+    (体の横に垂れていた髪の所)は背景にする(髪が動くと、体の横は背景が見える)。体の内側は、部位分けのモデルの体の画素
+    (core)があればそれを少し閉じた範囲、無ければ骨からの距離が体の太さの中・顔の幅の中(広めに出て、胴が太って見えた)。
     """
     shoulder = float(np.linalg.norm(j["left_shoulder"] - j["right_shoulder"]))
     from .inpaint_local import inpaint
 
-    hole = cv2.dilate(hanging.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool) & person
-    rest = person & ~hole
     h, w = person.shape
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
-    body = (_scores(xs, ys, j).min(axis=0) <= 1.0) | ((_head_share(xs, ys, j) >= 0.5) & (np.abs(xs - j["nose"][0]) < 0.4 * shoulder))
+    # 髪の層の上の端(目の高さ)のすぐ下は、体の絵にも元の髪を残す(髪の層と重ねて、継ぎ目の線を見せない)
+    eye = j["nose"][1] - 0.15 * (j["neck"][1] - j["nose"][1])
+    # 髪の縁の線(部位分けのモデルの髪に入らない黒い輪郭)まで外すため、少し広めに取る
+    hole = cv2.dilate(hanging.astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool) & person
+    hole &= ys > eye + 0.06 * shoulder
+    rest = person & ~hole
+    # 髪を外したあとに残った、体から離れた細いかけら(髪の輪郭の線など)は体の絵に入れない
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(rest.astype(np.uint8), connectivity=8)
+    if count > 2:
+        big = [i for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= 0.02 * rest.sum()]
+        rest = np.isin(labels, big)
+    if core is not None:
+        # モデルの体の画素を少し閉じた範囲と、骨からの距離が体の太さより内側(0.8。髪に隠れた肩などはモデルの体の画素に
+        # 入らないので、骨の見積もりで補う。1.0 では胴が太って見えた)
+        # 閉じる幅は、胸に垂れた髪の束の幅を渡れるくらい(0.08 では束の下が透明の穴になった)
+        kc = max(3, int(shoulder * 0.2)) | 1
+        body = cv2.morphologyEx(core.astype(np.uint8), cv2.MORPH_CLOSE,
+                                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kc, kc))).astype(bool)
+        body |= _scores(xs, ys, j).min(axis=0) <= 0.8
+    else:
+        body = (_scores(xs, ys, j).min(axis=0) <= 1.0) | ((_head_share(xs, ys, j) >= 0.5) & (np.abs(xs - j["nose"][0]) < 0.4 * shoulder))
     k = max(3, int(shoulder * 0.12)) | 1
     closed = cv2.morphologyEx(rest.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-    inside = hole & (closed.astype(bool) | body)
+    inside = hole & (body if core is not None else (closed.astype(bool) | body))
     # 体の外になる所は先に背景の色で塗り(髪の残りを、埋める絵の手がかりにしないように)、体の内側の穴だけを、
     # 穴ごとに切り出して埋める(全部まとめて埋めると、背景に引っぱられて白く埋まった)
     pixels = np.asarray(image.convert("RGB")).copy()
@@ -450,16 +517,62 @@ def _fill_behind_hair(image: Image.Image, person: np.ndarray, hanging: np.ndarra
     return Image.fromarray(pixels), rest | inside
 
 
+@dataclass
+class HairSplit:
+    """髪の層の分け方: 垂れた髪(前)・後ろ髪・体の画素(モデル)・髪を外して埋めた絵と人物の範囲。"""
+
+    hanging: np.ndarray
+    back: np.ndarray
+    chains: list[dict]
+    core: np.ndarray | None
+    filled: Image.Image
+    person: np.ndarray
+
+
+def split_hair(image: Image.Image, mask: np.ndarray, points: dict[str, np.ndarray], *, region: np.ndarray | None = None,
+               prompts: list[dict] | None = None) -> HairSplit | None:
+    """
+    垂れた髪を髪の層に分ける。region(前に決めた髪の層の範囲)があればそれを、無ければ点の指定か自動で切り出す。部位分けの
+    モデルがあれば、腕と胴の間のすき間に見える髪を後ろ髪に分け、すき間は透明にする。髪の下はまわりから埋める(LaMa)。
+    垂れた髪が無ければ None。
+    """
+    from . import body_physics
+
+    j = joints(points, mask)
+    if region is not None:
+        hanging = region
+        chains = body_physics.hair_chains(hanging, j)
+    else:
+        hanging, chains = hair_layer(image, mask, points, prompts)
+    if not hanging.any() or not chains:
+        return None
+    # 髪の束の間に見える背景(白っぽい所)は髪の層に入れない(髪を揺らすと、体の上に白い線が出た)
+    pixels = np.asarray(image.convert("RGB")).astype(np.float32)
+    if (~mask).any():
+        background = np.median(pixels[~mask], axis=0)
+        hanging = hanging & (np.linalg.norm(pixels - background, axis=2) > 24)
+    back = np.zeros_like(hanging)
+    core = None
+    parsed = _body_core(image, j)
+    if parsed is not None:
+        core, gap = parsed
+        back = hanging & gap
+        hanging = hanging & ~back
+        mask = mask & ~gap
+    filled, person = _fill_behind_hair(image, mask, hanging, j, core)
+    return HairSplit(hanging=hanging, back=back, chains=chains, core=core, filled=filled, person=person)
+
+
 def build(source: Path, out_dir: Path, outfit: Path | None = None, *, hair: bool = False, breasts: bool = False,
-          wind: float = 0.0) -> dict:
+          wind: float = 0.0, behind_hair: Path | None = None, hair_region: Path | None = None) -> dict:
     """
     source(Aポーズの絵)から、out_dir に texture.png・rig.json・overlay.png(確かめ用)を書く。outfit(同じ Aポーズで服を
     着た絵)があれば、服の層(outfit.png と服のメッシュ)も作る。骨は素体の絵の関節で決める(服の層も同じ骨で動く)。
     hair は垂れた髪を髪の層(hair.png と髪のメッシュ・鎖の骨)に分け、breasts は胸の骨を足す(揺れものの骨。胸は、成人キャラ
     だけと呼び出し側で決める)。wind は風の強さ(0〜1)。揺れは、動きを描き出すときに body_physics.bake で足す。
+    behind_hair(髪の下を NovelAI で描き直した絵)と hair_region(そのときの髪の層の範囲の白黒の絵)があれば、髪の層はその範囲、
+    体の絵は描き直した絵にする(まわりから埋める LaMa より、隠れていた体がちゃんと描かれる)。
     """
-    from . import body_physics
-
     image = Image.open(source).convert("RGB")
     original = image
     mask, points = detect(image)
@@ -473,13 +586,17 @@ def build(source: Path, out_dir: Path, outfit: Path | None = None, *, hair: bool
     # 髪の層: 垂れた髪を外し、下の体を埋める(服を着た絵も同じ所を埋める)。髪の骨は素体の絵の髪から
     hair_bones: list[dict] = []
     hanging = np.zeros(mask.shape, bool)
+    back = np.zeros(mask.shape, bool)
+    core = None
     if hair:
-        hair_pixels = hair_mask(image, mask, points)
-        chains = body_physics.hair_chains(hair_pixels, j)
-        hanging = _hanging(hair_pixels, mask, chains, j)
-        if hanging.any():
-            hair_bones = _hair_bones(chains)
-            image, mask = _fill_behind_hair(original, mask, hanging, j)
+        # 髪の下を NovelAI で描き直した絵があれば、そのときの髪の層の範囲で分け、体の絵は描き直した絵にする
+        redrawn = behind_hair is not None and hair_region is not None and behind_hair.is_file() and hair_region.is_file()
+        region = np.asarray(Image.open(hair_region).convert("L")) > 127 if redrawn else None
+        split = split_hair(original, mask, points, region=region)
+        if split is not None:
+            hair_bones = _hair_bones(split.chains)
+            hanging, back, core, mask = split.hanging, split.back, split.core, split.person
+            image = Image.open(behind_hair).convert("RGB") if redrawn else split.filled
 
     outfit_mask = None
     visible = mask
@@ -488,7 +605,8 @@ def build(source: Path, out_dir: Path, outfit: Path | None = None, *, hair: bool
         person, outfit_points = detect(outfit_image)
         drift = joint_drift(points, outfit_points)
         if hanging.any():
-            outfit_image, person = _fill_behind_hair(outfit_image, person, hanging, j)
+            person &= ~back
+            outfit_image, person = _fill_behind_hair(outfit_image, person, hanging, j, core)
         outfit_mask = outfit_region(image, outfit_image, mask, person, j)
         # 服を着た絵で背景の所は、体の層も見せない(服が素体より細い所で、素体の縁が服の横にはみ出して見えた)
         visible = mask & person
@@ -496,6 +614,9 @@ def build(source: Path, out_dir: Path, outfit: Path | None = None, *, hair: bool
     extra = list(hair_bones)
     if hair_bones:
         meshes.append(_hair_mesh(hanging, hair_bones, j))
+        if back.sum() > 200:
+            meshes.append(_hair_mesh(back, hair_bones, j, name=HAIR_BACK_MESH, z=_HAIR_BACK_Z, texture="hair_back.png",
+                                     sway=False))
     if breasts:
         extra += _add_breasts(meshes, j)
 
@@ -511,6 +632,9 @@ def build(source: Path, out_dir: Path, outfit: Path | None = None, *, hair: bool
     if hair_bones:
         soft = cv2.GaussianBlur(hanging.astype(np.float32), (3, 3), 0)
         Image.fromarray(np.dstack([np.asarray(original), (soft * 255).astype(np.uint8)]), "RGBA").save(out_dir / "hair.png")
+        if back.sum() > 200:
+            soft = cv2.GaussianBlur(back.astype(np.float32), (3, 3), 0)
+            Image.fromarray(np.dstack([np.asarray(original), (soft * 255).astype(np.uint8)]), "RGBA").save(out_dir / "hair_back.png")
     rig = {
         "source": source.name,
         "size": list(image.size),
@@ -709,6 +833,50 @@ def frame_quality(frames: list[Path]) -> dict:
 
 # 髪の色とみなす色の差(Lab の距離)。頭のてっぺんの髪の色からこれ以内
 _HAIR_DELTA = 28.0
+
+
+def hair_from_points(image: Image.Image, prompts: list[dict]) -> np.ndarray:
+    """
+    点で指して髪を切り出す(point_segment の MobileSAM)。prompts は {"pos": [[x, y]…], "neg": [[x, y]…]} の並び(左右の髪など、
+    まとまりごと)。まとまりごとに、外したい点を含まない候補のうち、いちばん小さいもの(無ければいちばん小さい候補)を使う
+    (大きい候補は顔や胴まで広がった。2026-10 実機)。
+    """
+    from . import point_segment
+
+    features = point_segment.encode(image.convert("RGB"))
+    out = np.zeros((image.height, image.width), bool)
+    for prompt in prompts:
+        pos = [tuple(p) for p in prompt.get("pos", [])]
+        neg = [tuple(p) for p in prompt.get("neg", [])]
+        if not pos:
+            continue
+        candidates = [m for m, _ in point_segment.segment(features, pos, neg)]
+        clean = [m for m in candidates if not any(m[int(y), int(x)] for x, y in neg)]
+        out |= min(clean or candidates, key=lambda m: int(m.sum()))
+    return out
+
+
+def hair_layer(image: Image.Image, mask: np.ndarray, points: dict[str, np.ndarray],
+               prompts: list[dict] | None = None) -> tuple[np.ndarray, list[dict]]:
+    """
+    髪の層にする画素(垂れた髪)と、髪の鎖。prompts(点の指定)があれば点で切り出し、無ければ体の部位分けのモデル
+    (body_parsing。置いてあれば)、それも無ければ色と点の自動の切り出し(hair_mask)。どれも、体の太さより外へはみ出して
+    髪につながる画素を足す(_hanging)。
+    """
+    from . import body_physics
+
+    from . import body_parsing
+
+    j = joints(points, mask)
+    # 点の指定 > 部位分けのモデル(あれば) > 色と点の自動の切り出し
+    if prompts:
+        hair_pixels = hair_from_points(image, prompts)
+    elif body_parsing.available():
+        hair_pixels = body_parsing.parse(image)["hair"] & mask
+    else:
+        hair_pixels = hair_mask(image, mask, points)
+    chains = body_physics.hair_chains(hair_pixels, j)
+    return _hanging(hair_pixels, mask, chains, j), chains
 
 
 def hair_mask(image: Image.Image, mask: np.ndarray, points: dict[str, np.ndarray]) -> np.ndarray:

@@ -237,6 +237,14 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
     )
 
 
+# 髪の層の下を描き直すとき(2Dモデル): 長い髪をまた描かないよう、髪の長さのタグを外し、ネガティブで抑える
+HAIR_LENGTH_RE = re.compile(r"\b(long|very long|absurdly long|medium)\s+hair\b|hair over (shoulder|breasts)|hair between", re.IGNORECASE)
+# 髪は頭から続いて描かれやすい(2026-10 実機: ネガティブだけでは長い髪をまた描いた)ので、短い髪のタグを足し、重みで強く抑える
+BEHIND_HAIR_TAGS = "short hair, hair above shoulders, nape, bare shoulders line"
+BEHIND_HAIR_NEGATIVE = (
+    "1.6::long hair::, 1.4::very long hair::, 1.3::hair over shoulder::, hair strand, loose hair, hair down, hair on body"
+)
+
 # 服を着せるとき(素体の Aポーズの絵の首から下を描き直す)、素体スーツに戻らないように抑える
 OUTFIT_NEGATIVE = "plain grey bodysuit, full-body suit, skin-tight, bodysuit, nude"
 
