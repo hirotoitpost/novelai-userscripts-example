@@ -4,12 +4,15 @@ see-through(アニメ絵を層に分ける。https://github.com/mitmul/see-throu
 
     SEE_THROUGH_TOKEN=合言葉 python see_through_server.py --port 8190
 
-- GET  /health     GPU の名前など(合言葉が要る)
-- POST /decompose  絵(multipart の image)を層に分け、PSD(層)と _depth.psd(層ごとの奥行き)を zip で返す。
-                   resolution(既定 1280)・seed・tblr_split(既定 入。髪を前髪・後ろ髪に、腕・目を左右に分ける)
+- GET  /health              GPU の名前・待っている仕事の数(合言葉が要る)
+- POST /jobs                絵(multipart の image)を層に分ける仕事を入れ、すぐに仕事の id を返す。resolution(既定 1280)・
+                            seed・tblr_split(既定 入。髪を前髪・後ろ髪に、腕・目を左右に分ける)・group_offload
+- GET  /jobs/{id}           仕事の状態(queued・running・done・error)と、かかった秒数・失敗の理由
+- GET  /jobs/{id}/result    できあがり: PSD(層)と _depth.psd(層ごとの奥行き)の zip
 
-外へはトンネル(cloudflared)で出すので、すべての呼び出しで Authorization: Bearer <合言葉> を確かめる。1度に1枚だけ動かす
-(GPU のメモリが足りなくなるので、重なった依頼は順番に待たせる)。
+1枚に数分かかり、Cloudflare のトンネルは 1 回の呼び出しを 100 秒で切る(524)ので、仕事を入れて状態を聞く形にする。
+外へはトンネルで出すので、すべての呼び出しで Authorization: Bearer <合言葉> を確かめる。1度に1枚だけ動かす
+(GPU のメモリが足りなくなるので、重なった仕事は順番に待たせる)。
 """
 
 from __future__ import annotations
@@ -19,11 +22,11 @@ import asyncio
 import glob
 import os
 import secrets
-import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -35,6 +38,7 @@ TOKEN = os.environ.get("SEE_THROUGH_TOKEN", "")
 REPO = Path.cwd()
 app = FastAPI()
 _lock = asyncio.Lock()
+_jobs: dict[str, dict] = {}
 
 
 def _check(authorization: str | None) -> None:
@@ -52,51 +56,82 @@ async def health(authorization: str | None = Header(None)) -> dict:
     return {
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "busy": _lock.locked(),
+        "jobs": sum(1 for j in _jobs.values() if j["status"] in ("queued", "running")),
         "repo": str(REPO),
     }
 
 
-@app.post("/decompose")
-async def decompose(
-    image: UploadFile = File(...),
-    resolution: int = Form(1280),
-    seed: int = Form(42),
-    tblr_split: bool = Form(True),
-    group_offload: bool = Form(False),
-    authorization: str | None = Header(None),
-) -> FileResponse:
-    _check(authorization)
-    if not 512 <= resolution <= 2048:
-        raise HTTPException(status_code=422, detail="resolution は 512〜2048")
+async def _run(job_id: str, cmd: list[str], out: Path, work: Path) -> None:
+    job = _jobs[job_id]
     async with _lock:
-        work = Path(tempfile.mkdtemp(prefix="seethrough_"))
-        src = work / "input.png"
-        src.write_bytes(await image.read())
-        out = work / "out"
-        cmd = [sys.executable, "inference/scripts/inference_psd.py", "--srcp", str(src), "--save_dir", str(out),
-               "--save_to_psd", "--resolution", str(resolution), "--seed", str(seed), "--disable_progressbar"]
-        if tblr_split:
-            cmd.append("--tblr_split")
-        if group_offload:
-            cmd.append("--group_offload")
+        job["status"] = "running"
         started = time.time()
         proc = await asyncio.to_thread(subprocess.run, cmd, cwd=REPO, capture_output=True, text=True)
+        job["seconds"] = round(time.time() - started)
         if proc.returncode != 0:
-            tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-30:])
-            shutil.rmtree(work, ignore_errors=True)
-            raise HTTPException(status_code=500, detail=f"see-through が失敗しました:\n{tail}")
-        psds = glob.glob(str(out / "**" / "*.psd"), recursive=True)
-        layers = [p for p in psds if not p.endswith("_depth.psd")]
+            job["status"] = "error"
+            job["detail"] = "see-through が失敗しました:\n" + "\n".join((proc.stdout + proc.stderr).splitlines()[-30:])
+            return
+        layers = [p for p in glob.glob(str(out / "**" / "*.psd"), recursive=True) if not p.endswith("_depth.psd")]
         if not layers:
-            raise HTTPException(status_code=500, detail="PSD ができませんでした")
+            job["status"] = "error"
+            job["detail"] = "PSD ができませんでした"
+            return
         bundle = work / "layers.zip"
         with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(layers[0], "layers.psd")
             depth = layers[0][: -len(".psd")] + "_depth.psd"
             if os.path.exists(depth):
                 archive.write(depth, "layers_depth.psd")
-        print(f"decompose: {time.time() - started:.0f} 秒 → {layers[0]}", flush=True)
-        return FileResponse(bundle, media_type="application/zip", filename="layers.zip")
+        job["result"] = str(bundle)
+        job["status"] = "done"
+        print(f"job {job_id}: {job['seconds']} 秒 → {layers[0]}", flush=True)
+
+
+@app.post("/jobs")
+async def create_job(
+    image: UploadFile = File(...),
+    resolution: int = Form(1280),
+    seed: int = Form(42),
+    tblr_split: bool = Form(True),
+    group_offload: bool = Form(False),
+    authorization: str | None = Header(None),
+) -> dict:
+    _check(authorization)
+    if not 512 <= resolution <= 2048:
+        raise HTTPException(status_code=422, detail="resolution は 512〜2048")
+    job_id = uuid.uuid4().hex
+    work = Path(tempfile.mkdtemp(prefix="seethrough_"))
+    src = work / "input.png"
+    src.write_bytes(await image.read())
+    out = work / "out"
+    cmd = [sys.executable, "inference/scripts/inference_psd.py", "--srcp", str(src), "--save_dir", str(out),
+           "--save_to_psd", "--resolution", str(resolution), "--seed", str(seed), "--disable_progressbar"]
+    if tblr_split:
+        cmd.append("--tblr_split")
+    if group_offload:
+        cmd.append("--group_offload")
+    _jobs[job_id] = {"status": "queued", "seconds": None, "detail": None, "result": None}
+    asyncio.create_task(_run(job_id, cmd, out, work))
+    return {"id": job_id}
+
+
+@app.get("/jobs/{job_id}")
+async def job_status(job_id: str, authorization: str | None = Header(None)) -> dict:
+    _check(authorization)
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="その仕事はありません")
+    return {k: job[k] for k in ("status", "seconds", "detail")}
+
+
+@app.get("/jobs/{job_id}/result")
+async def job_result(job_id: str, authorization: str | None = Header(None)) -> FileResponse:
+    _check(authorization)
+    job = _jobs.get(job_id)
+    if job is None or job["status"] != "done":
+        raise HTTPException(status_code=404, detail="まだできていません")
+    return FileResponse(job["result"], media_type="application/zip", filename="layers.zip")
 
 
 if __name__ == "__main__":
