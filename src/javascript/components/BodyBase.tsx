@@ -73,6 +73,14 @@ interface RigInfo {
   behind_hair?: { path: string; updated: number; region: string | null; points: unknown } | null
   /** 体の部位分けのモデル(see-through)を置いてあるか */
   parsing_model?: boolean
+  /** 今のモデルを see-through の層から作ったか */
+  from_layers?: boolean
+  /** see-through(リモートの GPU)で分けた層。a_pose は素体の絵、outfit は服を着せた絵 */
+  layers?: {
+    configured: boolean
+    a_pose: LayerState
+    outfit: LayerState
+  }
   /** 作ったときの品質の確かめ(Aポーズの骨格・服の層のずれ・描き出したコマのかけら/細い穴) */
   quality?: {
     a_pose_problems: string[]
@@ -80,6 +88,11 @@ interface RigInfo {
     outfit_drift_warn: boolean
     frames: { ok: boolean; frames: number[]; gap_frames: number[]; worst_fragment: number }
   } | null
+}
+
+interface LayerState {
+  updated: number | null
+  job: { status: 'running' | 'done' | 'error'; error: string | null; seconds: number } | null
 }
 
 interface Props {
@@ -129,6 +142,8 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [breastPhysics, setBreastPhysics] = useState(true)
   const [wind, setWind] = useState(0.3)
   const [outfitRunning, setOutfitRunning] = useState(false)
+  // see-through の層からモデルを作るか(層があれば既定で使う)
+  const [useLayers, setUseLayers] = useState(true)
 
   function loadBases() {
     fetch('/api/lora-dataset/body-bases').then(r => (r.ok ? r.json() : [])).then(setBases).catch(() => setBases([]))
@@ -152,6 +167,16 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       .catch(() => setRig(null))
   }
   useEffect(loadRig, [characterId, rootName, body?.base?.id])
+  // see-through の仕事が動いている間は、状態を聞き直す(1枚に数分かかる)
+  const layersRunning = rig?.layers?.a_pose.job?.status === 'running' || rig?.layers?.outfit.job?.status === 'running'
+  useEffect(() => {
+    if (!layersRunning) return
+    const timer = window.setInterval(loadRig, 5000)
+    return () => window.clearInterval(timer)
+  }, [layersRunning, characterId, rootName])
+  // モデルに使う絵(服の層を重ねるなら服を着せた絵)の層
+  const currentLayers = withOutfit && rig?.outfit ? rig?.layers?.outfit : rig?.layers?.a_pose
+  const layersReady = useLayers && !!currentLayers?.updated
   // キャラを替えたら、服のタグは前に着せた服(無ければキャラシートの普段の服装)にする
   useEffect(() => {
     setOutfitTags(rig?.outfit?.outfit_tags || rig?.default_outfit_tags || '')
@@ -218,6 +243,24 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
     }
   }
 
+  async function splitLayers(outfit: boolean) {
+    setRigStatus(null)
+    try {
+      const res = await fetch(`/api/lora-dataset/character/${characterId}/body-layers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root_name: rootName, with_outfit: outfit }),
+      })
+      if (!res.ok) {
+        setRigStatus(`層に分けられませんでした: ${await detail(res)}`)
+        return
+      }
+      setRig(await res.json())
+    } catch (e) {
+      setRigStatus(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   function rigUrl(name: string) {
     const updated = rig?.files[name]?.updated ?? 0
     return `/api/lora-dataset/character/${characterId}/body-rig/file?name=${name}&root_name=${encodeURIComponent(rootName)}&v=${updated}`
@@ -233,6 +276,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
         body: JSON.stringify({
           motion: rigMotion, root_name: rootName, with_outfit: withOutfit,
           hair_physics: hairPhysics, breast_physics: breastPhysics && !!rig?.breast_allowed, wind,
+          use_layers: layersReady,
         }),
       })
       if (!res.ok) {
@@ -603,6 +647,39 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
               </div>
             </div>
           </div>
+          {rig.layers && (
+            <div className="bdb-outfit">
+              <h5>see-through で層に分ける(リモートの GPU)</h5>
+              <p className="lora-hint">
+                絵を、前髪・後ろ髪・顔・目・口・服・腕・脚などの層に分けます(隠れていた所まで描き足します)。層ごとにメッシュを作るので、
+                髪や腕の重なりがきれいに動きます。Colab で notebooks/see_through_colab.ipynb を動かしている間だけ使えます(1枚 8分ほど)。
+              </p>
+              {!rig.layers.configured ? (
+                <p className="lora-hint">see-through のサーバーが設定されていません(.env の SEE_THROUGH_BASE_URL・SEE_THROUGH_TOKEN)。</p>
+              ) : (
+                <div className="fsh-actions">
+                  {([['a_pose', false, '素体の絵'], ['outfit', true, '服を着せた絵']] as const).map(([key, outfit, label]) => {
+                    const state = rig.layers![key]
+                    const job = state.job
+                    const hasSource = outfit ? !!rig.outfit : !!body.parts.find(p => p.key === 'a_pose')?.path
+                    if (!hasSource) return null
+                    return (
+                      <span key={key} className="bdb-layers-item">
+                        <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void splitLayers(outfit)}
+                          disabled={busy || rigRunning || job?.status === 'running'}>
+                          {job?.status === 'running'
+                            ? `${label}を分けています…(${Math.floor(job.seconds / 60)}分${job.seconds % 60}秒)`
+                            : state.updated ? `${label}を分け直す` : `${label}を層に分ける`}
+                        </button>
+                        {job?.status === 'error' && <span className="lora-error">{job.error}</span>}
+                        {state.updated && job?.status !== 'running' && <span className="lora-hint">✓ 分けた層あり</span>}
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           <div className="fsh-actions bdb-physics">
             <span className="lora-hint">揺れもの:</span>
             <label className="fsh-label" title="目の高さより下に垂れた髪を髪の層に分け、ばねでつないだ骨で、動きや重力・風に遅れて揺らします">
@@ -630,6 +707,12 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
               <label className="fsh-label">
                 <input type="checkbox" checked={withOutfit} disabled={busy || rigRunning} onChange={e => setWithOutfit(e.target.checked)} />
                 服の層を重ねる
+              </label>
+            )}
+            {currentLayers?.updated && (
+              <label className="fsh-label" title="see-through で分けた層からモデルを作ります(外すと、絵を骨の範囲で切り分けます)">
+                <input type="checkbox" checked={useLayers} disabled={busy || rigRunning} onChange={e => setUseLayers(e.target.checked)} />
+                分けた層を使う
               </label>
             )}
             <select className="lora-select bdb-rig-motion" value={rigMotion} disabled={busy || rigRunning}
@@ -671,7 +754,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
               {rig.files['preview.gif'] && (
                 <figure>
                   <img src={rigUrl('preview.gif')} alt="動きの確かめ" />
-                  <figcaption>動きの確かめ{rig.motion ? `(${rig.motions[rig.motion] ?? rig.motion}${rig.with_outfit ? '・服の層あり' : ''})` : ''}</figcaption>
+                  <figcaption>動きの確かめ{rig.motion ? `(${rig.motions[rig.motion] ?? rig.motion}${rig.with_outfit ? '・服の層あり' : ''}${rig.from_layers ? '・see-through の層' : ''})` : ''}</figcaption>
                 </figure>
               )}
             </div>

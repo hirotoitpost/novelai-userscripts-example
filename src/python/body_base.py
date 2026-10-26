@@ -6,7 +6,7 @@
 素体の種類のタグを入れる。
 
 種類は2つ:
-- suit(素体スーツ): 体の線が分かる無地のボディスーツ。全年齢の扱いで、どのキャラにも使える。
+- suit(素体スーツ): 体の線が分かる無地のスーツ(上・腰・脚のセパレート。タグは開発管理者の設定)。全年齢の扱いで、どのキャラにも使える。
 - nude(裸の素体): デッサン人形の程度(乳首・性器は描かない)。成人キャラだけに使える(nude_block_reason)。
   胸・腹・骨盤・大腿の寄りの絵は描かない(全身図で確かめる。部位の nude が False のもの)。
 
@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from . import content_guard
+from . import app_settings, content_guard
 from .character_sheet import character_minor_tags, join_tags, r18_negative, r18_positive, split_body, split_tags
 
 
@@ -132,9 +132,8 @@ SIZES = {"square": (1024, 1024), "portrait": (832, 1216)}
 NEGATIVE = "multiple views, character sheet, reference sheet, turnaround, split screen, multiple girls, multiple boys"
 
 KINDS = {"suit": "素体スーツ(全年齢)", "nude": "裸の素体(成人キャラだけ)"}
-SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, high collar, skin-tight, barefoot"
-# 未成年の手がかりがあるキャラ(minor_coded)の素体スーツ。体の線は出すが、胸・腰を強調しない。素体の胸の設定は使わない
-MODEST_SUIT_TAGS = "plain grey bodysuit, matte fabric, full-body suit, long sleeves, high collar, barefoot"
+# 素体スーツのタグは開発管理者の設定(app_settings の body_base.suit_tags。未成年の手がかりがあるキャラは
+# body_base.modest_suit_tags: 体の線は出すが、胸・腰を強調しない。素体の胸の設定は使わない)
 # 守りにかかわるタグ(裸の素体のタグ・ネガティブ、未成年を示すタグ)は、コンテンツガード(DB)の body_base.* にある
 
 # 素体の設定の項目(プルダウン)と画面の名前。選択肢(値・名前・タグ)は DB(body_base_options)にあり、素体の設定のページで編集する
@@ -230,7 +229,8 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         face_tags(character, base),
         body_tags(base, options, modest=modest, rear=part.rear),
         adult,
-        content_guard.text("body_base.nude_tags") if nude else MODEST_SUIT_TAGS if modest else SUIT_TAGS,
+        content_guard.text("body_base.nude_tags") if nude
+        else app_settings.get("body_base.modest_suit_tags" if modest else "body_base.suit_tags"),
         part.tags,
         BACKGROUND,
         character.get("style_tags"),
@@ -246,7 +246,7 @@ BEHIND_HAIR_NEGATIVE = (
 )
 
 # 服を着せるとき(素体の Aポーズの絵の首から下を描き直す)、素体スーツに戻らないように抑える
-OUTFIT_NEGATIVE = "plain grey bodysuit, full-body suit, skin-tight, bodysuit, nude"
+OUTFIT_NEGATIVE = "plain grey turtleneck shirt, grey bike shorts, grey pantyhose, plain grey bodysuit, bodysuit, nude"
 
 
 def outfit_prompt(character: dict[str, Any], base: dict[str, Any], outfit_tags: str, options: Options, *, modest: bool = False) -> str:
