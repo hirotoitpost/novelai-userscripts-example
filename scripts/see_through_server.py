@@ -5,7 +5,8 @@ see-through(アニメ絵を層に分ける。https://github.com/mitmul/see-throu
     SEE_THROUGH_TOKEN=合言葉 python see_through_server.py --port 8190
 
 - GET  /health     GPU の名前など(合言葉が要る)
-- POST /decompose  絵(multipart の image)を層に分けた PSD を返す。resolution(既定 1280)・seed・tblr_split(左右に分ける)
+- POST /decompose  絵(multipart の image)を層に分け、PSD(層)と _depth.psd(層ごとの奥行き)を zip で返す。
+                   resolution(既定 1280)・seed・tblr_split(既定 入。髪を前髪・後ろ髪に、腕・目を左右に分ける)
 
 外へはトンネル(cloudflared)で出すので、すべての呼び出しで Authorization: Bearer <合言葉> を確かめる。1度に1枚だけ動かす
 (GPU のメモリが足りなくなるので、重なった依頼は順番に待たせる)。
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 import uvicorn
@@ -59,7 +61,7 @@ async def decompose(
     image: UploadFile = File(...),
     resolution: int = Form(1280),
     seed: int = Form(42),
-    tblr_split: bool = Form(False),
+    tblr_split: bool = Form(True),
     group_offload: bool = Form(False),
     authorization: str | None = Header(None),
 ) -> FileResponse:
@@ -83,11 +85,18 @@ async def decompose(
             tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-30:])
             shutil.rmtree(work, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"see-through が失敗しました:\n{tail}")
-        psds = sorted(glob.glob(str(out / "**" / "*.psd"), recursive=True), key=os.path.getmtime)
-        if not psds:
+        psds = glob.glob(str(out / "**" / "*.psd"), recursive=True)
+        layers = [p for p in psds if not p.endswith("_depth.psd")]
+        if not layers:
             raise HTTPException(status_code=500, detail="PSD ができませんでした")
-        print(f"decompose: {time.time() - started:.0f} 秒 → {psds[-1]}", flush=True)
-        return FileResponse(psds[-1], media_type="application/octet-stream", filename="layers.psd")
+        bundle = work / "layers.zip"
+        with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(layers[0], "layers.psd")
+            depth = layers[0][: -len(".psd")] + "_depth.psd"
+            if os.path.exists(depth):
+                archive.write(depth, "layers_depth.psd")
+        print(f"decompose: {time.time() - started:.0f} 秒 → {layers[0]}", flush=True)
+        return FileResponse(bundle, media_type="application/zip", filename="layers.zip")
 
 
 if __name__ == "__main__":

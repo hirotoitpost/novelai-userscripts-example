@@ -49,8 +49,11 @@ def health() -> dict:
     return response.json()
 
 
-def decompose(image: Path, out: Path, *, resolution: int = 1280, seed: int = 42, tblr_split: bool = False) -> Path:
-    """image を層に分けた PSD を out に保存する。"""
+def decompose(image: Path, out: Path, *, resolution: int = 1280, seed: int = 42, tblr_split: bool = True) -> Path:
+    """
+    image を層に分け、out(zip)に保存する。中身は layers.psd(層。名前は部位: hairf 前髪・hairb 後ろ髪・face・eyel・
+    topwear・handwear-l など)と layers_depth.psd(層ごとの奥行き)。tblr_split は髪を前後に、腕・目を左右に分ける。
+    """
     base, token = _config()
     with open(image, "rb") as f:
         try:
