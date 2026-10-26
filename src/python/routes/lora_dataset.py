@@ -8,6 +8,8 @@ import io
 import json
 import re
 import sqlite3
+import time
+import zipfile
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -19,7 +21,8 @@ from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
-from .. import app_settings, body_base, body_check, body_export, body_parsing, body_rig, content_guard
+from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard
+from .. import see_through_remote
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -47,6 +50,7 @@ from .. import guard_password
 from ..guard_password import guard_token
 from ..sessions import require_admin
 from ..db import (
+    PerUser,
     add_body_base_option,
     add_dataset_variations,
     body_bases_using,
@@ -91,6 +95,7 @@ from ..lora_dataset import (
 )
 from ..models import (
     BodyHairUnderRequest,
+    BodyLayersRequest,
     BodyOutfitRequest,
     BodyRigRequest,
     BodyBaseOptionOrderRequest,
@@ -1277,6 +1282,31 @@ def _outfit_entry(character: dict, base: dict, root_name: str) -> dict[str, Any]
     }
 
 
+def _layers_path(character: dict, base: dict, root_name: str, outfit: bool) -> Path:
+    """see-through で分けた層(PSD)。素体の絵と同じフォルダ。"""
+    stem = f"{base['id']}_a_pose_outfit" if outfit else f"{base['id']}_a_pose"
+    return _body_dir(character, base, root_name) / f"{stem}_layers.psd"
+
+
+# 動いている see-through の仕事((キャラ, 素体, 服の絵か) → 状態)。1枚に数分かかるので、切り離して画面から状態を聞く
+_layer_jobs: PerUser[tuple[int, int, bool], dict[str, Any]] = PerUser()
+
+
+def _layers_entry(character: dict, base: dict, root_name: str) -> dict[str, Any]:
+    entry: dict[str, Any] = {"configured": see_through_remote.configured()}
+    for key, outfit in (("a_pose", False), ("outfit", True)):
+        path = _layers_path(character, base, root_name, outfit)
+        job = _layer_jobs.get((character["id"], base["id"], outfit))
+        entry[key] = {
+            "updated": path.stat().st_mtime if path.is_file() else None,
+            "job": None if job is None else {
+                "status": job["status"], "error": job.get("error"),
+                "seconds": round((job.get("finished") or time.time()) - job["started"]),
+            },
+        }
+    return entry
+
+
 def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
     base = _character_base(character)
     if base is None:
@@ -1291,6 +1321,7 @@ def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
     return {
         "base_id": base["id"], "files": files, "motion": meta.get("motion"), "motions": body_rig.MOTIONS,
         "with_outfit": bool(meta.get("with_outfit")), "outfit": _outfit_entry(character, base, root_name),
+        "from_layers": bool(meta.get("layers")),
         "quality": meta.get("quality"),
         "physics": meta.get("physics"),
         "behind_hair": _behind_hair_entry(character, base, root_name),
@@ -1299,6 +1330,7 @@ def _rig_entries(character: dict, root_name: str) -> dict[str, Any]:
         # 胸の揺れを付けられるキャラか(成人フラグがあり、控えめに描くキャラでない)
         "breast_allowed": bool(character.get("is_adult")) and not _age_checks(character)[1],
         "default_outfit_tags": character.get("outfit_tags") or "",
+        "layers": _layers_entry(character, base, root_name),
     }
 
 
@@ -1456,6 +1488,64 @@ async def draw_body_outfit(character_id: int, req: BodyOutfitRequest, client: Cl
     return _rig_entries(character, req.root_name)
 
 
+@router.post("/character/{character_id}/body-layers")
+async def split_body_layers(character_id: int, req: BodyLayersRequest) -> dict[str, Any]:
+    """
+    素体の Aポーズの絵(with_outfit なら服を着せた絵)を、リモートの GPU の see-through で層(前髪・後ろ髪・顔・目・服・腕など。
+    隠れた所まで描き足したもの)に分ける。1枚に数分かかるので、仕事を切り離してすぐ返す。状態は GET .../body-rig の
+    layers で見る。できた層は「2Dモデルを作る」(use_layers)で使う。
+    """
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    if base["kind"] == "nude":
+        reason, _ = _age_checks(character)
+        if reason:
+            raise HTTPException(status_code=403, detail=reason)
+    if not see_through_remote.configured():
+        raise HTTPException(
+            status_code=422,
+            detail="see-through のサーバーが設定されていません。notebooks/see_through_colab.ipynb を動かし、.env に "
+                   "SEE_THROUGH_BASE_URL と SEE_THROUGH_TOKEN を書いて、バックエンドを起動し直してください。",
+        )
+    if req.with_outfit:
+        source, _ = _outfit_paths(character, base, req.root_name)
+        missing = "服を着せた Aポーズの絵がまだありません。先に描いてください。"
+    else:
+        source = _body_dir(character, base, req.root_name) / f"{base['id']}_a_pose.png"
+        missing = "素体の「Aポーズ(関節の確認)」をまだ描いていません。先に描いてください。"
+    if not source.is_file():
+        raise HTTPException(status_code=422, detail=missing)
+    key = (character["id"], base["id"], req.with_outfit)
+    running = _layer_jobs.get(key)
+    if running is not None and running["status"] == "running":
+        raise HTTPException(status_code=409, detail="この絵はいま層に分けています。終わるまで待ってください。")
+    job: dict[str, Any] = {"status": "running", "started": time.time()}
+    _layer_jobs[key] = job
+    out = _layers_path(character, base, req.root_name, req.with_outfit)
+
+    def work() -> None:
+        bundle = out.with_suffix(".zip")
+        see_through_remote.decompose(source, bundle)
+        with zipfile.ZipFile(bundle) as archive:
+            out.write_bytes(archive.read("layers.psd"))
+        bundle.unlink()
+
+    async def run() -> None:
+        try:
+            await asyncio.to_thread(work)
+            job["status"] = "done"
+        except (see_through_remote.SeeThroughError, OSError, KeyError, zipfile.BadZipFile) as exc:
+            job["status"] = "error"
+            job["error"] = str(exc)
+        finally:
+            job["finished"] = time.time()
+
+    job["task"] = asyncio.create_task(run())
+    return _rig_entries(character, req.root_name)
+
+
 @router.post("/character/{character_id}/body-rig")
 async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, Any]:
     """
@@ -1487,13 +1577,23 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
     # 胸の揺れは成人キャラ(成人フラグ)で、未成年の手がかりが無いキャラだけ
     _, modest = _age_checks(character)
     breasts = req.breast_physics and bool(character.get("is_adult")) and not modest
+    layers = _layers_path(character, base, req.root_name, with_outfit) if req.use_layers else None
+    if layers is not None and not layers.is_file():
+        raise HTTPException(status_code=422, detail="この絵はまだ層に分けていません。先に「see-through で層に分ける」を押してください。")
 
     def work() -> None:
-        behind, region, _ = _behind_hair_paths(character, base, req.root_name)
-        rig = body_rig.build(
-            source, folder, outfit if with_outfit else None, hair=req.hair_physics, breasts=breasts, wind=req.wind,
-            behind_hair=behind, hair_region=region,
-        )
+        if layers is not None:
+            # see-through の層から(層ごとのメッシュ。どの層にも入らなかった所は元の絵から足す)
+            rig = body_layers.build_from_layers(
+                layers, folder, hair=req.hair_physics, breasts=breasts, wind=req.wind,
+                source=outfit if with_outfit else source,
+            )
+        else:
+            behind, region, _ = _behind_hair_paths(character, base, req.root_name)
+            rig = body_rig.build(
+                source, folder, outfit if with_outfit else None, hair=req.hair_physics, breasts=breasts, wind=req.wind,
+                behind_hair=behind, hair_region=region,
+            )
         result = body_rig.run_blender(blender, folder, req.motion)
         # 品質: Aポーズの骨格・服の層のずれ・描き出したコマ(かけら・細い穴)
         _, points = body_rig.detect(Image.open(source).convert("RGB"))
@@ -1506,7 +1606,10 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
         body_rig.frames_to_gif(result["frames"], folder / "preview.gif")
         body_export.export_all(folder)
         body_rig.package(folder)
-        meta = {"motion": req.motion, "with_outfit": with_outfit, "quality": quality, "physics": rig.get("physics")}
+        meta = {
+            "motion": req.motion, "with_outfit": with_outfit, "quality": quality, "physics": rig.get("physics"),
+            "layers": layers is not None,
+        }
         (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     try:

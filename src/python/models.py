@@ -339,6 +339,15 @@ class BodyRigRequest(BaseModel):
     hair_physics: bool = True
     breast_physics: bool = True
     wind: float = Field(0.3, ge=0.0, le=1.0)
+    # see-through で分けた層(POST .../body-layers)があれば、層からモデルを作る(body_layers.py)
+    use_layers: bool = False
+
+
+class BodyLayersRequest(BaseModel):
+    """素体の Aポーズ(with_outfit なら服を着せた絵)を、リモートの see-through で層に分ける(see_through_remote.py)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    with_outfit: bool = False
 
 
 class HairPointPrompt(BaseModel):

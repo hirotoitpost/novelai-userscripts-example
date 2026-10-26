@@ -67,6 +67,7 @@
 .bdb-outfit { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.5rem; border: 1px dashed #33335a; border-radius: 8px; }
 .bdb-outfit h5 { margin: 0; font-size: 0.85rem; }
 .bdb-outfit-row { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: flex-start; }
+.bdb-layers-item { display: inline-flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 .bdb-outfit-thumb { width: 120px; border-radius: 6px; background: #fff; }
 .bdb-outfit-form { flex: 1; min-width: min(100%, 260px); display: flex; flex-direction: column; gap: 0.4rem; }
 .bdb-outfit-form .lora-label { display: flex; flex-direction: column; gap: 0.2rem; }

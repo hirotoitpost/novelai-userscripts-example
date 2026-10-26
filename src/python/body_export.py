@@ -5,13 +5,15 @@
   座標は Spine に合わせて y を上にし、原点を絵の下端の中央に置く。メッシュの頂点は、重みを持つ骨ごとの「骨から見た位置」で書く
   (Spine の重み付きメッシュの形式)。輪郭(hull)の頂点を先頭に並べ直す
 - Live2D(Cubism Editor に読み込む PSD): 部位(頭・胴・上腕・前腕・手・大腿・下腿・足)ごとのレイヤー。体と服の層はフォルダを分ける。
-  Live2D のモデル(.moc3)は Cubism Editor でしか作れないので、Cubism が読み込む素材(部位ごとの PSD)までを書き出す
+  Live2D のモデル(.moc3)は Cubism Editor でしか作れないので、Cubism が読み込む素材(部位ごとの PSD)までを書き出す。
+  see-through の層から作ったリグ(body_layers.py)は、層をそのまま1枚ずつ(前髪・目・服など)
 """
 
 from __future__ import annotations
 
 import json
 import math
+import re
 import zipfile
 from pathlib import Path
 
@@ -217,6 +219,19 @@ def export_psd(rig_dir: Path, rig: dict) -> Path:
     labels_by_bone = {b.name: i for i, b in enumerate(BONES)}
     w, h = rig["size"]
     psd = PSDImage.new("RGBA", (w, h))
+    if rig.get("kind") == "see_through":
+        # see-through の層から作ったリグ(body_layers.py)は、層がそのまま部位なので、メッシュごとに1枚(奥から)
+        for mesh in sorted(rig["meshes"], key=lambda m: m["z"]):
+            image = np.asarray(Image.open(rig_dir / mesh["texture"]).convert("RGBA"))
+            ys, xs = np.nonzero(image[..., 3] > 0)
+            if not len(ys):
+                continue
+            y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+            name = re.sub(r"[^A-Za-z0-9._-]", "_", mesh["name"])
+            psd.append(PixelLayer.frompil(Image.fromarray(image[y0:y1, x0:x1], "RGBA"), psd, name, int(y0), int(x0)))
+        out = rig_dir / "model.psd"
+        psd.save(out)
+        return out
     # 後ろ髪(体の後ろに垂れた髪)は、いちばん奥に置く(先に入れたものが下になる)
     _hair_layer(psd, rig_dir / "hair_back.png", "hair.back", any(m["name"] == "hair.back" for m in rig["meshes"]))
     layers = [("body", rig["texture"])]
