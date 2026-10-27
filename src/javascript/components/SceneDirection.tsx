@@ -20,6 +20,9 @@ interface Props {
 
 interface Row { state: number | null; outfit: string; action: string }
 
+/** キャラの衣装(衣装のタブで登録した服。/api/wardrobe/outfits) */
+interface Outfit { id: number; character_id: number; name: string; tags: string }
+
 function rowOf(c: SceneCharacter): Row {
   return { state: c.state_id ?? null, outfit: c.scene_outfit_tags ?? '', action: c.action_tags ?? '' }
 }
@@ -33,6 +36,7 @@ async function errorDetail(res: Response): Promise<string> {
  * シーンの演出: キャラごとの状態・その場面の服装・動作と、シチュエーションの書き込み。
  * 状態はキャラ別データセットと同じく容姿を一時的に変え、コマ・挿絵の生成のたびに効く(キャラシートは変えない)。
  * シチュエーションは、選んだときにシーンのタグ・服装・動作へタグを書き込むだけ(書き込んだあとは手で直せる)。
+ * その場面の服装は、キャラに登録した衣装から選んで入れることもできる(入れたあとは手で直せる)。
  */
 export default function SceneDirection({ apiOrigin, sceneId, current, situations, states, onChanged, disabled }: Props) {
   const [rows, setRows] = useState<Record<number, Row>>({})
@@ -41,6 +45,14 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const [outfits, setOutfits] = useState<Outfit[]>([])
+
+  useEffect(() => {
+    fetch(`${apiOrigin}/api/wardrobe/outfits`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(setOutfits)
+      .catch(() => setOutfits([]))
+  }, [apiOrigin])
 
   // 物語を読み直したら、保存済みの値に戻す
   useEffect(() => {
@@ -130,6 +142,16 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
                 <td>
                   <input value={row.outfit} disabled={off} placeholder="空欄ならふだんの服装" aria-label={`${c.name}のこの場面の服装`}
                     onChange={e => edit(c.id, { outfit: e.target.value })} />
+                  {outfits.some(o => o.character_id === c.id) && (
+                    <select value="" disabled={off} aria-label={`${c.name}の衣装から選ぶ`} className="scene-dir-outfit"
+                      onChange={e => {
+                        const picked = outfits.find(o => o.id === Number(e.target.value))
+                        if (picked) edit(c.id, { outfit: picked.tags })
+                      }}>
+                      <option value="">衣装から選ぶ…</option>
+                      {outfits.filter(o => o.character_id === c.id).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                    </select>
+                  )}
                 </td>
                 <td>
                   <input value={row.action} disabled={off} placeholder="smile, waving など" aria-label={`${c.name}の動作・表情`}

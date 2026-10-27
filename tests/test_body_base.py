@@ -168,8 +168,9 @@ def test_nude_base_only_for_adults(client: TestClient, tmp_path: Path) -> None:
     res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"keys": ["front"]})
     assert res.text.count('"status": "ok"') == 1
     prompt, negative = client.calls[-1]  # type: ignore[attr-defined]
-    assert "barbie doll anatomy" in prompt and "adult" in prompt
-    assert "nipples" in negative and "loli" in negative
+    # 成人の裸の素体: 乳首は描き、性器は描かない
+    assert "nipples" in prompt and "featureless crotch" in prompt and "adult" in prompt
+    assert "pussy" in negative and "nipples" not in negative and "loli" in negative
     assert (tmp_path / f"outputs/training_data/eiko/body_base_r18/{base['id']}_front.png").is_file()
 
 
@@ -206,15 +207,22 @@ def test_body_base_image_is_served(client: TestClient, tmp_path: Path, monkeypat
 
 
 def test_suit_is_modest_for_minor_coded_characters(client: TestClient) -> None:
-    # 成人フラグがあっても、高校生の服装のキャラは控えめに描く(胸・曲線の設定を使わない)
+    # 成人フラグがあっても、高校生の服装のキャラは控えめなスーツで描く。体型(胸・曲線の設定)はキャラのまま
+    # (少年誌の一般的なキャラの体型)で、寄り・構図での強調だけを抑える
+    from python import content_guard
+
     student = _character(client, "student", is_adult=1, outfit_tags="school uniform")
     base = _base(client, chest="large", build="curvy", skin_tone="fair")
     info = client.put(f"/api/lora-dataset/character/{student['id']}/body-base", json={"body_base_id": base["id"]}).json()
-    assert info["modest"] is True and "large breasts" not in info["body_tags"] and "fair skin" in info["body_tags"]
+    assert info["modest"] is True and "large breasts" in info["body_tags"] and "fair skin" in info["body_tags"]
     client.post(f"/api/lora-dataset/character/{student['id']}/body-base", json={"keys": ["back", "hand_palm"]})
     (back_prompt, back_negative), (_, hand_negative) = client.calls[-2:]  # type: ignore[attr-defined]
-    assert "curvy" not in back_prompt and "skin-tight" not in back_prompt
-    assert "ass focus" in back_negative
+    assert "curvy" in back_prompt and "skin-tight" not in back_prompt
+    assert "ass focus" in back_negative and "large breasts" not in back_negative
+    # 外す設定は開発管理者のページで足せる
+    content_guard.set_value("body_base.modest_skip", ["chest"])
+    info = client.get(f"/api/lora-dataset/character/{student['id']}/body-base").json()
+    assert "large breasts" not in info["body_tags"] and "curvy" in info["body_tags"]
     # 部位ごとのネガティブ(手を突き出さない)
     assert "foreshortening" in hand_negative and "foreshortening" not in back_negative
 
@@ -231,7 +239,7 @@ def test_guard_values_come_from_the_db(client: TestClient) -> None:
     part = body_base.ITEMS["front"]
     assert "mannequin" in body_base.prompt(adult, {"kind": "nude"}, part, _defaults())
     content_guard.reset("body_base.nude_tags")
-    assert "barbie doll anatomy" in body_base.prompt(adult, {"kind": "nude"}, part, _defaults())
+    assert "featureless crotch" in body_base.prompt(adult, {"kind": "nude"}, part, _defaults())
 
 
 def test_rear_parts_describe_the_chest_from_behind() -> None:
@@ -241,8 +249,8 @@ def test_rear_parts_describe_the_chest_from_behind() -> None:
     back = body_base.prompt(character, base, body_base.ITEMS["back"], _defaults())
     assert "sideboob" in back and "breasts peek" in back and "large breasts" not in back
     assert "large breasts" in body_base.prompt(character, base, body_base.ITEMS["front"], _defaults())
-    # 控えめに描くキャラは、真後ろでも胸の設定を使わない
-    assert "sideboob" not in body_base.prompt(character, base, body_base.ITEMS["back"], _defaults(), modest=True)
+    # 控えめに描くキャラでも、体型の設定はそのまま使う
+    assert "breasts peek" in body_base.prompt(character, base, body_base.ITEMS["back"], _defaults(), modest=True)
 
 
 def test_options_are_edited_in_the_db(client: TestClient) -> None:
@@ -298,7 +306,7 @@ def test_outfit_is_drawn_over_the_a_pose(client: TestClient, tmp_path: Path, mon
     monkeypatch.setattr(body_rig, "outfit_inpaint_mask", lambda img: (Image.new("RGB", img.size, "white"), points))
     monkeypatch.setattr(body_rig, "detect", lambda img: (None, points))
     # 全年齢で止めるタグ・未成年を示すタグは着せられない
-    assert client.post(url, json={"outfit_tags": "bikini"}).status_code == 422
+    assert client.post(url, json={"outfit_tags": "lingerie"}).status_code == 422
     assert client.post(url, json={"outfit_tags": "school uniform"}).status_code == 422
     res = client.post(url, json={"outfit_tags": "white long-sleeved blouse, navy skirt"})
     assert res.status_code == 200, res.text
@@ -413,3 +421,19 @@ def test_behind_hair_is_redrawn_without_long_hair(client: TestClient, tmp_path: 
     entry = res.json()["behind_hair"]
     assert entry["path"].endswith("_a_pose_nohair.png") and entry["region"].endswith("_a_pose_hairmask.png")
     assert (tmp_path / entry["region"]).is_file()
+
+
+def test_swimsuit_base_is_all_ages_for_every_character(client: TestClient) -> None:
+    # 水着素体は全年齢: 未成年の手がかりがあるキャラにも当てられ、控えめな水着のタグで描く。裸のタグは入らない
+    student = _character(client, "student", is_adult=0, outfit_tags="school uniform")
+    base = _base(client, kind="swimsuit", chest="large")
+    info = client.put(f"/api/lora-dataset/character/{student['id']}/body-base", json={"body_base_id": base["id"]}).json()
+    assert info["base"]["kind"] == "swimsuit" and info["modest"] is True
+    client.post(f"/api/lora-dataset/character/{student['id']}/body-base", json={"keys": ["front"]})
+    prompt, negative = client.calls[-1]  # type: ignore[attr-defined]
+    assert "tankini" in prompt and "swim shorts" in prompt and "nude" not in prompt and "bike shorts" not in prompt
+    assert "ass focus" in negative
+    adult = {"appearance_tags": "1girl"}
+    assert "bikini" in body_base.prompt(adult, {"kind": "swimsuit"}, body_base.ITEMS["front"], _defaults())
+    # 全年齢の素体なので、全年齢で止めるタグは足すタグに入れられない
+    assert client.post("/api/lora-dataset/body-bases", json={"name": "z", "kind": "swimsuit", "extra_tags": "nsfw"}).status_code == 422

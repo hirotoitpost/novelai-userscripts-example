@@ -5,9 +5,11 @@
 どの素体を当てるかを選ぶ。描くときは、キャラの容姿から体型と肌の色のタグを外し、素体のタグに置き換え、服装の代わりに
 素体の種類のタグを入れる。
 
-種類は2つ:
+種類は3つ:
 - suit(素体スーツ): 体の線が分かる無地のスーツ(上・腰・脚のセパレート。タグは開発管理者の設定)。全年齢の扱いで、どのキャラにも使える。
-- nude(裸の素体): デッサン人形の程度(乳首・性器は描かない)。成人キャラだけに使える(nude_block_reason)。
+- swimsuit(水着素体): 無地の水着(上下のセパレート。タグは開発管理者の設定)。素体スーツと同じく全年齢で、どのキャラにも使える
+  (腕・脚・肩の形まで見え、漫画の水着の場面にも使える)。
+- nude(裸の素体): 乳首は描き、性器は描かない(タグはコンテンツガードの body_base.nude_*)。成人キャラだけに使える(nude_block_reason)。
   胸・腹・骨盤・大腿の寄りの絵は描かない(全身図で確かめる。部位の nude が False のもの)。
 
 部位は解剖学の区分(全身・頭頸部・体幹・上肢・下肢)で並べ、1枚ごとに、人体の構造として確かめる点(check)を添える。
@@ -131,9 +133,14 @@ SIZES = {"square": (1024, 1024), "portrait": (832, 1216)}
 # 1枚に同じキャラが何人も並ぶ設定画になりやすいので抑える(face_sheet.NEGATIVE と同じ理由)
 NEGATIVE = "multiple views, character sheet, reference sheet, turnaround, split screen, multiple girls, multiple boys"
 
-KINDS = {"suit": "素体スーツ(全年齢)", "nude": "裸の素体(成人キャラだけ)"}
+KINDS = {"suit": "素体スーツ(全年齢)", "swimsuit": "水着素体(全年齢)", "nude": "裸の素体(成人キャラだけ)"}
+# 全年齢の種類の服のタグ(開発管理者の設定のキー: ふだん, 控えめに描くキャラ)
+CLOTHES_SETTINGS = {
+    "suit": ("body_base.suit_tags", "body_base.modest_suit_tags"),
+    "swimsuit": ("body_base.swimsuit_tags", "body_base.modest_swimsuit_tags"),
+}
 # 素体スーツのタグは開発管理者の設定(app_settings の body_base.suit_tags。未成年の手がかりがあるキャラは
-# body_base.modest_suit_tags: 体の線は出すが、胸・腰を強調しない。素体の胸の設定は使わない)
+# body_base.modest_suit_tags: 体に貼り付けない服。体型(胸の設定も)はキャラのまま。寄り・構図での強調はネガティブで抑える)
 # 守りにかかわるタグ(裸の素体のタグ・ネガティブ、未成年を示すタグ)は、コンテンツガード(DB)の body_base.* にある
 
 # 素体の設定の項目(プルダウン)と画面の名前。選択肢(値・名前・タグ)は DB(body_base_options)にあり、素体の設定のページで編集する
@@ -218,9 +225,16 @@ def face_tags(character: dict[str, Any], base: dict[str, Any]) -> str:
     return face
 
 
+def clothes_tags(base: dict[str, Any], *, modest: bool = False) -> str:
+    """全年齢の種類(素体スーツ・水着素体)の服のタグ(開発管理者の設定)。"""
+    normal, quiet = CLOTHES_SETTINGS.get(base.get("kind") or "suit", CLOTHES_SETTINGS["suit"])
+    return app_settings.get(quiet if modest else normal)
+
+
 def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, options: Options, *, modest: bool = False) -> str:
     """
-    1枚のプロンプト。modest(未成年の手がかりがあるキャラ)は、胸・曲線の設定を外し、体に貼り付けないスーツにする
+    1枚のプロンプト。modest(未成年の手がかりがあるキャラ)は、体に貼り付けないスーツにする(コンテンツガードの
+    body_base.modest_skip にある設定は外す。既定では外さず、少年誌の一般的なキャラと同じく体型はキャラのまま描く)
     (裸の素体はそもそも当てられない)。
     """
     nude = base.get("kind") == "nude"
@@ -229,8 +243,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         face_tags(character, base),
         body_tags(base, options, modest=modest, rear=part.rear),
         adult,
-        content_guard.text("body_base.nude_tags") if nude
-        else app_settings.get("body_base.modest_suit_tags" if modest else "body_base.suit_tags"),
+        content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
         BACKGROUND,
         character.get("style_tags"),
@@ -245,8 +258,10 @@ BEHIND_HAIR_NEGATIVE = (
     "1.6::long hair::, 1.4::very long hair::, 1.3::hair over shoulder::, hair strand, loose hair, hair down, hair on body"
 )
 
-# 服を着せるとき(素体の Aポーズの絵の首から下を描き直す)、素体スーツに戻らないように抑える
-OUTFIT_NEGATIVE = "plain grey turtleneck shirt, grey bike shorts, grey pantyhose, plain grey bodysuit, bodysuit, nude"
+# 服を着せるとき(素体の Aポーズの絵の首から下を描き直す)、素体スーツ・水着に戻らないように抑える
+OUTFIT_NEGATIVE = (
+    "plain grey turtleneck shirt, grey bike shorts, grey pantyhose, plain grey bodysuit, bodysuit, swimsuit, bikini, nude"
+)
 
 
 def outfit_prompt(character: dict[str, Any], base: dict[str, Any], outfit_tags: str, options: Options, *, modest: bool = False) -> str:
@@ -320,7 +335,7 @@ def _minor_stages(character: dict[str, Any], family: list[dict[str, Any]]) -> li
 def minor_coded(character: dict[str, Any], family: list[dict[str, Any]]) -> bool:
     """
     未成年の手がかりがあるキャラか(未成年の定義・年齢・未成年を示すタグ・成長段階の未成年)。成人フラグの有無は見ない
-    (高校生のキャラに成人フラグが付いていることがある)。素体スーツを控えめに描くのに使う。
+    (高校生のキャラに成人フラグが付いていることがある)。素体スーツ・水着素体を控えめに描くのに使う。
     """
     text = ", ".join(str(character.get(k) or "") for k in _SHEET_TEXT_FIELDS)
     return (

@@ -3,12 +3,13 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import BackButton, { backState } from '../components/BackButton'
 import FullscreenViewer from '../components/FullscreenViewer'
 import { useLocalStorage } from '../hooks/useLocalStorage'
-import { fileUrl, getJson, thumbUrl } from '../library'
+import { fileUrl, getJson, readErrorDetail, thumbUrl } from '../library'
 import './Characters.css'
 
 /**
  * キャラ一覧: 登録したキャラをカードで並べる。参照画像の拡大、キャラ別データセットへの移動、生成したデータセットの画像、
  * 出ている作品(本棚・物語のページ)へのリンク。移った先の「← キャラ一覧」で、ここへ戻れる。
+ * 衣装を登録したキャラは、カードで着せ替え(普段の衣装を選ぶ)ができる。
  */
 
 interface Character {
@@ -27,7 +28,11 @@ interface Character {
   growth_order: number | null
   /** 年齢(歳)。入れてあれば年齢区分はこれで決まる */
   age: number | null
+  /** 普段の衣装(衣装のタブで登録した服。null なら選んでいない) */
+  outfit_id: number | null
 }
+
+interface Outfit { id: number; character_id: number; name: string; tags: string }
 
 /** 元のキャラのすぐ後ろに、その成長段階を幼い順に並べる(元のキャラが見つからない段階は、ふつうのキャラと同じ扱い) */
 function withStagesGrouped(list: Character[]): Character[] {
@@ -73,6 +78,8 @@ export default function Characters() {
   const [characters, setCharacters] = useState<Character[]>([])
   const [works, setWorks] = useState<Record<string, Work[]>>({})
   const [counts, setCounts] = useState<Record<string, number>>({})
+  const [outfits, setOutfits] = useState<Outfit[]>([])
+  const [wearing, setWearing] = useState<number | null>(null)
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -87,11 +94,13 @@ export default function Characters() {
       getJson<Character[]>('/api/story/characters'),
       getJson<Record<string, Work[]>>('/api/story/character-works'),
       getJson<Record<string, number>>('/api/library/character-datasets'),
+      getJson<Outfit[]>('/api/wardrobe/outfits'),
     ])
-      .then(([list, byCharacter, byCount]) => {
+      .then(([list, byCharacter, byCount, allOutfits]) => {
         setCharacters(list)
         setWorks(byCharacter)
         setCounts(byCount)
+        setOutfits(allOutfits)
       })
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
@@ -114,6 +123,25 @@ export default function Characters() {
     })
   }, [characters, query])
   const nameOf = useMemo(() => new Map(characters.map(c => [c.id, c.name])), [characters])
+  const outfitsOf = (id: number) => outfits.filter(o => o.character_id === id)
+
+  // 着せ替え: 普段の衣装を選ぶ(キャラシートの普段の服装が、その衣装のタグになる)
+  async function wear(c: Character, outfitId: number) {
+    setWearing(c.id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/wardrobe/characters/${c.id}/outfit`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ outfit_id: outfitId }),
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      const data: { outfit_id: number | null; outfit_tags: string } = await res.json()
+      setCharacters(list => list.map(x => (x.id === c.id ? { ...x, outfit_id: data.outfit_id, outfit_tags: data.outfit_tags } : x)))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWearing(null)
+    }
+  }
   const stageCount = useMemo(() => {
     const counts = new Map<number, number>()
     for (const c of characters) if (c.growth_of !== null) counts.set(c.growth_of, (counts.get(c.growth_of) ?? 0) + 1)
@@ -198,6 +226,15 @@ export default function Characters() {
                     )}
                     {c.notes && <p className="chars-notes">{c.notes}</p>}
                     <p className="chars-tags">{[c.appearance_tags, c.outfit_tags].filter(Boolean).join(', ')}</p>
+                    {outfitsOf(c.id).length > 0 && (
+                      <label className="chars-outfit">
+                        着せ替え
+                        <select value={c.outfit_id ?? ''} disabled={wearing === c.id} onChange={e => void wear(c, Number(e.target.value))}>
+                          {c.outfit_id === null && <option value="">(選んでいない)</option>}
+                          {outfitsOf(c.id).map(o => <option key={o.id} value={o.id} title={o.tags}>{o.name}</option>)}
+                        </select>
+                      </label>
+                    )}
                     <div className="chars-actions">
                       <button type="button" className="chars-small"
                         onClick={() => navigate(`/character-dataset?character=${c.id}`, { state: BACK })}>
@@ -210,6 +247,10 @@ export default function Characters() {
                       <button type="button" className="chars-small"
                         onClick={() => navigate(`/character-dataset?character=${c.id}#body`, { state: BACK })}>
                         素体
+                      </button>
+                      <button type="button" className="chars-small"
+                        onClick={() => navigate(`/character-dataset?character=${c.id}#wardrobe`, { state: BACK })}>
+                        衣装
                       </button>
                       <button type="button" className="chars-small" disabled={count === 0} onClick={() => openDataset(c.id)}>
                         生成したデータ({count}枚)

@@ -75,3 +75,6 @@
   .scene-dir .scene-dir-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem; margin-bottom: 0.4rem; }
   .scene-dir .scene-dir-table td { width: auto !important; white-space: normal; }
 }
+
+/* 登録した衣装から服装を入れる */
+.scene-dir-outfit { margin-top: 0.25rem; width: 100%; }

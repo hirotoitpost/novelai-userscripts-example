@@ -1,0 +1,89 @@
+/* キャラシートの衣装(着せ替え)。基本の見た目は LoraDataset.css(lora-*)・FaceSheet.css(fsh-actions)を共用し、ここは差分だけ。 */
+.wdr { display: flex; flex-direction: column; gap: 0.75rem; }
+.wdr-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.wdr-head h3 { margin: 0; font-size: 1.05rem; }
+
+.wdr-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--nai-border);
+  border-radius: 8px;
+  background: var(--nai-card);
+}
+
+.wdr-parts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.wdr-part {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) minmax(8rem, 1.5fr) minmax(5rem, 1fr) minmax(5rem, 1fr) auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+.wdr-part .lora-btn { min-height: 30px; padding: 0.3rem 0.7rem; }
+
+.wdr-tags {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--nai-muted);
+  overflow-wrap: anywhere;
+}
+
+.wdr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: 0.75rem;
+}
+
+.wdr-card {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: 0.6rem;
+  padding: 0.6rem;
+  border: 1px solid var(--nai-border);
+  border-radius: 8px;
+  background: var(--nai-card);
+}
+.wdr-card--worn { border-color: var(--nai-accent, #6c8cff); box-shadow: 0 0 0 1px var(--nai-accent, #6c8cff); }
+.wdr-card h4 { margin: 0 0 0.3rem; font-size: 0.95rem; display: flex; align-items: center; gap: 0.4rem; }
+.wdr-card-body { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.wdr-card-body .lora-btn { min-height: 30px; padding: 0.3rem 0.6rem; }
+
+.wdr-badge {
+  font-size: 0.7rem;
+  font-weight: 400;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--nai-accent, #6c8cff);
+  color: #fff;
+}
+
+.wdr-thumb {
+  width: 7rem;
+  aspect-ratio: 832 / 1216;
+  padding: 0;
+  border: 1px solid var(--nai-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: transparent;
+  cursor: zoom-in;
+}
+.wdr-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wdr-thumb--none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--nai-muted);
+  cursor: default;
+}
+
+@media (max-width: 700px) {
+  .wdr-part { grid-template-columns: 1fr 1fr; }
+  .wdr-card { grid-template-columns: 5rem minmax(0, 1fr); }
+  .wdr-thumb { width: 5rem; }
+}

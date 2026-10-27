@@ -22,6 +22,7 @@ import VariationImportDialog, { AXES } from '../components/VariationImportDialog
 import DatasetScenes from '../components/DatasetScenes'
 import FaceSheet from '../components/FaceSheet'
 import BodyBase from '../components/BodyBase'
+import Wardrobe from '../components/Wardrobe'
 import type { DatasetState, Situation } from '../components/DatasetScenes'
 import type { Axis, Variations } from '../components/VariationImportDialog'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
@@ -31,10 +32,11 @@ import './CharacterDataset.css'
 
 type Phase = 'idle' | 'running' | 'complete' | 'error' | 'cancelled'
 
-type TabId = 'dataset' | 'body'
+type TabId = 'dataset' | 'body' | 'wardrobe'
 const TABS: { id: TabId; label: string }[] = [
   { id: 'dataset', label: 'データセット' },
   { id: 'body', label: '素体' },
+  { id: 'wardrobe', label: '衣装' },
 ]
 
 // キャラ参照(Character Reference)は NovelAI が V4.5 系でしか受け付けない
@@ -72,8 +74,10 @@ export default function CharacterDataset() {
   const { token } = useAuth()
   // キャラ一覧の「顔・表情」から開いたとき(#faces)は、顔・表情シートを開いておく
   const [faceSheetOpen, setFaceSheetOpen] = useState(() => window.location.hash === '#faces')
-  // 右側のタブ。キャラ一覧の「素体」から開いたとき(#body)は素体のタブ
-  const [tab, setTab] = useState<TabId>(() => (window.location.hash === '#body' ? 'body' : 'dataset'))
+  // 右側のタブ。キャラ一覧の「素体」「衣装」から開いたとき(#body / #wardrobe)はそのタブ
+  const [tab, setTab] = useState<TabId>(() => (
+    window.location.hash === '#body' ? 'body' : window.location.hash === '#wardrobe' ? 'wardrobe' : 'dataset'
+  ))
   const location = useLocation()
 
   const [characters, setCharacters] = useState<Character[]>([])
@@ -719,6 +723,12 @@ export default function CharacterDataset() {
           <main className="lora-main">
             {character
               ? <BodyBase characterId={character.id} characterName={character.name} token={token} rootName={rootName} disabled={isRunning} />
+              : <p className="lora-hint">キャラクターを選んでください。</p>}
+          </main>
+        ) : tab === 'wardrobe' ? (
+          <main className="lora-main">
+            {character
+              ? <Wardrobe characterId={character.id} token={token} rootName={rootName} disabled={isRunning} onChanged={loadCharacters} />
               : <p className="lora-hint">キャラクターを選んでください。</p>}
           </main>
         ) : (

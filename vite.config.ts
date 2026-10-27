@@ -41,6 +41,11 @@ export default defineConfig({
     // HMR をオフにするだけでは、ページは開発サーバーへ接続し続け、切れて戻ると読み込み直す(Vite 6.4 で確認)。
     // 接続の受け口(WebSocket)ごと止めると、ページは最初から接続できず、読み込み直しも起きない
     ...(hmr ? {} : { ws: false as const }),
+    // 画面のコードでないフォルダは見張らない。root がリポジトリ全体なので、生成した絵・PSD・モデル(data/ に数万件・
+    // 数 GB)まで見張り、開発サーバーのメモリが 100GB 近くまで膨らんだ(2026-10 実機)
+    watch: {
+      ignored: ['**/data/**', '**/outputs/**', '**/.venv/**', '**/tests/**', '**/scripts/**', '**/notebooks/**', '**/usr/**'],
+    },
     // LAN 内の DNS(別リポジトリの lan-dns)で付けた名前(novelai.lan など)でも開けるようにする。
     // 先頭のドットは「.lan で終わる名前すべて」
     allowedHosts: ['.lan'],

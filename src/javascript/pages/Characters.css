@@ -293,3 +293,13 @@
     width: 96px;
   }
 }
+
+/* 着せ替え(普段の衣装を選ぶ) */
+.chars-outfit {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: #8a8ab0;
+}
+.chars-outfit select { flex: 1; min-width: 0; font-size: 0.8rem; padding: 0.2rem 0.3rem; }
