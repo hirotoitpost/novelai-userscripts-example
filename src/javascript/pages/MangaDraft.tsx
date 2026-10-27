@@ -73,6 +73,8 @@ interface DraftState {
   seriesId: number | null
   // 構成(コマ運び)の参考にする取り込み(/api/manga-import)
   importId: number | null
+  // R18 のパターン(シナリオの型・プレイ)。選ぶと成人向けの決まりで作る(年齢を入れた成人キャラだけのとき)
+  adultPatternIds?: number[]
   outlines: Outline[]
   outline: Outline | null
   names: { id: number; name: string }[]
@@ -81,6 +83,9 @@ interface DraftState {
   // 台本や大枠を変えたら消す(変えた台本は新しい物語にする)
   pendingStoryId?: number | null
 }
+
+/** R18 のパターン(/api/adult-patterns) */
+interface AdultPattern { id: number; kind: string; name: string; tags: string; description: string }
 
 interface Job {
   status: string
@@ -149,6 +154,14 @@ export default function MangaDraft() {
   const [seriesList, setSeriesList] = useState<Series[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [presets, setPresets] = useState<ImagePreset[]>([])
+  const [adultPatterns, setAdultPatterns] = useState<AdultPattern[]>([])
+  useEffect(() => {
+    fetch('/api/adult-patterns')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => d && setAdultPatterns([...d.patterns.scenario, ...d.patterns.play]))
+      .catch(() => setAdultPatterns([]))
+  }, [])
+  const adultIds = draft.adultPatternIds ?? []
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -245,6 +258,7 @@ export default function MangaDraft() {
     notes: draft.notes,
     series_id: draft.seriesId,
     import_id: draft.importId,
+    adult_pattern_ids: adultIds,
   })
 
   const makeOutlines = async () => {
@@ -518,6 +532,24 @@ export default function MangaDraft() {
             </p>
           )}
           <GenreManager genres={genres} onError={setError} />
+          {adultPatterns.length > 0 && (
+            <details className="md-adult" open={adultIds.length > 0}>
+              <summary>R18 のパターン{adultIds.length > 0 && `(${adultIds.length}件を選択中)`}</summary>
+              <p className="md-hint">
+                選ぶと、成人向けの決まりで大枠と台本を作り、パターンの流れ・タグ・描き文字・言い回しを例として渡します。
+                登場人物が全員、年齢(18 歳以上)を入れた成人のときだけ使えます。パターンは「R18 のパターン」のページで足せます。
+              </p>
+              <div className="md-adult-list">
+                {adultPatterns.map(p => (
+                  <label key={p.id} className="md-check" title={p.description || p.tags}>
+                    <input type="checkbox" checked={adultIds.includes(p.id)}
+                      onChange={e => update({ adultPatternIds: e.target.checked ? [...adultIds, p.id] : adultIds.filter(i => i !== p.id) })} />
+                    {p.kind === 'scenario' ? 'シナリオ' : 'プレイ'}: {p.name}
+                  </label>
+                ))}
+              </div>
+            </details>
+          )}
           {token && <RedrawStates token={token} />}
           {selectedSeries && (
             <p className="md-hint">シリーズの人物設定と既刊のあらすじを前提に、続編として作ります。</p>

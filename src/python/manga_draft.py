@@ -9,6 +9,8 @@ LLM にはセリフごとの話し手を構造で答えさせるので、合成�
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import json
 import re
 from dataclasses import dataclass
@@ -82,9 +84,17 @@ async def _ask_json(api_key: str, system: str, user: str, *, max_tokens: int, te
     raise RuntimeError(f"台本AIの応答を読み取れませんでした({_MAX_ATTEMPTS}回試行)。{last_error}")
 
 
+# 成人向けの決まりで作っている間(R18 のパターンを選んだ大枠・台本)。指示文を組み立てる関数の奥まで、引数で
+# 渡さずに伝える
+_ADULT_RULES: ContextVar[bool] = ContextVar("draft_adult_rules", default=False)
+
+
 def _content_rule() -> str:
-    """指示文の末尾に足す、内容についての決まり(content_guard の draft.content_rule。空なら足さない)。"""
-    rule = content_guard.text("draft.content_rule")
+    """
+    指示文の末尾に足す、内容についての決まり(content_guard の draft.content_rule。R18 のパターンで作るときは
+    draft.adult_content_rule。空なら足さない)。
+    """
+    rule = content_guard.text("draft.adult_content_rule" if _ADULT_RULES.get() else "draft.content_rule")
     return f"\n- {rule}" if rule else ""
 
 
@@ -218,10 +228,16 @@ async def generate_outlines(
     previous: list[str] | None = None,
     structure: list[list[str]] | None = None,
     panel_range: tuple[int, int] | None = None,
+    adult: bool = False,
 ) -> list[dict[str, Any]]:
-    system, user = outline_prompts(
-        theme, genre, characters, episodes, notes=notes, previous=previous, structure=structure, panel_range=panel_range
-    )
+    """adult は成人向けの決まりで作る(R18 のパターンを選んだとき。キャラが全員成人であることは呼び出し側で確かめる)。"""
+    token = _ADULT_RULES.set(adult)
+    try:
+        system, user = outline_prompts(
+            theme, genre, characters, episodes, notes=notes, previous=previous, structure=structure, panel_range=panel_range
+        )
+    finally:
+        _ADULT_RULES.reset(token)
     # 話数が多いと案3つ分の応答が長くなる(10話で 4000 トークンを超えるおそれ)
     max_tokens = 4000 + max(0, episodes - 4) * 400
     outlines = parse_outlines(
@@ -439,11 +455,19 @@ async def generate_episode(
     previous_panels: list[dict[str, Any]] | None = None,
     structure: list[str] | None = None,
     count: int | None = None,
+    adult: bool = False,
 ) -> list[dict[str, Any]]:
-    """count は、構成を使わないときのコマ数(無ければ既定の4。ページごとにコマ数を変える漫画で使う)。"""
-    system, user = episode_prompts(
-        outline, episode_index, characters, notes=notes, previous_panels=previous_panels, structure=structure, count=count
-    )
+    """
+    count は、構成を使わないときのコマ数(無ければ既定の4。ページごとにコマ数を変える漫画で使う)。
+    adult は成人向けの決まりで作る(generate_outlines と同じ)。
+    """
+    token = _ADULT_RULES.set(adult)
+    try:
+        system, user = episode_prompts(
+            outline, episode_index, characters, notes=notes, previous_panels=previous_panels, structure=structure, count=count
+        )
+    finally:
+        _ADULT_RULES.reset(token)
     expected = len(structure) if structure else count or PANELS_PER_EPISODE
     last_error = ""
     for _ in range(_MAX_ATTEMPTS):

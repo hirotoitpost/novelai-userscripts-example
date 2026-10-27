@@ -669,9 +669,41 @@ async def get_sfx_suggestions(import_id: int) -> dict[str, Any]:
     item = _require(import_id)
     pages = (item.get("analysis") or {}).get("pages") or []
     try:
-        return {"available": True, "suggestions": await asyncio.to_thread(_suggest, import_id, pages)}
+        suggestions = await asyncio.to_thread(_suggest, import_id, pages)
     except Exception as exc:  # noqa: BLE001 候補が出せなくても、読みは手で入れられる
-        return {"available": False, "suggestions": {}, "detail": str(exc)}
+        return {"available": False, "suggestions": _pattern_suggestions(item, pages, {}), "detail": str(exc)}
+    return {"available": True, "suggestions": _pattern_suggestions(item, pages, suggestions)}
+
+
+def _pattern_suggestions(item: dict[str, Any], pages: list[dict[str, Any]], shaped: dict[str, list[str]]) -> dict[str, list[str]]:
+    """
+    R18 の取り込みでは、形の似た読みの後ろに、R18 のパターンの描き文字を足す(そのコマの場面・所作のタグと、
+    タグが重なるプレイのもの)。読みを入れた描き文字がまだ無い作品でも、候補が出る。
+    """
+    if not item.get("adult"):
+        return shaped
+    from ..adult_patterns import sfx_vocabulary
+    from ..db import list_adult_patterns
+
+    conn = get_connection()
+    try:
+        patterns = list_adult_patterns(conn)
+    finally:
+        conn.close()
+    result = dict(shaped)
+    for page_index, page in enumerate(pages):
+        for panel_index, panel in enumerate(page["panels"]):
+            tags = ", ".join([*(panel.get("scene_tags") or []), *(panel.get("action_tags") or [])])
+            words = sfx_vocabulary(patterns, tags)
+            if not words:
+                continue
+            for index, sfx in enumerate(panel.get("sfx") or []):
+                if str(sfx.get("reading") or "").strip():
+                    continue
+                key = f"{page_index}-{panel_index}-{index}"
+                shaped_words = result.get(key, [])
+                result[key] = list(dict.fromkeys([*shaped_words, *words]))
+    return result
 
 
 @router.get("/{import_id}/pages/{page_index}/crop")

@@ -135,6 +135,15 @@ export default function CharacterDataset() {
   const [scorer, setScorer] = useLocalStorage<'color' | 'vlm'>('nai_chards_scorer', 'color')
   const [guardId, setGuardId] = useLocalStorage<number | null>('nai_chards_guard', null)
   const [r18Selected, setR18Selected] = useState(false)
+  // R18 のプレイ(/api/adult-patterns)。1枚ごとに順に1つ足す
+  const [plays, setPlays] = useState<{ id: number; name: string; tags: string }[]>([])
+  const [playIds, setPlayIds] = useState<number[]>([])
+  useEffect(() => {
+    fetch('/api/adult-patterns')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setPlays(d ? d.patterns.play : []))
+      .catch(() => setPlays([]))
+  }, [])
   const [editingSheet, setEditingSheet] = useState(false)
   const [newCharName, setNewCharName] = useState('')
   const [charError, setCharError] = useState<string | null>(null)
@@ -220,6 +229,8 @@ export default function CharacterDataset() {
   // 成人キャラ以外では選べない(キャラを切り替えたら自動で全年齢に戻る)
   const r18 = r18Selected && !!character?.is_adult
   const rating = r18 ? 'r18' : 'general'
+  // R18 のプレイを使えるか(年齢 18 歳以上を入れた成人キャラ)
+  const adultAge = character?.age != null && character.age >= 18 && !character.is_minor
   const isRunning = phase === 'running'
   const combos = AXES.reduce((n, a) => n * Math.max(1, selected[a.key].length), 1)
   // シチュエーション×状態の単位(1枚ごとにどれか1つ。単位ごとに均等に割り振る)
@@ -307,6 +318,7 @@ export default function CharacterDataset() {
       ...selected,
       situation_ids: pickedSituations.map(s => s.id),
       state_ids: pickedStates.map(s => s.id),
+      adult_pattern_ids: r18 && adultAge ? playIds : [],
       include_plain_state: includePlain,
       state_method: stateMethod,
       inpaint_strength: inpaintStrength,
@@ -675,10 +687,23 @@ export default function CharacterDataset() {
               )}
               {r18 && (
                 <p className="lora-hint">
-                  R18では未成年を示すタグ(school uniform, student など)は使えません。
+                  R18では未成年を示すタグ(student, loli など)は使えません(年齢を入れた成人キャラの制服は、衣装として使えます)。
                   プロンプトに adult, mature female を加え、ネガティブで幼い見た目を避けます。
                   保存先は generated_r18/・manual_r18/ です。バリエーションは「追加…」から入力してください。
                 </p>
+              )}
+              {r18 && plays.length > 0 && (
+                <div className="chards-plays">
+                  <span className="lora-label">R18 のプレイ(選ぶと1枚ごとに順に1つ足します)</span>
+                  {!adultAge && <p className="lora-hint">プレイは、キャラシートに年齢(18 歳以上)を入れたキャラだけで使えます。</p>}
+                  {plays.map(p => (
+                    <label key={p.id} className="lora-checkbox-label" title={p.tags}>
+                      <input type="checkbox" checked={playIds.includes(p.id)} disabled={isRunning || !adultAge}
+                        onChange={e => setPlayIds(e.target.checked ? [...playIds, p.id] : playIds.filter(i => i !== p.id))} />
+                      {p.name}
+                    </label>
+                  ))}
+                </div>
               )}
             </fieldset>
 

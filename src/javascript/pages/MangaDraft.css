@@ -448,3 +448,8 @@
   display: grid;
   gap: 0.4rem;
 }
+
+/* R18 のパターンを選ぶ欄 */
+.md-adult { font-size: 0.85rem; }
+.md-adult summary { cursor: pointer; }
+.md-adult-list { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; }

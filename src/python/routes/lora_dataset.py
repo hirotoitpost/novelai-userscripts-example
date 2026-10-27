@@ -557,6 +557,36 @@ async def get_character_sheet_prompt(character_id: int) -> dict:
     }
 
 
+def _with_plays(shots: list[Any], pattern_ids: list[int], character: dict, r18: bool) -> list[Any]:
+    """
+    R18 のプレイを1枚ごとに順に足す(プレイの参照画像があれば、その画像から読み取ったタグも順に)。
+    R18 で、年齢(18 歳以上)を入れた成人キャラだけ。
+    """
+    if not pattern_ids:
+        return shots
+    from ..adult_patterns import play_tags
+    from ..db import count_adult_pattern_use, get_adult_pattern
+
+    if not r18:
+        raise HTTPException(status_code=422, detail="R18 のプレイは、R18 のデータセットでだけ使えます。")
+    if not content_guard.is_defined_adult(character):
+        raise HTTPException(status_code=422, detail="R18 のプレイは、年齢(18 歳以上)を入れた成人キャラだけで使えます。")
+    conn = get_connection()
+    try:
+        patterns = [get_adult_pattern(conn, i) for i in pattern_ids]
+        if any(p is None or p["kind"] != "play" for p in patterns):
+            raise HTTPException(status_code=404, detail="R18 のプレイが見つかりません。")
+        result = []
+        for index, shot in enumerate(shots):
+            pattern = patterns[index % len(patterns)]
+            tags = play_tags(pattern, count_adult_pattern_use(conn, pattern["id"]))
+            situation = " / ".join(n for n in (shot.situation, pattern["name"]) if n)
+            result.append(dataclasses.replace(shot, prompt=join_tags(shot.prompt, tags), situation=situation))
+    finally:
+        conn.close()
+    return result
+
+
 @router.post("/character/{character_id}/generate")
 async def generate_character_dataset(
     character_id: int, req: CharacterDatasetRequest, client: ClientDep
@@ -628,6 +658,7 @@ async def generate_character_dataset(
         situations=situations or None,
         states=_shot_states(states, req),
     )
+    shots = _with_plays(shots, req.adult_pattern_ids, character, r18)
     # インペイントで作る状態(部位のあるもの)。ふだんの体の1枚ごとに、その部位だけを描き直した絵を足す
     inpaint_states = [s for s in states if s.get("part", "none") in PARTS] if req.state_method == "inpaint" else []
     plain_shots = sum(1 for shot in shots if not shot.state)

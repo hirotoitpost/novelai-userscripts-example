@@ -864,6 +864,45 @@ def _init_schema(conn: sqlite3.Connection) -> None:
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (slot, value, label, tags, int(colorable), order, now),
                 )
+    # R18 のパターン(adult_patterns.py): プレイとシナリオの型、その表現(描き文字・言い回し)と、プレイの参照画像。
+    # uses は使った回数(参照画像を順に回すのに使う)。初めて表を作るときだけ、はじめのパターンを入れる
+    first_adult_patterns = (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'adult_patterns'").fetchone() is None
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS adult_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            sfx TEXT NOT NULL DEFAULT '',
+            lines TEXT NOT NULL DEFAULT '',
+            uses INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE (kind, name)
+        )
+        """
+    )
+    # tags は参照画像から読み取ったタグ(プレイを使うときに足す)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS adult_pattern_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern_id INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    if first_adult_patterns:
+        from .adult_patterns import DEFAULTS
+
+        for item in DEFAULTS:
+            add_adult_pattern(conn, item, commit=False)
     # 状態で描き直す部位(body_parts.PARTS のキー。none はプロンプトだけで作る)
     if "part" not in {row["name"] for row in conn.execute("PRAGMA table_info(dataset_states)")}:
         conn.execute("ALTER TABLE dataset_states ADD COLUMN part TEXT NOT NULL DEFAULT 'none'")
@@ -3361,6 +3400,97 @@ DEFAULT_BODY_BASE_OPTIONS: dict[str, list[tuple[str, str, str, str | None]]] = {
         ("defined", "はっきり", "defined muscles, abs", None),
     ],
 }
+
+
+_ADULT_PATTERN_FIELDS = ("kind", "name", "tags", "description", "sfx", "lines")
+
+
+def list_adult_patterns(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """R18 のパターン(種類ごと、並べる順)と、それぞれの参照画像。"""
+    images: dict[int, list[dict[str, Any]]] = {}
+    for row in conn.execute("SELECT * FROM adult_pattern_images ORDER BY id"):
+        images.setdefault(row["pattern_id"], []).append(dict(row))
+    rows = conn.execute("SELECT * FROM adult_patterns ORDER BY kind, sort_order, id")
+    return [{**dict(row), "images": images.get(row["id"], [])} for row in rows]
+
+
+def get_adult_pattern(conn: sqlite3.Connection, pattern_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM adult_patterns WHERE id = ?", (pattern_id,)).fetchone()
+    if row is None:
+        return None
+    images = [dict(r) for r in conn.execute("SELECT * FROM adult_pattern_images WHERE pattern_id = ? ORDER BY id", (pattern_id,))]
+    return {**dict(row), "images": images}
+
+
+def add_adult_pattern(conn: sqlite3.Connection, pattern: dict[str, Any], *, commit: bool = True) -> dict[str, Any]:
+    """パターンを足す(その種類の最後に並べる)。同じ種類に同じ名前があれば sqlite3.IntegrityError。"""
+    last = conn.execute("SELECT MAX(sort_order) FROM adult_patterns WHERE kind = ?", (pattern["kind"],)).fetchone()[0]
+    cur = conn.execute(
+        "INSERT INTO adult_patterns (kind, name, tags, description, sfx, lines, sort_order, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (*(pattern.get(f) or "" for f in _ADULT_PATTERN_FIELDS), (last or 0) + 1, datetime.now(timezone.utc).isoformat()),
+    )
+    if commit:
+        conn.commit()
+    return get_adult_pattern(conn, int(cur.lastrowid or 0)) or {}
+
+
+def update_adult_pattern(conn: sqlite3.Connection, pattern_id: int, pattern: dict[str, Any]) -> dict[str, Any] | None:
+    """パターンの名前・タグ・説明・表現を書き換える(種類は変えない)。"""
+    fields = _ADULT_PATTERN_FIELDS[1:]
+    conn.execute(
+        f"UPDATE adult_patterns SET {', '.join(f'{f} = ?' for f in fields)} WHERE id = ?",
+        (*(pattern.get(f) or "" for f in fields), pattern_id),
+    )
+    conn.commit()
+    return get_adult_pattern(conn, pattern_id)
+
+
+def delete_adult_pattern(conn: sqlite3.Connection, pattern_id: int) -> list[str]:
+    """パターンを消し、その参照画像のパス(ファイルは呼び出し側で消す)を返す。"""
+    paths = [row["path"] for row in conn.execute("SELECT path FROM adult_pattern_images WHERE pattern_id = ?", (pattern_id,))]
+    conn.execute("DELETE FROM adult_pattern_images WHERE pattern_id = ?", (pattern_id,))
+    conn.execute("DELETE FROM adult_patterns WHERE id = ?", (pattern_id,))
+    conn.commit()
+    return paths
+
+
+def reorder_adult_patterns(conn: sqlite3.Connection, kind: str, ids: list[int]) -> None:
+    for order, pattern_id in enumerate(ids):
+        conn.execute("UPDATE adult_patterns SET sort_order = ? WHERE id = ? AND kind = ?", (order, pattern_id, kind))
+    conn.commit()
+
+
+def count_adult_pattern_use(conn: sqlite3.Connection, pattern_id: int) -> int:
+    """使った回数を1つ増やし、増やす前の回数を返す(参照画像を順に回す番号)。"""
+    row = conn.execute("SELECT uses FROM adult_patterns WHERE id = ?", (pattern_id,)).fetchone()
+    conn.execute("UPDATE adult_patterns SET uses = uses + 1 WHERE id = ?", (pattern_id,))
+    conn.commit()
+    return int(row["uses"]) if row else 0
+
+
+def add_adult_pattern_image(conn: sqlite3.Connection, pattern_id: int, path: str, tags: str) -> dict[str, Any]:
+    cur = conn.execute(
+        "INSERT INTO adult_pattern_images (pattern_id, path, tags, created_at) VALUES (?, ?, ?, ?)",
+        (pattern_id, path, tags, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM adult_pattern_images WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def update_adult_pattern_image(conn: sqlite3.Connection, image_id: int, tags: str) -> None:
+    conn.execute("UPDATE adult_pattern_images SET tags = ? WHERE id = ?", (tags, image_id))
+    conn.commit()
+
+
+def delete_adult_pattern_image(conn: sqlite3.Connection, image_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM adult_pattern_images WHERE id = ?", (image_id,)).fetchone()
+    if row is None:
+        return None
+    conn.execute("DELETE FROM adult_pattern_images WHERE id = ?", (image_id,))
+    conn.commit()
+    return dict(row)
 
 
 def list_wardrobe_parts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
