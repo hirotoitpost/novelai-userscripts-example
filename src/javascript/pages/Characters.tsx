@@ -255,6 +255,10 @@ export default function Characters() {
                       <button type="button" className="chars-small" disabled={count === 0} onClick={() => openDataset(c.id)}>
                         生成したデータ({count}枚)
                       </button>
+                      <button type="button" className="chars-small"
+                        onClick={() => navigate(`/character-images?character=${c.id}`, { state: BACK })}>
+                        生成した画像・参照画像の選び直し
+                      </button>
                     </div>
                     <div className="chars-works">
                       <span className="chars-label">出ている作品{list.length > 0 && `(${list.length})`}</span>

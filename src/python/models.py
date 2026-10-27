@@ -349,6 +349,25 @@ class AdultPatternImageTagsRequest(BaseModel):
     tags: str = Field("", max_length=1000)
 
 
+class CharacterImageReferenceRequest(BaseModel):
+    """キャラの画像の一覧(character_images.py)から1枚を参照画像に選び直す。path は一覧の path。"""
+
+    path: str = Field(min_length=1, max_length=500)
+
+
+class CharacterImageCleanupRequest(BaseModel):
+    """
+    古い画像の整理(character_images.cleanup_targets)。kinds は整理する種類、older_than_days より前のものだけ。
+    character_id を渡せばそのキャラの画像だけ(無ければ全部。生成履歴はキャラに関係なく全部)。
+    paths は片付けるもの(一覧で見せて選んだもの。いま整理してよいものに限る)。見本の一覧を出すときは渡さない。
+    """
+
+    kinds: list[str] = Field(default_factory=lambda: ["candidate"], max_length=10)
+    older_than_days: int = Field(30, ge=0, le=3650)
+    character_id: Optional[int] = None
+    paths: Optional[list[str]] = Field(None, max_length=20000)
+
+
 class AdultPatternApplyRequest(BaseModel):
     """場面に R18 のプレイを入れる(プレイのタグを場面のタグに足し、描き文字が無ければ入れる)。"""
 
