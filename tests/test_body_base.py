@@ -257,6 +257,31 @@ def test_rear_parts_describe_the_chest_from_behind() -> None:
     assert "breasts peek" in body_base.prompt(character, base, body_base.ITEMS["back"], _defaults(), modest=True)
 
 
+def test_rear_parts_drop_tags_seen_only_from_the_front() -> None:
+    # 目・乳首・股など後ろから見えない物のタグは、真後ろの部位では外す(正面に引き戻されるため)
+    character = {"appearance_tags": "1girl, long hair, hair over shoulder, brown eyes, gentle eyes"}
+    adult = {**character, "age": 30}
+    base = {"kind": "nude"}
+    back = body_base.prompt(adult, base, body_base.ITEMS["back"], _defaults())
+    for tag in ("brown eyes", "gentle eyes", "hair over shoulder", "nipples", "featureless crotch"):
+        assert tag not in back
+    assert "long hair" in back and "1.4::from behind::" in back and "shoulder blades" in back
+    front = body_base.prompt(adult, base, body_base.ITEMS["front"], _defaults())
+    assert "brown eyes" in front and "nipples" in front
+
+
+def test_whole_body_parts_are_barefoot() -> None:
+    # 全身の部位ははだし(靴はネガティブ)。服を着せる絵は衣装の靴を使うので、はだしにしない
+    character = {"appearance_tags": "1girl"}
+    base = {"kind": "suit"}
+    for key in ("front", "side", "back", "three_quarter", "a_pose"):
+        part = body_base.ITEMS[key]
+        assert "barefoot" in body_base.prompt(character, base, part, _defaults())
+        assert "high heels" in part.negative
+    assert "barefoot" not in body_base.prompt(character, base, body_base.ITEMS["hand_palm"], _defaults())
+    assert "barefoot" not in body_base.outfit_prompt(character, base, "sandals", _defaults())
+
+
 def test_options_are_edited_in_the_db(client: TestClient) -> None:
     data = client.get("/api/lora-dataset/body-bases/options").json()
     assert [f["key"] for f in data["fields"]][:2] == ["sex", "skin_tone"]

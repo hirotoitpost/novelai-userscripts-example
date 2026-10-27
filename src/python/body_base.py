@@ -53,9 +53,18 @@ GROUPS: tuple[tuple[str, str], ...] = (
 )
 
 _STAND = "full body, standing, arms at sides, expressionless"
+# 全身の部位は、はだしにする(2026-10 実機: 背面でハイヒールを履いた)。服を着せる絵(outfit_prompt)は衣装の靴を使うので、
+# Aポーズのタグには入れず prompt() で足す
+_BARE_FEET = "barefoot"
+_BARE_FEET_NEGATIVE = "high heels, shoes, boots, sandals, footwear"
 # 真後ろ。頭も向こうを向かせる(振り返って顔を見せないように)。重みなしでは、振り返り・正面・前後の2人並びが
 # 出た(2026-10 実機)ので、強調の重みを付ける
 _FROM_BEHIND = "solo, 1.4::from behind::, 1.3::facing away::, straight-back, back view, back of head, head facing away"
+# 真後ろからは見えない物のタグ(目・乳首・股・臍・肩の前に垂らした髪)。入れると正面に引き戻される
+# (2026-10 実機: 裸の素体の nipples・キャラの brown eyes などで、背面が3回とも正面向きになった)ので、真後ろの部位では外す
+_REAR_HIDDEN_RE = re.compile(
+    r"\beyes\b|\beyelashes\b|\bnipples?\b|featureless crotch|\bnavel\b|hair over (shoulders?|breasts?)", re.IGNORECASE
+)
 _BACK_NEGATIVE = (
     "1.3::looking back::, looking at viewer, looking over shoulder, front view, facing viewer, face, profile, "
     "turning head, 1.4::multiple views::, 1.3::turnaround::, two views, front and back, 2girls"
@@ -66,22 +75,23 @@ _HAND_NEGATIVE = "foreshortening, reaching towards viewer, outstretched hand, ex
 PARTS: tuple[BodyPart, ...] = (
     BodyPart("front", "正面(解剖学的正位)", f"{_STAND}, front view, facing viewer, palms facing forward, feet together", "whole",
              "成人で7〜7.5頭身。肩幅は頭幅の約2倍(女性は1.5〜2倍)。腕を下ろすと指先は大腿の中ほど、手首は大転子(股関節)の高さ。"
-             "臍は全身のほぼ中ほどより少し上", "portrait"),
+             "臍は全身のほぼ中ほどより少し上", "portrait", negative=_BARE_FEET_NEGATIVE),
     BodyPart("side", "側面(矢状面)", f"{_STAND}, from side, profile", "whole",
              "耳・肩・大転子・膝・外くるぶしがほぼ一直線(重心線)。脊柱は頸と腰で前に、胸で後ろに弯曲(S字)。"
-             "胸郭は前後に厚く、骨盤は前に傾く", "portrait"),
+             "胸郭は前後に厚く、骨盤は前に傾く", "portrait", negative=_BARE_FEET_NEGATIVE),
     # from behind だけだと振り返って顔を見せやすい(2026-10 実機)。頭も真後ろを向かせ、振り返りをネガティブで抑える
-    BodyPart("back", "背面(真後ろ)", f"{_STAND}, {_FROM_BEHIND}", "whole",
+    BodyPart("back", "背面(真後ろ)", f"{_STAND}, {_FROM_BEHIND}, back, shoulder blades, ass", "whole",
              "後頭部は頭の高さの下1/3で首へ細くなり、外後頭隆起の下に項のくぼみ。肩甲骨は第2〜7肋骨の高さ、内側の縁は脊柱から"
              "指3本分。腰のくぼみ(ヴィーナスのえくぼ)は上後腸骨棘の位置",
-             "portrait", negative=_BACK_NEGATIVE, rear=True),
+             "portrait", negative=f"{_BACK_NEGATIVE}, {_BARE_FEET_NEGATIVE}", rear=True),
     BodyPart("three_quarter", "斜め", f"{_STAND}, three-quarter view", "whole",
-             "胸郭と骨盤が同じ向きにねじれずに並ぶか。奥の肩・腰は手前より細く見える", "portrait"),
+             "胸郭と骨盤が同じ向きにねじれずに並ぶか。奥の肩・腰は手前より細く見える", "portrait",
+             negative=_BARE_FEET_NEGATIVE),
     BodyPart("a_pose", "Aポーズ(関節の確認)",
              "full body, standing, front view, facing viewer, a-pose, arms slightly away from body, legs slightly apart, expressionless",
              "whole",
              "肩関節は鎖骨の外端の下。肘は臍の高さ、手首は股の高さ。膝蓋骨は脚の長さのほぼ中ほど。"
-             "腕を開いても鎖骨・三角筋の形が崩れないか", "portrait"),
+             "腕を開いても鎖骨・三角筋の形が崩れないか", "portrait", negative=_BARE_FEET_NEGATIVE),
     BodyPart("head_front", "頭部(正面)", "portrait, close-up, front view, facing viewer, looking at viewer, expressionless", "head",
              "目は頭の高さのほぼ中ほど。目と目の間は目1つ分。耳は眉から鼻の下までの高さ"),
     BodyPart("head_side", "頭部(側面)", "portrait, close-up, from side, profile, expressionless", "head",
@@ -235,19 +245,23 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
     """
     1枚のプロンプト。modest(未成年の手がかりがあるキャラ)は、体に貼り付けないスーツにする(コンテンツガードの
     body_base.modest_skip にある設定は外す。既定では外さず、少年誌の一般的なキャラと同じく体型はキャラのまま描く)
-    (裸の素体はそもそも当てられない)。
+    (裸の素体はそもそも当てられない)。真後ろの部位は、後ろから見えない物のタグを外す(_REAR_HIDDEN_RE)。
     """
     nude = base.get("kind") == "nude"
     adult = (content_guard.text("body_base.male_adult_tags") if base.get("sex") == "male" else r18_positive()) if nude else ""
-    return join_tags(
+    tags = join_tags(
         face_tags(character, base),
         body_tags(base, options, modest=modest, rear=part.rear),
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
+        _BARE_FEET if part.group == "whole" else "",
         BACKGROUND,
         character.get("style_tags"),
     )
+    if part.rear:
+        tags = ", ".join(t for t in split_tags(tags) if not _REAR_HIDDEN_RE.search(t))
+    return tags
 
 
 # 髪の層の下を描き直すとき(2Dモデル): 長い髪をまた描かないよう、髪の長さのタグを外し、ネガティブで抑える
