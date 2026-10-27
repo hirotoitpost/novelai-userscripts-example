@@ -858,9 +858,10 @@ class MangaGenreRequest(BaseModel):
 
 
 class MangaImportUpdateRequest(BaseModel):
-    """取り込みの手直し。genre は漫画ドラフトのジャンルへの割り当て(空文字で外す)。"""
+    """取り込みの手直し。genre は漫画ドラフトのジャンルへの割り当て(空文字で外す)。adult は R18 の指定。"""
 
     genre: Optional[str] = Field(None, max_length=100)
+    adult: Optional[bool] = None
 
 
 class MangaImportLinesRequest(BaseModel):
@@ -895,6 +896,9 @@ class MangaImportRequest(BaseModel):
     # 漫画ドラフトのジャンルへの割り当て(日常コメディ など。空なら割り当てない)。漫画ドラフトで同じジャンルを
     # 選ぶと構成の参考の先頭に出て、似た漫画を作るときのジャンルにもなる
     genre: str = Field("", max_length=100)
+    # R18(成人誌の漫画)。似た漫画を作るとき、性的なタグ・体つきのタグも使い、作る人物は全員成人にする
+    # (未成年を思わせるタグは使わない。コマを描くときの未成年キャラの安全対策もそのまま効く)
+    adult: bool = False
     # 読み取りが終わったら、続けて漫画を作る(similar なら似た漫画、rebuild なら作り直し)
     auto_manga: Optional[MangaImportAutoRequest] = None
 

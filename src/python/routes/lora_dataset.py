@@ -267,7 +267,8 @@ def _check_tags(character: dict, text: str, guard: dict, r18: bool) -> None:
     if r18:
         if not character.get("is_adult"):
             raise HTTPException(status_code=403, detail="R18は成人キャラ(キャラシートの成人フラグ)でのみ使えます。")
-        found = sorted(set(character_minor_tags(character)) | set(minor_tags(text)))
+        # 年齢を入れた成人キャラは、成人の衣装(制服のコスプレ など)を未成年の手がかりにしない
+        found = sorted(set(character_minor_tags(character)) | set(minor_tags(text, adult=content_guard.is_defined_adult(character))))
         if found:
             raise HTTPException(status_code=422, detail=f"R18では未成年を示すタグは使えません: {', '.join(found)}")
         blocked = blocked_tags(text, guard["blocked_tags"], include_core=False)

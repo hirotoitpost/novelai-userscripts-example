@@ -147,10 +147,11 @@ def test_outfit_tags_follow_the_age_rules(client: TestClient) -> None:
     # 未成年の手がかりがあるキャラは、全年齢で止めるタグを入れられない。水着は入れられる
     assert client.post(url, json={"name": "x", "extra_tags": "lingerie"}).status_code == 422
     assert client.post(url, json={"name": "水着", "parts": [{"slot": "swimwear", "value": "tankini"}]}).status_code == 200
-    # 成人キャラは、未成年を示すタグを入れられない。性的な場面のタグはだれにも入れられない
+    # 成人キャラは、未成年を示すタグを入れられない(制服は衣装として着られる)。性的な場面のタグはだれにも入れられない
     adult = _character(client, "a", is_adult=1, age=30)
     adult_url = f"/api/wardrobe/characters/{adult['id']}/outfits"
-    assert client.post(adult_url, json={"name": "x", "extra_tags": "school uniform"}).status_code == 422
+    assert client.post(adult_url, json={"name": "制服", "extra_tags": "school uniform"}).status_code == 200
+    assert client.post(adult_url, json={"name": "x", "extra_tags": "kindergarten uniform"}).status_code == 422
     assert client.post(adult_url, json={"name": "x", "extra_tags": "sex"}).status_code == 422
 
 

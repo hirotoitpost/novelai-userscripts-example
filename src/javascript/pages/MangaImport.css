@@ -412,3 +412,14 @@
   width: 12rem;
   max-width: 100%;
 }
+
+/* R18(成人誌の漫画)の取り込みの印 */
+.mi-badge-adult {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 400;
+  background: #c0392b;
+  color: #fff;
+}

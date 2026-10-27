@@ -293,12 +293,16 @@ def negative(base: dict[str, Any], part: BodyPart | None = None, *, modest: bool
 _SHEET_TEXT_FIELDS = ("name", "trigger_word", "appearance_tags", "body_tags", "outfit_tags", "style_tags")
 
 
-def minor_words(text: str) -> list[str]:
+def minor_words(text: str, *, adult: bool = False) -> list[str]:
     """
     未成年を示す語(コンテンツガードの body_base.minor_tags)。キャラ別データセットの dataset.minor_tags とは別に持つ
-    (あちらを空にしても、素体はこちらで判定する)。
+    (あちらを空にしても、素体はこちらで判定する)。adult(年齢を入れた成人キャラ)か、組み合わせで成人を表していれば、
+    成人の衣装(制服 など)は除く。
     """
-    return content_guard.find("body_base.minor_tags", text or "")
+    found = content_guard.find("body_base.minor_tags", text or "")
+    if adult or content_guard.adult_marked(text or ""):
+        found = content_guard.without_costumes(found)
+    return found
 
 
 def nude_block_reason(character: dict[str, Any], family: list[dict[str, Any]]) -> str | None:
@@ -315,7 +319,7 @@ def nude_block_reason(character: dict[str, Any], family: list[dict[str, Any]]) -
     if character.get("age") is None:
         return "裸の素体は、キャラシートに年齢(18 歳以上)を入れたキャラにだけ当てられます。"
     text = ", ".join(str(character.get(k) or "") for k in _SHEET_TEXT_FIELDS)
-    found = sorted(set(character_minor_tags(character)) | set(minor_words(text)))
+    found = sorted(set(character_minor_tags(character)) | set(minor_words(text, adult=content_guard.is_defined_adult(character))))
     if found:
         return f"キャラシートに未成年を示すタグがあるため、裸の素体を当てられません: {', '.join(found)}"
     minors = _minor_stages(character, family)
@@ -340,7 +344,7 @@ def minor_coded(character: dict[str, Any], family: list[dict[str, Any]]) -> bool
     text = ", ".join(str(character.get(k) or "") for k in _SHEET_TEXT_FIELDS)
     return (
         _is_minor(character)
-        or bool(minor_words(text) or character_minor_tags(character))
+        or bool(minor_words(text, adult=content_guard.is_defined_adult(character)) or character_minor_tags(character))
         or bool(_minor_stages(character, family))
     )
 

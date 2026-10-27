@@ -130,6 +130,7 @@ from ..manga_v2.overlay import (
 )
 from ..manga_v2.panel_shapes import trace_page
 from ..manga_v2.prompt import build_panel_negative, build_panel_prompt, is_sexual
+from ..content_guard import is_defined_adult
 from ..manga_v2.speakers import CastMember, attribute_speakers, cast_members
 from ..models import (
     MangaV2CatalogFont,
@@ -1300,7 +1301,9 @@ async def _run_panels(
         image = await generate_image_v5(
             api_key,
             build_panel_prompt(
-                join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity, manga_style=req.manga_style
+                join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity, manga_style=req.manga_style,
+                # 場面のキャラが全員、年齢を入れた成人なら、成人の衣装(制服のコスプレ など)のタグを除かない
+                costume_ok=bool(scene_characters) and all(is_defined_adult(c) for c in scene_characters),
             ),
             join_tags(
                 build_panel_negative(negatives.get(scene["id"]) or settings.negative_prompt, color=req.color, sexual=sexual),
@@ -2437,7 +2440,10 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
                     tags = minor_guard.all_ages_tags(tags)
                 seed = ((panel.get("seed") or story_id * 1000 + scene["scene_index"]) + 101) % 4294967296
                 params = GenerateImageParams(
-                    prompt=build_panel_prompt(tags, color=req.color, complexity=settings.complexity, manga_style=req.manga_style),
+                    prompt=build_panel_prompt(
+                        tags, color=req.color, complexity=settings.complexity, manga_style=req.manga_style,
+                        costume_ok=bool(members) and all(is_defined_adult(c) for c in members),
+                    ),
                     negative_prompt=join_tags(
                         build_panel_negative(negatives.get(scene["id"]) or settings.negative_prompt, color=req.color),
                         minor_guard.all_ages_negative() if softened else "",
