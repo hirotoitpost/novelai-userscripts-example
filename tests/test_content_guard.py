@@ -55,7 +55,7 @@ def put(client: TestClient, key: str, value: object) -> dict:
 
 def test_defaults_are_seeded_into_the_db(client: TestClient, tmp_path: Path) -> None:
     rules = client.get("/api/content-guard/rules").json()["rules"]
-    assert len(rules) == 31 and not any(r["modified"] for r in rules)
+    assert len(rules) == 33 and not any(r["modified"] for r in rules)
     conn = sqlite3.connect(tmp_path / "app.db")
     try:
         stored = {row[0] for row in conn.execute("SELECT key FROM content_guard_rules")}
@@ -229,3 +229,34 @@ def test_previous_defaults_are_upgraded_but_edits_are_kept(client: TestClient) -
     finally:
         conn.close()
     assert json.loads(stored) == "nsfw, nude, underwear"
+
+
+def test_adult_costumes_are_not_minor_cues_for_adults(client: TestClient) -> None:
+    from python import minor_guard
+    from python.character_sheet import character_minor_tags
+
+    # 制服は成人も衣装として着る。年齢を入れた成人キャラ・成人を表す組み合わせでは、未成年の手がかりにしない
+    assert content_guard.is_costume("school uniform") and content_guard.is_costume("serafuku")
+    assert minor_tags("school uniform") == ["school uniform"]
+    assert minor_tags("school uniform", adult=True) == []
+    assert minor_tags("mature female, school uniform") == []
+    adult = {"name": "a", "age": 25, "is_adult": 1, "outfit_tags": "school uniform, pleated skirt"}
+    assert character_minor_tags(adult) == []
+    assert character_minor_tags({**adult, "age": None}) == ["school uniform"]
+    assert character_minor_tags({**adult, "age": 16}) == ["school uniform"]
+    # 子どもの体・年齢・身分を表す語は、成人でも、衣装のタグに足しても例外にならない
+    assert character_minor_tags({**adult, "outfit_tags": "school uniform, loli"}) == ["loli"]
+    assert minor_tags("mature female, child") == ["child"]
+    put(client, "safety.adult_costume_tags", ["school ?uniform", "loli", "students?"])
+    assert not content_guard.is_costume("loli") and not content_guard.is_costume("student")
+    assert minor_tags("loli, student", adult=True) == ["loli", "student"]
+
+    # 漫画のコマ: 場面のキャラが全員成人なら、性的な場面でも衣装のタグを残す(子どもを表すタグは除く)
+    tags = "1girl, sex, school uniform, loli"
+    assert sanitize_scene_tags(tags, adult=False) == "1girl, sex"
+    assert content_guard.sanitize_scene_tags(tags, adult=False, costume_ok=True) == "1girl, sex, school uniform"
+    assert "school uniform" in build_panel_prompt("1girl, sex, school uniform", color=True, complexity=None, costume_ok=True)
+    assert content_guard.sanitize_scene_tags("mature female, sex, school uniform", adult=False) == "mature female, sex, school uniform"
+    # 未成年キャラの安全対策: 制服を着た成人キャラは成人として判定する
+    assert minor_guard.decide("sex", [adult]).action == minor_guard.OK
+    assert minor_guard.decide("sex", [{**adult, "age": None, "is_adult": 0}]).action == minor_guard.BLOCK

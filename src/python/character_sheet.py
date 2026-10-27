@@ -98,17 +98,27 @@ def r18_negative() -> str:
     return content_guard.text("dataset.r18_negative")
 
 
-def minor_tags(tags: str) -> list[str]:
-    return content_guard.find("dataset.minor_tags", tags)
+def minor_tags(tags: str, *, adult: bool = False) -> list[str]:
+    """
+    未成年を示すタグ。adult(年齢を入れた成人キャラ)か、タグの組み合わせで成人を表していれば、成人の衣装
+    (制服 など。content_guard.is_costume)は除く。
+    """
+    found = content_guard.find("dataset.minor_tags", tags)
+    if adult or content_guard.adult_marked(tags):
+        found = content_guard.without_costumes(found)
+    return found
 
 
 def character_minor_tags(character: dict[str, Any]) -> list[str]:
-    """キャラシートの中で未成年を示すタグ(成人フラグを付けられるかの判定に使う)。"""
+    """
+    キャラシートの中で未成年を示すタグ(成人フラグを付けられるかの判定に使う)。年齢(18 歳以上)を入れた成人キャラは、
+    成人の衣装(制服のコスプレ など)を手がかりにしない。
+    """
     text = ", ".join(
         str(character.get(k) or "")
         for k in ("name", "trigger_word", "appearance_tags", "body_tags", "outfit_tags", "style_tags")
     )
-    return minor_tags(text)
+    return minor_tags(text, adult=content_guard.is_defined_adult(character))
 
 
 def core_blocked_tags() -> list[str]:

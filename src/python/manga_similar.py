@@ -133,8 +133,12 @@ def _words(tag: str) -> set[str]:
 
 
 def _is_minor(tag: str) -> bool:
-    """未成年を思わせるタグか(性的な場面から除くタグと、成人キャラに付けられないタグ。中身は content_guard)。"""
-    return content_guard.search("scene.minor_tags", tag) or content_guard.search("dataset.minor_tags", tag)
+    """
+    未成年を思わせるタグか(性的な場面から除くタグと、成人キャラに付けられないタグ。中身は content_guard)。
+    R18 の取り込みで作る人物は全員成人なので、成人の衣装(制服のコスプレ など)は除かない。
+    """
+    minor = content_guard.search("scene.minor_tags", tag) or content_guard.search("dataset.minor_tags", tag)
+    return minor and not content_guard.is_costume(tag)
 
 
 def _is_safe(tag: str, adult: bool = False) -> bool:

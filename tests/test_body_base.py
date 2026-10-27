@@ -59,10 +59,13 @@ def test_nude_block_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body_base.nude_block_reason({**adult, "age": 17}, []) is not None
     # 成人フラグだけで年齢の無いキャラには当てない
     assert "年齢" in (body_base.nude_block_reason({**adult, "age": None}, []) or "")
-    assert body_base.nude_block_reason({**adult, "outfit_tags": "school uniform"}, []) is not None
+    # 年齢を入れた成人キャラの制服は衣装(コスプレ)。子どもを表すタグは止める
+    assert body_base.nude_block_reason({**adult, "outfit_tags": "school uniform"}, []) is None
+    assert body_base.nude_block_reason({**adult, "outfit_tags": "school uniform, child"}, []) is not None
+    assert body_base.nude_block_reason({**adult, "age": None, "outfit_tags": "school uniform"}, []) is not None
     # キャラ別データセットの未成年タグ(dataset.minor_tags)が空でも、素体の未成年タグ(body_base.minor_tags)で止める
     monkeypatch.setattr(body_base, "character_minor_tags", lambda _c: [])
-    assert "school uniform" in (body_base.nude_block_reason({**adult, "outfit_tags": "school uniform, cardigan"}, []) or "")
+    assert "kindergarten" in (body_base.nude_block_reason({**adult, "outfit_tags": "kindergarten uniform, cardigan"}, []) or "")
     assert body_base.nude_block_reason({**adult, "appearance_tags": "1girl, young woman"}, []) is not None
     # 成長段階に未成年の段階があれば、成人の段階でも当てない
     child = {"id": 2, "name": "5歳", "is_minor": 1, "age": 5}

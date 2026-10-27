@@ -188,6 +188,40 @@ def words(key: str) -> frozenset[str]:
     return loaded.compiled[cache_key]
 
 
+# ---- 成人の衣装(制服のコスプレ など) ----
+
+# 衣装の例外にしない語(子どもの体・年齢そのものを表す語)。成人の年齢を入れても、組み合わせで成人を表しても、
+# これに当たるタグは未成年の手がかりのまま(絵が子どもの体になるため)。開発管理者のページで衣装のタグに
+# 足しても効かないよう、ここに持つ
+_NEVER_COSTUME = re.compile(
+    r"\b(loli(ta)?|shota|child(ren)?|kids?|toddler|bab(y|ies)|infant|little (girl|boy)s?|young (girl|boy)s?|"
+    r"underage|minor|teen(age|ager)?s?|petite child|elementary|kindergarten|randoseru|aged down|"
+    r"jk|joshi ?kousei|school ?(girl|boy)s?|students?|(high|middle) school)\b",
+    re.IGNORECASE,
+)
+
+
+def is_costume(tag: str) -> bool:
+    """成人も衣装として着るタグか(safety.adult_costume_tags。子どもの体・年齢・身分を表す語は当たらない)。"""
+    return search("safety.adult_costume_tags", tag) and not _NEVER_COSTUME.search(tag or "")
+
+
+def adult_marked(tags: str) -> bool:
+    """タグの組み合わせで成人を表しているか(safety.adult_markers。mature female など)。"""
+    return search("safety.adult_markers", tags or "")
+
+
+def is_defined_adult(character: dict[str, Any]) -> bool:
+    """年齢(18 歳以上)を入れてある成人キャラか(未成年の定義が無いこと)。"""
+    age = character.get("age")
+    return age is not None and int(age) >= 18 and not character.get("is_minor")
+
+
+def without_costumes(found: list[str]) -> list[str]:
+    """未成年の手がかりの語から、成人の衣装の語を除く(成人キャラ・成人を表す組み合わせのとき)。"""
+    return [word for word in found if not is_costume(word)]
+
+
 # ---- 場面のタグ ----
 
 
@@ -200,15 +234,18 @@ def tags_adult(tags: str | None) -> bool:
     return bool(tags) and (is_sexual(tags or "") or search("library.adult_tags", tags or ""))
 
 
-def sanitize_scene_tags(tags: str, *, adult: bool) -> str:
+def sanitize_scene_tags(tags: str, *, adult: bool, costume_ok: bool = False) -> str:
     """
     成人向け、または性的な語を含むタグから未成年を思わせるタグを除く。成人向けなら先頭に nsfw を付け、
     性器が関わる場面には explicit, uncensored(女性器なら pussy も)を足す(足さないと布や構図で隠されがち)。
+    costume_ok(場面のキャラが全員、年齢を入れた成人)か、タグの組み合わせで成人を表していれば、成人の衣装
+    (制服 など)は除かない。子どもの体・年齢を表すタグは、どちらでも除く。
     """
     items = [t.strip() for t in tags.split(",") if t.strip()]
     sexual = adult or any(is_sexual(t) for t in items)
     if sexual:
-        items = [t for t in items if not search("scene.minor_tags", t)]
+        costumes = costume_ok or adult_marked(tags)
+        items = [t for t in items if not search("scene.minor_tags", t) or (costumes and is_costume(t))]
     lower = [t.lower() for t in items]
     if adult and any(search("scene.genital_tags", t) for t in items):
         extra = [t for t in ("explicit", "uncensored") if t not in lower]

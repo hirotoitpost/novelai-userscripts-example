@@ -74,14 +74,14 @@ def test_adult_import_keeps_body_and_sexual_tags_but_not_minor_ones(monkeypatch)
     pages = [Image.new("RGB", (8, 8))] * 2
     # 全年齢: 体つき・露出の語は使わない(制服は使う)
     assert set(manga_similar.read_pages(pages).people[0].tags) == {"black hair", "school uniform", "skirt"}
-    # R18: 体つき・露出も使う。未成年を思わせるタグ(制服)は使わない
+    # R18: 体つき・露出も使う。作る人物は成人なので、制服は衣装として使う
     tags = set(manga_similar.read_pages(pages, adult=True).people[0].tags)
-    assert {"black hair", "skirt", "large breasts"} <= tags and "school uniform" not in tags
+    assert {"black hair", "skirt", "large breasts", "school uniform"} <= tags
 
     script = [{"prompt_tags": "bedroom", "characters": ["A"], "actions": {}, "lines": ["…"]}]
-    imported = [{"detailed": True, "scene_tags": ["bed", "sex", "loli"], "action_tags": ["kiss"], "lines": ["x"]}]
+    imported = [{"detailed": True, "scene_tags": ["bed", "sex", "loli", "child"], "action_tags": ["kiss"], "lines": ["x"]}]
     kept = manga_similar.apply_import_panels([dict(script[0])], imported, adult=True)[0]["prompt_tags"]
-    assert "sex" in kept and "loli" not in kept
+    assert "sex" in kept and "loli" not in kept and "child" not in kept
     assert "sex" not in manga_similar.apply_import_panels([dict(script[0])], imported)[0]["prompt_tags"]
 
 

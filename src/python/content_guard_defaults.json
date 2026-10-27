@@ -225,6 +225,24 @@
       "value": "全年齢向けの日常の話に出せる人物にする"
     },
     {
+      "key": "safety.adult_costume_tags",
+      "group": "未成年キャラの安全対策",
+      "label": "成人の衣装として扱うタグ(コスプレ)",
+      "description": "未成年の手がかりのタグのうち、成人も衣装として着るもの。キャラに 18 歳以上の年齢を入れてあるか、タグの組み合わせで成人を表している(成人を表すタグ)ときは、未成年の手がかりにしない。子どもの体・年齢・身分を表す語(loli・child・student など)は、ここに足しても例外にならない。",
+      "kind": "patterns",
+      "match": "word",
+      "value": ["school ?uniform", "serafuku", "gym uniform"]
+    },
+    {
+      "key": "safety.adult_markers",
+      "group": "未成年キャラの安全対策",
+      "label": "成人を表すタグ(衣装の例外に使う)",
+      "description": "これがタグにあれば、成人の衣装として扱うタグ(制服 など)を未成年の手がかりにしない。",
+      "kind": "patterns",
+      "match": "word",
+      "value": ["mature female", "mature male", "adult", "milf", "office lady", "adult cosplay"]
+    },
+    {
       "key": "similar.adult_naming_rule",
       "group": "漫画の下書き・似た漫画",
       "label": "似た漫画の人物づくりの決まり(R18 の取り込み)",

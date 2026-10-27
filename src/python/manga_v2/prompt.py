@@ -22,14 +22,19 @@ def is_sexual(tags: str) -> bool:
     return content_guard.is_sexual(tags)
 
 
-def build_panel_prompt(scene_tags: str, *, color: bool, complexity: str | None, manga_style: bool = True) -> str:
-    """manga_style が False なら先頭の manga style を付けない(モノクロの指定は color に従って付ける)。"""
+def build_panel_prompt(
+    scene_tags: str, *, color: bool, complexity: str | None, manga_style: bool = True, costume_ok: bool = False
+) -> str:
+    """
+    manga_style が False なら先頭の manga style を付けない(モノクロの指定は color に従って付ける)。
+    costume_ok は、場面のキャラが全員、年齢を入れた成人のとき(成人の衣装のタグを除かない。sanitize_scene_tags)。
+    """
     from ..content_guard import sanitize_scene_tags
 
     parts = [] if color else ["monochrome, greyscale, screentone"]
     if manga_style:
         parts.insert(0, "manga style")
-    tags = sanitize_scene_tags(scene_tags.strip().strip(","), adult=False)
+    tags = sanitize_scene_tags(scene_tags.strip().strip(","), adult=False, costume_ok=costume_ok)
     if tags:
         parts.append(tags)
     if complexity:
