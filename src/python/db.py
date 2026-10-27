@@ -3056,7 +3056,12 @@ def list_panel_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 # 取り込みの使い方。structure: 構成だけ(この列ができる前の取り込み)、similar: 似た漫画を作る、
 # rebuild: 自分の作品を作り直す(セリフの文面も持つ)
 # genre: 漫画ドラフトのジャンル(日常コメディ など)への割り当て。空は割り当てなし
-_MANGA_IMPORTS_EXTRA_COLUMNS = {"purpose": "TEXT NOT NULL DEFAULT 'structure'", "genre": "TEXT NOT NULL DEFAULT ''"}
+# adult: R18(成人誌の漫画)の取り込み。似た漫画を作るとき、性的なタグ・体つきのタグも使う(manga_similar.py)
+_MANGA_IMPORTS_EXTRA_COLUMNS = {
+    "purpose": "TEXT NOT NULL DEFAULT 'structure'",
+    "genre": "TEXT NOT NULL DEFAULT ''",
+    "adult": "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 def _migrate_manga_imports(conn: sqlite3.Connection) -> None:
@@ -3068,12 +3073,12 @@ def _migrate_manga_imports(conn: sqlite3.Connection) -> None:
 
 
 def create_manga_import(
-    conn: sqlite3.Connection, title: str, page_count: int, purpose: str = "structure", genre: str = ""
+    conn: sqlite3.Connection, title: str, page_count: int, purpose: str = "structure", genre: str = "", adult: bool = False
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
-        "INSERT INTO manga_imports (title, page_count, purpose, genre, created_at) VALUES (?, ?, ?, ?, ?)",
-        (title, page_count, purpose, genre, now),
+        "INSERT INTO manga_imports (title, page_count, purpose, genre, adult, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (title, page_count, purpose, genre, int(adult), now),
     )
     conn.commit()
     return get_manga_import(conn, int(cur.lastrowid or 0)) or {}
@@ -3101,7 +3106,10 @@ def update_manga_import(
     analysis: Any = None,
     purpose: str | None = None,
     genre: str | None = None,
+    adult: bool | None = None,
 ) -> None:
+    if adult is not None:
+        conn.execute("UPDATE manga_imports SET adult = ? WHERE id = ?", (int(adult), import_id))
     if genre is not None:
         conn.execute("UPDATE manga_imports SET genre = ? WHERE id = ?", (genre, import_id))
     if purpose is not None:

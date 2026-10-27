@@ -28,6 +28,8 @@ interface ImportSummary {
   purpose: Purpose | 'structure'
   // 漫画ドラフトのジャンルへの割り当て(無ければ空)
   genre: string
+  // R18(成人誌の漫画)。似た漫画を作るとき、性的なタグ・体つきのタグも使い、作る人物は全員成人にする
+  adult: boolean
   panel_count: number
   created_at: string
 }
@@ -102,6 +104,8 @@ export default function MangaImport() {
   // 取り込むときに割り当てるジャンルと、開いている取り込みの割り当ての書きかけ
   const [genre, setGenre] = useState('')
   const [genreDraft, setGenreDraft] = useState<string | null>(null)
+  // R18(成人誌の漫画)として取り込むか
+  const [adult, setAdult] = useState(false)
   const genreStore = useGenres(token)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -205,7 +209,7 @@ export default function MangaImport() {
     try {
       const payload = await Promise.all(files.map(async f => ({ name: f.name, data: await readAsDataUrl(f) })))
       const created = await apiFetch<ImportSummary>(token, '/api/manga-import', {
-        title: title.trim(), files: payload, use_vision: useVision, purpose, genre: genre.trim(),
+        title: title.trim(), files: payload, use_vision: useVision, purpose, genre: genre.trim(), adult,
         auto_manga: autoManga ? makeOptions(purpose === 'rebuild') : null,
       })
       setTitle('')
@@ -292,6 +296,25 @@ export default function MangaImport() {
       setGenreDraft(null)
       await loadList()
       await genreStore.reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 開いている取り込みの R18 の指定を変える(似た漫画を作るときに効く)。 */
+  const saveAdult = async (next: boolean) => {
+    if (!token || !selected) return
+    setError(null)
+    try {
+      const res = await fetch(`/api/manga-import/${selected.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ adult: next }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      const saved = await res.json() as ImportSummary
+      setSelected({ ...selected, adult: saved.adult })
+      await loadList()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -384,6 +407,11 @@ export default function MangaImport() {
           </label>
           {files.length > 0 && <p className="mi-hint">{files.length}ファイル: {files.map(f => f.name).join('、')}</p>}
           <label className="mi-check">
+            <input type="checkbox" checked={adult} onChange={e => setAdult(e.target.checked)} />
+            R18(成人誌の漫画)として取り込む: 似た漫画を作るとき、性的な要素・体つきも読み取って使います。作る人物は全員成人(18歳以上)にし、
+            未成年を思わせるタグは使いません
+          </label>
+          <label className="mi-check">
             <input type="checkbox" checked={useVision} onChange={e => setUseVision(e.target.checked)} />
             コマの役割・感情も読み取る(ローカルの画像モデル、1コマ十数秒)
           </label>
@@ -395,7 +423,7 @@ export default function MangaImport() {
             <p className="mi-hint">
               {purpose === 'rebuild'
                 ? '作り直し: 読み取ったセリフをそのまま使い、話し手とコマの人物を文章モデルで決めて、同じコマ割りで描き直します。'
-                : '似た漫画: 取り込んだページの絵から舞台・人物の見た目・コマごとの場面と所作を読み取り、新しい話を作って、同じコマ割り(1ページ=1話)で漫画にします。作品のキャラそのものやセリフ、性的な要素は写しません。'}
+                : `似た漫画: 取り込んだページの絵から舞台・人物の見た目・コマごとの場面と所作を読み取り、新しい話を作って、同じコマ割り(1ページ=1話)で漫画にします。作品のキャラそのものやセリフは写しません。${adult ? 'R18 の取り込みでは性的な要素も写します。' : '性的な要素は写しません。'}`}
               {' '}NovelAI の文章・画像生成を使います。
             </p>
             {purpose === 'rebuild' && (
@@ -448,7 +476,7 @@ export default function MangaImport() {
             {imports.map(item => (
               <li key={item.id} className={selected?.id === item.id ? 'mi-item mi-item--on' : 'mi-item'}>
                 <button type="button" className="mi-item-open" onClick={() => open(item.id)}>
-                  <strong>{item.title}</strong>
+                  <strong>{item.title}{item.adult && <span className="mi-badge-adult">R18</span>}</strong>
                   <span>{item.page_count}ページ・{item.panel_count}コマ・{PURPOSE_LABELS[item.purpose] ?? item.purpose}・{STATUS_LABELS[item.status] ?? item.status}{item.genre && `・ジャンル: ${item.genre}`}</span>
                 </button>
                 <button type="button" className="mi-item-action" disabled={item.status !== 'analyzed'}
@@ -493,6 +521,10 @@ export default function MangaImport() {
               )}
               <span className="mi-hint">漫画ドラフトでこのジャンルを選ぶと、構成の参考の先頭に出ます。似た漫画を作るときのジャンルにもなります。</span>
             </div>
+            <label className="mi-check">
+              <input type="checkbox" checked={selected.adult} onChange={e => void saveAdult(e.target.checked)} />
+              R18(成人誌の漫画): 似た漫画を作るとき、性的な要素・体つきも使い、作る人物は全員成人にします(作ったあとの漫画は変わりません)
+            </label>
             <p className="mi-hint">
               {selected.purpose === 'rebuild' && 'セリフの文面を読み取ってあります。間違いはコマごとの欄で直せます(1行に1つのセリフ)。'}
               {selected.purpose === 'similar' && 'セリフは数・長さ・調子だけを読み取ってあります(文面は保存していません)。'}

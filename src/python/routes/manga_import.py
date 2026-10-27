@@ -107,6 +107,7 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
         "status": item["status"],
         "purpose": item.get("purpose") or "structure",
         "genre": item.get("genre") or "",
+        "adult": bool(item.get("adult")),
         "panel_count": sum(len(p["panels"]) for p in pages),
         "created_at": item["created_at"],
     }
@@ -219,10 +220,12 @@ async def _prepare_cast(
     戻り値は(キャラ, ページの絵から読み取った舞台・見た目)。
     """
     from ..cast import auto_reference
-    from ..db import get_character, save_character
+    from ..db import get_character, save_character, update_character_sheet
     from ..manga_similar import name_people, read_pages
 
-    pages = (_require(import_id).get("analysis") or {}).get("pages") or []
+    item = _require(import_id)
+    adult = bool(item.get("adult"))
+    pages = (item.get("analysis") or {}).get("pages") or []
     job.progress, job.total = 0, len(used)
     job.message = "取り込んだページの舞台と人物の見た目を読み取っています"
     images = []
@@ -230,7 +233,7 @@ async def _prepare_cast(
         with Image.open(_page_path(import_id, index)) as src:
             images.append(src.convert("RGB"))
     boxes = [[tuple(p["box"]) for p in pages[index]["panels"]] for index in used]
-    features = await asyncio.to_thread(read_pages, images, boxes)
+    features = await asyncio.to_thread(lambda: read_pages(images, boxes, adult=adult))
 
     conn = get_connection()
     try:
@@ -241,7 +244,7 @@ async def _prepare_cast(
         if not features.people:
             raise RuntimeError("取り込んだページから人物を見つけられませんでした。使うキャラを選んでください。")
         job.message = "登場人物の名前と人物像を考えています"
-        named = await name_people(api_key, features.people, _genre(import_id, req), features.setting)
+        named = await name_people(api_key, features.people, _genre(import_id, req), features.setting, adult=adult)
         conn = get_connection()
         try:
             for person, info in zip(features.people, named):
@@ -253,6 +256,9 @@ async def _prepare_cast(
                     suffix += 1
                 tags = [person.gender, *person.tags, *[t for t in info.get("look", "").split(", ") if t]]
                 created = save_character(conn, name, ", ".join(dict.fromkeys(tags)), info["profile"])
+                if adult:
+                    # R18 の取り込みの人物は成人(年齢は人物づくりで 18 歳以上を確かめてある)
+                    created = update_character_sheet(conn, created["id"], {"age": info["age"], "is_adult": 1, "is_minor": 0}) or created
                 characters.append(created)
         finally:
             conn.close()
@@ -323,6 +329,7 @@ async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str
     from ..manga_import import structure_lines
     from ..manga_similar import apply_import_panels, theme_of, wordless
 
+    adult = bool(_require(import_id).get("adult"))
     used, page_panels = _used_pages(import_id, req.max_pages)
     structure = [structure_lines(panels) for panels in page_panels]
     characters, features = await _prepare_cast(import_id, used, req, api_key, job)
@@ -347,7 +354,7 @@ async def make_similar(import_id: int, req: MangaImportAutoRequest, api_key: str
             previous_panels=episodes[-1] if episodes else None,
             structure=structure[index],
         )
-        episodes.append(apply_import_panels(episode, page_panels[index]))
+        episodes.append(apply_import_panels(episode, page_panels[index], adult=adult))
     return await _finish(import_id, outline["title"], cast, episodes, req, features.monochrome, api_key, job)
 
 
@@ -412,7 +419,7 @@ async def post_import(
         raise HTTPException(status_code=401, detail="続けて漫画を作るには NovelAI へのログインが必要です。")
     conn = get_connection()
     try:
-        item = create_manga_import(conn, req.title.strip(), len(pages), req.purpose, req.genre.strip())
+        item = create_manga_import(conn, req.title.strip(), len(pages), req.purpose, req.genre.strip(), req.adult)
         # 候補に無いジャンルを割り当てたら、候補にも足す
         if req.genre.strip():
             add_manga_genre(conn, req.genre.strip())
@@ -454,8 +461,17 @@ async def get_import(import_id: int) -> dict[str, Any]:
 
 @router.patch("/{import_id}")
 async def patch_import(import_id: int, req: MangaImportUpdateRequest) -> dict[str, Any]:
-    """取り込みを手直しする。genre: 漫画ドラフトのジャンルへの割り当て(空文字で外す)。"""
+    """
+    取り込みを手直しする。genre: 漫画ドラフトのジャンルへの割り当て(空文字で外す)。adult: R18 の指定
+    (似た漫画を作るときに効く。作ったあとの漫画は変わらない)。
+    """
     _require(import_id)
+    if req.adult is not None:
+        conn = get_connection()
+        try:
+            update_manga_import(conn, import_id, adult=req.adult)
+        finally:
+            conn.close()
     if req.genre is not None:
         conn = get_connection()
         try:

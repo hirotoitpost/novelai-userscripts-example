@@ -352,3 +352,47 @@ def test_genres_can_be_added_and_removed(client: TestClient, tmp_path: Path) -> 
     client.delete("/api/manga-draft/genres", params={"name": "ほのぼの"})
     db.get_connection().close()
     assert "ほのぼの" not in client.get("/api/manga-draft/genres").json()
+
+
+def test_adult_import_makes_adult_characters(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from python import manga_similar
+    from python.manga_similar import ImportFeatures, Person
+    from python.models import MangaImportAutoRequest
+
+    data = base64.b64encode(_png(_page(_grid()))).decode()
+    res = client.post(
+        "/api/manga-import",
+        json={"title": "成人誌", "files": [{"name": "p1.png", "data": data}], "use_vision": False, "adult": True},
+    )
+    assert res.status_code == 200 and res.json()["adult"] is True
+    import_id = res.json()["id"]
+    assert _wait(client, import_id)["status"] == "done"
+    # R18 の指定はあとから変えられる(既定は全年齢)
+    assert client.patch(f"/api/manga-import/{import_id}", json={"adult": False}).json()["adult"] is False
+    assert client.patch(f"/api/manga-import/{import_id}", json={"adult": True}).json()["adult"] is True
+
+    seen: dict[str, bool] = {}
+
+    def read(images, boxes, *, adult=False):  # noqa: ANN001
+        seen["read"] = adult
+        return ImportFeatures(setting=["bedroom"], people=[Person("1girl", ["black hair", "large breasts"], 2)], monochrome=True)
+
+    async def name(api_key, people, genre, setting, *, adult=False):  # noqa: ANN001
+        seen["name"] = adult
+        return [{"name": "佐藤 花", "age": 27, "profile": "会社員", "look": ""}]
+
+    monkeypatch.setattr(manga_similar, "read_pages", read)
+    monkeypatch.setattr(manga_similar, "name_people", name)
+
+    class Job:
+        progress = total = 0
+        message = ""
+
+    used, _ = import_routes._used_pages(import_id, 1)
+    characters, _ = asyncio.run(import_routes._prepare_cast(import_id, used, MangaImportAutoRequest(references=False), "k", Job()))
+    assert seen == {"read": True, "name": True}
+    # 作った人物は成人(年齢つき)。未成年キャラの安全対策は、コマを描くときにこの年齢で判定される
+    assert characters[0]["age"] == 27 and characters[0]["is_adult"] == 1 and characters[0]["is_minor"] == 0
+    assert "large breasts" in characters[0]["appearance_tags"]
