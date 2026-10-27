@@ -29,15 +29,20 @@
       "key": "dataset.blocked_tags",
       "group": "キャラ別データセット",
       "label": "全年齢で止めるタグ(基本のガード)",
-      "description": "全年齢のデータセット生成・取り込みで、これに当たるタグがあると 422 で止める。ガードプロファイルはこれへの上乗せ。水着は一般誌の水着の場面と同じく全年齢で扱う(水着素体・衣装の水着。2026-10)。",
+      "description": "全年齢のデータセット生成・取り込みで、これに当たるタグがあると 422 で止める。ガードプロファイルはこれへの上乗せ。水着・胸の谷間は一般誌と同じく全年齢で扱う(水着素体・衣装の水着。2026-10)。",
       "kind": "patterns",
       "match": "word",
       "value": [
         "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
         "underwear", "lingerie", "panties", "bra", "brassiere",
-        "see-through", "cleavage", "pussy", "penis", "cum", "bondage"
+        "see-through", "pussy", "penis", "cum", "bondage"
       ],
       "previous": [
+        [
+          "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
+          "underwear", "lingerie", "panties", "bra", "brassiere",
+          "see-through", "cleavage", "pussy", "penis", "cum", "bondage"
+        ],
         [
           "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
           "underwear", "lingerie", "panties", "bra", "brassiere", "swimsuit", "bikini",
@@ -292,9 +297,10 @@
       "key": "body_base.suit_negative",
       "group": "素体",
       "label": "素体スーツのネガティブ",
-      "description": "素体スーツ(全年齢)の1枚に足すネガティブ(全年齢のネガティブと一緒に入る)。",
+      "description": "素体スーツ・水着素体(全年齢)の1枚に足すネガティブ(全年齢のネガティブと一緒に入る)。胸の谷間は体型のうちなので入れない。",
       "kind": "text",
-      "value": "cleavage, see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout"
+      "value": "see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout",
+      "previous": ["cleavage, see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout"]
     },
     {
       "key": "body_base.modest_negative",
