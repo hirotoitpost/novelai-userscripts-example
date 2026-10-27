@@ -164,6 +164,8 @@ export default function MangaDraft() {
   const adultIds = draft.adultPatternIds ?? []
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // R18 のパターンで作った台本で、成人以外が描かれていたため全年齢にしたコマの知らせ
+  const [softNote, setSoftNote] = useState<string | null>(null)
 
   // 漫画にするときの設定
   const [template, setTemplate] = useState('vertical4')
@@ -292,18 +294,23 @@ export default function MangaDraft() {
   /** 1話分の台本を作る。直前の話のコマを渡して流れをつなげる。 */
   const makeEpisode = async (index: number, scripts: (DraftPanel[] | null)[]): Promise<DraftPanel[] | null> => {
     if (!token || !draft.outline) return null
-    const res = await apiFetch<{ panels: DraftPanel[] }>(token, '/api/manga-draft/episode', {
+    const res = await apiFetch<{ panels: DraftPanel[]; softened?: number[] }>(token, '/api/manga-draft/episode', {
       ...common(),
       outline: draft.outline,
       episode_index: index,
       previous_panels: index > 0 ? cleanPanels(scripts[index - 1] ?? []) : [],
     })
+    if (res.softened?.length) {
+      setSoftNote(prev => [prev, `第${index + 1}話の${res.softened!.join('・')}コマ目は、成人以外の人物が描かれていたため、性的なタグを外して全年齢にしました(台本で直せます)。`]
+        .filter(Boolean).join(' '))
+    }
     return res.panels
   }
 
   const makeEpisodes = async (indexes: number[]) => {
     if (!draft.outline) return
     setError(null)
+    setSoftNote(null)
     let scripts = [...draft.scripts]
     try {
       for (const index of indexes) {
@@ -847,8 +854,9 @@ export default function MangaDraft() {
           </section>
         )}
 
-        {(busy || error || result) && (
+        {(busy || error || result || softNote) && (
           <section className="md-status" aria-live="polite">
+            {softNote && <p className="md-hint">{softNote}</p>}
             {busy && (
               <p>
                 <span className="md-spinner" /> {busy}

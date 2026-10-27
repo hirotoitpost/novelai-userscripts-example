@@ -61,8 +61,9 @@
         "jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit",
         "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?",
         "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage",
-        "minor", "young", "aged down", "toddler", "little girl", "little boy"
-      ]
+        "minor", "young(?! (woman|women|man|men|adult|adults|lady|ladies))", "aged down", "toddler", "little girl", "little boy"
+      ],
+      "previous": [["jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit", "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?", "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage", "minor", "young", "aged down", "toddler", "little girl", "little boy"]]
     },
     {
       "key": "dataset.adult_only_tags",
@@ -180,9 +181,10 @@
       "key": "draft.adult_content_rule",
       "group": "漫画の下書き・似た漫画",
       "label": "漫画の下書きの決まり(R18 のパターンを選んだとき)",
-      "description": "漫画の下書きで R18 のパターン(プレイ・シナリオの型)を選んだときに、大枠シナリオと台本の指示文に入れる決まり。キャラが全員、年齢(18 歳以上)を入れた成人のときだけ使われる。",
+      "description": "漫画の下書きで R18 のパターン(プレイ・シナリオの型)を選んだときに、大枠シナリオと台本の指示文に入れる決まり。年齢(18 歳以上)を入れた成人キャラが登場するときだけ使われる(子どもなど成人でないキャラがいても使える。性的なコマに成人以外がいれば、そのコマは全年齢にする)。",
       "kind": "text",
-      "value": "成人向け。登場人物は全員18歳以上の成人として描き、学生や子どもとして描かない。性的な場面は合意のある関係として描く"
+      "value": "成人向け。性的な場面に出すのは18歳以上の成人の人物だけで、学生や子どもとして描かない。未成年の人物(子ども・連れ子など)は、性的な場面のコマには出さない。性的な場面は合意のある関係として描く",
+      "previous": ["成人向け。登場人物は全員18歳以上の成人として描き、学生や子どもとして描かない。性的な場面は合意のある関係として描く"]
     },
     {
       "key": "draft.content_rule",
@@ -307,7 +309,8 @@
       "description": "キャラシート(名前・トリガーワード・容姿・体型・服装・画風)にこれがあると、裸の素体を当てない・描かない。素体スーツは胸・曲線の設定を使わず控えめに描く。裸の素体の足すタグにも入れられない。キャラ別データセットの未成年ガードとは別に持つ(あちらを空にしても、素体はこれで判定する)。",
       "kind": "patterns",
       "match": "word",
-      "value": ["jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit", "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?", "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage", "minor", "young", "aged down", "toddler", "little girl", "little boy", "baby", "infant"]
+      "value": ["jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit", "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?", "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage", "minor", "young(?! (woman|women|man|men|adult|adults|lady|ladies))", "aged down", "toddler", "little girl", "little boy", "baby", "infant"],
+      "previous": [["jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit", "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?", "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage", "minor", "young", "aged down", "toddler", "little girl", "little boy", "baby", "infant"]]
     },
     {
       "key": "body_base.nude_tags",

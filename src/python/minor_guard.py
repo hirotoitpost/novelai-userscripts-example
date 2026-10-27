@@ -48,10 +48,16 @@ def _names(character: dict[str, Any]) -> list[str]:
 
 
 def minor_cues(character: dict[str, Any], story_text: str = "") -> list[str]:
-    """そのキャラが未成年だと思わせる手がかり(画面に出す説明)。無ければ空。"""
+    """
+    そのキャラが未成年だと思わせる手がかり(画面に出す説明)。無ければ空。
+    年齢(18 歳以上)を入れた成人キャラは、キャラシートのタグだけを見る。メモや本文の語(「娘は小学生」「高校生の
+    連れ子」など)は家族のことを書いていることが多く、入れた年齢を優先する。
+    """
     from .character_sheet import character_minor_tags
 
     cues = [f"キャラシートのタグ: {tag}" for tag in character_minor_tags(character)]
+    if content_guard.is_defined_adult(character):
+        return cues
     notes = str(character.get("notes") or "")
     cues += [f"キャラのメモ: {word}" for word in minor_words(notes)]
     names = _names(character)
@@ -153,6 +159,32 @@ def all_ages_tags(tags: str) -> str:
         and t.lower() not in ("explicit", "uncensored")
     ]
     return ", ".join(kept)
+
+
+def soften_sexual_panels(
+    panels: list[dict[str, Any]], adults: set[str]
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """
+    台本のコマのうち、性的なコマに年齢を入れた成人以外(adults に無い名前)が描かれていれば、そのコマの性的なタグを
+    外して全年齢のコマにする(作り直さない。子どもに邪魔される筋なども、そのまま残る)。
+    戻り値は(直したコマ, 全年齢にしたコマの番号(1始まり))。
+    """
+    result: list[dict[str, Any]] = []
+    softened: list[int] = []
+    for index, panel in enumerate(panels, start=1):
+        actions = panel.get("actions") or {}
+        outfits = panel.get("outfits") or {}
+        tags = ", ".join([str(panel.get("prompt_tags") or ""), *actions.values(), *outfits.values()])
+        if content_guard.is_sexual(tags) and any(name not in adults for name in panel.get("characters") or []):
+            panel = {
+                **panel,
+                "prompt_tags": all_ages_tags(str(panel.get("prompt_tags") or "")),
+                "actions": {name: all_ages_tags(t) for name, t in actions.items()},
+                "outfits": {name: all_ages_tags(t) for name, t in outfits.items()},
+            }
+            softened.append(index)
+        result.append(panel)
+    return result, softened
 
 
 def all_ages_members(members: list[dict[str, Any]]) -> list[dict[str, Any]]:

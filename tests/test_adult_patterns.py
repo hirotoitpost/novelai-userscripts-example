@@ -161,9 +161,9 @@ def test_draft_dataset_and_import_uses(client: TestClient) -> None:
     finally:
         conn.close()
 
-    # 漫画ドラフト: 成人キャラだけで使え、そのあいだは成人向けの決まりを入れる
+    # 漫画ドラフト: 成人キャラが登場するときに使え、そのあいだは成人向けの決まりを入れる
     with pytest.raises(HTTPException):
-        draft_routes._adult_patterns([play["id"]], [adult["id"], young["id"]])
+        draft_routes._adult_patterns([play["id"]], [young["id"]])
     assert draft_routes._adult_patterns([play["id"]], [adult["id"]])[0]["name"] == "後背位"
     assert draft_routes._adult_patterns([], [young["id"]]) == []
     token = manga_draft._ADULT_RULES.set(True)
@@ -191,3 +191,56 @@ def test_draft_dataset_and_import_uses(client: TestClient) -> None:
     suggested = manga_import._pattern_suggestions({"adult": 1}, pages, {"0-0-0": ["どん"]})
     assert suggested["0-0-0"][0] == "どん" and "ぱんっぱんっ" in suggested["0-0-0"] and "0-1-0" not in suggested
     assert manga_import._pattern_suggestions({"adult": 0}, pages, {}) == {}
+
+
+def test_family_stories_with_children(client: TestClient) -> None:
+    from fastapi import HTTPException
+
+    from python import manga_similar, minor_guard
+    from python.character_sheet import minor_tags
+    from python.routes import manga_draft as draft_routes
+
+    # 年齢を入れた成人キャラは、本文・メモの家族の話(娘は小学生 など)で未成年扱いにしない
+    mother = {"name": "美咲", "age": 32, "is_adult": 1, "notes": "高校生の娘がいる", "appearance_tags": "1girl"}
+    story = "美咲の娘は小学生。美咲は高校生の連れ子と暮らしている。"
+    assert minor_guard.character_age(mother, story).state == minor_guard.ADULT
+    assert minor_guard.decide("sex", [mother], story).action == minor_guard.OK
+    # 年齢を入れていなければ、これまでどおり本文の語を手がかりにする。キャラシートのタグは成人でも見る
+    assert minor_guard.character_age({**mother, "age": None}, story).state == minor_guard.MINOR
+    assert minor_guard.character_age({**mother, "appearance_tags": "1girl, loli"}, story).state == minor_guard.MINOR
+
+    # 子ども・連れ子のいる物語でも、成人キャラがいれば R18 のパターンを使える
+    play = client.get("/api/adult-patterns").json()["patterns"]["play"][0]
+    conn = db.get_connection()
+    try:
+        adult = db.save_character(conn, "美咲", "1girl", None)
+        db.update_character_sheet(conn, adult["id"], {"age": 32, "is_adult": 1})
+        child = db.save_character(conn, "陽菜", "1girl", None)
+        db.update_character_sheet(conn, child["id"], {"age": 16, "is_minor": 1})
+    finally:
+        conn.close()
+    assert draft_routes._adult_patterns([play["id"]], [adult["id"], child["id"]])
+    with pytest.raises(HTTPException):
+        draft_routes._adult_patterns([play["id"]], [child["id"]])
+    # 性的なコマに成人以外が描かれていれば、作り直さず、そのコマを全年齢にする
+    panels = [
+        {"characters": ["美咲"], "prompt_tags": "bedroom, sex", "actions": {"美咲": "moaning"}},
+        {"characters": ["美咲", "陽菜"], "prompt_tags": "bedroom, sex, nude", "actions": {"陽菜": "surprised"}},
+        {"characters": ["陽菜"], "prompt_tags": "kitchen", "actions": {}},
+    ]
+    fixed, softened = minor_guard.soften_sexual_panels(panels, draft_routes._adult_names([adult["id"], child["id"]]))
+    assert softened == [2]
+    assert fixed[0]["prompt_tags"] == "bedroom, sex" and fixed[1]["prompt_tags"] == "bedroom" and fixed[2] == panels[2]
+
+    # R18 の取り込み: 未成年を思わせるタグを外すのは性的なコマだけ(日常のコマの赤ちゃんは残す)
+    script = [{"prompt_tags": "", "characters": [], "actions": {}, "lines": []} for _ in range(2)]
+    imported = [
+        {"detailed": True, "scene_tags": ["living room", "baby"], "action_tags": ["holding baby"], "lines": ["x"]},
+        {"detailed": True, "scene_tags": ["bed", "sex", "child"], "action_tags": [], "lines": ["x"]},
+    ]
+    out = manga_similar.apply_import_panels(script, imported, adult=True)
+    assert "baby" in out[0]["prompt_tags"] and "sex" in out[1]["prompt_tags"] and "child" not in out[1]["prompt_tags"]
+
+    # young は、young woman・young adult などの成人を表す組み合わせには当てない
+    assert minor_tags("young woman, young adult, young man") == []
+    assert minor_tags("young girl") == ["young"] and minor_tags("1girl, young") == ["young"]

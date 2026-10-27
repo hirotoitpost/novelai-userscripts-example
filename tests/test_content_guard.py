@@ -74,7 +74,7 @@ def test_default_behaviour_is_unchanged(client: TestClient) -> None:
     assert blocked_tags("one-piece swimsuit, sports bra, {{nude}}, nipple") == ["bra", "nipple", "nude"]
     assert blocked_tags("sexy, cumulonimbus, swimwear, nude_body") == []
     assert blocked_tags("maid outfit, mermaid", ["maid"], include_core=False) == ["maid"]
-    assert minor_tags("JK, student council, young woman") == ["jk", "student", "young"]
+    assert minor_tags("JK, student council, young woman, young girl") == ["jk", "student", "young"]
     assert minor_tags("lolita fashion, petite, adult") == []
     assert sheet_negative(CHARACTER).endswith("short hair, nsfw, nude, underwear")
     assert "child, loli, shota, young, teenage" in sheet_negative(CHARACTER, r18=True)
