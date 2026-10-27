@@ -435,6 +435,8 @@ export interface CharacterDatasetRequest {
   /** シチュエーション(1枚ごとにどれか1つ)と状態(容姿を一時的に変える) */
   situation_ids?: number[]
   state_ids?: number[]
+  /** R18 のプレイ(/api/adult-patterns。1枚ごとに順に1つ)。R18 で、年齢を入れた成人キャラだけ */
+  adult_pattern_ids?: number[]
   /** 状態を選んだとき、状態なし(ふだんの体)の枚も作るか */
   include_plain_state?: boolean
   /** 状態の作り方: 状態のタグで生成 / ふだんの体の絵から部位だけを描き直す */

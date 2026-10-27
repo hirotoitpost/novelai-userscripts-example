@@ -320,6 +320,41 @@ class BodyBaseOptionRequest(BaseModel):
     rear_tags: Optional[str] = Field(None, max_length=500)
 
 
+class AdultPatternRequest(BaseModel):
+    """
+    R18 のパターン(adult_patterns.py)。kind は play(プレイ) / scenario(シナリオの型)。tags はプロンプトに入れるタグ、
+    description はシナリオの流れ(文章モデルに渡す)、sfx は描き文字・lines はセリフの言い回しの例(1行に1つ)。
+    """
+
+    kind: str
+    name: str = Field(min_length=1, max_length=60)
+    tags: str = Field("", max_length=1000)
+    description: str = Field("", max_length=1000)
+    sfx: str = Field("", max_length=1000)
+    lines: str = Field("", max_length=2000)
+
+
+class AdultPatternOrderRequest(BaseModel):
+    kind: str
+    ids: list[int] = Field(max_length=500)
+
+
+class AdultPatternImageRequest(BaseModel):
+    """プレイの参照画像(data URL か base64)。"""
+
+    data: str = Field(min_length=1, max_length=30_000_000)
+
+
+class AdultPatternImageTagsRequest(BaseModel):
+    tags: str = Field("", max_length=1000)
+
+
+class AdultPatternApplyRequest(BaseModel):
+    """場面に R18 のプレイを入れる(プレイのタグを場面のタグに足し、描き文字が無ければ入れる)。"""
+
+    pattern_id: int
+
+
 class WardrobePartRequest(BaseModel):
     """
     衣装の部品(wardrobe.py)。slot は部位(dress / outer / top / bottom / swimwear / legwear / footwear / headwear /
@@ -463,6 +498,8 @@ class CharacterDatasetRequest(BaseModel):
     state_ids: list[int] = Field(default_factory=list, max_length=20)
     # 状態を選んだとき、状態なし(ふだんの体)の枚も作るか
     include_plain_state: bool = True
+    # R18 のプレイ(adult_patterns の id。1枚ごとに順に1つ)。R18 で、年齢(18 歳以上)を入れた成人キャラだけ
+    adult_pattern_ids: list[int] = Field(default_factory=list, max_length=30)
     # 状態の作り方。prompt: 状態のタグで生成する / inpaint: ふだんの体で生成した絵から、状態の部位だけを描き直す
     # (顔・服・背景が同じで体だけが違う組ができる。部位の無い状態はプロンプトで作る)。inpaint のときの count は、
     # ふだんの体の絵の枚数(1枚ごとに、選んだ状態の数だけ描き直しの絵が増える)
@@ -944,6 +981,8 @@ class MangaDraftOutlineRequest(BaseModel):
     series_id: Optional[int] = Field(None, description="続編にするシリーズ(メモリと既刊のあらすじを前提にする)")
     # 構成の参考にする取り込み(/api/manga-import)。コマ運び(構図・人数・セリフ量・役割)だけを使う
     import_id: Optional[int] = None
+    # R18 のパターン(シナリオの型・プレイ)。選ぶと成人向けの決まりで作る(キャラが全員、年齢を入れた成人のときだけ)
+    adult_pattern_ids: list[int] = Field(default_factory=list, max_length=10)
 
 
 class MangaDraftEpisodeRequest(BaseModel):
@@ -955,6 +994,7 @@ class MangaDraftEpisodeRequest(BaseModel):
     series_id: Optional[int] = None
     import_id: Optional[int] = None
     previous_panels: list[MangaDraftPanel] = Field(default_factory=list, max_length=8)
+    adult_pattern_ids: list[int] = Field(default_factory=list, max_length=10)
 
 
 class MangaDraftCreateRequest(BaseModel):

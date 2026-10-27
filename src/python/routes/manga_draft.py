@@ -148,9 +148,38 @@ def _notes(series_memory: str, notes: str) -> str:
     return "\n".join(part for part in (series_memory.strip(), notes.strip()) if part)
 
 
+def _adult_patterns(pattern_ids: list[int], character_ids: list[int]) -> list[dict[str, Any]]:
+    """
+    選んだ R18 のパターン。選んだときは、キャラが全員、年齢(18 歳以上)を入れた成人でなければ止める。
+    """
+    if not pattern_ids:
+        return []
+    from ..content_guard import is_defined_adult
+    from ..db import get_adult_pattern
+
+    conn = get_connection()
+    try:
+        patterns = [get_adult_pattern(conn, i) for i in pattern_ids]
+        rows = [get_character(conn, i) for i in character_ids]
+    finally:
+        conn.close()
+    if any(p is None for p in patterns):
+        raise HTTPException(status_code=404, detail="R18 のパターンが見つかりません。")
+    minors = [r["name"] for r in rows if r is not None and not is_defined_adult(r)]
+    if minors:
+        raise HTTPException(
+            status_code=422,
+            detail=f"R18 のパターンは、年齢(18 歳以上)を入れた成人キャラだけで使えます: {', '.join(minors)}",
+        )
+    return [p for p in patterns if p is not None]
+
+
 @router.post("/outlines")
 async def post_outlines(req: MangaDraftOutlineRequest, client: ClientDep) -> dict[str, Any]:
-    """大枠シナリオ案を3つ作る(GLM-4.6 で数十秒)。"""
+    """大枠シナリオ案を3つ作る(GLM-4.6 で数十秒)。R18 のパターンを選ぶと、成人向けの決まりで作る。"""
+    from ..adult_patterns import draft_notes
+
+    patterns = _adult_patterns(req.adult_pattern_ids, req.character_ids)
     characters = _characters(req.character_ids, req.profiles)
     memory, recaps, next_volume = _series_context(req.series_id)
     structure = _import_structure(req.import_id)
@@ -163,9 +192,10 @@ async def post_outlines(req: MangaDraftOutlineRequest, client: ClientDep) -> dic
             req.genre,
             characters,
             episodes,
-            notes=_notes(memory, req.notes),
+            notes=_notes(memory, _notes(req.notes, draft_notes(patterns))),
             previous=recaps,
             structure=structure,
+            adult=bool(patterns),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -179,9 +209,15 @@ async def post_outlines(req: MangaDraftOutlineRequest, client: ClientDep) -> dic
 
 @router.post("/episode")
 async def post_episode(req: MangaDraftEpisodeRequest, client: ClientDep) -> dict[str, Any]:
-    """大枠の1話分を4コマの台本にする(GLM-4.6 で十数秒)。直前の話のコマを渡すと流れをつなげる。"""
+    """
+    大枠の1話分を4コマの台本にする(GLM-4.6 で十数秒)。直前の話のコマを渡すと流れをつなげる。
+    R18 のパターンを選ぶと、成人向けの決まりで、パターンの描き文字・言い回しを例にして作る。
+    """
+    from ..adult_patterns import draft_notes
+
     if req.episode_index >= len(req.outline.episodes):
         raise HTTPException(status_code=400, detail="その話は大枠にありません。")
+    patterns = _adult_patterns(req.adult_pattern_ids, req.character_ids)
     characters = _characters(req.character_ids, req.profiles)
     memory, _, _ = _series_context(req.series_id)
     structure = _import_structure(req.import_id)
@@ -191,9 +227,10 @@ async def post_episode(req: MangaDraftEpisodeRequest, client: ClientDep) -> dict
             req.outline.model_dump(),
             req.episode_index,
             characters,
-            notes=_notes(memory, req.notes),
+            notes=_notes(memory, _notes(req.notes, draft_notes(patterns))),
             previous_panels=[p.model_dump() for p in req.previous_panels],
             structure=structure[req.episode_index] if req.episode_index < len(structure) else None,
+            adult=bool(patterns),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))

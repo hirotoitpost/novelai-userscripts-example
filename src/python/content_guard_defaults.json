@@ -177,6 +177,14 @@
       "value": "never use tags implying minors (child, loli, shota, school uniform, student, classroom)"
     },
     {
+      "key": "draft.adult_content_rule",
+      "group": "漫画の下書き・似た漫画",
+      "label": "漫画の下書きの決まり(R18 のパターンを選んだとき)",
+      "description": "漫画の下書きで R18 のパターン(プレイ・シナリオの型)を選んだときに、大枠シナリオと台本の指示文に入れる決まり。キャラが全員、年齢(18 歳以上)を入れた成人のときだけ使われる。",
+      "kind": "text",
+      "value": "成人向け。登場人物は全員18歳以上の成人として描き、学生や子どもとして描かない。性的な場面は合意のある関係として描く"
+    },
+    {
       "key": "draft.content_rule",
       "group": "漫画の下書き・似た漫画",
       "label": "漫画の下書きの決まり(LLM への指示)",

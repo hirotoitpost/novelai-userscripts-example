@@ -205,6 +205,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/adult-patterns')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/adult-patterns')}
+          >
+            <div className="home-card-icon">🔞</div>
+            <h2>R18 のパターン</h2>
+            <p>成人向けの作品のプレイ・シナリオの型と、その描き文字・言い回し・参照画像を登録します(成人キャラだけで使えます)。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/chunks')}
             role="button"
             tabIndex={0}

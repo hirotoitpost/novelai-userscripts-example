@@ -90,6 +90,7 @@ from ..character_sheet import (
     split_prompt,
 )
 from ..models import (
+    AdultPatternApplyRequest,
     ApplySceneSituationRequest,
     CastPresetRequest,
     CharacterNewRequest,
@@ -2651,6 +2652,45 @@ async def apply_scene_situation(scene_id: int, req: ApplySceneSituationRequest) 
         )
     finally:
         conn.close()
+
+
+@router.post("/scenes/{scene_id}/adult-pattern")
+async def apply_scene_adult_pattern(scene_id: int, req: AdultPatternApplyRequest) -> dict[str, Any]:
+    """
+    R18 のパターン(プレイ・シナリオの型)のタグを、シーンのタグに足す。プレイに参照画像があれば、使うたびに1枚ずつ
+    順に、その画像から読み取ったタグも足す。シーンに描き文字が無ければ、パターンの描き文字の最初の1つを入れる。
+    シーンの登場キャラが全員、年齢(18 歳以上)を入れた成人のときだけ使える。書き込むだけなので、あとから手で直せる。
+    """
+    from ..adult_patterns import lines_of, play_tags
+    from ..content_guard import is_defined_adult
+    from ..db import count_adult_pattern_use, get_adult_pattern
+
+    conn = get_connection()
+    try:
+        scene = get_scene(conn, scene_id)
+        if scene is None:
+            raise HTTPException(status_code=404, detail="scene not found")
+        pattern = get_adult_pattern(conn, req.pattern_id)
+        if pattern is None:
+            raise HTTPException(status_code=404, detail="R18 のパターンが見つかりません。")
+        cast = characters_by_scene(conn, scene["story_id"]).get(scene_id, [])
+        if not cast:
+            raise HTTPException(status_code=422, detail="R18 のパターンは、登場キャラを割り当てたシーンで使えます。")
+        minors = [c["name"] for c in cast if not is_defined_adult(c)]
+        if minors:
+            raise HTTPException(
+                status_code=422,
+                detail=f"R18 のパターンは、年齢(18 歳以上)を入れた成人キャラだけのシーンで使えます: {', '.join(minors)}",
+            )
+        tags = play_tags(pattern, count_adult_pattern_use(conn, pattern["id"]))
+        update_scene_content(conn, scene_id, draft_prompt_tags=join_tags(scene["draft_prompt_tags"], tags))
+        sfx = json.loads(scene["sfx"]) if scene.get("sfx") else []
+        words = lines_of(pattern.get("sfx", ""))
+        if not sfx and words:
+            update_scene_sfx(conn, scene_id, words[:1])
+    finally:
+        conn.close()
+    return {"tags": tags, "sfx": words}
 
 
 # 終わったジョブを一覧(/jobs)に残す時間。再読み込みの前後で終わった処理も「完了」と出せるように

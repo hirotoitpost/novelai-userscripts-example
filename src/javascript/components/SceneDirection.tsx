@@ -46,6 +46,16 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [outfits, setOutfits] = useState<Outfit[]>([])
+  // R18 のプレイ(/api/adult-patterns)。年齢を入れた成人キャラだけのシーンで使える(サーバーが判定する)
+  const [plays, setPlays] = useState<{ id: number; name: string; tags: string }[]>([])
+  const [playId, setPlayId] = useState<number | ''>('')
+
+  useEffect(() => {
+    fetch(`${apiOrigin}/api/adult-patterns`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setPlays(d ? d.patterns.play : []))
+      .catch(() => setPlays([]))
+  }, [apiOrigin])
 
   useEffect(() => {
     fetch(`${apiOrigin}/api/wardrobe/outfits`)
@@ -96,6 +106,19 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
     })
     if (!res.ok) throw new Error(await errorDetail(res))
     return '保存しました'
+  })
+
+  const applyPlay = () => run(async () => {
+    if (playId === '') return ''
+    const res = await fetch(`${apiOrigin}/api/story/scenes/${sceneId}/adult-pattern`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pattern_id: playId }),
+    })
+    if (!res.ok) throw new Error(await errorDetail(res))
+    const data: { tags: string } = await res.json()
+    setPlayId('')
+    return `シーンのタグに足しました: ${data.tags}`
   })
 
   const applySituation = () => run(async () => {
@@ -195,6 +218,21 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
           </button>
         )}
       </div>
+      {plays.length > 0 && (
+        <div className="scene-dir-situation">
+          <select value={playId} disabled={off || dirty} aria-label="R18 のプレイを選ぶ"
+            onChange={e => setPlayId(e.target.value ? Number(e.target.value) : '')}>
+            <option value="">R18 のプレイを足す(年齢を入れた成人キャラだけ)…</option>
+            {plays.map(p => <option key={p.id} value={p.id} title={p.tags}>{p.name}</option>)}
+          </select>
+          {playId !== '' && (
+            <button type="button" disabled={off} onClick={() => void applyPlay()}
+              title="プレイのタグ(参照画像があれば、その1枚から読み取ったタグも)をシーンのタグに足し、描き文字が無ければ入れます">
+              足す
+            </button>
+          )}
+        </div>
+      )}
       {dirty && <p className="scene-dir-hint">シチュエーションを書き込む前に、変更を保存するか元に戻してください。</p>}
       {note && <p className="scene-dir-note" role="status">{note}</p>}
       {error && <p className="scene-dir-error" role="alert">{error}</p>}

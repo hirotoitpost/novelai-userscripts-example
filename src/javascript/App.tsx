@@ -18,6 +18,7 @@ import MangaDraft from './pages/MangaDraft'
 import MangaImport from './pages/MangaImport'
 import BodyBaseSettings from './pages/BodyBaseSettings'
 import WardrobeSettings from './pages/WardrobeSettings'
+import AdultPatterns from './pages/AdultPatterns'
 import CharacterDataset from './pages/CharacterDataset'
 import Characters from './pages/Characters'
 import Chunks from './pages/Chunks'
@@ -77,6 +78,10 @@ function AppRoutes() {
       <Route
         path="/wardrobe-settings"
         element={<ProtectedRoute><WardrobeSettings /></ProtectedRoute>}
+      />
+      <Route
+        path="/adult-patterns"
+        element={<ProtectedRoute><AdultPatterns /></ProtectedRoute>}
       />
       <Route
         path="/characters"
