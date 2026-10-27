@@ -29,13 +29,20 @@
       "key": "dataset.blocked_tags",
       "group": "キャラ別データセット",
       "label": "全年齢で止めるタグ(基本のガード)",
-      "description": "全年齢のデータセット生成・取り込みで、これに当たるタグがあると 422 で止める。ガードプロファイルはこれへの上乗せ。",
+      "description": "全年齢のデータセット生成・取り込みで、これに当たるタグがあると 422 で止める。ガードプロファイルはこれへの上乗せ。水着は一般誌の水着の場面と同じく全年齢で扱う(水着素体・衣装の水着。2026-10)。",
       "kind": "patterns",
       "match": "word",
       "value": [
         "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
-        "underwear", "lingerie", "panties", "bra", "brassiere", "swimsuit", "bikini",
+        "underwear", "lingerie", "panties", "bra", "brassiere",
         "see-through", "cleavage", "pussy", "penis", "cum", "bondage"
+      ],
+      "previous": [
+        [
+          "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
+          "underwear", "lingerie", "panties", "bra", "brassiere", "swimsuit", "bikini",
+          "see-through", "cleavage", "pussy", "penis", "cum", "bondage"
+        ]
       ]
     },
     {

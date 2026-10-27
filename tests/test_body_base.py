@@ -306,7 +306,7 @@ def test_outfit_is_drawn_over_the_a_pose(client: TestClient, tmp_path: Path, mon
     monkeypatch.setattr(body_rig, "outfit_inpaint_mask", lambda img: (Image.new("RGB", img.size, "white"), points))
     monkeypatch.setattr(body_rig, "detect", lambda img: (None, points))
     # 全年齢で止めるタグ・未成年を示すタグは着せられない
-    assert client.post(url, json={"outfit_tags": "bikini"}).status_code == 422
+    assert client.post(url, json={"outfit_tags": "lingerie"}).status_code == 422
     assert client.post(url, json={"outfit_tags": "school uniform"}).status_code == 422
     res = client.post(url, json={"outfit_tags": "white long-sleeved blouse, navy skirt"})
     assert res.status_code == 200, res.text

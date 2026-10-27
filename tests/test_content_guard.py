@@ -63,7 +63,7 @@ def test_defaults_are_seeded_into_the_db(client: TestClient, tmp_path: Path) -> 
         conn.close()
     assert stored == {r["key"] for r in rules}
     by_key = {r["key"]: r for r in rules}
-    assert len(by_key["dataset.blocked_tags"]["value"]) == 20
+    assert len(by_key["dataset.blocked_tags"]["value"]) == 18
     assert len(by_key["dataset.minor_tags"]["value"]) == 23
     assert len(by_key["scene.sexual_tags"]["value"]) == 19
     assert by_key["library.adult_text_min_hits"]["value"] == 3
@@ -71,7 +71,7 @@ def test_defaults_are_seeded_into_the_db(client: TestClient, tmp_path: Path) -> 
 
 def test_default_behaviour_is_unchanged(client: TestClient) -> None:
     # キャラ別データセット
-    assert blocked_tags("one-piece swimsuit, sports bra, {{nude}}, nipple") == ["bra", "nipple", "nude", "swimsuit"]
+    assert blocked_tags("one-piece swimsuit, sports bra, {{nude}}, nipple") == ["bra", "nipple", "nude"]
     assert blocked_tags("sexy, cumulonimbus, swimwear, nude_body") == []
     assert blocked_tags("maid outfit, mermaid", ["maid"], include_core=False) == ["maid"]
     assert minor_tags("JK, student council, young woman") == ["jk", "student", "young"]
@@ -175,10 +175,12 @@ def test_validation(client: TestClient) -> None:
 def test_reset(client: TestClient) -> None:
     put(client, "dataset.blocked_tags", ["nude"])
     put(client, "general.safe_negative", "nsfw")
-    assert blocked_tags("bikini") == []
+    assert blocked_tags("lingerie") == []
     restored = client.delete("/api/content-guard/rules/dataset.blocked_tags").json()
-    assert not restored["modified"] and len(restored["value"]) == 20
-    assert blocked_tags("bikini") == ["bikini"]
+    assert not restored["modified"] and len(restored["value"]) == 18
+    assert blocked_tags("lingerie") == ["lingerie"]
+    # 水着は全年齢で扱う(水着素体・衣装の水着)
+    assert blocked_tags("bikini, one-piece swimsuit") == []
     assert content_guard.get("general.safe_negative") == "nsfw"
     rules = client.post("/api/content-guard/reset").json()["rules"]
     assert not any(r["modified"] for r in rules)
