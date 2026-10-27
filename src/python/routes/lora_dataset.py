@@ -874,10 +874,10 @@ def _check_body_base(req: BodyBaseSaveRequest) -> None:
             status_code=422,
             detail=f"素体の足すタグに、性的な場面のタグは入れられません(裸は種類で選びます): {', '.join(found)}",
         )
-    if req.kind == "suit":
+    if req.kind != "nude":
         blocked = blocked_tags(req.extra_tags)
         if blocked:
-            raise HTTPException(status_code=422, detail=f"素体スーツ(全年齢)では使えないタグです: {', '.join(blocked)}")
+            raise HTTPException(status_code=422, detail=f"全年齢の素体では使えないタグです: {', '.join(blocked)}")
     else:
         minors = body_base.minor_words(req.extra_tags)
         if minors:
@@ -1116,7 +1116,7 @@ async def assign_body_base(character_id: int, req: CharacterBodyBaseRequest, roo
 async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, client: ClientDep) -> StreamingResponse:
     """
     キャラに当てた素体で、部位を1枚ずつ描く(SSE で1枚ごとに知らせる)。キャラの顔・髪・目+素体の体+部位のタグ+無地の背景。
-    素体スーツは全年齢の検査、裸の素体は R18 の検査(成人キャラ・未成年を示すタグなし)と、成長段階の検査を通す。
+    素体スーツ・水着素体は全年齢の検査、裸の素体は R18 の検査(成人キャラ・未成年を示すタグなし)と、成長段階の検査を通す。
     描いた絵は <データセットのフォルダ>/body_base(_r18)/<素体のID>_<部位>.png に、キャプションと一緒に置く(上書き)。
     """
     character = _load_character(character_id)

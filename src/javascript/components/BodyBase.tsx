@@ -8,8 +8,10 @@ import './BodyBase.css'
 /**
  * キャラシートの素体。服を着せる前の体(モデリングでいう素体)を、キャラの顔・髪・目のまま部位ごとに描いて見る。
  * 素体(肌の色・体格・身長・プロポーション など)はキャラとは別に一覧で持ち、ここで作る・直す。キャラにはどれを当てるか選ぶ。
- * 素体スーツ(全年齢)はどのキャラにも、裸の素体は成人キャラだけに当てられる(サーバーが判定する)。
+ * 素体スーツ・水着素体(全年齢)はどのキャラにも、裸の素体は成人キャラだけに当てられる(サーバーが判定する)。
  */
+
+type BaseKind = 'suit' | 'swimsuit' | 'nude'
 
 type Field = 'sex' | 'skin_tone' | 'build' | 'height' | 'proportion' | 'chest' | 'muscle'
 
@@ -19,14 +21,14 @@ interface Options {
   /** 設定の項目(プルダウン)。選択肢は DB にあり、素体の設定のページで編集する */
   fields: { key: Field; label: string }[]
   options: Record<Field, Choice[]>
-  kinds: { value: 'suit' | 'nude'; label: string }[]
+  kinds: { value: BaseKind; label: string }[]
   groups: { id: string; label: string }[]
 }
 
 interface Base extends Record<Field, string> {
   id: number
   name: string
-  kind: 'suit' | 'nude'
+  kind: BaseKind
   extra_tags: string
   negative_tags: string
   notes: string
@@ -50,7 +52,7 @@ interface CharacterBody {
   body_tags: string
   nude_allowed: boolean
   nude_reason: string | null
-  /** 未成年の手がかりがあるキャラ。素体スーツを控えめに描く(胸・曲線の設定を使わない) */
+  /** 未成年の手がかりがあるキャラ。素体スーツ・水着素体を控えめな服で描く(体型はキャラのまま) */
   modest: boolean
   parts: Part[]
 }
@@ -331,7 +333,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
     setEditing(null)
     loadBases()
     // 作った素体は、まだ素体の無いキャラにそのまま当てる
-    if (!id && !body?.base && (saved.kind === 'suit' || body?.nude_allowed)) await assign(saved.id)
+    if (!id && !body?.base && (saved.kind !== 'nude' || body?.nude_allowed)) await assign(saved.id)
     else loadBody()
   }
 
@@ -420,7 +422,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       <h3>{characterName}の素体</h3>
       <p className="lora-hint">
         服を着せる前の体を、キャラの顔・髪・目のまま部位ごとに描きます。体型と肌の色は、キャラシートの容姿の代わりに素体の設定を使います。
-        素体スーツはどのキャラにも、裸の素体(デッサン人形の程度)は成人キャラにだけ当てられます。
+        素体スーツ・水着素体はどのキャラにも、裸の素体(性器は描かない)は成人キャラにだけ当てられます。
       </p>
 
       <div className="bdb-assign">
@@ -442,7 +444,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
         {body?.base && <p className="lora-hint">体のタグ: {body.body_tags || '(指定なし)'}</p>}
         {body && !body.nude_allowed && <p className="lora-hint">裸の素体は当てられません: {body.nude_reason}</p>}
         {body?.modest && (
-          <p className="lora-hint">未成年の手がかりがあるキャラなので、素体スーツは胸・体の曲線の設定を使わず、控えめに描きます。</p>
+          <p className="lora-hint">未成年の手がかりがあるキャラなので、素体スーツ・水着素体は肌の出る所を少なくした服で描きます(体型はキャラのまま)。</p>
         )}
       </div>
 

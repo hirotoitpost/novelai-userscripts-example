@@ -288,12 +288,12 @@ class FaceSheetRequest(BaseModel):
 
 class BodyBaseSaveRequest(BaseModel):
     """
-    素体(body_base.py)を作る・書き換える。kind は suit(素体スーツ) / nude(裸の素体・成人キャラだけ)。
+    素体(body_base.py)を作る・書き換える。kind は suit(素体スーツ) / swimsuit(水着素体) / nude(裸の素体・成人キャラだけ)。
     sex 以下の選択肢の値は GET /api/lora-dataset/body-bases/options にある(空は指定しない)。
     """
 
     name: str = Field(min_length=1, max_length=80)
-    kind: Literal["suit", "nude"] = "suit"
+    kind: Literal["suit", "swimsuit", "nude"] = "suit"
     sex: Literal["female", "male"] = "female"
     skin_tone: str = ""
     build: str = ""

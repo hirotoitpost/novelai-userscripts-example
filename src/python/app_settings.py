@@ -126,6 +126,23 @@ SETTINGS: tuple[Setting, ...] = (
         "matte fabric, no shoes",
     ),
     Setting(
+        "body_base.swimsuit_tags",
+        "素体",
+        "水着素体のタグ",
+        "水着素体(全年齢)を描くときの水着のタグ。上下のセパレートにする(see-through で層に分けるとき、上下つながった服では"
+        "腰の層が出なかった。2026-10)。",
+        "text",
+        "plain navy bikini, matte fabric, barefoot",
+    ),
+    Setting(
+        "body_base.modest_swimsuit_tags",
+        "素体",
+        "水着素体のタグ(控えめに描くキャラ)",
+        "未成年の手がかりがあるキャラの水着素体のタグ。肌の出る所を少なくしたセパレート(タンキニの上と水着の短パン)。",
+        "text",
+        "plain navy tankini, swim shorts, matte fabric, barefoot",
+    ),
+    Setting(
         "blender.path",
         "素体の2Dモデル(Blender)",
         "Blender の実行ファイル",
