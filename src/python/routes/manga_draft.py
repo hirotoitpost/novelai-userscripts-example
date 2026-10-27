@@ -150,7 +150,8 @@ def _notes(series_memory: str, notes: str) -> str:
 
 def _adult_patterns(pattern_ids: list[int], character_ids: list[int]) -> list[dict[str, Any]]:
     """
-    選んだ R18 のパターン。選んだときは、キャラが全員、年齢(18 歳以上)を入れた成人でなければ止める。
+    選んだ R18 のパターン。年齢(18 歳以上)を入れた成人キャラが1人もいなければ止める。子ども・連れ子など成人でない
+    キャラがいてもよい(性的なコマには出さないよう指示し、出ていれば台本のそのコマを全年齢にする。_softened)。
     """
     if not pattern_ids:
         return []
@@ -165,13 +166,24 @@ def _adult_patterns(pattern_ids: list[int], character_ids: list[int]) -> list[di
         conn.close()
     if any(p is None for p in patterns):
         raise HTTPException(status_code=404, detail="R18 のパターンが見つかりません。")
-    minors = [r["name"] for r in rows if r is not None and not is_defined_adult(r)]
-    if minors:
+    if not any(r is not None and is_defined_adult(r) for r in rows):
         raise HTTPException(
             status_code=422,
-            detail=f"R18 のパターンは、年齢(18 歳以上)を入れた成人キャラだけで使えます: {', '.join(minors)}",
+            detail="R18 のパターンは、年齢(18 歳以上)を入れた成人キャラが登場する漫画で使えます。",
         )
     return [p for p in patterns if p is not None]
+
+
+def _adult_names(character_ids: list[int]) -> set[str]:
+    """年齢(18 歳以上)を入れた成人キャラの名前(台本のコマの人物は名前で書かれる)。"""
+    from ..content_guard import is_defined_adult
+
+    conn = get_connection()
+    try:
+        rows = [get_character(conn, i) for i in character_ids]
+    finally:
+        conn.close()
+    return {r["name"] for r in rows if r is not None and is_defined_adult(r)}
 
 
 @router.post("/outlines")
@@ -234,7 +246,12 @@ async def post_episode(req: MangaDraftEpisodeRequest, client: ClientDep) -> dict
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    return {"panels": panels}
+    softened: list[int] = []
+    if patterns:
+        from ..minor_guard import soften_sexual_panels
+
+        panels, softened = soften_sexual_panels(panels, _adult_names(req.character_ids))
+    return {"panels": panels, "softened": softened}
 
 
 @router.post("/create", response_model=StoryResponse)

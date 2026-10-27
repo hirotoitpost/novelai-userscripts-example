@@ -354,10 +354,19 @@ def apply_import_panels(
     for panel, source in zip(script, imported):
         if not source.get("detailed"):
             continue
-        scene = [t for t in source.get("scene_tags") or [] if _is_safe(t, adult)]
+        scene_tags, action_tags = source.get("scene_tags") or [], source.get("action_tags") or []
+        # R18 の取り込みで未成年を思わせるタグを外すのは、性的なコマだけ(日常のコマの赤ちゃん・子どもは残す)
+        sexual = adult and content_guard.is_sexual(", ".join([*scene_tags, *action_tags]))
+
+        def safe(tag: str) -> bool:
+            if not adult:
+                return _is_safe(tag)
+            return not (sexual and _is_minor(tag))
+
+        scene = [t for t in scene_tags if safe(t)]
         if scene:
             panel["prompt_tags"] = _clean_tags(", ".join([*scene, panel.get("prompt_tags") or ""]))
-        action = [t for t in source.get("action_tags") or [] if _is_safe(t, adult)]
+        action = [t for t in action_tags if safe(t)]
         drawn = panel.get("characters") or []
         used = {t.lower() for tags in (panel.get("actions") or {}).values() for t in tags.split(", ")}
         missing = [t for t in action if t.lower() not in used]
