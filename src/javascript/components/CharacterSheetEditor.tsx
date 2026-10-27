@@ -328,6 +328,10 @@ export default function CharacterSheetEditor({
                 外す
               </button>
             )}
+            {/* 過去の候補・コマ・データセットなど、このキャラの画像から選び直す(古い画像の整理も同じページ) */}
+            <a className={classes.button} href={`/character-images?character=${character.id}`}>
+              過去の画像から選び直す
+            </a>
           </div>
           {fileUrl && (
             <ReferenceCandidates

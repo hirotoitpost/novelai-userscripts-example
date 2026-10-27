@@ -18,6 +18,7 @@ import MangaDraft from './pages/MangaDraft'
 import MangaImport from './pages/MangaImport'
 import BodyBaseSettings from './pages/BodyBaseSettings'
 import WardrobeSettings from './pages/WardrobeSettings'
+import CharacterImages from './pages/CharacterImages'
 import AdultPatterns from './pages/AdultPatterns'
 import CharacterDataset from './pages/CharacterDataset'
 import Characters from './pages/Characters'
@@ -86,6 +87,10 @@ function AppRoutes() {
       <Route
         path="/characters"
         element={<ProtectedRoute><Characters /></ProtectedRoute>}
+      />
+      <Route
+        path="/character-images"
+        element={<ProtectedRoute><CharacterImages /></ProtectedRoute>}
       />
       <Route
         path="/chunks"
