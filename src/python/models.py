@@ -320,6 +320,49 @@ class BodyBaseOptionRequest(BaseModel):
     rear_tags: Optional[str] = Field(None, max_length=500)
 
 
+class WardrobePartRequest(BaseModel):
+    """
+    衣装の部品(wardrobe.py)。slot は部位(dress / outer / top / bottom / swimwear / legwear / footwear / headwear /
+    accessory)か、色(color)・柄(pattern)。value は衣装が持つ値(足すときだけ。省けば振る)。colorable は色・柄を付けられるか。
+    """
+
+    slot: str
+    value: Optional[str] = Field(None, max_length=40)
+    label: str = Field(min_length=1, max_length=40)
+    tags: str = Field("", max_length=500)
+    colorable: bool = True
+
+
+class WardrobePartOrderRequest(BaseModel):
+    """部位の部品の並べる順(部品の id の並び)。"""
+
+    slot: str
+    ids: list[int] = Field(max_length=200)
+
+
+class OutfitPart(BaseModel):
+    """衣装の1つの部品(部位・種類・色・柄。色・柄は空なら付けない)。"""
+
+    slot: str
+    value: str = Field(max_length=40)
+    color: str = Field("", max_length=40)
+    pattern: str = Field("", max_length=40)
+
+
+class CharacterOutfitRequest(BaseModel):
+    """キャラの衣装(部品と、自由入力のタグ)。"""
+
+    name: str = Field(min_length=1, max_length=40)
+    parts: list[OutfitPart] = Field(default_factory=list, max_length=30)
+    extra_tags: str = Field("", max_length=1000)
+
+
+class CharacterOutfitSelectRequest(BaseModel):
+    """普段の衣装を選ぶ(null で選ばない。普段の服装のタグはそのまま残す)。"""
+
+    outfit_id: Optional[int] = None
+
+
 class BodyBaseOptionOrderRequest(BaseModel):
     """項目の選択肢の並べる順(選択肢の id の並び)。"""
 
@@ -379,6 +422,8 @@ class BodyOutfitRequest(BaseModel):
     """
 
     outfit_tags: Optional[str] = Field(None, max_length=1000)
+    # 衣装(character_outfits の id)を着せる。そのときは outfit_tags の代わりに衣装のタグを使い、絵は衣装ごとにも残す
+    outfit_id: Optional[int] = None
     strength: float = Field(0.85, ge=0.3, le=1.0)
     # 関節のずれが大きければ、強さを下げて描き直す(回数は設定 body_base.check_attempts)
     auto_check: bool = True
@@ -1066,6 +1111,8 @@ class CharacterResponse(BaseModel):
     growth_order: Optional[int] = None
     # 年齢(歳)。入れてあれば年齢区分(未成年/成人)はこれで決まる
     age: Optional[int] = None
+    # 普段の衣装(character_outfits の id。衣装を選んでいなければ None)
+    outfit_id: Optional[int] = None
 
 
 class CharacterSheetRequest(BaseModel):

@@ -7,6 +7,7 @@ import binascii
 import io
 import json
 import re
+import shutil
 import sqlite3
 import time
 import zipfile
@@ -22,7 +23,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard
-from .. import see_through_remote
+from .. import see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -50,6 +51,8 @@ from .. import guard_password
 from ..guard_password import guard_token
 from ..sessions import require_admin
 from ..db import (
+    get_character_outfit,
+    list_wardrobe_parts,
     PerUser,
     add_body_base_option,
     add_dataset_variations,
@@ -1267,6 +1270,12 @@ def _outfit_paths(character: dict, base: dict, root_name: str) -> tuple[Path, Pa
     return folder / f"{base['id']}_a_pose_outfit.png", folder / f"{base['id']}_a_pose_outfit.json"
 
 
+def _outfit_copy_paths(character: dict, base: dict, root_name: str, outfit_id: int) -> tuple[Path, Path]:
+    """衣装(character_outfits)ごとに残す、服を着た Aポーズの絵と記録。いま2Dモデルに使う絵(_outfit_paths)とは別に持つ。"""
+    folder = _body_dir(character, base, root_name) / "outfits"
+    return folder / f"{base['id']}_a_pose_outfit_{outfit_id}.png", folder / f"{base['id']}_a_pose_outfit_{outfit_id}.json"
+
+
 def _outfit_entry(character: dict, base: dict, root_name: str) -> dict[str, Any] | None:
     image, meta = _outfit_paths(character, base, root_name)
     if not image.is_file():
@@ -1276,6 +1285,7 @@ def _outfit_entry(character: dict, base: dict, root_name: str) -> dict[str, Any]
         "path": image.relative_to(_PROJECT_ROOT).as_posix(),
         "updated": image.stat().st_mtime,
         "outfit_tags": info.get("outfit_tags", ""),
+        "outfit_id": info.get("outfit_id"),
         "drift": info.get("drift"),
         "drift_warn": info.get("drift") is not None and info["drift"] > body_rig.OUTFIT_DRIFT_WARN,
         "attempts": info.get("attempts", 1),
@@ -1435,6 +1445,16 @@ async def draw_body_outfit(character_id: int, req: BodyOutfitRequest, client: Cl
     if not source.is_file():
         raise HTTPException(status_code=422, detail="素体の「Aポーズ(関節の確認)」をまだ描いていません。先に描いてください。")
     outfit_tags = (req.outfit_tags if req.outfit_tags is not None else character.get("outfit_tags") or "").strip()
+    if req.outfit_id is not None:
+        conn = get_connection()
+        try:
+            outfit = get_character_outfit(conn, req.outfit_id)
+            catalog = wardrobe.catalog_map(list_wardrobe_parts(conn))
+        finally:
+            conn.close()
+        if outfit is None or outfit["character_id"] != character_id:
+            raise HTTPException(status_code=404, detail="衣装が見つかりません。")
+        outfit_tags = wardrobe.compose(outfit["parts"], outfit["extra_tags"], catalog)
     if not outfit_tags:
         raise HTTPException(status_code=422, detail="服のタグを入れてください(キャラシートの普段の服装が空です)。")
     found = sorted(set(blocked_tags(outfit_tags)) | set(body_base.option_problems(outfit_tags)))
@@ -1480,12 +1500,36 @@ async def draw_body_outfit(character_id: int, req: BodyOutfitRequest, client: Cl
             break
     drawn, drift, strength = best
 
-    out, meta = _outfit_paths(character, base, req.root_name)
-    drawn.save(out, "PNG")
-    meta.write_text(json.dumps(
-        {"outfit_tags": outfit_tags, "drift": drift, "strength": strength, "attempts": attempt + 1}, ensure_ascii=False,
-    ), encoding="utf-8")
+    record = json.dumps(
+        {"outfit_tags": outfit_tags, "outfit_id": req.outfit_id, "drift": drift, "strength": strength, "attempts": attempt + 1},
+        ensure_ascii=False,
+    )
+    targets = [_outfit_paths(character, base, req.root_name)]
+    if req.outfit_id is not None:
+        # 衣装ごとにも残す(衣装のタブで見る・あとで2Dモデルに使う絵へ戻す)
+        targets.append(_outfit_copy_paths(character, base, req.root_name, req.outfit_id))
+    for out, meta in targets:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        drawn.save(out, "PNG")
+        meta.write_text(record, encoding="utf-8")
     return _rig_entries(character, req.root_name)
+
+
+@router.post("/character/{character_id}/body-outfit/{outfit_id}/use")
+async def use_body_outfit(character_id: int, outfit_id: int, root_name: str = "training_data") -> dict[str, Any]:
+    """衣装ごとに残した、服を着た Aポーズの絵を、2Dモデルに使う絵にする(描き直さない)。"""
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    image, meta = _outfit_copy_paths(character, base, root_name, outfit_id)
+    if not image.is_file():
+        raise HTTPException(status_code=404, detail="この衣装はまだ素体に着せていません。")
+    out, out_meta = _outfit_paths(character, base, root_name)
+    shutil.copyfile(image, out)
+    if meta.is_file():
+        shutil.copyfile(meta, out_meta)
+    return _rig_entries(character, root_name)
 
 
 @router.post("/character/{character_id}/body-layers")

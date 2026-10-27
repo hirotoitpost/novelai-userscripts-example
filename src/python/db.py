@@ -817,6 +817,53 @@ def _init_schema(conn: sqlite3.Connection) -> None:
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (field, value, label, tags, rear_tags, order, now),
                 )
+    # 衣装(wardrobe.py): 部品(部位ごとの服の種類・色・柄)と、キャラごとの衣装。部品は衣装の設定のページで編集する。
+    # 初めて表を作るときだけ、はじめの部品を入れる(消したものが、起動のたびに戻らないように)
+    first_wardrobe = (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'wardrobe_parts'").fetchone() is None
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS wardrobe_parts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slot TEXT NOT NULL,
+            value TEXT NOT NULL,
+            label TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '',
+            colorable INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE (slot, value)
+        )
+        """
+    )
+    # parts は [{slot, value, color, pattern}](JSON)。キャラの普段の衣装は characters.outfit_id
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS character_outfits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            character_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            parts TEXT NOT NULL DEFAULT '[]',
+            extra_tags TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_character_outfits_character ON character_outfits(character_id)")
+    if first_wardrobe:
+        from .wardrobe import DEFAULT_PARTS
+
+        now = datetime.now(timezone.utc).isoformat()
+        for slot, choices in DEFAULT_PARTS.items():
+            for order, (value, label, tags, colorable) in enumerate(choices):
+                conn.execute(
+                    "INSERT INTO wardrobe_parts (slot, value, label, tags, colorable, sort_order, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (slot, value, label, tags, int(colorable), order, now),
+                )
     # 状態で描き直す部位(body_parts.PARTS のキー。none はプロンプトだけで作る)
     if "part" not in {row["name"] for row in conn.execute("PRAGMA table_info(dataset_states)")}:
         conn.execute("ALTER TABLE dataset_states ADD COLUMN part TEXT NOT NULL DEFAULT 'none'")
@@ -1015,6 +1062,8 @@ _CHARACTERS_EXTRA_COLUMNS = {
     "age": "INTEGER",
     # 当てる素体(body_bases の id)。キャラシートの「素体」で選ぶ
     "body_base_id": "INTEGER",
+    # 普段の衣装(character_outfits の id)。選ぶと、その衣装のタグを outfit_tags に入れる
+    "outfit_id": "INTEGER",
 }
 
 
@@ -2294,6 +2343,7 @@ def replace_story_character(conn: sqlite3.Connection, story_id: int, from_id: in
 
 
 def delete_character(conn: sqlite3.Connection, character_id: int) -> None:
+    conn.execute("DELETE FROM character_outfits WHERE character_id = ?", (character_id,))
     conn.execute("DELETE FROM characters WHERE id = ?", (character_id,))
     conn.commit()
 
@@ -3303,6 +3353,131 @@ DEFAULT_BODY_BASE_OPTIONS: dict[str, list[tuple[str, str, str, str | None]]] = {
         ("defined", "はっきり", "defined muscles, abs", None),
     ],
 }
+
+
+def list_wardrobe_parts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """衣装の部品(部位ごと、並べる順)。"""
+    return [dict(row) for row in conn.execute("SELECT * FROM wardrobe_parts ORDER BY slot, sort_order, id")]
+
+
+def get_wardrobe_part(conn: sqlite3.Connection, part_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM wardrobe_parts WHERE id = ?", (part_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_wardrobe_part(conn: sqlite3.Connection, slot: str, value: str, label: str, tags: str, colorable: bool) -> dict[str, Any]:
+    """部品を足す(その部位の最後に並べる)。同じ部位に同じ値があれば sqlite3.IntegrityError。"""
+    last = conn.execute("SELECT MAX(sort_order) FROM wardrobe_parts WHERE slot = ?", (slot,)).fetchone()[0]
+    cur = conn.execute(
+        "INSERT INTO wardrobe_parts (slot, value, label, tags, colorable, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (slot, value, label, tags, int(colorable), (last or 0) + 1, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return get_wardrobe_part(conn, int(cur.lastrowid or 0)) or {}
+
+
+def update_wardrobe_part(conn: sqlite3.Connection, part_id: int, label: str, tags: str, colorable: bool) -> dict[str, Any] | None:
+    """部品の名前・タグを書き換える(値は衣装が使っているので変えない)。"""
+    conn.execute(
+        "UPDATE wardrobe_parts SET label = ?, tags = ?, colorable = ? WHERE id = ?", (label, tags, int(colorable), part_id)
+    )
+    conn.commit()
+    return get_wardrobe_part(conn, part_id)
+
+
+def delete_wardrobe_part(conn: sqlite3.Connection, part_id: int) -> bool:
+    cur = conn.execute("DELETE FROM wardrobe_parts WHERE id = ?", (part_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def reorder_wardrobe_parts(conn: sqlite3.Connection, slot: str, ids: list[int]) -> None:
+    """部位の部品を ids の順に並べる(ほかの部位の id は無視する)。"""
+    for order, part_id in enumerate(ids):
+        conn.execute("UPDATE wardrobe_parts SET sort_order = ? WHERE id = ? AND slot = ?", (order, part_id, slot))
+    conn.commit()
+
+
+def outfits_using_part(conn: sqlite3.Connection, slot: str, value: str) -> list[str]:
+    """その部品を使っている衣装(「キャラ名: 衣装名」)。色・柄は、どの部位に付けていても使っているとみなす。"""
+    rows = conn.execute(
+        "SELECT o.name, o.parts, c.name AS character_name FROM character_outfits o"
+        " JOIN characters c ON c.id = o.character_id ORDER BY o.id"
+    )
+    used = []
+    for row in rows:
+        for part in json.loads(row["parts"] or "[]"):
+            hit = part.get(slot) == value if slot in ("color", "pattern") else (part.get("slot"), part.get("value")) == (slot, value)
+            if hit:
+                used.append(f"{row['character_name']}: {row['name']}")
+                break
+    return used
+
+
+def _outfit_row(row: sqlite3.Row) -> dict[str, Any]:
+    outfit = dict(row)
+    outfit["parts"] = json.loads(outfit["parts"] or "[]")
+    return outfit
+
+
+def list_character_outfits(conn: sqlite3.Connection, character_id: int) -> list[dict[str, Any]]:
+    """キャラの衣装(並べる順)。"""
+    rows = conn.execute(
+        "SELECT * FROM character_outfits WHERE character_id = ? ORDER BY sort_order, id", (character_id,)
+    )
+    return [_outfit_row(row) for row in rows]
+
+
+def list_all_outfits(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """全員の衣装(キャラ・並べる順)。"""
+    rows = conn.execute("SELECT * FROM character_outfits ORDER BY character_id, sort_order, id")
+    return [_outfit_row(row) for row in rows]
+
+
+def get_character_outfit(conn: sqlite3.Connection, outfit_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM character_outfits WHERE id = ?", (outfit_id,)).fetchone()
+    return _outfit_row(row) if row else None
+
+
+def save_character_outfit(
+    conn: sqlite3.Connection, outfit_id: int | None, character_id: int, name: str, parts: list[dict[str, Any]], extra_tags: str,
+) -> dict[str, Any]:
+    """衣装を作る(outfit_id が None。そのキャラの最後に並べる)か、書き換える。"""
+    now = datetime.now(timezone.utc).isoformat()
+    body = json.dumps(parts, ensure_ascii=False)
+    if outfit_id is None:
+        last = conn.execute(
+            "SELECT MAX(sort_order) FROM character_outfits WHERE character_id = ?", (character_id,)
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO character_outfits (character_id, name, parts, extra_tags, sort_order, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (character_id, name, body, extra_tags, (last or 0) + 1, now, now),
+        )
+        outfit_id = int(cur.lastrowid or 0)
+    else:
+        conn.execute(
+            "UPDATE character_outfits SET name = ?, parts = ?, extra_tags = ?, updated_at = ? WHERE id = ?",
+            (name, body, extra_tags, now, outfit_id),
+        )
+    conn.commit()
+    return get_character_outfit(conn, outfit_id) or {}
+
+
+def delete_character_outfit(conn: sqlite3.Connection, outfit_id: int) -> None:
+    """衣装を消す。普段の衣装だったキャラは、普段の衣装なし(服装のタグはそのまま残す)にする。"""
+    conn.execute("UPDATE characters SET outfit_id = NULL WHERE outfit_id = ?", (outfit_id,))
+    conn.execute("DELETE FROM character_outfits WHERE id = ?", (outfit_id,))
+    conn.commit()
+
+
+def set_character_outfit(conn: sqlite3.Connection, character_id: int, outfit_id: int | None, outfit_tags: str | None) -> None:
+    """普段の衣装を選ぶ(outfit_tags はその衣装のタグ。None なら普段の服装のタグは変えない)。"""
+    if outfit_tags is None:
+        conn.execute("UPDATE characters SET outfit_id = ? WHERE id = ?", (outfit_id, character_id))
+    else:
+        conn.execute("UPDATE characters SET outfit_id = ?, outfit_tags = ? WHERE id = ?", (outfit_id, outfit_tags, character_id))
+    conn.commit()
 
 
 def list_body_base_options(conn: sqlite3.Connection) -> list[dict[str, Any]]:
