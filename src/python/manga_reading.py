@@ -2,7 +2,9 @@
 取り込んだ漫画のページから、セリフ(吹き出しの中の文字)と、描き文字の場所と、コマごとの場面・所作を読み取る。
 
 - セリフ: RapidOCR でページ全体を読む(縦書きの1列ごとに読める。実機で、吹き出しごとに切り出して読むより
-  ずっと正確だった)。読めた列を吹き出しごとにまとめ、右から左へつないで1つのセリフにする。手描きの効果音
+  ずっと正確だった)。読めた列を吹き出しごとにまとめ、右から左へつないで1つのセリフにする。英語に訳した漫画
+  (ページの文字の多くが英字)は、吹き出しの英語の行を上から下へ、語の間を空けてつなぐ(英字だけの行を雑音として
+  捨てない。2026-10 実機: 捨てていたため、英訳の漫画でセリフが 25〜40% しか取れなかった)。手描きの効果音
   (描き文字)はほとんど読めず、読めても誤りが多いので、文字の領域の検出(manga_elements の text)に重なるものと、
   確からしさの高いものだけを残す。
 - 描き文字(手描きの効果音): 読めないので、場所の候補だけを探す(文字らしい領域のうち、セリフでないもの)。
@@ -72,7 +74,15 @@ class TextColumn:
 
     @property
     def vertical(self) -> bool:
+        # 英字は横書き(「I」「A」のような1字の行は、縦長の枠になっても横書きの吹き出しの1行)
+        if _LATIN.search(self.text):
+            return False
         return (self.box[3] - self.box[1]) >= (self.box[2] - self.box[0])
+
+    @property
+    def mark(self) -> bool:
+        """記号だけの短い列(「?」「!!」「…」)。向きが決まらないので、隣の列の向きに合わせる。"""
+        return bool(_MARKS_ONLY.match(self.text.strip()))
 
 
 def _ocr_columns(image: Image.Image) -> list[TextColumn]:
@@ -100,10 +110,16 @@ def _intersects(a: Box, b: Box) -> bool:
 
 
 def _same_bubble(a: TextColumn, b: TextColumn) -> bool:
-    """隣り合う列か(縦書きなら横に並び、縦の範囲が重なる。横書きならその逆)。"""
-    if a.vertical != b.vertical:
+    """隣り合う列か(縦書きなら横に並び、縦の範囲が重なる。横書きならその逆)。記号だけの列は相手の向きで見る。"""
+    if a.mark and b.mark:
         return False
-    along, across = (1, 0) if a.vertical else (0, 1)
+    if a.mark or b.mark:
+        vertical = b.vertical if a.mark else a.vertical
+    elif a.vertical != b.vertical:
+        return False
+    else:
+        vertical = a.vertical
+    along, across = (1, 0) if vertical else (0, 1)
     overlap = min(a.box[along + 2], b.box[along + 2]) - max(a.box[along], b.box[along])
     shorter = min(a.box[along + 2] - a.box[along], b.box[along + 2] - b.box[along])
     if overlap < shorter * _COLUMN_OVERLAP:
@@ -132,7 +148,8 @@ def group_columns(columns: list[TextColumn]) -> list[list[TextColumn]]:
         groups.setdefault(find(index), []).append(column)
     result = []
     for members in groups.values():
-        if members[0].vertical:
+        words = [c for c in members if not c.mark] or members
+        if sum(c.vertical for c in words) * 2 >= len(words) and not any(_LATIN.search(c.text) for c in words):
             members.sort(key=lambda c: -(c.box[0] + c.box[2]))
         else:
             members.sort(key=lambda c: c.box[1] + c.box[3])
@@ -141,11 +158,20 @@ def group_columns(columns: list[TextColumn]) -> list[list[TextColumn]]:
 
 
 _NOISE = re.compile(r"^[\W_ー〜~・…。、！？!?♪♡♥☆★0-9a-zA-Z]*$")
+_LATIN = re.compile(r"[A-Za-z]")
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+# 記号だけの短い列(「?」「!?」「…」「♥」)
+_MARKS_ONLY = re.compile(r"^[^\w\u3040-\u30ff\u3400-\u9fff]{1,3}$")
+# 英語のセリフとみなす語(英字2字以上の語。「OS」「W,I」のような描き文字の読み違いのかけらは、1語だけなら捨てる)
+_ENGLISH_WORD = re.compile(r"[A-Za-z][A-Za-z']+")
 
 
 def _clean_text(text: str) -> str:
-    """読み取りの揺れをそろえる(半角の記号を全角に、空白を除く)。"""
-    text = re.sub(r"\s+", "", text)
+    """読み取りの揺れをそろえる(半角の記号を全角に、空白を除く。英字の語の間の空白は1つにして残す)。"""
+    if _LATIN.search(text):
+        text = re.sub(r"\s+([!?.,…~])", r"\1", re.sub(r"\s+", " ", text).strip())
+    else:
+        text = re.sub(r"\s+", "", text)
     for src, dst in (
         ("!", "！"),
         ("?", "？"),
@@ -167,6 +193,40 @@ class Speech:
     text: str
 
 
+def _join(members: list[TextColumn]) -> str:
+    """
+    吹き出しの列を1つのセリフにつなぐ。日本語は詰めてつなぐ。英語は語の間を空け、行末の「-」で切れた語
+    (EVERY- / THING)は1語に戻す。「H-HMPH」のような言いよどみの「-」(前が1字)と、記号だけの列は詰める。
+    """
+    if not any(_LATIN.search(c.text) for c in members):
+        return "".join(c.text for c in members)
+    text = ""
+    for c in members:
+        part = c.text.strip()
+        if not text:
+            text = part
+        elif c.mark:
+            text += part
+        elif re.search(r"[A-Za-z]{2,}-$", text) and part[:1].isalpha():
+            text = text[:-1] + part
+        elif text.endswith("-"):
+            text += part
+        else:
+            text += " " + part
+    return text
+
+
+def _english_page(columns: list[TextColumn]) -> bool:
+    """英語に訳した漫画のページか(英字の列が、日本語の列より多い)。日本語の漫画の、描き文字の読み違い(英字のかけら)はセリフにしない。"""
+    latin = sum(1 for c in columns if _LATIN.search(c.text) and not _CJK.search(c.text))
+    return latin > sum(1 for c in columns if _CJK.search(c.text))
+
+
+def _is_english_speech(text: str) -> bool:
+    words = _ENGLISH_WORD.findall(text)
+    return len(words) >= 2 or any(len(w) >= 3 for w in words)
+
+
 def read_speech(
     image: Image.Image, text_boxes: list[Box] | None, page_columns: list[TextColumn] | None = None
 ) -> list[Speech]:
@@ -180,11 +240,13 @@ def read_speech(
         near_text = text_boxes is None or any(_intersects(column.box, b) for b in text_boxes)
         if column.score >= (_MIN_SCORE if near_text and text_boxes is not None else _MIN_SCORE_ALONE):
             columns.append(column)
+    english = _english_page(columns)
     speeches = []
     for members in group_columns(columns):
-        text = _clean_text("".join(c.text for c in members))
-        # 記号や英数字だけのもの(効果音のかけら・ページ番号など)は捨てる。「……」「!?」だけのセリフは残す
-        if not text or _NOT_SPEECH.match(text) or (_NOISE.match(text) and not re.search(r"[…！？!?]", text)):
+        text = _clean_text(_join(members))
+        # 記号や英数字だけのもの(効果音のかけら・ページ番号など)は捨てる。「……」「!?」だけのセリフと、英訳の漫画の英語のセリフは残す
+        noise = _NOISE.match(text) and not re.search(r"[…！？!?]", text) and not (english and _is_english_speech(text))
+        if not text or _NOT_SPEECH.match(text) or noise:
             continue
         box = (
             min(c.box[0] for c in members),
@@ -199,9 +261,16 @@ def read_speech(
 _POLITE = re.compile(r"(です|ます|ません|でした|ました|でしょう|ください|ございま)")
 
 
+# 英語のセリフの長さを、日本語のセリフの字数の目安にする割合(英字の数 × これ。おおよその目安)
+_EN_TO_JA = 0.6
+
+
 def line_features(text: str) -> dict[str, Any]:
-    """セリフの型(文面を使わずに、新しいセリフを作るための手がかり): 文字数・文末の型・口調。"""
-    body = text.rstrip("♪♡♥☆★〜ー")
+    """
+    セリフの型(文面を使わずに、新しいセリフを作るための手がかり): 文字数・文末の型・口調。
+    英語のセリフ(英訳の漫画)の文字数は、日本語のセリフにしたときの字数の目安(英字の数 × _EN_TO_JA)。
+    """
+    body = text.rstrip("♪♡♥☆★〜ー ")
     if re.search(r"[？?]", body[-3:]):
         ending = "問いかけ"
     elif re.search(r"[！!]", body[-3:]):
@@ -210,7 +279,11 @@ def line_features(text: str) -> dict[str, Any]:
         ending = "言いよどみ"
     else:
         ending = "ふつう"
-    return {"chars": len(text), "ending": ending, "polite": bool(_POLITE.search(text))}
+    if _LATIN.search(text) and not _CJK.search(text):
+        chars = max(1, round(len(re.findall(r"[A-Za-z]", text)) * _EN_TO_JA))
+    else:
+        chars = len(text)
+    return {"chars": chars, "ending": ending, "polite": bool(_POLITE.search(text))}
 
 
 def order_in_panel(speeches: list[Speech], rect: tuple[int, int, int, int]) -> list[Speech]:
@@ -356,8 +429,8 @@ def read_page(image: Image.Image, text_boxes: list[Box] | None, face_boxes: list
     """
     columns = _ocr_columns(image)
     speeches = read_speech(image, text_boxes, columns)
-    # セリフの場所: 検出があればそれ、無ければ読めたセリフの場所
-    speech_boxes = list(text_boxes) if text_boxes is not None else [s.box for s in speeches]
+    # セリフの場所: 文字の領域の検出と、読めたセリフの場所(検出に漏れた吹き出しの文字を、描き文字にしない)
+    speech_boxes = [*(text_boxes or []), *(s.box for s in speeches)]
     return PageReading(speeches, detect_sfx(image, speech_boxes, face_boxes, end_mark_boxes(columns)))
 
 

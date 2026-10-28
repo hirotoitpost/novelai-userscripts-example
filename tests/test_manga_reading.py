@@ -79,11 +79,64 @@ def test_read_speech_drops_sound_effects_and_marks(monkeypatch: pytest.MonkeyPat
     assert sorted(s.text for s in read_speech(image, None)) == ["……", "いっしょに帰りませんか？"]
 
 
+def test_english_speech_is_kept_on_translated_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 英訳の漫画: 吹き出しの英語は1語ずつ横書きの行に読める。「A」「?」のような短い行(縦長の枠)も同じ吹き出しにまとめる
+    columns = [
+        column(100, 100, 50, 20, "ISN'T"),
+        column(105, 118, 40, 20, "THIS"),
+        column(118, 136, 14, 20, "A"),
+        column(100, 154, 50, 20, "CRIME"),
+        column(118, 172, 12, 18, "?"),
+        column(400, 100, 60, 20, "EVERY-"),  # 行末の「-」で切れた語は1語に戻す
+        column(405, 118, 50, 20, "THING"),
+        column(415, 136, 30, 20, "IS"),
+        column(410, 154, 40, 20, "FINE"),
+        column(700, 100, 20, 20, "H-"),  # 言いよどみの「-」は詰める
+        column(690, 118, 50, 20, "HMPH,"),
+        column(690, 136, 50, 20, "WHAT"),
+        column(600, 600, 40, 20, "OK"),  # 2字の1語だけ(描き文字の読み違いのかけらと区別できない)は捨てる
+    ]
+    monkeypatch.setattr(manga_reading, "_ocr_columns", lambda image: columns)
+    texts = sorted(s.text for s in read_speech(Image.new("RGB", (848, 1200), "white"), None))
+    assert texts == ["EVERYTHING IS FINE", "H-HMPH, WHAT", "ISN'T THIS A CRIME？"]
+
+
+def test_latin_fragments_on_japanese_pages_are_still_noise(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 日本語の漫画: 描き文字を英字に読み違えたかけらはセリフにしない
+    columns = [
+        column(135, 50, 30, 90, "いっしょに"),
+        column(100, 50, 30, 120, "帰りませんか"),
+        column(500, 300, 30, 90, "おはよう"),
+        column(500, 600, 80, 30, "OPFTHE"),
+    ]
+    monkeypatch.setattr(manga_reading, "_ocr_columns", lambda image: columns)
+    texts = sorted(s.text for s in read_speech(Image.new("RGB", (848, 1200), "white"), None))
+    assert texts == ["いっしょに帰りませんか", "おはよう"]
+
+
+def test_cast_tags_fill_in_people_the_detector_missed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 顔の見えない体の寄りや、重なった2人は、顔・体の検出では数え漏れる。写っている人のタグの人数を使う
+    assert manga_import.tagged_people(["1girl", "1boy"]) == 2 and manga_import.tagged_people(["6+girls"]) == 6
+    tags = {0: (["close-up"], [], ["1girl"]), 1: ([], [], ["1girl", "1boy"]), 2: ([], [], [])}
+    crops = iter(range(3))
+    monkeypatch.setattr(manga_import, "describe_panel", lambda crop: tags[next(crops)])
+    monkeypatch.setattr(manga_import, "read_page", lambda image, boxes, faces=None: PageReading([], []))
+    panels = [
+        manga_import.PanelInfo((0, 0, 400, 400), 0, "no humans", 0),
+        manga_import.PanelInfo((400, 0, 400, 400), 1, "long", 0),
+        manga_import.PanelInfo((0, 400, 800, 400), 0, "no humans", 0),
+    ]
+    manga_import._add_details(Image.new("RGB", (800, 800), "white"), panels, None, keep_text=False)
+    assert [(p.people, p.shot) for p in panels] == [(1, "close-up"), (2, "long"), (0, "no humans")]
+
+
 def test_line_features_describe_the_line_without_its_text() -> None:
     assert line_features("いっしょに帰りませんか？") == {"chars": 12, "ending": "問いかけ", "polite": True}
     assert line_features("はなれろって！") == {"chars": 7, "ending": "強い調子", "polite": False}
     assert line_features("その、えっと……") == {"chars": 8, "ending": "言いよどみ", "polite": False}
     assert line_features("帰ろう〜♪")["ending"] == "ふつう"
+    # 英語のセリフの文字数は、日本語にしたときの字数の目安(英字 14 字 × 0.6)
+    assert line_features("ISN'T THIS A CRIME？") == {"chars": 8, "ending": "問いかけ", "polite": False}
 
 
 def test_reading_order_in_a_panel() -> None:
