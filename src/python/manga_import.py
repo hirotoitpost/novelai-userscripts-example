@@ -447,6 +447,18 @@ def _shot(faces: list, bodies: list, rect: Rect) -> str:
     return "no humans"
 
 
+def tagged_people(cast_tags: list[str]) -> int:
+    """写っている人のタグ(1girl・2boys・6+girls)の人数の合計。"""
+    return sum(int(m.group(1)) for tag in cast_tags if (m := re.match(r"^(\d+)", tag)))
+
+
+def tag_shot(scene_tags: list[str]) -> str:
+    """顔も体も見つからなかったコマの構図を、構図のタグから決める(無ければ中くらい)。"""
+    if {"close-up", "portrait"} & set(scene_tags):
+        return "close-up"
+    return "long" if "full body" in scene_tags else "medium"
+
+
 def _head_shot(heads: list, rect: Rect) -> str:
     """モデルが使えないとき: 頭の検出から構図を決める(頭は顔より大きいので基準を緩める)。"""
     return _shot(heads, [], rect) if heads else "no humans"
@@ -504,6 +516,13 @@ def _add_details(
     for index, panel in enumerate(panels):
         x, y, w, h = panel.box
         panel.scene_tags, panel.action_tags, panel.cast_tags = describe_panel(image.crop((x, y, x + w, y + h)))
+        # 顔・体の検出は、顔の見えない体の寄り(胸・腰)や、重なった2人を数え漏らす(2026-10 実機: 英訳の成人誌の漫画で
+        # 0人のコマが多かった)。写っている人のタグの人数が多ければ、そちらを使う
+        tagged = tagged_people(panel.cast_tags)
+        if tagged > panel.people:
+            if panel.people == 0:
+                panel.shot = tag_shot(panel.scene_tags)
+            panel.people = tagged
         panel.lines = []
         for speech in order_in_panel(by_panel.get(index, []), panel.box):
             line = line_features(speech.text)
