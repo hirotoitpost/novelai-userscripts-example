@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import io
 import sys
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -276,6 +277,55 @@ def test_import_api(client: TestClient, tmp_path: Path) -> None:
     assert client.delete(f"/api/manga-import/{import_id}").status_code == 204
     assert client.get(f"/api/manga-import/{import_id}").status_code == 404
     assert not (tmp_path / "imports" / str(import_id)).exists()
+
+
+def test_cancel_stops_reading_and_keeps_read_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 2ページ目の読み取りを待たせておき、そのあいだに止める
+    release = threading.Event()
+    real = import_routes.analyze_page
+
+    def slow(path, purpose):
+        if path.name != "page_001.png":
+            release.wait(10)
+        return real(path, purpose)
+
+    monkeypatch.setattr(import_routes, "analyze_page", slow)
+    data = base64.b64encode(_png(_page(_grid()))).decode()
+    page = {"name": "p.png", "data": f"data:image/png;base64,{data}"}
+    res = client.post("/api/manga-import", json={"title": "止める", "files": [page, page, page], "use_vision": False})
+    import_id = res.json()["id"]
+    for _ in range(40):
+        if client.get(f"/api/manga-import/{import_id}/job").json()["progress"] == 1:
+            break
+        time.sleep(0.25)
+    try:
+        job = client.post(f"/api/manga-import/{import_id}/cancel").json()
+    finally:
+        release.set()
+    assert job["status"] == "cancelled" and "1/3ページ" in job["message"]
+    item = client.get(f"/api/manga-import/{import_id}").json()
+    assert item["status"] == "cancelled" and len(item["analysis"]["pages"]) == 1
+    # 止めたあとは、もう止めるものが無い。読み取り直せる
+    assert client.post(f"/api/manga-import/{import_id}/cancel").status_code == 409
+    assert client.post(f"/api/manga-import/{import_id}/analyze?use_vision=false").status_code == 200
+    assert _wait(client, import_id)["status"] == "done"
+    assert client.get(f"/api/manga-import/{import_id}").json()["status"] == "analyzed"
+
+
+def test_reading_left_by_a_restart_shows_as_cancelled(client: TestClient) -> None:
+    data = base64.b64encode(_png(_page(_grid()))).decode()
+    res = client.post("/api/manga-import", json={"title": "x", "files": [{"name": "p.png", "data": data}], "use_vision": False})
+    import_id = res.json()["id"]
+    _wait(client, import_id)
+    # 読み取り中にサーバーを再起動すると、処理は無く、取り込みは読み取り中のまま残る
+    conn = db.get_connection()
+    try:
+        db.update_manga_import(conn, import_id, status="analyzing")
+    finally:
+        conn.close()
+    import_routes._jobs.pop(import_id, None)
+    assert client.get(f"/api/manga-import/{import_id}").json()["status"] == "cancelled"
+    assert client.get("/api/manga-import").json()[0]["status"] == "cancelled"
 
 
 def test_import_api_accepts_zip(client: TestClient) -> None:

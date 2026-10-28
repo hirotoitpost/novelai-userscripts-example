@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../api'
@@ -76,7 +76,7 @@ const SHOT_LABELS: Record<string, string> = {
 }
 const PURPOSE_LABELS: Record<string, string> = { similar: '似た漫画用', rebuild: '作り直し用', structure: '構成のみ' }
 const STATUS_LABELS: Record<string, string> = {
-  imported: '取り込み済み', analyzing: '読み取り中', analyzed: '読み取り済み', error: 'エラー',
+  imported: '取り込み済み', analyzing: '読み取り中', analyzed: '読み取り済み', error: 'エラー', cancelled: '中断',
 }
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -125,6 +125,8 @@ export default function MangaImport() {
   const [characters, setCharacters] = useState<Character[]>([])
   const [made, setMade] = useState<{ storyId: number; message: string } | null>(null)
   const task = useTaskStatus()
+  // 処理状況のダイアログで追っている、漫画を作るジョブの取り込み(ダイアログのキャンセルで止める)
+  const following = useRef<number | null>(null)
 
   const loadList = useCallback(async () => {
     if (!token) return
@@ -160,6 +162,16 @@ export default function MangaImport() {
     if (!token) return
     task.start(rebuild ? '漫画を作り直す' : '似た漫画を作る')
     setMade(null)
+    following.current = id
+    try {
+      await followJob(id)
+    } finally {
+      if (following.current === id) following.current = null
+    }
+  }
+
+  const followJob = async (id: number) => {
+    if (!token) return
     while (true) {
       await new Promise(r => setTimeout(r, 3000))
       const current = await apiFetch<Job | null>(token, `/api/manga-import/${id}/job`).catch(() => undefined)
@@ -173,6 +185,10 @@ export default function MangaImport() {
       if (current.status === 'done' && current.story_id) {
         task.finish('done', current.message)
         setMade({ storyId: current.story_id, message: current.message })
+      } else if (current.status === 'cancelled') {
+        task.finish('cancelled', current.message)
+        // 止める前に作り終えたページは物語に残る
+        if (current.story_id) setMade({ storyId: current.story_id, message: current.message })
       } else {
         task.finish('error', current.detail ?? current.message)
       }
@@ -254,6 +270,20 @@ export default function MangaImport() {
       setSfxDrafts({})
       await loadList()
       await open(selected.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 読み取り・漫画づくりを止める。読み取りは、読み取ったページまで残る(読み取り直せる)。 */
+  const cancel = async (id: number) => {
+    if (!token) return
+    setError(null)
+    try {
+      const res = await fetch(`/api/manga-import/${id}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      await loadList()
+      if (selected?.id === id) await open(id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -505,7 +535,18 @@ export default function MangaImport() {
           <section className="mi-section">
             <h2>{selected.title}</h2>
             {job && job.status === 'running' && (
-              <p className="mi-hint"><span className="mi-spinner" /> {job.message}({job.progress}/{job.total}ページ)</p>
+              <p className="mi-hint">
+                <span className="mi-spinner" /> {job.message}({job.progress}/{job.total}ページ)
+                {selected.status === 'analyzing' && (
+                  <button type="button" className="mi-item-action" onClick={() => void cancel(selected.id)}>止める</button>
+                )}
+              </p>
+            )}
+            {selected.status === 'cancelled' && (
+              <p className="mi-hint">
+                {job?.status === 'cancelled' ? job.message : '読み取りを途中で止めました(サーバーの再起動など)。'}
+                読み取ったページまで見られます。似た漫画を作るには、読み取り直してください。
+              </p>
             )}
             {job && job.status === 'error' && <p className="mi-error">読み取りに失敗しました: {job.detail}</p>}
             <div className="mi-field mi-field--inline mi-genre">
@@ -675,6 +716,9 @@ export default function MangaImport() {
         status={task.status}
         minimized={task.minimized}
         onMinimize={task.setMinimized}
+        onCancel={task.status?.state === 'running' && following.current !== null
+          ? () => { if (following.current !== null) void cancel(following.current) }
+          : undefined}
         onClose={task.dismiss}
       />
     </div>
