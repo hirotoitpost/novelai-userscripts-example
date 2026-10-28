@@ -2,8 +2,10 @@
 取り込んだ漫画を、セリフごと台本に起こす(取り込みの使い方 rebuild)。自分の作品(権利のある作品)を、
 このアプリで描き直すためのもの。
 
-セリフの文面は読み取ったもの(画面で直したもの)をそのまま使う。描き文字(効果音)は、画面で読みを入れたものを
-台本の効果音にする(読みの無い候補は入れない)。文章モデル(NovelAI の GLM)に決めさせるのは、
+セリフの文面は読み取ったもの(画面で直したもの)を使う。整える(clean_page)ときだけ、文章モデルに文字の
+読み違いを直させ、英語のセリフを日本語に訳させ、セリフでない文字(広告・クレジット・意味のないかけら)を
+外させる(言い回しは変えさせない)。描き文字(効果音)は、画面で読みを入れたものを台本の効果音にする
+(読みの無い候補は入れない)。話し手を決める(assign_page)ときに文章モデル(NovelAI の GLM)に決めさせるのは、
 各セリフの話し手・声か心の声か・コマに描く人物・所作のタグを誰に付けるか、だけ。セリフの文面は返させない
 (書き換えさせない)。
 """
@@ -32,6 +34,76 @@ _SYSTEM = """あなたは漫画の編集者です。漫画の1ページ分につ
 - characters はそのコマに描かれている人物(「写っている人」の人数と性別に合わせる。声だけの人は入れない)。人物がいないコマは空
 - actions は、そのコマの「所作」のタグを、当てはまる人物に割り振る(渡されたタグだけを使う。当てはまらなければ入れない)
 - セリフの文面は返さない(書き換えない)"""
+
+
+# 整えたセリフ1つの長さの上限(台本のセリフは80字まで。吹き出しに収まる長さにする)
+CLEAN_LINE_CHARS = 40
+
+_CLEAN_SYSTEM = f"""あなたは漫画の翻訳・校正の担当です。漫画の1ページ分の、コマごとのセリフを渡します。
+セリフは絵から文字認識で読み取ったもので、読み違い(綴りの崩れ・語のつながり・先頭や末尾の欠け)や、セリフではない文字
+(広告・クレジット・ページ番号・描き文字や絵の一部の読み違い)が混ざっています。各セリフを、日本語の自然なセリフに整えてください。
+JSONだけを返してください(前置きや```は不要):
+{{"panels":[{{"lines":["整えたセリフ",""]}}]}}
+- panels は渡されたコマと同じ数・同じ順。lines は、そのコマのセリフと同じ数・同じ順
+- 英語のセリフは日本語に訳す(漫画のセリフらしい話し言葉に。人名はカタカナ)
+- 読み違いは、前後のセリフの流れから元の文を推し量って直してから訳す(例: 「SANACHAN OS SI CUTE」は SANA-CHAN IS SO CUTE)
+- 日本語のセリフは、読み違いを直すだけにして、言い回しは変えない
+- セリフではないもの・意味を推し量れないかけらは、空文字にする。英語のページに混ざる日本語の1〜2字(「山」「十」)や、
+  文にならない語の並び(「Golban P」「han Brain」)は、絵や描き文字の読み違いなので空文字
+- 1つのセリフは{CLEAN_LINE_CHARS}字まで。新しいセリフは足さない"""
+
+
+def _texts(panel: dict[str, Any]) -> list[str]:
+    texts = (str(line.get("text") or "").strip() for line in panel.get("lines") or [])
+    return [text for text in texts if text][:MAX_LINES]
+
+
+def clean_prompts(panels: list[dict[str, Any]]) -> tuple[str, str]:
+    blocks = []
+    for index, panel in enumerate(panels):
+        texts = _texts(panel)
+        rows = [f"{index + 1}コマ目:"]
+        rows.extend(f"  セリフ{i + 1}: 「{text}」" for i, text in enumerate(texts))
+        if not texts:
+            rows.append("  セリフなし")
+        blocks.append("\n".join(rows))
+    return _CLEAN_SYSTEM, "\n".join(blocks)
+
+
+def parse_cleaned(data: Any, panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    整えたセリフを、コマのセリフに入れ替える(空文字にしたセリフは外す)。コマ数が合わなければ ValueError。
+    セリフの数が合わないコマは、読み取ったままにする。
+    """
+    raw_panels = (data or {}).get("panels") if isinstance(data, dict) else None
+    if not isinstance(raw_panels, list) or len(raw_panels) < len(panels):
+        raise ValueError("コマ数が合いません")
+    result = []
+    for panel, raw in zip(panels, raw_panels):
+        lines = [line for line in panel.get("lines") or [] if str(line.get("text") or "").strip()][:MAX_LINES]
+        cleaned = (raw or {}).get("lines") if isinstance(raw, dict) else None
+        if isinstance(cleaned, list) and len(cleaned) == len(lines):
+            lines = [
+                {**line, "text": text[:CLEAN_LINE_CHARS]}
+                for line, text in zip(lines, (str(t or "").strip().strip("「」") for t in cleaned))
+                if text
+            ]
+        result.append({**panel, "lines": lines})
+    return result
+
+
+async def clean_page(api_key: str, panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """1ページ分のセリフを整える(読み違いを直し、日本語にし、セリフでない文字を外す)。整えられなければ読み取ったまま。"""
+    if not any(_texts(p) for p in panels):
+        return panels
+    system, user = clean_prompts(panels)
+    for _ in range(_MAX_ATTEMPTS):
+        try:
+            data = await _ask_json(api_key, system, user, max_tokens=2500, temperature=0.2)
+            return parse_cleaned(data, panels)
+        except (ValueError, RuntimeError):
+            continue
+    return panels
 
 
 def _panel_block(index: int, panel: dict[str, Any]) -> str:

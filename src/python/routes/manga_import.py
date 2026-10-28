@@ -383,11 +383,12 @@ async def make_rebuild(import_id: int, req: MangaImportAutoRequest, api_key: str
     """
     取り込んだ漫画を、セリフごと台本に起こして描き直し、物語のIDを返す(自分の作品のためのもの):
     キャラ(選んだもの、無ければ見た目から作る)と参照画像 → ページごとに、セリフの話し手・描く人物・所作の
-    割り振りを文章モデルに決めさせる(セリフの文面は読み取ったまま) → 取り込んだ作品のコマ割りで物語を作る
+    割り振りを文章モデルに決めさせる(clean_lines なら、その前にセリフを整える: 読み違いの直し・日本語に訳す・
+    セリフでない文字を外す) → 取り込んだ作品のコマ割りで物語を作る
     → コマの生成と合成。
     """
     from ..manga_draft import draft_characters
-    from ..manga_rebuild import assign_page, script_panels
+    from ..manga_rebuild import assign_page, clean_page, script_panels
 
     item = _require(import_id)
     if (item.get("purpose") or "structure") != "rebuild":
@@ -400,6 +401,9 @@ async def make_rebuild(import_id: int, req: MangaImportAutoRequest, api_key: str
     looks = {c.name: (by_id[c.id].get("appearance_tags") or "") for c in cast}
     episodes: list[list[dict[str, Any]]] = []
     for index, panels in enumerate(page_panels):
+        if req.clean_lines:
+            job.message = f"セリフを整えています(読み違いの直し・日本語に訳す) {index + 1}/{len(page_panels)}ページ"
+            panels = await clean_page(api_key, panels)
         job.message = f"セリフの話し手を決めています {index + 1}/{len(page_panels)}ページ"
         episodes.append(script_panels(panels, await assign_page(api_key, panels, cast, looks)))
     return await _finish(import_id, item["title"], cast, episodes, req, features.monochrome, api_key, job)
