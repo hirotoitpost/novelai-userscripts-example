@@ -62,7 +62,7 @@ from ..db import (
     list_body_base_options,
     reorder_body_base_options,
     update_body_base_option,
-    character_family,
+    characters_sharing_seed,
     delete_body_base,
     get_body_base,
     list_body_bases,
@@ -920,13 +920,13 @@ def _check_body_base(req: BodyBaseSaveRequest) -> None:
 
 
 def _age_checks(character: dict) -> tuple[str | None, bool]:
-    """(裸の素体を当てられない理由, 素体スーツを控えめに描くか)。どちらも同じ人物の成長段階まで見る。"""
+    """(裸の素体を当てられない理由, 素体スーツを控えめに描くか)。どちらも同じシードで描くキャラまで見る。"""
     conn = get_connection()
     try:
-        family = character_family(conn, character)
+        look_alikes = characters_sharing_seed(conn, character)
     finally:
         conn.close()
-    return body_base.nude_block_reason(character, family), body_base.minor_coded(character, family)
+    return body_base.nude_block_reason(character, look_alikes), body_base.minor_coded(character, look_alikes)
 
 
 def _character_base(character: dict) -> dict | None:
@@ -1093,7 +1093,7 @@ async def update_body_base(base_id: int, req: BodyBaseSaveRequest) -> dict[str, 
             raise HTTPException(status_code=404, detail="素体が見つかりません。")
         if req.kind == "nude":
             users = [dict(r) for r in conn.execute("SELECT * FROM characters WHERE body_base_id = ?", (base_id,))]
-            blocked = [c["name"] for c in users if body_base.nude_block_reason(c, character_family(conn, c))]
+            blocked = [c["name"] for c in users if body_base.nude_block_reason(c, characters_sharing_seed(conn, c))]
             if blocked:
                 raise HTTPException(
                     status_code=403,

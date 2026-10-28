@@ -68,9 +68,12 @@ def test_nude_block_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "kindergarten" in (body_base.nude_block_reason({**adult, "outfit_tags": "kindergarten uniform, cardigan"}, []) or "")
     assert body_base.nude_block_reason({**adult, "appearance_tags": "1girl, young"}, []) is not None
     assert body_base.nude_block_reason({**adult, "appearance_tags": "1girl, young woman"}, []) is None
-    # 成長段階に未成年の段階があれば、成人の段階でも当てない
+    # 同じシードで描く未成年のキャラ(未成年の定義・未成年を示すタグ)がいれば、成人キャラでも当てない
     child = {"id": 2, "name": "5歳", "is_minor": 1, "age": 5}
     assert "5歳" in (body_base.nude_block_reason(adult, [adult, child]) or "")
+    student = {"id": 3, "name": "高校生", "is_adult": 1, "outfit_tags": "school uniform, child"}
+    assert "高校生" in (body_base.nude_block_reason(adult, [student]) or "")
+    assert body_base.minor_coded(adult, [child]) and not body_base.minor_coded(adult, [])
 
 
 @pytest.fixture
@@ -178,10 +181,20 @@ def test_nude_base_only_for_adults(client: TestClient, tmp_path: Path) -> None:
     assert (tmp_path / f"outputs/training_data/eiko/body_base_r18/{base['id']}_front.png").is_file()
 
 
-def test_growth_family_with_minor_stage_blocks_nude(client: TestClient) -> None:
-    root = _character(client, "yura_base")
-    _character(client, "yura_10", is_minor=1, age=10, growth_of=root["id"])
-    grown = _character(client, "yura_22", is_adult=1, age=22, growth_of=root["id"])
+def test_growth_stage_link_alone_does_not_block_nude(client: TestClient) -> None:
+    # 成長段階の紐付けは関係を表すだけ。子どもの段階があっても、成人の段階は成人として扱う
+    root = _character(client, "yota_base")
+    _character(client, "yota_10", is_minor=1, age=10, growth_of=root["id"])
+    grown = _character(client, "yota_22", is_adult=1, age=22, growth_of=root["id"])
+    base = _base(client, kind="nude")
+    res = client.put(f"/api/lora-dataset/character/{grown['id']}/body-base", json={"body_base_id": base["id"]})
+    assert res.status_code == 200 and res.json()["modest"] is False
+
+
+def test_sharing_a_seed_with_a_minor_blocks_nude(client: TestClient) -> None:
+    # 未成年のキャラと同じシード(同じ顔)で描くキャラには、成長段階の紐付けが無くても当てない
+    _character(client, "yura_10", is_minor=1, age=10, seed=3481379030)
+    grown = _character(client, "yura_22", is_adult=1, age=22, seed=3481379030)
     base = _base(client, kind="nude")
     res = client.put(f"/api/lora-dataset/character/{grown['id']}/body-base", json={"body_base_id": base["id"]})
     assert res.status_code == 403 and "yura_10" in res.json()["detail"]
