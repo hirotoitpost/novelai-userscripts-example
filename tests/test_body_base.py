@@ -54,26 +54,21 @@ def test_face_tags_drop_body_and_skin() -> None:
 
 def test_nude_block_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     adult = {"id": 1, "name": "栄子", "is_adult": 1, "age": 28, "appearance_tags": "1girl, adult woman"}
-    assert body_base.nude_block_reason(adult, [adult]) is None
-    assert body_base.nude_block_reason({**adult, "is_adult": 0}, []) is not None
-    assert body_base.nude_block_reason({**adult, "age": 17}, []) is not None
+    assert body_base.nude_block_reason(adult) is None
+    assert body_base.nude_block_reason({**adult, "is_adult": 0}) is not None
+    assert body_base.nude_block_reason({**adult, "age": 17}) is not None
     # 成人フラグだけで年齢の無いキャラには当てない
-    assert "年齢" in (body_base.nude_block_reason({**adult, "age": None}, []) or "")
+    assert "年齢" in (body_base.nude_block_reason({**adult, "age": None}) or "")
     # 年齢を入れた成人キャラの制服は衣装(コスプレ)。子どもを表すタグは止める
-    assert body_base.nude_block_reason({**adult, "outfit_tags": "school uniform"}, []) is None
-    assert body_base.nude_block_reason({**adult, "outfit_tags": "school uniform, child"}, []) is not None
-    assert body_base.nude_block_reason({**adult, "age": None, "outfit_tags": "school uniform"}, []) is not None
+    assert body_base.nude_block_reason({**adult, "outfit_tags": "school uniform"}) is None
+    assert body_base.nude_block_reason({**adult, "outfit_tags": "school uniform, child"}) is not None
+    assert body_base.nude_block_reason({**adult, "age": None, "outfit_tags": "school uniform"}) is not None
     # キャラ別データセットの未成年タグ(dataset.minor_tags)が空でも、素体の未成年タグ(body_base.minor_tags)で止める
     monkeypatch.setattr(body_base, "character_minor_tags", lambda _c: [])
-    assert "kindergarten" in (body_base.nude_block_reason({**adult, "outfit_tags": "kindergarten uniform, cardigan"}, []) or "")
-    assert body_base.nude_block_reason({**adult, "appearance_tags": "1girl, young"}, []) is not None
-    assert body_base.nude_block_reason({**adult, "appearance_tags": "1girl, young woman"}, []) is None
-    # 同じシードで描く未成年のキャラ(未成年の定義・未成年を示すタグ)がいれば、成人キャラでも当てない
-    child = {"id": 2, "name": "5歳", "is_minor": 1, "age": 5}
-    assert "5歳" in (body_base.nude_block_reason(adult, [adult, child]) or "")
-    student = {"id": 3, "name": "高校生", "is_adult": 1, "outfit_tags": "school uniform, child"}
-    assert "高校生" in (body_base.nude_block_reason(adult, [student]) or "")
-    assert body_base.minor_coded(adult, [child]) and not body_base.minor_coded(adult, [])
+    assert "kindergarten" in (body_base.nude_block_reason({**adult, "outfit_tags": "kindergarten uniform, cardigan"}) or "")
+    assert body_base.nude_block_reason({**adult, "appearance_tags": "1girl, young"}) is not None
+    assert body_base.nude_block_reason({**adult, "appearance_tags": "1girl, young woman"}) is None
+    assert not body_base.minor_coded(adult) and body_base.minor_coded({**adult, "outfit_tags": "school uniform, child"})
 
 
 @pytest.fixture
@@ -191,13 +186,13 @@ def test_growth_stage_link_alone_does_not_block_nude(client: TestClient) -> None
     assert res.status_code == 200 and res.json()["modest"] is False
 
 
-def test_sharing_a_seed_with_a_minor_blocks_nude(client: TestClient) -> None:
-    # 未成年のキャラと同じシード(同じ顔)で描くキャラには、成長段階の紐付けが無くても当てない
+def test_sharing_a_seed_with_a_minor_does_not_block_nude(client: TestClient) -> None:
+    # シードは描き方をそろえるためのもの。子どもの段階と同じシードでも、成人の段階は成人として扱う(服装も控えめにしない)
     _character(client, "yura_10", is_minor=1, age=10, seed=3481379030)
-    grown = _character(client, "yura_22", is_adult=1, age=22, seed=3481379030)
+    grown = _character(client, "yura_68", is_adult=1, age=68, seed=3481379030)
     base = _base(client, kind="nude")
     res = client.put(f"/api/lora-dataset/character/{grown['id']}/body-base", json={"body_base_id": base["id"]})
-    assert res.status_code == 403 and "yura_10" in res.json()["detail"]
+    assert res.status_code == 200 and res.json()["modest"] is False
 
 
 def test_switching_a_used_base_to_nude_checks_its_characters(client: TestClient) -> None:
@@ -249,9 +244,9 @@ def test_guard_values_come_from_the_db(client: TestClient) -> None:
     from python import content_guard
 
     adult = {"id": 1, "name": "a", "is_adult": 1, "age": 30, "outfit_tags": "maid outfit"}
-    assert body_base.nude_block_reason(adult, []) is None
+    assert body_base.nude_block_reason(adult) is None
     content_guard.set_value("body_base.minor_tags", ["maid outfit"])
-    assert "maid outfit" in (body_base.nude_block_reason(adult, []) or "")
+    assert "maid outfit" in (body_base.nude_block_reason(adult) or "")
     content_guard.set_value("body_base.nude_tags", "nude, mannequin")
     part = body_base.ITEMS["front"]
     assert "mannequin" in body_base.prompt(adult, {"kind": "nude"}, part, _defaults())

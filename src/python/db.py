@@ -3714,14 +3714,6 @@ def set_character_body_base(conn: sqlite3.Connection, character_id: int, base_id
     conn.commit()
 
 
-def characters_sharing_seed(conn: sqlite3.Connection, character: dict[str, Any]) -> list[dict[str, Any]]:
-    """同じシードで描くほかのキャラ(同じ顔で描かれる人物)。シードが無ければ空。"""
-    if character.get("seed") is None:
-        return []
-    rows = conn.execute("SELECT * FROM characters WHERE seed = ? AND id != ?", (character["seed"], character["id"]))
-    return [dict(row) for row in rows]
-
-
 # ---- 描き直しで作る人物の状態 ----
 
 # 初めて表を作るときに入れる例。look は、描き直しに入れるその人物の見た目(none / outfit: 服だけ / full: 容姿・体型・服装)
