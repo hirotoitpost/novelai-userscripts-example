@@ -319,12 +319,12 @@ def minor_words(text: str, *, adult: bool = False) -> list[str]:
     return found
 
 
-def nude_block_reason(character: dict[str, Any], family: list[dict[str, Any]]) -> str | None:
+def nude_block_reason(character: dict[str, Any], look_alikes: list[dict[str, Any]]) -> str | None:
     """
     裸の素体を当てられない理由(当てられれば None)。成人フラグがあり、年齢が 18 歳以上と入れてあり、未成年の定義・
-    未成年を示すタグ(コンテンツガードの dataset.minor_tags と body_base.minor_tags)が無いことに加え、同じ人物の成長段階
-    (family: 元のキャラと、その段階のキャラ全部)に未成年の段階があれば当てない(未成年の段階と同じ顔・同じシードで描かれる
-    人物のため)。
+    未成年を示すタグ(コンテンツガードの dataset.minor_tags と body_base.minor_tags)が無いことに加え、同じシードで描く
+    キャラ(look_alikes)に未成年の手がかりがあれば当てない(未成年のキャラと同じ顔で描かれる人物のため)。成長段階の
+    紐付け(growth_of)は関係を表すだけなので見ない。
     """
     if not character.get("is_adult"):
         return "裸の素体は、成人キャラ(キャラシートの成人フラグ)にだけ当てられます。"
@@ -332,13 +332,12 @@ def nude_block_reason(character: dict[str, Any], family: list[dict[str, Any]]) -
         return "未成年と定義されたキャラには、裸の素体を当てられません。"
     if character.get("age") is None:
         return "裸の素体は、キャラシートに年齢(18 歳以上)を入れたキャラにだけ当てられます。"
-    text = ", ".join(str(character.get(k) or "") for k in _SHEET_TEXT_FIELDS)
-    found = sorted(set(character_minor_tags(character)) | set(minor_words(text, adult=content_guard.is_defined_adult(character))))
+    found = _sheet_minor_tags(character)
     if found:
         return f"キャラシートに未成年を示すタグがあるため、裸の素体を当てられません: {', '.join(found)}"
-    minors = _minor_stages(character, family)
+    minors = _minor_look_alikes(character, look_alikes)
     if minors:
-        return f"同じ人物の成長段階に未成年の段階があるため、裸の素体を当てられません: {', '.join(minors)}"
+        return f"同じシードで描く未成年のキャラがいるため、裸の素体を当てられません: {', '.join(minors)}"
     return None
 
 
@@ -346,21 +345,21 @@ def _is_minor(character: dict[str, Any]) -> bool:
     return bool(character.get("is_minor")) or (character.get("age") is not None and int(character["age"]) < 18)
 
 
-def _minor_stages(character: dict[str, Any], family: list[dict[str, Any]]) -> list[str]:
-    return [c["name"] for c in family if c["id"] != character["id"] and _is_minor(c)]
-
-
-def minor_coded(character: dict[str, Any], family: list[dict[str, Any]]) -> bool:
-    """
-    未成年の手がかりがあるキャラか(未成年の定義・年齢・未成年を示すタグ・成長段階の未成年)。成人フラグの有無は見ない
-    (高校生のキャラに成人フラグが付いていることがある)。素体スーツ・水着素体を控えめに描くのに使う。
-    """
+def _sheet_minor_tags(character: dict[str, Any]) -> list[str]:
     text = ", ".join(str(character.get(k) or "") for k in _SHEET_TEXT_FIELDS)
-    return (
-        _is_minor(character)
-        or bool(minor_words(text, adult=content_guard.is_defined_adult(character)) or character_minor_tags(character))
-        or bool(_minor_stages(character, family))
-    )
+    return sorted(set(character_minor_tags(character)) | set(minor_words(text, adult=content_guard.is_defined_adult(character))))
+
+
+def _minor_look_alikes(character: dict[str, Any], look_alikes: list[dict[str, Any]]) -> list[str]:
+    return [c["name"] for c in look_alikes if c["id"] != character["id"] and (_is_minor(c) or _sheet_minor_tags(c))]
+
+
+def minor_coded(character: dict[str, Any], look_alikes: list[dict[str, Any]]) -> bool:
+    """
+    未成年の手がかりがあるキャラか(未成年の定義・年齢・未成年を示すタグ・同じシードで描く未成年のキャラ)。成人フラグの
+    有無は見ない(高校生のキャラに成人フラグが付いていることがある)。素体スーツ・水着素体を控えめに描くのに使う。
+    """
+    return _is_minor(character) or bool(_sheet_minor_tags(character)) or bool(_minor_look_alikes(character, look_alikes))
 
 
 def file_dir_name(base: dict[str, Any]) -> str:

@@ -3714,10 +3714,11 @@ def set_character_body_base(conn: sqlite3.Connection, character_id: int, base_id
     conn.commit()
 
 
-def character_family(conn: sqlite3.Connection, character: dict[str, Any]) -> list[dict[str, Any]]:
-    """同じ人物の成長段階(元のキャラと、その段階のキャラ全部。成長段階が無ければそのキャラだけ)。"""
-    root = character.get("growth_of") or character["id"]
-    rows = conn.execute("SELECT * FROM characters WHERE id = ? OR growth_of = ?", (root, root))
+def characters_sharing_seed(conn: sqlite3.Connection, character: dict[str, Any]) -> list[dict[str, Any]]:
+    """同じシードで描くほかのキャラ(同じ顔で描かれる人物)。シードが無ければ空。"""
+    if character.get("seed") is None:
+        return []
+    rows = conn.execute("SELECT * FROM characters WHERE seed = ? AND id != ?", (character["seed"], character["id"]))
     return [dict(row) for row in rows]
 
 
