@@ -115,6 +115,8 @@ export default function MangaImport() {
   const [purpose, setPurpose] = useLocalStorage<Purpose>('nai_import_purpose', 'similar')
   // 作り直すとき、台本(物語)を作るところまでにする(セリフや割り振りを直してから絵を生成できる)
   const [scriptOnly, setScriptOnly] = useLocalStorage('nai_import_script_only', false)
+  // 作り直すとき、読み取ったセリフを文章モデルで整える(読み違いの直し・日本語に訳す・広告やかけらを外す)
+  const [cleanLines, setCleanLines] = useLocalStorage('nai_import_clean_lines', true)
   // 手直し中のセリフ(キーは ページ-コマ)
   const [lineDrafts, setLineDrafts] = useState<Record<string, string>>({})
   // 入力中の描き文字の読み(キーは ページ-コマ-番号。足すときは ページ-コマ-new)と、読みの候補
@@ -151,7 +153,7 @@ export default function MangaImport() {
   }, [token])
 
   const makeOptions = (rebuild: boolean) => ({
-    character_ids: autoCast, max_pages: autoPages, make_images: !(rebuild && scriptOnly),
+    character_ids: autoCast, max_pages: autoPages, make_images: !(rebuild && scriptOnly), clean_lines: cleanLines,
   })
 
   /**
@@ -460,6 +462,12 @@ export default function MangaImport() {
               <label className="mi-check">
                 <input type="checkbox" checked={scriptOnly} onChange={e => setScriptOnly(e.target.checked)} />
                 台本(物語)を作るところまでにする(コマの絵は、物語のページで確かめてから生成)
+              </label>
+            )}
+            {purpose === 'rebuild' && (
+              <label className="mi-check">
+                <input type="checkbox" checked={cleanLines} onChange={e => setCleanLines(e.target.checked)} />
+                セリフを整える(文字の読み違いを直し、英語は日本語に訳し、広告や意味のないかけらを外す。手で直したセリフも整え直します)
               </label>
             )}
             <label className="mi-field mi-field--inline">

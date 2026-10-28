@@ -849,6 +849,9 @@ class MangaImportAutoRequest(BaseModel):
     references: bool = True
     # False なら台本(物語)を作るところまで。コマの絵は生成しない(セリフや割り振りを直してから生成できる)
     make_images: bool = True
+    # 作り直すとき、読み取ったセリフを文章モデルで整える(文字の読み違いを直し、英語を日本語に訳し、
+    # 広告・意味のないかけらを外す)。False なら読み取った(画面で直した)文面のまま
+    clean_lines: bool = True
 
 
 class CastPresetRequest(BaseModel):

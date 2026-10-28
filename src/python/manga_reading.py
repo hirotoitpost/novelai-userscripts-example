@@ -246,7 +246,9 @@ def read_speech(
         text = _clean_text(_join(members))
         # 記号や英数字だけのもの(効果音のかけら・ページ番号など)は捨てる。「……」「!?」だけのセリフと、英訳の漫画の英語のセリフは残す
         noise = _NOISE.match(text) and not re.search(r"[…！？!?]", text) and not (english and _is_english_speech(text))
-        if not text or _NOT_SPEECH.match(text) or noise:
+        # 英訳の漫画に残る日本語のかけら(描き文字・絵の一部の読み違い。「山」「十」)はセリフにしない
+        fragment = english and _CJK.search(text) and len(re.sub(r"\W", "", text)) <= 2
+        if not text or _NOT_SPEECH.match(text) or _CREDIT.search(text) or noise or fragment:
             continue
         box = (
             min(c.box[0] for c in members),
@@ -499,6 +501,12 @@ _ACTION_EXTRA = {
 }
 # ページの終わりの印など、セリフではない文字
 _NOT_SPEECH = re.compile(r"^(おわり|終わり|おしまい|つづく|続く|完|end|fin)[。.!！]*$", re.IGNORECASE)
+# 広告・クレジット・注意書き(単行本の宣伝、無断転載の注意、配信元など)。吹き出しの外に書かれていて、セリフではない
+_CREDIT = re.compile(
+    r"(無断転載|転載禁止|複製禁止|好評発売|発売中|発売予定|単行本|配信中|連載中|著作権|copyright|©|all rights reserved"
+    r"|no reproduction|republication|unauthori[sz]ed|https?://|www\.|\.(com|net|jp)\b|isbn)",
+    re.IGNORECASE,
+)
 # 顔文字のタグ(:d, ;d, > < など)は表情
 _EMOTICON = re.compile(r"^[^a-z0-9]*[a-z0-9]?[^a-z0-9]*$")
 

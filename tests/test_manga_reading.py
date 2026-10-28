@@ -33,7 +33,8 @@ from python.manga_reading import (  # noqa: E402
     order_in_panel,
     read_speech,
 )
-from python.manga_rebuild import assign_prompts, panel_sfx, parse_assignment, script_panels  # noqa: E402
+from python import manga_rebuild  # noqa: E402
+from python.manga_rebuild import assign_prompts, panel_sfx, parse_assignment, parse_cleaned, script_panels  # noqa: E402
 from python.manga_similar import apply_import_panels, wordless  # noqa: E402
 from python.routes import manga_import as import_routes  # noqa: E402
 
@@ -112,6 +113,58 @@ def test_latin_fragments_on_japanese_pages_are_still_noise(monkeypatch: pytest.M
     monkeypatch.setattr(manga_reading, "_ocr_columns", lambda image: columns)
     texts = sorted(s.text for s in read_speech(Image.new("RGB", (848, 1200), "white"), None))
     assert texts == ["いっしょに帰りませんか", "おはよう"]
+
+
+def test_credits_and_stray_fragments_are_not_speech(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 広告・クレジットの文字と、英訳の漫画に残る日本語のかけら(絵や描き文字の読み違い)はセリフにしない
+    columns = [
+        column(100, 100, 60, 20, "GOOD"),
+        column(100, 118, 70, 20, "MORNING"),
+        column(400, 100, 80, 20, "SEE YOU"),
+        column(400, 118, 60, 20, "LATER"),
+        column(700, 100, 30, 30, "山"),
+        column(100, 900, 400, 20, "No reproduction or republication without permission."),
+        column(600, 900, 30, 200, "好評発売中"),
+    ]
+    monkeypatch.setattr(manga_reading, "_ocr_columns", lambda image: columns)
+    texts = sorted(s.text for s in read_speech(Image.new("RGB", (848, 1200), "white"), None))
+    assert texts == ["GOOD MORNING", "SEE YOU LATER"]
+
+
+def test_cleaned_lines_replace_the_read_text() -> None:
+    panels = [
+        {"lines": [{"text": "SANACHAN OS SI CUTE", "box": [1, 2, 3, 4]}, {"text": "Golban P"}], "people": 1},
+        {"lines": [], "people": 0},
+        {"lines": [{"text": "INGS ARE GOING WELL"}]},
+    ]
+    data = {"panels": [{"lines": ["「サナちゃん、今日もかわいいね」", ""]}, {"lines": []}, {"lines": ["a", "b"]}]}
+    cleaned = parse_cleaned(data, panels)
+    # 整えた文面に入れ替え、空文字にしたセリフは外す。ほかの読み取り(場所など)は残す
+    assert cleaned[0]["lines"] == [{"text": "サナちゃん、今日もかわいいね", "box": [1, 2, 3, 4]}]
+    assert cleaned[0]["people"] == 1 and cleaned[1]["lines"] == []
+    # セリフの数が合わないコマは、読み取ったまま
+    assert cleaned[2]["lines"] == [{"text": "INGS ARE GOING WELL"}]
+    with pytest.raises(ValueError):
+        parse_cleaned({"panels": []}, panels)
+
+
+def test_clean_page_keeps_the_read_text_when_the_model_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    calls: list[str] = []
+
+    async def broken(api_key, system, user, **kwargs):
+        calls.append(user)
+        raise RuntimeError("応答を読み取れません")
+
+    monkeypatch.setattr(manga_rebuild, "_ask_json", broken)
+    panels = [{"lines": [{"text": "HELLO THERE"}]}]
+    assert asyncio.run(manga_rebuild.clean_page("key", panels)) == panels
+    assert "セリフ1: 「HELLO THERE」" in calls[0]
+    # セリフの無いページは文章モデルに聞かない
+    calls.clear()
+    assert asyncio.run(manga_rebuild.clean_page("key", [{"lines": []}])) == [{"lines": []}]
+    assert calls == []
 
 
 def test_cast_tags_fill_in_people_the_detector_missed(monkeypatch: pytest.MonkeyPatch) -> None:
