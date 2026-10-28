@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import FullscreenViewer from '../components/FullscreenViewer'
 import ImagePreview from '../components/ImagePreview'
 import { API_ORIGIN, fileUrl, formatDate, getJson, readErrorDetail, thumbUrl } from '../library'
 import './Publications.css'
@@ -8,7 +9,8 @@ import './CharacterImages.css'
 /**
  * キャラごとの生成した画像(参照画像の候補・参照画像・漫画のコマ・描き直す前のコマ・データセット・顔と表情のシート・素体・
  * 生成履歴)を一覧で見て、参照画像に選び直す。下の「古い画像の整理」で、候補・使われていない参照画像・描き直す前のコマ・
- * 生成履歴をごみ箱へ移す(30日のあいだは元に戻せる)。API は /api/character-images(character_images.py)。
+ * 生成履歴をごみ箱へ移す(30日のあいだは元に戻せる)。拡大した画面の「全画面」で、画面いっぱいに出して(ズーム・前後も)見比べられる。
+ * API は /api/character-images(character_images.py)。
  */
 
 interface Kind {
@@ -68,6 +70,8 @@ export default function CharacterImages() {
   const [kindFilter, setKindFilter] = useState<string>('all')
   const [shown, setShown] = useState(PAGE)
   const [preview, setPreview] = useState<number | null>(null)
+  // 全画面で見ている画像の番号(拡大表示とは別。閉じたら、その画像の拡大表示に戻る)
+  const [fullscreen, setFullscreen] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -136,6 +140,7 @@ export default function CharacterImages() {
         ? 'この絵を参照画像にしました(候補のシードを基準シードにもしました)。'
         : 'この絵を参照画像にしました。')
       setPreview(null)
+      setFullscreen(null)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -219,6 +224,7 @@ export default function CharacterImages() {
                 : <span className="cimg-noref">参照画像なし</span>}
               <p className="pub-hint">
                 押すと拡大します。拡大した画面の「参照画像にする」で、その絵を参照画像に選び直せます(候補は、そのシードを基準シードにもします)。
+                「全画面」で、画面いっぱいに出して細部まで見られます(ピンチ・ホイールでズーム、左右で前後)。
                 「使用中」はいまの参照画像・いまのコマなどで、整理では片付けません。
               </p>
             </div>
@@ -344,16 +350,52 @@ export default function CharacterImages() {
         index={preview}
         onIndexChange={setPreview}
         actions={index => (
-          <button
-            type="button"
-            className="ipv-btn ipv-btn--primary"
-            disabled={busy || visible[index]?.path === data?.reference_image_path}
-            onClick={() => void chooseReference(visible[index])}
-          >
-            {visible[index]?.path === data?.reference_image_path ? 'いまの参照画像' : '参照画像にする'}
-          </button>
+          <>
+            <button
+              type="button"
+              className="ipv-btn"
+              onClick={() => {
+                // 拡大表示の矢印キー・Esc と重ならないよう、拡大表示を閉じてから全画面にする
+                setPreview(null)
+                setFullscreen(index)
+              }}
+            >
+              全画面
+            </button>
+            <button
+              type="button"
+              className="ipv-btn ipv-btn--primary"
+              disabled={busy || visible[index]?.path === data?.reference_image_path}
+              onClick={() => void chooseReference(visible[index])}
+            >
+              {visible[index]?.path === data?.reference_image_path ? 'いまの参照画像' : '参照画像にする'}
+            </button>
+          </>
         )}
       />
+      {fullscreen !== null && visible[fullscreen] && (
+        <FullscreenViewer
+          src={fileUrl(visible[fullscreen].path)}
+          alt={kindLabel[visible[fullscreen].kind] ?? visible[fullscreen].kind}
+          counter={`${fullscreen + 1} / ${visible.length} ・ ${kindLabel[visible[fullscreen].kind] ?? visible[fullscreen].kind}`}
+          onPrev={fullscreen > 0 ? () => setFullscreen(fullscreen - 1) : undefined}
+          onNext={fullscreen < visible.length - 1 ? () => setFullscreen(fullscreen + 1) : undefined}
+          onClose={() => {
+            setPreview(fullscreen)
+            setFullscreen(null)
+          }}
+          tool={(_region, _zoomed, controls) => controls && (
+            <button
+              type="button"
+              className="fsv-close"
+              disabled={busy || visible[fullscreen].path === data?.reference_image_path}
+              onClick={() => void chooseReference(visible[fullscreen])}
+            >
+              {visible[fullscreen].path === data?.reference_image_path ? 'いまの参照画像' : '参照画像にする'}
+            </button>
+          )}
+        />
+      )}
     </div>
   )
 }

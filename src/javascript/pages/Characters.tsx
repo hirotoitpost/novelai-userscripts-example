@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import BackButton, { backState } from '../components/BackButton'
+import BodyBaseBatch from '../components/BodyBaseBatch'
 import FullscreenViewer from '../components/FullscreenViewer'
+import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { fileUrl, getJson, readErrorDetail, thumbUrl } from '../library'
 import './Characters.css'
@@ -10,6 +12,7 @@ import './Characters.css'
  * キャラ一覧: 登録したキャラをカードで並べる。参照画像の拡大、キャラ別データセットへの移動、生成したデータセットの画像、
  * 出ている作品(本棚・物語のページ)へのリンク。移った先の「← キャラ一覧」で、ここへ戻れる。
  * 衣装を登録したキャラは、カードで着せ替え(普段の衣装を選ぶ)ができる。
+ * 「素体を一括で描く」で、カードで選んだキャラの素体を1人ずつ順に描く(BodyBaseBatch.tsx)。
  */
 
 interface Character {
@@ -72,6 +75,7 @@ const BACK = backState('キャラ一覧')
 export default function Characters() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { token } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const datasetId = Number(searchParams.get('dataset')) || null
 
@@ -88,6 +92,9 @@ export default function Characters() {
   const [images, setImages] = useState<DatasetImage[] | null>(null)
   const [zoomIndex, setZoomIndex] = useState<number | null>(null)
   const [blurAdult, setBlurAdult] = useLocalStorage('nai_library_blur_adult', true)
+  // 素体を一括で描く: 選ぶ表示にしているか・選んだキャラ
+  const [batchMode, setBatchMode] = useState(false)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     Promise.all([
@@ -155,6 +162,17 @@ export default function Characters() {
     else setSearchParams({}, { replace: true })
   }
 
+  function toggleSelected(id: number) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  // 描く順は一覧の並び(元のキャラ → 成長段階)。検索で隠れたキャラも、選んだままなら描く
+  const batchTargets = withStagesGrouped(characters).filter(c => selected.has(c.id)).map(c => ({ id: c.id, name: c.name }))
+
   const datasetCharacter = characters.find(c => c.id === datasetId) ?? null
   const zoomed = zoomIndex !== null && images ? images[zoomIndex] : null
 
@@ -164,6 +182,12 @@ export default function Characters() {
         <BackButton className="chars-back" />
         <h1>キャラ一覧</h1>
         <span className="chars-count">{loading ? '読み込み中…' : `${shown.length} / ${characters.length} 人`}</span>
+        {datasetId === null && (
+          <button type="button" className={batchMode ? 'chars-small chars-small--on' : 'chars-small'} aria-pressed={batchMode}
+            onClick={() => setBatchMode(on => !on)}>
+            素体を一括で描く
+          </button>
+        )}
       </header>
       {error && <p className="chars-error" role="alert">{error}</p>}
 
@@ -197,13 +221,32 @@ export default function Characters() {
         <>
           <input className="chars-search" type="search" placeholder="名前・メモ・タグで探す" value={query}
             onChange={e => setQuery(e.target.value)} />
+          {batchMode && (
+            <>
+              <BodyBaseBatch characters={batchTargets} token={token} />
+              <div className="chars-select-bar">
+                <span className="chars-count">{selected.size} 人を選んでいます</span>
+                <button type="button" className="chars-small"
+                  onClick={() => setSelected(prev => new Set([...prev, ...shown.map(c => c.id)]))}>
+                  表示中のキャラをすべて選ぶ
+                </button>
+                <button type="button" className="chars-small" disabled={selected.size === 0} onClick={() => setSelected(new Set())}>
+                  選択を外す
+                </button>
+              </div>
+            </>
+          )}
           {!loading && characters.length === 0 && <p className="chars-hint">まだキャラが登録されていません。</p>}
           <div className="chars-grid">
             {shown.map(c => {
               const list = works[String(c.id)] ?? []
               const count = counts[String(c.id)] ?? 0
               return (
-                <article key={c.id} className={c.growth_of !== null && nameOf.has(c.growth_of) ? 'chars-card chars-card--stage' : 'chars-card'}>
+                <article key={c.id} className={[
+                  'chars-card',
+                  c.growth_of !== null && nameOf.has(c.growth_of) ? 'chars-card--stage' : '',
+                  batchMode && selected.has(c.id) ? 'chars-card--chosen' : '',
+                ].filter(Boolean).join(' ')}>
                   {c.reference_image_path ? (
                     <button type="button" className="chars-ref" onClick={() => setZoomRef(c)} title="参照画像を拡大">
                       <img src={thumbUrl(c.reference_image_path, 360)} alt={`${c.name}の参照画像`} loading="lazy" />
@@ -212,6 +255,12 @@ export default function Characters() {
                     <div className="chars-ref chars-ref--none">参照画像なし</div>
                   )}
                   <div className="chars-body">
+                    {batchMode && (
+                      <label className="chars-check chars-pick">
+                        <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelected(c.id)} />
+                        選ぶ
+                      </label>
+                    )}
                     <h2>
                       {c.name}
                       {c.age !== null && <span className="chars-badge chars-badge--age">{c.age}歳</span>}
