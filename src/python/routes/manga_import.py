@@ -98,13 +98,25 @@ def _decode(data: str) -> bytes:
         raise HTTPException(status_code=400, detail="ファイルを読み取れませんでした。")
 
 
+def _status(item: dict[str, Any]) -> str:
+    """
+    取り込みの状態。読み取り中のまま処理が無いもの(読み取り中にサーバーを再起動した)は、止めたもの
+    (cancelled)として返す(読み取り中のままだと、読み取り直せない)。
+    """
+    if item["status"] == "analyzing":
+        job = _jobs.get(item["id"])
+        if job is None or job.status != "running":
+            return "cancelled"
+    return item["status"]
+
+
 def _summary(item: dict[str, Any]) -> dict[str, Any]:
     pages = (item.get("analysis") or {}).get("pages") or []
     return {
         "id": item["id"],
         "title": item["title"],
         "page_count": item["page_count"],
-        "status": item["status"],
+        "status": _status(item),
         "purpose": item.get("purpose") or "structure",
         "genre": item.get("genre") or "",
         "adult": bool(item.get("adult")),
@@ -139,6 +151,11 @@ async def _analyze(import_id: int, page_count: int, use_vision: bool, job: _Impo
         job.status = "done"
         job.message = f"{page_count}ページ・{sum(len(p['panels']) for p in pages)}コマを読み取りました"
         status = "analyzed"
+    except asyncio.CancelledError:
+        # 止めた(POST /cancel)。読み取ったページまでは保存してある
+        job.status = "cancelled"
+        job.message = f"止めました({len(pages)}/{page_count}ページを読み取りました)"
+        status = "cancelled"
     except Exception as exc:  # noqa: BLE001 失敗も状態として返す
         job.status = "error"
         job.detail = str(exc)
@@ -187,6 +204,10 @@ async def _make(import_id: int, req: MangaImportAutoRequest, api_key: str, job: 
         maker = make_rebuild if rebuild else make_similar
         job.story_id = await maker(import_id, req, api_key, job)
         job.status = "done"
+    except asyncio.CancelledError:
+        # 止めた(POST /cancel)。作り終えたコマ・ページは物語に残る
+        job.status = "cancelled"
+        job.message = "止めました"
     except Exception as exc:  # noqa: BLE001 失敗も状態として返す
         job.status = "error"
         job.detail = str(exc)
@@ -501,6 +522,22 @@ async def reanalyze(import_id: int, use_vision: bool = True, purpose: str | None
     return _job_response(
         _start(import_id, item["page_count"], use_vision, purpose or item.get("purpose") or "structure")
     )
+
+
+@router.post("/{import_id}/cancel")
+async def cancel_job(import_id: int) -> dict[str, Any] | None:
+    """
+    読み取り・漫画づくりを止める。読み取りは、読み取ったページまで保存して「止めた」状態になる
+    (読み取り直せる。似た漫画は作れない)。漫画づくりは、作り終えたコマ・ページが物語に残る。
+    """
+    _require(import_id)
+    job = _jobs.get(import_id)
+    if job is None or job.status != "running" or job.task is None or job.task.done():
+        raise HTTPException(status_code=409, detail="この取り込みは処理中ではありません。")
+    job.task.cancel()
+    # 止めた状態(job.status と取り込みの状態)を書き終えるまで待つ
+    await asyncio.wait([job.task], timeout=10)
+    return _job_response(job)
 
 
 def _start_make(import_id: int, req: MangaImportAutoRequest, api_key: str, *, rebuild: bool) -> dict[str, Any] | None:
