@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { fileUrl } from '../library'
 import FullscreenViewer from './FullscreenViewer'
+import SheetItemEditor, { type SheetItem } from './SheetItemEditor'
 import './FaceSheet.css'
 import './BodyBase.css'
 
@@ -26,6 +27,8 @@ interface Options {
   options: Record<Field, Choice[]>
   kinds: { value: BaseKind; label: string }[]
   groups: { id: string; label: string }[]
+  /** 部位の中身(全キャラ共通。コードの既定に、上書き・足した部位を重ねたもの) */
+  parts: SheetItem[]
 }
 
 interface Base extends Record<Field, string> {
@@ -161,6 +164,8 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zoomKey, setZoomKey] = useState<string | null>(null)
+  // 編集中の部位(item が null なら、group に足す)
+  const [editingPart, setEditingPart] = useState<{ item: SheetItem | null; group: string } | null>(null)
   // 2Dモデル(Blender で骨を入れたもの)
   const [rig, setRig] = useState<RigInfo | null>(null)
   const [rigMotion, setRigMotion] = useState('wave')
@@ -187,8 +192,11 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       .then(setBody)
       .catch(() => setBody(null))
   }
-  useEffect(() => {
+  function loadOptions() {
     fetch('/api/lora-dataset/body-bases/options').then(r => (r.ok ? r.json() : null)).then(setOptions).catch(() => {})
+  }
+  useEffect(() => {
+    loadOptions()
     loadBases()
   }, [])
   useEffect(loadBody, [characterId, rootName])
@@ -444,6 +452,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const busy = disabled || running
   const kindLabel = (kind: string) => options?.kinds.find(k => k.value === kind)?.label ?? kind
   const groups = options?.groups ?? []
+  const partItem = (key: string) => options?.parts.find(p => p.key === key) ?? null
   const drawn = groups.flatMap(g => (body?.parts ?? []).filter(p => p.group === g.id && p.path))
   const zoomIndex = drawn.findIndex(p => p.key === zoomKey)
   const zoom = zoomIndex >= 0 ? drawn[zoomIndex] : null
@@ -597,6 +606,8 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
           <div className="fsh-group-head">
             <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => pickGroup(group.id, false)}>全部選ぶ</button>
             <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => pickGroup(group.id, true)}>まだの部位を選ぶ</button>
+            <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+              onClick={() => setEditingPart({ item: null, group: group.id })}>＋ 部位を足す</button>
           </div>
           <div className="fsh-grid">
             {body.parts.filter(p => p.group === group.id).map(p => (
@@ -611,7 +622,12 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
                 <label className="fsh-label">
                   <input type="checkbox" checked={picked.has(p.key)} disabled={busy || !p.available} onChange={() => toggle(p.key)} />
                   {p.label}
+                  {partItem(p.key)?.edited && <span className="sie-badge">{partItem(p.key)?.builtin ? '編集済み' : '追加'}</span>}
                 </label>
+                <button type="button" className="sie-edit" disabled={busy || !partItem(p.key)} title={partItem(p.key)?.tags}
+                  onClick={() => setEditingPart({ item: partItem(p.key), group: p.group })}>
+                  ✎ プロンプト
+                </button>
                 {p.path && p.auto_check && (
                   <span className={p.auto_check.passed ? 'bdb-auto bdb-auto--ok' : 'bdb-auto bdb-auto--ng'}
                     title={p.auto_check.passed ? '自動チェックに合格' : `合格する絵が出なかったので、いちばん良い絵を残しました: ${p.auto_check.reasons.join('・')}`}>
@@ -856,6 +872,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
         </details>
       )}
 
+      {editingPart && options && (
+        <SheetItemEditor sheet="body" groups={options.groups} item={editingPart.item} group={editingPart.group} token={token}
+          onClose={() => setEditingPart(null)} onChanged={() => { loadOptions(); loadBody() }} />
+      )}
       {zoom?.path && (
         <FullscreenViewer
           src={`${fileUrl(zoom.path)}&v=${zoom.updated ?? 0}`}

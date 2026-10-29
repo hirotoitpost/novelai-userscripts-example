@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react'
 import { fileUrl } from '../library'
 import FullscreenViewer from './FullscreenViewer'
+import SheetItemEditor, { type SheetItem } from './SheetItemEditor'
 import './FaceSheet.css'
 
 /**
  * キャラシートの顔・表情シート。顔の向き(正面・側面・背面・見返り・逆立ち など)と表情(喜怒哀楽・羞恥・テヘペロ・
  * ウインク など)を選んで1枚ずつ描き、一覧で見る。キャラシートの見た目と基準シードで描くので、項目ごとの違いは
  * 向き・表情だけになりやすい。描いた絵はキャプション付きでデータセットのフォルダ(face_sheet/)に置く。
+ * 項目は全キャラ共通で、足したり、名前・プロンプト(足すタグ)・ネガティブ・サイズを書き換えたりできる(SheetItemEditor)。
  */
 
 interface Entry {
   key: string
   label: string
-  group: 'angle' | 'expression'
+  group: string
   path: string | null
   updated: number | null
 }
@@ -25,7 +27,8 @@ interface Props {
   disabled?: boolean
 }
 
-const GROUPS: { id: Entry['group']; label: string }[] = [
+// 項目のまとまり(サーバーから読めなかったときの既定)
+const DEFAULT_GROUPS: { id: string; label: string }[] = [
   { id: 'angle', label: '顔の向き・姿勢' },
   { id: 'expression', label: '表情' },
 ]
@@ -38,6 +41,10 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
   const [status, setStatus] = useState<string | null>(null)
   // 拡大して見ている項目のキー。左右で、描いてある項目を画面の並び順に前後する
   const [zoomKey, setZoomKey] = useState<string | null>(null)
+  // 項目の中身(プロンプト・ネガティブ など)とまとまり。編集中の項目(item が null なら足す)
+  const [items, setItems] = useState<SheetItem[]>([])
+  const [groups, setGroups] = useState(DEFAULT_GROUPS)
+  const [editing, setEditing] = useState<{ item: SheetItem | null; group: string } | null>(null)
 
   function load() {
     fetch(`/api/lora-dataset/character/${characterId}/face-sheet?root_name=${encodeURIComponent(rootName)}`)
@@ -45,7 +52,18 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
       .then(setEntries)
       .catch(() => setEntries([]))
   }
+  function loadItems() {
+    fetch('/api/lora-dataset/sheet-items/face')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (!data) return
+        setItems(data.items)
+        setGroups(data.groups)
+      })
+      .catch(() => {})
+  }
   useEffect(load, [characterId, rootName])
+  useEffect(loadItems, [])
   useEffect(() => setZoomKey(null), [characterId])
 
   function toggle(key: string) {
@@ -55,7 +73,7 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
     setPicked(next)
   }
 
-  function pickGroup(group: Entry['group'], onlyMissing: boolean) {
+  function pickGroup(group: string, onlyMissing: boolean) {
     const next = new Set(picked)
     for (const e of entries) if (e.group === group && (!onlyMissing || !e.path)) next.add(e.key)
     setPicked(next)
@@ -107,7 +125,8 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
   }
 
   const busy = disabled || running
-  const drawn = GROUPS.flatMap(group => entries.filter(e => e.group === group.id && e.path))
+  const drawn = groups.flatMap(group => entries.filter(e => e.group === group.id && e.path))
+  const itemOf = (key: string) => items.find(i => i.key === key) ?? null
   const zoomIndex = drawn.findIndex(e => e.key === zoomKey)
   const zoom = zoomIndex >= 0 ? drawn[zoomIndex] : null
 
@@ -118,12 +137,14 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
         描きたい項目を選んで「描く」を押すと、キャラシートの見た目と基準シードで1枚ずつ描きます(1枚ごとに Anlas を使います)。
         描いてある項目は描き直します。絵はキャプション付きで、データセットのフォルダの face_sheet/ に置きます。
       </p>
-      {GROUPS.map(group => (
+      {groups.map(group => (
         <div key={group.id}>
           <div className="fsh-group-head">
             <h4>{group.label}</h4>
             <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => pickGroup(group.id, false)}>全部選ぶ</button>
             <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => pickGroup(group.id, true)}>まだの項目を選ぶ</button>
+            <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+              onClick={() => setEditing({ item: null, group: group.id })}>＋ 項目を足す</button>
           </div>
           <div className="fsh-grid">
             {entries.filter(e => e.group === group.id).map(e => (
@@ -138,7 +159,12 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
                 <label className="fsh-label">
                   <input type="checkbox" checked={picked.has(e.key)} disabled={busy} onChange={() => toggle(e.key)} />
                   {e.label}
+                  {itemOf(e.key)?.edited && <span className="sie-badge">{itemOf(e.key)?.builtin ? '編集済み' : '追加'}</span>}
                 </label>
+                <button type="button" className="sie-edit" disabled={busy || !itemOf(e.key)}
+                  title={itemOf(e.key)?.tags} onClick={() => setEditing({ item: itemOf(e.key), group: e.group })}>
+                  ✎ プロンプト
+                </button>
               </div>
             ))}
           </div>
@@ -154,6 +180,10 @@ export default function FaceSheet({ characterId, characterName, token, rootName,
         </button>
         {status && <span className="lora-hint">{status}</span>}
       </div>
+      {editing && (
+        <SheetItemEditor sheet="face" groups={groups} item={editing.item} group={editing.group} token={token}
+          onClose={() => setEditing(null)} onChanged={() => { loadItems(); load() }} />
+      )}
       {zoom?.path && (
         <FullscreenViewer
           src={`${fileUrl(zoom.path)}&v=${zoom.updated ?? 0}`}

@@ -13,10 +13,13 @@
   胸・腹・骨盤・大腿の寄りの絵は描かない(全身図で確かめる。部位の nude が False のもの)。
 
 部位は解剖学の区分(全身・頭頸部・体幹・上肢・下肢)で並べ、1枚ごとに、人体の構造として確かめる点(check)を添える。
+部位はコードの既定(PARTS)に、DB(sheet_items の sheet='body')の上書き(名前・タグ・ネガティブ・サイズ・確かめる点)と、
+利用者が足した部位を重ねたもの(parts)。全キャラで共通。足した部位は、裸の素体では描かない(胸・腹の寄りと同じ扱い)。
 """
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -188,10 +191,31 @@ def option_problems(text: str) -> list[str]:
     return sorted(set(clean_extra(text)) | set(minor_words(text)))
 
 
-def presets() -> list[dict[str, Any]]:
+def parts(rows: list[dict[str, Any]] | None = None) -> dict[str, BodyPart]:
+    """
+    使う部位: コードの既定に、DB の上書き・足した部位(db.list_sheet_items(conn, "body") の行)を重ねる。
+    上書きでは、裸の素体で描くか・真後ろの部位かは既定のまま。足した部位は裸の素体では描かない。
+    """
+    result = dict(ITEMS)
+    for row in rows or []:
+        fields = {
+            "label": row["label"], "tags": row["tags"], "group": row["grp"], "check": row["check_text"],
+            "size": row["size"], "negative": row["negative"],
+        }
+        builtin = ITEMS.get(row["key"])
+        result[row["key"]] = dataclasses.replace(builtin, **fields) if builtin else BodyPart(row["key"], nude=False, **fields)
+    return result
+
+
+def presets(rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """画面の部位の一覧。builtin はコードの部位(消すと既定に戻る)、edited は DB で上書き・足したもの。"""
+    edited = {row["key"] for row in rows or []}
     return [
-        {"key": p.key, "label": p.label, "group": p.group, "tags": p.tags, "check": p.check, "nude": p.nude}
-        for p in PARTS
+        {
+            "key": p.key, "label": p.label, "group": p.group, "tags": p.tags, "check": p.check, "nude": p.nude,
+            "negative": p.negative, "size": p.size, "builtin": p.key in ITEMS, "edited": p.key in edited,
+        }
+        for p in parts(rows).values()
     ]
 
 

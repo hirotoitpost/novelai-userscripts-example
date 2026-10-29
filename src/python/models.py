@@ -494,6 +494,21 @@ class CharacterBodyBaseRequest(BaseModel):
     body_base_id: Optional[int] = None
 
 
+class SheetItemRequest(BaseModel):
+    """
+    顔・表情シート・素体の項目の追加と書き換え(全キャラ共通)。group は face なら angle / expression、body なら
+    whole / head / trunk / upper_limb / lower_limb。tags はその項目で足すプロンプト(構図を含む)。
+    """
+
+    label: str = Field(min_length=1, max_length=40)
+    group: str
+    tags: str = Field(min_length=1, max_length=1000)
+    negative: str = Field("", max_length=1000)
+    size: Literal["square", "portrait"] = "square"
+    # 素体だけ: 人体の構造として確かめる点(画面に出す)
+    check: str = Field("", max_length=400)
+
+
 class BodyBaseSheetRequest(FaceSheetRequest):
     """
     キャラに当てた素体で、部位(body_base.PARTS のキー)を1枚ずつ描く。描いてある部位は描き直す(上書き)。

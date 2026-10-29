@@ -793,6 +793,26 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     first_body_options = (
         conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'body_base_options'").fetchone() is None
     )
+    # 顔・表情シート(face_sheet.py)と素体(body_base.py)の項目の上書きと追加。sheet は face か body。key がコードの
+    # 項目(正面 など)なら、その項目の名前・タグ・ネガティブ・サイズ・確かめる点を上書きする(消すと既定に戻る)。
+    # それ以外の key は利用者が足した項目(custom_<番号>)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sheet_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sheet TEXT NOT NULL,
+            key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            grp TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '',
+            negative TEXT NOT NULL DEFAULT '',
+            size TEXT NOT NULL DEFAULT 'square',
+            check_text TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE (sheet, key)
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS body_base_options (
@@ -3622,6 +3642,48 @@ def set_character_outfit(conn: sqlite3.Connection, character_id: int, outfit_id:
     else:
         conn.execute("UPDATE characters SET outfit_id = ?, outfit_tags = ? WHERE id = ?", (outfit_id, outfit_tags, character_id))
     conn.commit()
+
+
+def list_sheet_items(conn: sqlite3.Connection, sheet: str) -> list[dict[str, Any]]:
+    """顔・表情シート(face)・素体(body)の項目の上書きと追加(足した順)。"""
+    return [dict(row) for row in conn.execute("SELECT * FROM sheet_items WHERE sheet = ? ORDER BY id", (sheet,))]
+
+
+def save_sheet_item(conn: sqlite3.Connection, sheet: str, key: str, item: dict[str, Any]) -> None:
+    """項目を上書きする(無ければ足す)。item は label・grp・tags・negative・size・check_text。"""
+    conn.execute(
+        """
+        INSERT INTO sheet_items (sheet, key, label, grp, tags, negative, size, check_text, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(sheet, key) DO UPDATE SET
+            label = excluded.label, grp = excluded.grp, tags = excluded.tags, negative = excluded.negative,
+            size = excluded.size, check_text = excluded.check_text
+        """,
+        (
+            sheet, key, item["label"], item["grp"], item["tags"], item.get("negative") or "", item.get("size") or "square",
+            item.get("check_text") or "", datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+
+
+def next_sheet_item_key(conn: sqlite3.Connection, sheet: str) -> str:
+    """
+    足す項目のキー(custom_<番号>)。消した項目の番号は使い回さない(前に描いた絵のファイル名と重ならないように。
+    AUTOINCREMENT の連番を使う)。
+    """
+    row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'sheet_items'").fetchone()
+    number = int(row[0]) + 1 if row else 1
+    while conn.execute("SELECT 1 FROM sheet_items WHERE sheet = ? AND key = ?", (sheet, f"custom_{number}")).fetchone():
+        number += 1
+    return f"custom_{number}"
+
+
+def delete_sheet_item(conn: sqlite3.Connection, sheet: str, key: str) -> bool:
+    """項目の上書き・追加を消す(コードの項目は既定に戻る)。消したら True。"""
+    cur = conn.execute("DELETE FROM sheet_items WHERE sheet = ? AND key = ?", (sheet, key))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def list_body_base_options(conn: sqlite3.Connection) -> list[dict[str, Any]]:

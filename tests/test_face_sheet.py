@@ -91,3 +91,55 @@ def test_face_sheet_image_is_served(client: TestClient, tmp_path: Path, monkeypa
     assert res.status_code == 200 and res.headers["content-type"] == "image/png"
     # キャプションなど png 以外は出さない
     assert client.get("/api/library/file", params={"path": path.replace(".png", ".txt")}).status_code == 403
+
+
+def test_face_sheet_items_can_be_added_edited_and_reset(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    prompts: list[str] = []
+    negatives: list[str] = []
+
+    async def fake_generate(client, prompt, size, cfg, seed=None, inpaint=None):  # noqa: ANN001
+        prompts.append(prompt)
+        negatives.append(cfg.negative_prompt)
+        return Image.new("RGB", size, (200, 200, 200))
+
+    monkeypatch.setattr(lora_routes, "generate_one", fake_generate)
+    character = client.post("/api/story/characters/new", json={"name": "ゆら", "appearance_tags": "1girl", "trigger_word": "yura"}).json()
+
+    # 項目を足す(全キャラ共通)。キーは custom_<番号>
+    res = client.post(
+        "/api/lora-dataset/sheet-items/face",
+        json={"label": "ピース", "group": "expression", "tags": "portrait, smile, peace sign", "negative": "frown", "size": "portrait"},
+    )
+    assert res.status_code == 200, res.text
+    key = res.json()["key"]
+    assert key.startswith("custom_")
+    added = {i["key"]: i for i in res.json()["items"]}[key]
+    assert added["builtin"] is False and added["edited"] is True and added["size"] == "portrait"
+    # コードの項目のプロンプトを書き換える
+    res = client.put(
+        "/api/lora-dataset/sheet-items/face/front",
+        json={"label": "正面(腕組み)", "group": "angle", "tags": "front view, upper body, crossed arms"},
+    )
+    front = {i["key"]: i for i in res.json()["items"]}["front"]
+    assert front["label"] == "正面(腕組み)" and front["builtin"] and front["edited"]
+    assert [p["key"] for p in client.get("/api/lora-dataset/face-sheet/presets").json()][-1] == key
+
+    res = client.post(f"/api/lora-dataset/character/{character['id']}/face-sheet", json={"keys": ["front", key]})
+    assert res.text.count('"status": "ok"') == 2
+    assert "crossed arms" in prompts[-2] and "peace sign" in prompts[-1]
+    # 項目のネガティブは、その項目にだけ足す
+    assert "frown" not in negatives[0] and "frown" in negatives[1]
+    entries = {e["key"]: e for e in client.get(f"/api/lora-dataset/character/{character['id']}/face-sheet").json()}
+    assert entries[key]["label"] == "ピース" and entries[key]["path"]
+
+    # 既定に戻す・足した項目を消す
+    assert {i["key"]: i for i in client.delete("/api/lora-dataset/sheet-items/face/front").json()["items"]}["front"]["label"] == "正面"
+    assert key not in {i["key"] for i in client.delete(f"/api/lora-dataset/sheet-items/face/{key}").json()["items"]}
+    assert client.delete(f"/api/lora-dataset/sheet-items/face/{key}").status_code == 404
+    # 消した項目の番号は使い回さない(前に描いた絵と重ならない)
+    again = client.post("/api/lora-dataset/sheet-items/face", json={"label": "x", "group": "angle", "tags": "from side"}).json()["key"]
+    assert again != key
+    # まとまり・シートの名前を確かめる
+    assert client.post("/api/lora-dataset/sheet-items/face", json={"label": "x", "group": "trunk", "tags": "x"}).status_code == 422
+    assert client.get("/api/lora-dataset/sheet-items/hair").status_code == 404
+    assert client.put("/api/lora-dataset/sheet-items/face/nothing", json={"label": "x", "group": "angle", "tags": "x"}).status_code == 404
