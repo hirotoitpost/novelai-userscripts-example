@@ -174,6 +174,8 @@ def test_terms_fix_misread_kanji_and_must_appear_in_the_text() -> None:
     assert manga_rebuild.fix_terms("こちら捧乳科の窓口です。１00０搾った", ["搾乳科"]) == "こちら搾乳科の窓口です。1000搾った"
     # 2字の用語では直さない(「母乳」を「搾乳」にしてしまう)
     assert manga_rebuild.fix_terms("母乳が出る", ["搾乳"]) == "母乳が出る"
+    # 最後の字だけ違うものは別の言葉(搾乳機・搾乳活動)なので直さない
+    assert manga_rebuild.fix_terms("搾乳機を付けて搾乳活動", ["搾乳科"]) == "搾乳機を付けて搾乳活動"
 
 
 def test_japanese_pages_are_not_rewritten_by_the_model(monkeypatch: pytest.MonkeyPatch) -> None:

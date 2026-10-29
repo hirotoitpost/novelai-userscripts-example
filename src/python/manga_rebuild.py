@@ -137,14 +137,22 @@ def _inside_misreading(text: str, start: int, length: int, terms: list[str]) -> 
     return False
 
 
+def _misread(window: str, term: str) -> bool:
+    """
+    用語の読み違いとして直してよいか: 漢字1字違いで、違うのが最後の字ではない。最後の字だけ違うものは、別の
+    言葉のことが多い(実機: 「搾乳科」に合わせて「搾乳機」「搾乳活動」「搾乳練習」まで「搾乳科」にした)。
+    """
+    return _near(window, term) and window[-1] == term[-1]
+
+
 def fix_terms(text: str, terms: list[str]) -> str:
-    """セリフの中の、作品の用語の読み違い(漢字1字違い。3字以上の用語)を直し、全角の数字を半角にする。"""
+    """セリフの中の、作品の用語の読み違い(_misread。3字以上の用語)を直し、全角の数字を半角にする。"""
     text = text.translate(_WIDE_DIGITS)
     for term in terms:
         if len(term) < 3 or term in text:
             continue
         for i in range(len(text) - len(term) + 1):
-            if _near(text[i : i + len(term)], term):
+            if _misread(text[i : i + len(term)], term):
                 text = text[:i] + term + text[i + len(term) :]
     return text
 
