@@ -5,6 +5,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage'
 import ChunkPicker from '../components/ChunkPicker'
 import TagTextarea from '../components/TagTextarea'
 import SheetFromPromptDialog, { SheetSource } from '../components/SheetFromPromptDialog'
+import CharacterFromImage from '../components/CharacterFromImage'
 import { naiImageFilename } from '../downloadFilename'
 import type { Character } from '../components/StoryCharacters'
 import {
@@ -1324,6 +1325,18 @@ export default function ImageGenerate() {
                 <button type="button" className="ig-action-btn ig-action-btn--secondary" onClick={generate}>
                   🔄 再生成
                 </button>
+                {token && (
+                  <CharacterFromImage token={token} className="ig-action-btn ig-action-btn--secondary"
+                    image={async () => {
+                      const blob = await (await fetch(result.src)).blob()
+                      return await new Promise<string>((resolve, reject) => {
+                        const reader = new FileReader()
+                        reader.onload = () => resolve(reader.result as string)
+                        reader.onerror = () => reject(reader.error)
+                        reader.readAsDataURL(blob)
+                      })
+                    }} />
+                )}
               </div>
               <div className="ig-result-tools">
                 <span className="ig-result-tools-label">仕上げ</span>

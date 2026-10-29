@@ -567,6 +567,12 @@ def embedded_prompt(data: bytes) -> dict[str, Any] | None:
     }
 
 
+def character_names() -> set[str]:
+    """判定モデルが知っているキャラ名のタグ(既存の作品のキャラ。_ は空白にしたもの)。"""
+    _, tags = _get_session()
+    return {name.replace("_", " ") for name, category in tags if category == _CHARACTER}
+
+
 def vocabulary() -> set[str]:
     """判定モデルが知っているタグ(danbooru の語彙、_ は空白にしたもの)。"""
     _, tags = _get_session()
