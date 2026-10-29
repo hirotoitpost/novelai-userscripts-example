@@ -2,9 +2,10 @@
 取り込んだ漫画を、セリフごと台本に起こす(取り込みの使い方 rebuild)。自分の作品(権利のある作品)を、
 このアプリで描き直すためのもの。
 
-セリフの文面は読み取ったもの(画面で直したもの)を使う。整える(clean_page)ときだけ、文章モデルに文字の
-読み違いを直させ、英語のセリフを日本語に訳させ、セリフでない文字(広告・クレジット・意味のないかけら)を
-外させる(言い回しは変えさせない)。描き文字(効果音)は、画面で読みを入れたものを台本の効果音にする
+セリフの文面は読み取ったもの(画面で直したもの)を使う。整える(clean_page)ときは、作品の用語(work_terms)の
+読み違いを直す。英語のページ(英訳の漫画)だけ、文章モデルに文字の読み違いを直させ、日本語に訳させ、セリフでない
+文字(広告・クレジット・意味のないかけら)を外させる。日本語のページは文章モデルに書き換えさせない(読み取りは
+十分正確で、書き換えさせると意味が変わったり言葉が和らげられたりした)。描き文字(効果音)は、画面で読みを入れたものを台本の効果音にする
 (読みの無い候補は入れない)。話し手を決める(assign_page)ときに文章モデル(NovelAI の GLM)に決めさせるのは、
 各セリフの話し手・声か心の声か・コマに描く人物・所作のタグを誰に付けるか、だけ。セリフの文面は返させない
 (書き換えさせない)。
@@ -12,11 +13,16 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .manga_draft import DraftCharacter, _ask_json, _clean_tags
 
 _MAX_ATTEMPTS = 3
+_KANJI = re.compile(r"[\u3400-\u9fff]")
+_JAPANESE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+# 全角の数字(「100０」「１0００」のように半角と混ざって読める)
+_WIDE_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 # 台本の1コマに入れられるセリフの数(models.MangaDraftPanel.lines の上限)
 MAX_LINES = 8
 # 台本の1コマに入れる効果音の数(manga_draft.parse_episode と同じ)
@@ -58,7 +64,98 @@ def _texts(panel: dict[str, Any]) -> list[str]:
     return [text for text in texts if text][:MAX_LINES]
 
 
-def clean_prompts(panels: list[dict[str, Any]]) -> tuple[str, str]:
+# 作品の用語(固有名詞・造語)の数と長さの上限、用語を探すときに渡すセリフの長さの上限
+MAX_TERMS = 12
+_TERM_CHARS = 16
+_TERMS_INPUT_CHARS = 6000
+
+_TERMS_SYSTEM = f"""漫画1作品分のセリフを渡します。絵から文字認識で読み取ったもので、読み違い(形の似た漢字への置き換え・字の抜け)が
+混ざっています。作品の中で繰り返し出てくる固有名詞(人名・組織名・部署名など)と造語・用語を、前後の文脈から推し量った
+正しい表記で挙げてください。JSONだけを返してください(前置きや```は不要):
+{{"terms":["正しい表記"]}}
+- 読み違いで表記がばらばらになっているものは、正しい1つにまとめる(例: 「魔法少女」「魔法小女」「麻法少女」→ 魔法少女)
+- 1回しか出てこない、ありふれた言葉は入れない
+- {MAX_TERMS}個まで。無ければ空の配列"""
+
+
+def terms_prompt(pages: list[list[dict[str, Any]]]) -> str:
+    texts = [text for panels in pages for panel in panels for text in _texts(panel)]
+    return "\n".join(texts)[:_TERMS_INPUT_CHARS]
+
+
+async def work_terms(api_key: str, pages: list[list[dict[str, Any]]]) -> list[str]:
+    """作品の中で繰り返し出てくる固有名詞・用語の正しい表記(セリフを整えるときの手がかり)。分からなければ空。"""
+    user = terms_prompt(pages)
+    if not user:
+        return []
+    try:
+        data = await _ask_json(api_key, _TERMS_SYSTEM, user, max_tokens=600, temperature=0.2)
+    except (ValueError, RuntimeError):
+        return []
+    raw = data.get("terms") if isinstance(data, dict) else None
+    terms = [str(t).strip()[:_TERM_CHARS] for t in raw if str(t).strip()] if isinstance(raw, list) else []
+    return checked_terms(list(dict.fromkeys(terms)), user)[:MAX_TERMS]
+
+
+def _near(window: str, term: str) -> bool:
+    """同じ長さで、漢字1字だけ違うか(形の似た漢字への読み違い)。"""
+    diffs = [i for i, (a, b) in enumerate(zip(window, term)) if a != b]
+    return len(diffs) == 1 and bool(_KANJI.match(window[diffs[0]])) and bool(_KANJI.match(term[diffs[0]]))
+
+
+def _appears(term: str, text: str) -> bool:
+    """セリフに出てくるか(3字以上の用語は、漢字1字違いの読み違いも数える)。"""
+    if term in text:
+        return True
+    return len(term) >= 3 and any(_near(text[i : i + len(term)], term) for i in range(len(text) - len(term) + 1))
+
+
+def checked_terms(terms: list[str], text: str) -> list[str]:
+    """
+    文章モデルが挙げた用語のうち、セリフに出てくるもの。出てくる所がどれも、先に挙げた用語の読み違いの中に
+    あるもの(「搾乳科」のあとの「捧乳」。「捧乳科」の中にしか出てこない)は外す。実機では、出てこない人名や、
+    作った言葉も挙げた。
+    """
+    kept: list[str] = []
+    for term in terms:
+        if not _appears(term, text):
+            continue
+        spots = [i for i in range(len(text) - len(term) + 1) if text.startswith(term, i)]
+        if spots and all(_inside_misreading(text, i, len(term), kept) for i in spots):
+            continue
+        kept.append(term)
+    return kept
+
+
+def _inside_misreading(text: str, start: int, length: int, terms: list[str]) -> bool:
+    """text の start から length 字が、terms のどれかの読み違い(漢字1字違い)の中にあるか。"""
+    for term in terms:
+        for begin in range(max(0, start + length - len(term)), start + 1):
+            window = text[begin : begin + len(term)]
+            if len(window) == len(term) and _near(window, term):
+                return True
+    return False
+
+
+def fix_terms(text: str, terms: list[str]) -> str:
+    """セリフの中の、作品の用語の読み違い(漢字1字違い。3字以上の用語)を直し、全角の数字を半角にする。"""
+    text = text.translate(_WIDE_DIGITS)
+    for term in terms:
+        if len(term) < 3 or term in text:
+            continue
+        for i in range(len(text) - len(term) + 1):
+            if _near(text[i : i + len(term)], term):
+                text = text[:i] + term + text[i + len(term) :]
+    return text
+
+
+def japanese_page(panels: list[dict[str, Any]]) -> bool:
+    """日本語の漫画のページか(セリフの半分より多くに、かな・漢字がある)。"""
+    texts = [text for panel in panels for text in _texts(panel)]
+    return sum(1 for text in texts if _JAPANESE.search(text)) * 2 > len(texts)
+
+
+def clean_prompts(panels: list[dict[str, Any]], terms: list[str] | None = None) -> tuple[str, str]:
     blocks = []
     for index, panel in enumerate(panels):
         texts = _texts(panel)
@@ -67,7 +164,13 @@ def clean_prompts(panels: list[dict[str, Any]]) -> tuple[str, str]:
         if not texts:
             rows.append("  セリフなし")
         blocks.append("\n".join(rows))
-    return _CLEAN_SYSTEM, "\n".join(blocks)
+    system = _CLEAN_SYSTEM
+    if terms:
+        system += (
+            "\n- この作品の用語(正しい表記): " + "、".join(terms)
+            + "。セリフの中の、これらに似た読み違いは、この表記に直す"
+        )
+    return system, "\n".join(blocks)
 
 
 def parse_cleaned(data: Any, panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -92,11 +195,22 @@ def parse_cleaned(data: Any, panels: list[dict[str, Any]]) -> list[dict[str, Any
     return result
 
 
-async def clean_page(api_key: str, panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """1ページ分のセリフを整える(読み違いを直し、日本語にし、セリフでない文字を外す)。整えられなければ読み取ったまま。"""
+async def clean_page(
+    api_key: str, panels: list[dict[str, Any]], terms: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """
+    1ページ分のセリフを整える。terms は作品の用語の正しい表記(work_terms)。日本語のページは、用語の読み違いと
+    全角の数字だけを直す(fix_terms)。英語のページは文章モデルで、読み違いを直し、日本語にし、セリフでない文字を
+    外す(整えられなければ読み取ったまま)。
+    """
     if not any(_texts(p) for p in panels):
         return panels
-    system, user = clean_prompts(panels)
+    if japanese_page(panels):
+        return [
+            {**panel, "lines": [{**line, "text": fix_terms(str(line.get("text") or ""), terms or [])} for line in panel.get("lines") or []]}
+            for panel in panels
+        ]
+    system, user = clean_prompts(panels, terms)
     for _ in range(_MAX_ATTEMPTS):
         try:
             data = await _ask_json(api_key, system, user, max_tokens=2500, temperature=0.2)

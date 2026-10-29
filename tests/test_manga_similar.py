@@ -34,6 +34,24 @@ def test_cluster_people_by_gender_and_hair() -> None:
     assert set(people[1].tags) == {"brown hair", "glasses", "necktie"}
 
 
+def test_cluster_people_keeps_both_genders_and_ignores_colour_in_black_and_white() -> None:
+    # 白黒の作品: 同じ女性がコマによって金髪にも黒髪にも読まれる。髪の色で分けず、髪の色は一番多いものだけ
+    guesses = [
+        ("1girl", ["blonde hair", "ponytail", "large breasts"]),
+        ("1girl", ["black hair", "ponytail", "large breasts"]),
+        ("1girl", ["black hair", "ponytail"]),
+        ("1girl", ["black hair", "blonde hair", "large breasts"]),
+        ("1girl", ["black hair", "large breasts"]),
+        ("1boy", ["bald"]),
+    ]
+    people = manga_similar.cluster_people(guesses, monochrome=True)
+    assert [(p.gender, p.count) for p in people] == [("1girl", 5), ("1boy", 1)]
+    assert set(people[0].tags) == {"black hair", "ponytail", "large breasts"}
+    # カラーでは髪の色で分ける。それでも、両方の性別が出てくれば性別ごとに1人ずつ選ぶ
+    people = manga_similar.cluster_people(guesses)
+    assert sorted(p.gender for p in people) == ["1boy", "1girl"]
+
+
 def test_read_pages_keeps_setting_and_drops_unsafe_tags(monkeypatch) -> None:
     scores = [
         TagScore("comic", 0.9, "general"),

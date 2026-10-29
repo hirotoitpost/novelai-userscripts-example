@@ -610,6 +610,10 @@ _PAGE_SYSTEM = f"""あなたは漫画の編集者です。漫画の1ページ分
 {_ROLE_LINES}
 - 感情はどれか1つ: {" / ".join(EMOTIONS)}
 - 同じ役割ばかりにしない。話の流れ(前後のコマのセリフ)から決める"""
+# 成人向けの作品(R18 の取り込み)で足す決まり(性的な場面のコマを「ボケ」「ツッコミ」にしていた)
+_ADULT_PAGE_RULE = """
+- 成人向けの作品です。性的な場面のコマは、ボケ・ツッコミにしない(やりとりなら会話、盛り上がりの山場なら感動、
+  意外な展開なら驚き)。感情は、快感・興奮・照れ・困惑なども場面に合わせて使う"""
 
 
 def classify_context(panel: PanelInfo, page: int, pages: int, index: int, count: int) -> str:
@@ -641,11 +645,11 @@ def normalize_emotion(answer: str) -> str:
 
 
 async def classify_page(
-    api_key: str, panels: list[PanelInfo], page: int, pages: int
+    api_key: str, panels: list[PanelInfo], page: int, pages: int, *, adult: bool = False
 ) -> list[tuple[str, str]] | None:
     """
     1ページ分のコマの(役割, 感情)を文章モデル(NovelAI の GLM)に決めさせる。答えが使えなければ None
-    (画像モデルで読む)。
+    (画像モデルで読む)。adult は成人向けの作品(R18 の取り込み)。
     """
     from .manga_draft import _ask_json
 
@@ -655,7 +659,8 @@ async def classify_page(
         f"{k + 1}コマ目:\n" + classify_context(panel, page, pages, k, len(panels)) for k, panel in enumerate(panels)
     )
     try:
-        data = await _ask_json(api_key, _PAGE_SYSTEM, user, max_tokens=1500, temperature=0.3)
+        system = _PAGE_SYSTEM + (_ADULT_PAGE_RULE if adult else "")
+        data = await _ask_json(api_key, system, user, max_tokens=1500, temperature=0.3)
     except (RuntimeError, ValueError) as exc:
         logger.warning("コマの役割を文章モデルで決められませんでした: %s", exc)
         return None
