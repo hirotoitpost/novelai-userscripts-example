@@ -333,8 +333,9 @@ def _work_lines(item: dict[str, Any]) -> list[str]:
 
 async def _create_cast(import_id: int, features: Any, genre: str, api_key: str, job: Any) -> list[dict[str, Any]]:
     """
-    読み取った人物(features.people)をキャラ一覧に作り、取り込みに覚えさせる(cast_ids)。名前は、自分の作品なら
-    セリフの呼びかけ・名乗りから拾い、分からなければ文章モデルが考える(name_people)。同じ名前のキャラが
+    読み取った人物(features.people)をキャラ一覧に作り、取り込みに覚えさせる(cast_ids)。名前は、判定モデルが
+    キャラ名(既存の作品のキャラ)を見分けた人物はそのキャラの名前、自分の作品ならセリフの呼びかけ・名乗りから拾い、
+    分からなければ文章モデルが考える(name_people)。同じ名前のキャラが
     すでにあれば、名前に番号を付けて別のキャラにする(元のキャラを書き換えない)。
     """
     from ..db import save_character, update_character_sheet
@@ -356,7 +357,9 @@ async def _create_cast(import_id: int, features: Any, genre: str, api_key: str, 
             while get_character_by_name(conn, name) or name in taken:
                 name = f"{info['name']}{suffix}"
                 suffix += 1
-            tags = [person.gender, *person.tags, *[t for t in info.get("look", "").split(", ") if t]]
+            # 判定モデルが見分けたキャラは、キャラ名のタグも容姿に入れる(NovelAI はキャラ名で描き分ける)
+            character = [person.character] if person.character else []
+            tags = [person.gender, *character, *person.tags, *[t for t in info.get("look", "").split(", ") if t]]
             notes = f"{info['profile']}(取り込み「{item['title']}」の人物)"
             created = save_character(conn, name, ", ".join(dict.fromkeys(tags)), notes)
             age = info.get("age")

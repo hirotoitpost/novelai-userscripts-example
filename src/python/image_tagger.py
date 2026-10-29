@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import csv
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -436,11 +436,15 @@ def _is_person_tag(tag: str) -> bool:
 
 @dataclass
 class CharacterGuess:
-    """推定した人物。tags はその人だけのタグ(確率の高い順)、center はキャラの位置(画像に対する割合)。"""
+    """
+    推定した人物。tags はその人だけのタグ(確率の高い順)、center はキャラの位置(画像に対する割合)。
+    characters は、その人の切り抜きで CHARACTER_THRESHOLD 以上だったキャラ名のタグ(既存の作品のキャラ)。
+    """
 
     gender: str
     tags: list[str]
     center: tuple[float, float]
+    characters: list[str] = field(default_factory=list)
 
     @property
     def prompt(self) -> str:
@@ -483,9 +487,11 @@ def split_characters(image: Image.Image) -> list[CharacterGuess]:
     heads = sorted(detect_heads_in_image(image), key=lambda b: (b[0] + b[2]) / 2)[:_MAX_CHARACTERS]
     if len(heads) < 2:
         return []
-    per_person = [
-        {s.tag: s.probability for s in tag_image(crop) if s.category == "general"}
-        for crop in _person_crops(image, heads)
+    scores = [tag_image(crop) for crop in _person_crops(image, heads)]
+    per_person = [{s.tag: s.probability for s in person if s.category == "general"} for person in scores]
+    named = [
+        [s.tag for s in person if s.category == "character" and s.probability >= CHARACTER_THRESHOLD]
+        for person in scores
     ]
     skip = set(_COUNT_TAGS) | set(STYLE_TAGS) | set(FRAMING_TAGS) | _SCENE_ONLY
     assigned: list[list[tuple[float, str]]] = [[] for _ in heads]
@@ -497,13 +503,13 @@ def split_characters(image: Image.Image) -> list[CharacterGuess]:
             assigned[best].append((values[best], tag))
     width = image.width
     guesses = []
-    for (x0, y0, x1, y1), person, tags in zip(heads, per_person, assigned):
+    for (x0, y0, x1, y1), person, tags, characters in zip(heads, per_person, assigned, named):
         gender = max(("1girl", "1boy", "1other"), key=lambda g: person.get(g, 0.0))
         names = [tag for _, tag in sorted(tags, reverse=True)]
         names = [t for t in names if not _implied(t, names)]
         # 位置は頭の中心の左右。上下は真ん中にする(座っている・寝ているなどで体の中心が読みにくいため)
         center = (_grid((x0 + x1) / 2 / width), 0.5)
-        guesses.append(CharacterGuess(gender, names, center))
+        guesses.append(CharacterGuess(gender, names, center, characters))
     return guesses
 
 
