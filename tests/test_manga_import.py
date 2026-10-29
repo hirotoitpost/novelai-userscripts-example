@@ -132,12 +132,47 @@ def test_analyze_page_with_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_parse_role_from_answer_or_thinking() -> None:
     assert parse_role({"content": '{"role": "導入", "emotion": "喜び"}'}) == ("導入", "喜び")
     # 選択肢そのままでない答えは、含まれる語で拾う
-    assert parse_role({"content": '{"role": "会話シーン", "emotion": "穏やか"}'}) == ("会話", "穏やか")
+    # 感情は決まった中から(選択肢にない言い回しは読み替える。読み替えられなければ空)
+    assert parse_role({"content": '{"role": "会話シーン", "emotion": "穏やか"}'}) == ("会話", "平静")
+    assert parse_role({"content": '{"role": "導入", "emotion": "主な感情を1語"}'}) == ("導入", "")
     # 答えが空で、思考の中に JSON があるとき
     thinking = 'まず人物を見る…最終的に {"role": "オチ", "emotion": "笑い"} とする'
     assert parse_role({"content": "", "thinking": thinking}) == ("オチ", "笑い")
     assert parse_role({"content": "", "thinking": "考え中…"}) is None
     assert parse_role({"content": '{"role": "", "emotion": ""}'}) is None
+
+
+def test_classify_page_asks_the_text_model_with_tags_and_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from python import manga_draft
+
+    asked: list[str] = []
+
+    async def answer(api_key, system, user, **kwargs):
+        asked.append(user)
+        return {"panels": [{"role": "導入シーン", "emotion": "嬉しい"}, {"role": "謎", "emotion": "照れ"}]}
+
+    monkeypatch.setattr(manga_draft, "_ask_json", answer)
+    panels = [
+        manga_import.PanelInfo((0, 0, 10, 10), 1, "medium", 1, cast_tags=["1girl"], lines=[{"text": "おはよう"}], detailed=True),
+        manga_import.PanelInfo((0, 10, 10, 10), 0, "no humans", 0, scene_tags=["office"], detailed=True),
+    ]
+    assert asyncio.run(manga_import.classify_page("key", panels, 0, 11)) == [("導入", "喜び"), ("", "照れ")]
+    assert "全11ページの1ページ目、2コマ中1コマ目" in asked[0] and "「おはよう」" in asked[0] and "セリフなし" in asked[0]
+
+    # コマ数が足りない答え・答えられないときは None(画像モデルで読む)
+    async def short(api_key, system, user, **kwargs):
+        return {"panels": [{"role": "会話", "emotion": "喜び"}]}
+
+    monkeypatch.setattr(manga_draft, "_ask_json", short)
+    assert asyncio.run(manga_import.classify_page("key", panels, 0, 11)) is None
+
+    async def broken(api_key, system, user, **kwargs):
+        raise RuntimeError("応答を読み取れません")
+
+    monkeypatch.setattr(manga_draft, "_ask_json", broken)
+    assert asyncio.run(manga_import.classify_page("key", panels, 0, 11)) is None
 
 
 def _png(image: Image.Image) -> bytes:

@@ -7,7 +7,9 @@
   絵の中の直線で1コマが割れたときは、すき間が狭いので継ぎ直す。枠が見つからなければページ全体を1コマとする。
 - 人数・構図: 頭の検出(manga_v2/detect.py)。頭の大きさがコマの高さに占める割合で寄り/引きを決める。
 - セリフの量: 文字の領域の数(文字は読まない)。
-- 役割・感情: ローカルの画像モデル(Ollama の qwen3-vl:2b。1コマ十数秒)。使えなければ空のままにする。
+- 役割・感情: NovelAI のトークンがあれば文章モデル(GLM)で、ページごとに絵のタグ・セリフ・位置から決める
+  (classify_page)。無いか決められなければ、ローカルの画像モデル(Ollama の qwen3-vl:2b。1コマ十数秒)。
+  使えなければ空のままにする。感情は EMOTIONS のどれか。
 
 取り込みの使い方(purpose)を選んだときは、さらに読み取る(manga_reading.py):
 
@@ -77,6 +79,26 @@ _GROW_STEP = 4
 _ROW_OVERLAP = 0.5
 
 ROLES = ["導入", "会話", "驚き", "ボケ", "ツッコミ", "感動", "オチ", "場面転換"]
+# 役割の決め方(画像モデルへの指示。定義が無いと、ほとんどのコマを「導入」にしていた)
+_ROLE_HINTS = {
+    "導入": "話の始まりで、人物や場所を紹介するコマ(作品の冒頭に多い)",
+    "会話": "人物がやりとりしている、ふつうのコマ(迷ったらこれ)",
+    "驚き": "人物が驚く・意外なことが起きるコマ",
+    "ボケ": "笑わせる言動・とぼけたことをするコマ",
+    "ツッコミ": "ボケに突っ込む・言い返すコマ",
+    "感動": "気持ちが大きく動く・盛り上がりの山場のコマ",
+    "オチ": "話の締めくくり・落ちのコマ(作品の終わりに多い)",
+    "場面転換": "時間や場所が変わる・風景だけのコマ",
+}
+# 感情はこの中から選ばせる(自由に答えさせると、言い回しがばらばらになり、指示文が混ざることもあった)
+EMOTIONS = ["喜び", "笑い", "照れ", "驚き", "怒り", "悲しみ", "不安", "困惑", "恐怖", "興奮", "快感", "安心", "真剣", "平静"]
+# 選択肢にない答えの読み替え(含まれる語で拾う)
+_EMOTION_ALIASES = {
+    "楽し": "喜び", "嬉し": "喜び", "幸せ": "喜び", "恥ずかし": "照れ", "羞恥": "照れ", "驚愕": "驚き",
+    "緊張": "不安", "焦り": "不安", "心配": "不安", "戸惑": "困惑", "混乱": "困惑", "怖": "恐怖",
+    "欲情": "興奮", "官能": "快感", "悦": "快感", "穏やか": "平静", "落ち着": "平静", "無表情": "平静",
+    "決意": "真剣", "集中": "真剣", "苛立": "怒り", "寂し": "悲しみ", "泣": "悲しみ", "安堵": "安心",
+}
 
 
 @dataclass
@@ -577,6 +599,76 @@ _CLASSIFY_PROMPT = (
     'JSONだけで答える: {"role": "' + " / ".join(ROLES) + ' のどれか", "emotion": "主な感情を1語(例: 喜び)"}'
 )
 
+# 文章モデルに、1ページ分のコマの役割と感情を決めさせる指示(絵はタグで渡す)。ローカルの画像モデル(2B)は小さく、
+# 絵だけでは「導入」「驚き」に偏り、役割の定義や手がかりを足すと考え込んで答えが空になった(2026-10 実機)
+_ROLE_LINES = "\n".join(f"  - {role}: {hint}" for role, hint in _ROLE_HINTS.items())
+_PAGE_SYSTEM = f"""あなたは漫画の編集者です。漫画の1ページ分について、コマごとの位置・絵のタグ・セリフを渡します。
+各コマの、話の中での役割と、人物の主な感情を決めてください。JSONだけを返してください(前置きや```は不要):
+{{"panels":[{{"role":"役割","emotion":"感情"}}]}}
+- panels は渡されたコマと同じ数・同じ順
+- 役割はどれか1つ:
+{_ROLE_LINES}
+- 感情はどれか1つ: {" / ".join(EMOTIONS)}
+- 同じ役割ばかりにしない。話の流れ(前後のコマのセリフ)から決める"""
+
+
+def classify_context(panel: PanelInfo, page: int, pages: int, index: int, count: int) -> str:
+    """classify_page に渡す、コマの位置と読み取った手がかり(page / index は 0 始まり)。"""
+    rows = [f"- 位置: 全{pages}ページの{page + 1}ページ目、{count}コマ中{index + 1}コマ目"]
+    tags = [*panel.cast_tags, *panel.scene_tags, *panel.action_tags]
+    if tags:
+        rows.append("- 絵のタグ: " + ", ".join(tags[:20]))
+    texts = [str(line["text"]) for line in panel.lines if line.get("text")]
+    if texts:
+        rows.append("- セリフ: " + " / ".join(f"「{t[:40]}」" for t in texts[:6]))
+    elif panel.lines:
+        # 似た漫画用(文面を残さない)では、セリフの調子だけ
+        rows.append("- セリフの調子: " + ", ".join(str(line.get("ending") or "") for line in panel.lines[:6]))
+    elif panel.detailed:
+        rows.append("- セリフなし")
+    return "\n".join(rows)
+
+
+def normalize_emotion(answer: str) -> str:
+    """感情の答えを EMOTIONS のどれかにする(読み替えられなければ空)。"""
+    answer = answer.strip()
+    if answer in EMOTIONS:
+        return answer
+    found = next((e for e in EMOTIONS if e in answer), None)
+    if found:
+        return found
+    return next((e for key, e in _EMOTION_ALIASES.items() if key in answer), "")
+
+
+async def classify_page(
+    api_key: str, panels: list[PanelInfo], page: int, pages: int
+) -> list[tuple[str, str]] | None:
+    """
+    1ページ分のコマの(役割, 感情)を文章モデル(NovelAI の GLM)に決めさせる。答えが使えなければ None
+    (画像モデルで読む)。
+    """
+    from .manga_draft import _ask_json
+
+    if not panels:
+        return []
+    user = "\n\n".join(
+        f"{k + 1}コマ目:\n" + classify_context(panel, page, pages, k, len(panels)) for k, panel in enumerate(panels)
+    )
+    try:
+        data = await _ask_json(api_key, _PAGE_SYSTEM, user, max_tokens=1500, temperature=0.3)
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("コマの役割を文章モデルで決められませんでした: %s", exc)
+        return None
+    raw = data.get("panels") if isinstance(data, dict) else None
+    if not isinstance(raw, list) or len(raw) < len(panels):
+        return None
+    result = []
+    for item in raw[: len(panels)]:
+        item = item if isinstance(item, dict) else {}
+        answer = str(item.get("role") or "").strip()
+        result.append((next((r for r in ROLES if r in answer), ""), normalize_emotion(str(item.get("emotion") or ""))))
+    return result
+
 
 def _vision_endpoint() -> tuple[str, str] | None:
     """Ollama の(ホスト, モデル)。.env の VLLM_VISION_BASE_URL(…/v1)から作る。未設定なら None。"""
@@ -609,14 +701,17 @@ def parse_role(message: dict[str, Any]) -> tuple[str, str] | None:
         # 「会話シーン」「オチ(笑い)」のように選択肢そのままで答えないことがあるので、含まれる語で拾う
         answer = str(data.get("role") or "").strip()
         role = next((r for r in ROLES if r in answer), "")
-        emotion = str(data.get("emotion") or "").strip()[:10]
+        emotion = normalize_emotion(str(data.get("emotion") or ""))
         if role or emotion:
             return role, emotion
     return None
 
 
 async def classify_panel(crop: Image.Image) -> tuple[str, str]:
-    """コマの役割と感情(読めなければ空)。ローカルの画像モデルで1コマ十数秒(聞き直すとさらにかかる)。"""
+    """
+    コマの役割と感情(読めなければ空)。ローカルの画像モデルで1コマ十数秒(聞き直すとさらにかかる)。
+    NovelAI のトークンがあれば、classify_page(文章モデル)を先に使う。
+    """
     endpoint = _vision_endpoint()
     if endpoint is None:
         return "", ""

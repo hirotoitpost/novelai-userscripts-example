@@ -47,7 +47,7 @@ from ..db import (
     list_manga_imports,
     update_manga_import,
 )
-from ..manga_import import analyze_page, classify_panel, load_pages, panel_dict
+from ..manga_import import analyze_page, classify_page, classify_panel, load_pages, panel_dict
 from ..client import get_client, operator_token
 from ..models import (
     MangaImportAutoRequest,
@@ -125,8 +125,13 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _analyze(import_id: int, page_count: int, use_vision: bool, job: _ImportJob, purpose: str) -> None:
-    """ページごとにコマと構成を読み取り、1ページ終わるごとに保存する(途中でも結果を見られる)。"""
+async def _analyze(
+    import_id: int, page_count: int, use_vision: bool, job: _ImportJob, purpose: str, api_key: str | None = None
+) -> None:
+    """
+    ページごとにコマと構成を読み取り、1ページ終わるごとに保存する(途中でも結果を見られる)。役割・感情は、
+    NovelAI のトークンがあれば文章モデルでページごとに決め、無いか決められなければ画像モデルでコマごとに読む。
+    """
     pages: list[dict[str, Any]] = []
     try:
         for index in range(page_count):
@@ -136,10 +141,18 @@ async def _analyze(import_id: int, page_count: int, use_vision: bool, job: _Impo
             if use_vision:
                 with Image.open(_page_path(import_id, index)) as src:
                     image = src.convert("RGB")
-                for k, panel in enumerate(panels, start=1):
-                    job.message = f"{index + 1}ページ目 {k}/{len(panels)}コマ目の役割を読み取っています"
-                    x, y, w, h = panel.box
-                    panel.role, panel.emotion = await classify_panel(image.crop((x, y, x + w, y + h)))
+                decided = None
+                if api_key:
+                    job.message = f"{index + 1}ページ目のコマの役割を決めています"
+                    decided = await classify_page(api_key, panels, index, page_count)
+                if decided is not None:
+                    for panel, (role, emotion) in zip(panels, decided):
+                        panel.role, panel.emotion = role, emotion
+                else:
+                    for k, panel in enumerate(panels, start=1):
+                        job.message = f"{index + 1}ページ目 {k}/{len(panels)}コマ目の役割を読み取っています"
+                        x, y, w, h = panel.box
+                        panel.role, panel.emotion = await classify_panel(image.crop((x, y, x + w, y + h)))
             # overlays: コマにまたがって描かれた絵(何段にもまたがって立つ人物など)の数
             pages.append({"panels": [panel_dict(p) for p in panels], "overlays": overlays})
             conn = get_connection()
@@ -188,7 +201,7 @@ def _start(
         conn.close()
 
     async def run() -> None:
-        await _analyze(import_id, page_count, use_vision, job, purpose)
+        await _analyze(import_id, page_count, use_vision, job, purpose, api_key)
         if auto is not None and api_key and job.status == "done":
             # 読み取りが終わったら、同じジョブのまま漫画を作る(画面には1つの処理として見せる)
             job.status = "running"
@@ -514,7 +527,12 @@ async def get_import_job(import_id: int) -> dict[str, Any] | None:
 
 
 @router.post("/{import_id}/analyze")
-async def reanalyze(import_id: int, use_vision: bool = True, purpose: str | None = None) -> dict[str, Any] | None:
+async def reanalyze(
+    import_id: int,
+    api_key: Annotated[str | None, Depends(_optional_api_key)],
+    use_vision: bool = True,
+    purpose: str | None = None,
+) -> dict[str, Any] | None:
     """
     読み取り直す(読み取りに失敗したときや、画像モデルを後から使うとき)。purpose を渡すと使い方を変える
     (similar / rebuild)。渡さなければ、取り込んだときの使い方のまま。読み取り直すと、手直ししたセリフと
@@ -524,7 +542,7 @@ async def reanalyze(import_id: int, use_vision: bool = True, purpose: str | None
     if purpose is not None and purpose not in ("similar", "rebuild"):
         raise HTTPException(status_code=422, detail="purpose は similar か rebuild です。")
     return _job_response(
-        _start(import_id, item["page_count"], use_vision, purpose or item.get("purpose") or "structure")
+        _start(import_id, item["page_count"], use_vision, purpose or item.get("purpose") or "structure", api_key=api_key)
     )
 
 
