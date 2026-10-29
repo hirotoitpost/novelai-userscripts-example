@@ -837,7 +837,8 @@ class MangaImportAutoRequest(BaseModel):
     作って、取り込んだ作品のコマ割りで漫画にする(1ページ=1話)。
     """
 
-    # 使う登録済みのキャラ。空なら、取り込んだページの人物の見た目から新しいキャラを作る(最大2人)
+    # 使う登録済みのキャラ。空なら、取り込んだときにキャラ一覧に作った人物。それも無ければ、取り込んだページの
+    # 人物の見た目から新しいキャラを作る(最大2人)
     character_ids: list[int] = Field(default_factory=list, max_length=4)
     # None なら、取り込みに割り当てたジャンル(無ければ 日常コメディ)
     genre: Optional[str] = Field(None, max_length=100)
@@ -958,6 +959,9 @@ class MangaImportRequest(BaseModel):
     # R18(成人誌の漫画)。似た漫画を作るとき、性的なタグ・体つきのタグも使い、作る人物は全員成人にする
     # (未成年を思わせるタグは使わない。コマを描くときの未成年キャラの安全対策もそのまま効く)
     adult: bool = False
+    # 読み取りが終わったら、絵の人物(判定モデルで読んだ見た目)をキャラ一覧に作る(名前は、rebuild ならセリフから拾い、
+    # 分からなければ文章モデルが考える)。NovelAI のトークンが要る
+    import_cast: bool = True
     # 読み取りが終わったら、続けて漫画を作る(similar なら似た漫画、rebuild なら作り直し)
     auto_manga: Optional[MangaImportAutoRequest] = None
 

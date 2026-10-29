@@ -16,6 +16,10 @@
 ジャンルになり、漫画ドラフトでは同じジャンルの取り込みが構成の参考の先頭に出る。
 
 読み取った構成は、漫画ドラフト(/api/manga-draft の import_id)でもコマ運びの参考として使える。
+
+読み取りが終わったら、絵の人物(判定モデルで読んだ見た目)をキャラ一覧に作る(import_cast。トークンが要る)。
+名前は、作り直し用ならセリフの呼びかけ・名乗りから拾い、分からなければ文章モデルが考える(似た漫画用は新しい名前)。
+作ったキャラは取り込みに覚えさせ(cast_ids)、漫画を作るときにキャラを選ばなければ、それを使う。
 """
 
 from __future__ import annotations
@@ -121,6 +125,8 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
         "genre": item.get("genre") or "",
         "adult": bool(item.get("adult")),
         "panel_count": sum(len(p["panels"]) for p in pages),
+        # 取り込んだ絵の人物からキャラ一覧に作ったキャラ(漫画を作るときの既定のキャラ)
+        "cast_ids": item.get("cast_ids") or [],
         "created_at": item["created_at"],
     }
 
@@ -188,6 +194,7 @@ def _start(
     purpose: str,
     auto: MangaImportAutoRequest | None = None,
     api_key: str | None = None,
+    cast: bool = False,
 ) -> _ImportJob:
     running = _jobs.get(import_id)
     if running is not None and running.status == "running":
@@ -203,6 +210,11 @@ def _start(
 
     async def run() -> None:
         await _analyze(import_id, page_count, use_vision, job, purpose, api_key)
+        if cast and api_key and job.status == "done" and purpose in ("similar", "rebuild"):
+            # 読み取った人物をキャラ一覧に作る(取り込み済みなら作らない。読み取り直しで人物が増えないように)
+            if not _stored_cast(_require(import_id)):
+                job.status = "running"
+                await _cast(import_id, api_key, job, required=False)
         if auto is not None and api_key and job.status == "done":
             # 読み取りが終わったら、同じジョブのまま漫画を作る(画面には1つの処理として見せる)
             job.status = "running"
@@ -210,6 +222,30 @@ def _start(
 
     job.task = asyncio.create_task(run())
     return job
+
+
+async def _cast(import_id: int, api_key: str, job: _ImportJob, *, required: bool) -> None:
+    """
+    読み取った人物をキャラ一覧に作る(import_cast)。required でなければ(読み取りに続けて作るとき)、
+    作れなくても読み取りは終わったものとして返す(続けて漫画を作るときは、そこでもう一度作る)。
+    """
+    read = job.message
+    try:
+        made = await import_cast(import_id, api_key, job)
+        job.status = "done"
+        names = "、".join(c["name"] for c in made)
+        note = f"キャラ一覧に{len(made)}人を作りました({names})" if made else "取り込んだページから人物を見つけられませんでした"
+        job.message = f"{read}。{note}" if not required else note
+    except asyncio.CancelledError:
+        job.status = "cancelled"
+        job.message = "止めました"
+    except Exception as exc:  # noqa: BLE001 失敗も状態として返す
+        if required:
+            job.status = "error"
+            job.detail = str(exc)
+        else:
+            job.status = "done"
+            job.message = f"{read}。人物はキャラ一覧に作れませんでした: {exc}"
 
 
 async def _make(import_id: int, req: MangaImportAutoRequest, api_key: str, job: _ImportJob, *, rebuild: bool) -> None:
@@ -247,16 +283,14 @@ def _used_pages(import_id: int, max_pages: int) -> tuple[list[int], list[list[di
     return used, [pages[i]["panels"][:_MAX_PANELS_PER_EPISODE] for i in used]
 
 
-async def _prepare_cast(
-    import_id: int, used: list[int], req: MangaImportAutoRequest, api_key: str, job: Any
-) -> tuple[list[dict[str, Any]], Any]:
-    """
-    使うキャラ(選んだもの。無ければ、ページの人物の見た目から作る)と、その参照画像を用意する。
-    戻り値は(キャラ, ページの絵から読み取った舞台・見た目)。
-    """
-    from ..cast import auto_reference
-    from ..db import get_character, save_character, update_character_sheet
-    from ..manga_similar import name_people, read_pages
+# 取り込むときにキャラ一覧に作る人物の数(多い順)と、人物を読むページの数(コマのあるページを先頭から)
+CAST_PEOPLE = 4
+CAST_PAGES = 12
+
+
+async def _read_features(import_id: int, used: list[int], job: Any, *, max_people: int | None = None) -> Any:
+    """使うページの絵から、舞台・人物の見た目・白黒かどうかを読み取る(判定モデル。read_pages)。"""
+    from ..manga_similar import MAX_PEOPLE, read_pages
 
     item = _require(import_id)
     adult = bool(item.get("adult"))
@@ -268,35 +302,116 @@ async def _prepare_cast(
         with Image.open(_page_path(import_id, index)) as src:
             images.append(src.convert("RGB"))
     boxes = [[tuple(p["box"]) for p in pages[index]["panels"]] for index in used]
-    features = await asyncio.to_thread(lambda: read_pages(images, boxes, adult=adult))
+    people = max_people or MAX_PEOPLE
+    return await asyncio.to_thread(lambda: read_pages(images, boxes, adult=adult, max_people=people))
 
+
+def _stored_cast(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """取り込んだときにキャラ一覧に作った人物(消されたものは除く)。"""
+    from ..db import get_character
+
+    conn = get_connection()
+    try:
+        return [c for c in (get_character(conn, i) for i in item.get("cast_ids") or []) if c]
+    finally:
+        conn.close()
+
+
+def _work_lines(item: dict[str, Any]) -> list[str]:
+    """名前の手がかりにするセリフ(自分の作品の作り直し用だけ。似た漫画用はセリフの文面を持たない)。"""
+    if (item.get("purpose") or "structure") != "rebuild":
+        return []
+    pages = (item.get("analysis") or {}).get("pages") or []
+    return [
+        str(line.get("text") or "")
+        for page in pages
+        for panel in page["panels"]
+        for line in panel.get("lines") or []
+        if line.get("text")
+    ]
+
+
+async def _create_cast(import_id: int, features: Any, genre: str, api_key: str, job: Any) -> list[dict[str, Any]]:
+    """
+    読み取った人物(features.people)をキャラ一覧に作り、取り込みに覚えさせる(cast_ids)。名前は、自分の作品なら
+    セリフの呼びかけ・名乗りから拾い、分からなければ文章モデルが考える(name_people)。同じ名前のキャラが
+    すでにあれば、名前に番号を付けて別のキャラにする(元のキャラを書き換えない)。
+    """
+    from ..db import save_character, update_character_sheet
+    from ..manga_similar import ADULT_AGE, name_people
+
+    item = _require(import_id)
+    adult = bool(item.get("adult"))
+    job.message = "登場人物の名前と人物像を考えています"
+    named = await name_people(
+        api_key, features.people, genre, features.setting, adult=adult, lines=_work_lines(item)
+    )
+    characters: list[dict[str, Any]] = []
+    conn = get_connection()
+    try:
+        for person, info in zip(features.people, named):
+            name = info["name"]
+            taken = {c["name"] for c in characters}
+            suffix = 2
+            while get_character_by_name(conn, name) or name in taken:
+                name = f"{info['name']}{suffix}"
+                suffix += 1
+            tags = [person.gender, *person.tags, *[t for t in info.get("look", "").split(", ") if t]]
+            notes = f"{info['profile']}(取り込み「{item['title']}」の人物)"
+            created = save_character(conn, name, ", ".join(dict.fromkeys(tags)), notes)
+            age = info.get("age")
+            if adult:
+                # R18 の取り込みの人物は成人(年齢は人物づくりで 18 歳以上を確かめてある)
+                created = update_character_sheet(conn, created["id"], {"age": age, "is_adult": 1, "is_minor": 0}) or created
+            elif age is not None and age < ADULT_AGE:
+                # 全年齢の取り込みでは、未成年と考えた人物だけ年齢を入れる(未成年キャラの安全対策が効く)。
+                # 成人と考えた人物も成人にはしない(見た目から考えた年齢なので、確かめてから入れる)
+                created = update_character_sheet(conn, created["id"], {"age": age, "is_adult": 0, "is_minor": 1}) or created
+            characters.append(created)
+        update_manga_import(conn, import_id, cast_ids=[c["id"] for c in characters])
+    finally:
+        conn.close()
+    return characters
+
+
+async def import_cast(import_id: int, api_key: str, job: Any) -> list[dict[str, Any]]:
+    """
+    取り込んだページの人物(判定モデルで読んだ見た目)を、キャラ一覧に CAST_PEOPLE 人まで作る。
+    人物が見つからなければ何も作らない。作ったキャラは、漫画を作るときの既定のキャラになる。
+    """
+    item = _require(import_id)
+    pages = (item.get("analysis") or {}).get("pages") or []
+    used = [i for i, page in enumerate(pages) if page["panels"]][:CAST_PAGES]
+    if not used:
+        return []
+    features = await _read_features(import_id, used, job, max_people=CAST_PEOPLE)
+    if not features.people:
+        return []
+    return await _create_cast(import_id, features, _genre(import_id, MangaImportAutoRequest()), api_key, job)
+
+
+async def _prepare_cast(
+    import_id: int, used: list[int], req: MangaImportAutoRequest, api_key: str, job: Any
+) -> tuple[list[dict[str, Any]], Any]:
+    """
+    使うキャラ(選んだもの。無ければ、ページの人物の見た目から作る)と、その参照画像を用意する。
+    戻り値は(キャラ, ページの絵から読み取った舞台・見た目)。
+    """
+    from ..cast import auto_reference
+    from ..db import get_character
+
+    features = await _read_features(import_id, used, job)
     conn = get_connection()
     try:
         characters = [c for c in (get_character(conn, i) for i in req.character_ids) if c]
     finally:
         conn.close()
+    # 選んでいなければ、取り込んだときにキャラ一覧に作った人物。それも無ければ、ここで作る
+    characters = characters or _stored_cast(_require(import_id))
     if not characters:
         if not features.people:
             raise RuntimeError("取り込んだページから人物を見つけられませんでした。使うキャラを選んでください。")
-        job.message = "登場人物の名前と人物像を考えています"
-        named = await name_people(api_key, features.people, _genre(import_id, req), features.setting, adult=adult)
-        conn = get_connection()
-        try:
-            for person, info in zip(features.people, named):
-                name = info["name"]
-                taken = {c["name"] for c in characters}
-                suffix = 2
-                while get_character_by_name(conn, name) or name in taken:
-                    name = f"{info['name']}{suffix}"
-                    suffix += 1
-                tags = [person.gender, *person.tags, *[t for t in info.get("look", "").split(", ") if t]]
-                created = save_character(conn, name, ", ".join(dict.fromkeys(tags)), info["profile"])
-                if adult:
-                    # R18 の取り込みの人物は成人(年齢は人物づくりで 18 歳以上を確かめてある)
-                    created = update_character_sheet(conn, created["id"], {"age": info["age"], "is_adult": 1, "is_minor": 0}) or created
-                characters.append(created)
-        finally:
-            conn.close()
+        characters = await _create_cast(import_id, features, _genre(import_id, req), api_key, job)
 
     if req.references and req.make_images:
         missing = [c for c in characters if not c.get("reference_image_path") and (c.get("appearance_tags") or "").strip()]
@@ -472,7 +587,7 @@ async def post_import(
     _page_dir(item["id"]).mkdir(parents=True, exist_ok=True)
     for index, page in enumerate(pages):
         page.save(_page_path(item["id"], index), "PNG")
-    job = _start(item["id"], len(pages), req.use_vision, req.purpose, req.auto_manga, api_key)
+    job = _start(item["id"], len(pages), req.use_vision, req.purpose, req.auto_manga, api_key, cast=req.import_cast)
     return {**_summary(item), "job": _job_response(job)}
 
 
@@ -538,18 +653,18 @@ async def reanalyze(
     api_key: Annotated[str | None, Depends(_optional_api_key)],
     use_vision: bool = True,
     purpose: str | None = None,
+    import_cast: bool = True,
 ) -> dict[str, Any] | None:
     """
     読み取り直す(読み取りに失敗したときや、画像モデルを後から使うとき)。purpose を渡すと使い方を変える
     (similar / rebuild)。渡さなければ、取り込んだときの使い方のまま。読み取り直すと、手直ししたセリフと
-    描き文字は消える。
+    描き文字は消える。import_cast なら、人物をまだキャラ一覧に作っていなければ、読み取りに続けて作る。
     """
     item = _require(import_id)
     if purpose is not None and purpose not in ("similar", "rebuild"):
         raise HTTPException(status_code=422, detail="purpose は similar か rebuild です。")
-    return _job_response(
-        _start(import_id, item["page_count"], use_vision, purpose or item.get("purpose") or "structure", api_key=api_key)
-    )
+    purpose = purpose or item.get("purpose") or "structure"
+    return _job_response(_start(import_id, item["page_count"], use_vision, purpose, api_key=api_key, cast=import_cast))
 
 
 @router.post("/{import_id}/cancel")
@@ -583,6 +698,31 @@ def _start_make(import_id: int, req: MangaImportAutoRequest, api_key: str, *, re
     job = _ImportJob()
     _jobs[import_id] = job
     job.task = asyncio.create_task(_make(import_id, req, api_key, job, rebuild=rebuild))
+    return _job_response(job)
+
+
+@router.post("/{import_id}/cast")
+async def post_cast(import_id: int, client: ClientDep) -> dict[str, Any] | None:
+    """
+    読み取り済みの取り込みの人物(判定モデルで読んだ見た目)を、キャラ一覧に作る(ジョブ)。名前は、自分の作品
+    (作り直し用)ならセリフから拾い、分からなければ文章モデルが考える。作ったキャラは取り込みに覚えさせ、
+    漫画を作るときの既定のキャラになる。すでに作ってあれば 409(キャラ一覧で消すと、作り直せる)。
+    """
+    item = _require(import_id)
+    if item["status"] != "analyzed":
+        raise HTTPException(status_code=409, detail="取り込んだ作品をまだ読み取っていません。")
+    if (item.get("purpose") or "structure") not in ("similar", "rebuild"):
+        raise HTTPException(status_code=409, detail="この取り込みは構成だけを読み取っています。読み取り直してください。")
+    stored = _stored_cast(item)
+    if stored:
+        names = "、".join(c["name"] for c in stored)
+        raise HTTPException(status_code=409, detail=f"人物はキャラ一覧に作ってあります({names})。")
+    running = _jobs.get(import_id)
+    if running is not None and running.status == "running":
+        raise HTTPException(status_code=409, detail="この取り込みは処理中です。")
+    job = _ImportJob()
+    _jobs[import_id] = job
+    job.task = asyncio.create_task(_cast(import_id, client.api_key, job, required=True))
     return _job_response(job)
 
 

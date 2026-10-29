@@ -52,6 +52,40 @@ def test_cluster_people_keeps_both_genders_and_ignores_colour_in_black_and_white
     assert sorted(p.gender for p in people) == ["1boy", "1girl"]
 
 
+def test_cluster_people_takes_up_to_max_people() -> None:
+    guesses = [("1girl", ["black hair"])] * 3 + [("1girl", ["blonde hair"])] * 2 + [("1boy", ["brown hair"]), ("1girl", ["red hair"])]
+    assert len(manga_similar.cluster_people(guesses)) == 2
+    people = manga_similar.cluster_people(guesses, max_people=4)
+    assert [(p.gender, p.tags) for p in people] == [
+        ("1girl", ["black hair"]), ("1girl", ["blonde hair"]), ("1boy", ["brown hair"]), ("1girl", ["red hair"])
+    ]
+
+
+def test_name_people_takes_names_from_the_lines(monkeypatch) -> None:
+    import asyncio
+
+    from python import manga_draft
+
+    asked: list[tuple[str, str]] = []
+
+    async def ask(api_key, system, user, *, max_tokens, temperature):  # noqa: ANN001
+        asked.append((system, user))
+        return {"characters": [{"name": "藤堂 美咲", "age": 30, "profile": "先輩", "look": ""}]}
+
+    monkeypatch.setattr(manga_draft, "_ask_json", ask)
+    people = [manga_similar.Person("1girl", ["black hair"], 3)]
+    lines = ["今日も暑いね", "藤堂さん、おはようございます", "今日も暑いね"]
+    asyncio.run(manga_similar.name_people("k", people, "日常", [], lines=lines))
+    system, user = asked[-1]
+    # 自分の作品のセリフは名前の手がかり(名前の入っていそうな行を先に、同じ行は1回)
+    assert "呼びかけ" in system and "既存の作品" not in system
+    assert user.index("「藤堂さん、おはようございます」") < user.index("「今日も暑いね」") and user.count("今日も暑いね") == 1
+    # セリフが無ければ(似た漫画)、名前は新しく作る
+    asyncio.run(manga_similar.name_people("k", people, "日常", []))
+    system, user = asked[-1]
+    assert "既存の作品" in system and "セリフ" not in user
+
+
 def test_read_pages_keeps_setting_and_drops_unsafe_tags(monkeypatch) -> None:
     scores = [
         TagScore("comic", 0.9, "general"),
