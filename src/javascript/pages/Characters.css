@@ -69,9 +69,10 @@
 }
 
 .chars-search {
+  flex: 1 1 16rem;
   width: 100%;
   max-width: 28rem;
-  margin: 0.25rem 0 1rem;
+  margin: 0;
   padding: 0.5rem 0.75rem;
   background: #12122a;
   border: 1px solid #2a2a50;
@@ -326,4 +327,60 @@
 .chars-card--chosen {
   border-color: #7b5cf6;
   box-shadow: 0 0 0 1px #7b5cf6;
+}
+
+/* 並べ替え・絞り込み */
+.chars-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.chars-field {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: #c8c8ec;
+  min-width: 0;
+}
+
+.chars-field select {
+  min-width: 0;
+  background: #12122a;
+  color: #e8e8ff;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+}
+
+.chars-stages {
+  align-self: flex-start;
+}
+
+/* 小さく表示: 参照画像・名前・バッジだけのカードを詰めて並べる(「詳しく」で開いたカードは横いっぱい) */
+.chars-grid--compact {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+  gap: 0.6rem;
+}
+
+.chars-card--compact {
+  grid-template-columns: 64px 1fr;
+  gap: 0.6rem;
+  padding: 0.5rem;
+}
+
+.chars-card--compact .chars-ref {
+  width: 64px;
+}
+
+.chars-card--compact .chars-body h2 {
+  font-size: 0.92rem;
+}
+
+.chars-grid--compact .chars-card:not(.chars-card--compact) {
+  grid-column: 1 / -1;
 }
