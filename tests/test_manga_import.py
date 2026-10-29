@@ -271,6 +271,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # 場面・所作の判定モデルと文字の読み取りも使わない(読み取りそのものは test_manga_reading.py で確かめる)
     monkeypatch.setattr(manga_import, "describe_panel", lambda crop: ([], [], []))
     monkeypatch.setattr(manga_import, "read_page", lambda image, boxes, faces=None: PageReading([], []))
+    # .env のトークンは使わない(トークンがあると、読み取りに続けて人物をキャラ一覧に作る)
+    monkeypatch.setattr(import_routes, "operator_token", lambda: None)
     app = FastAPI()
     app.include_router(import_routes.router)
     with TestClient(app) as test_client:
@@ -471,11 +473,11 @@ def test_adult_import_makes_adult_characters(client: TestClient, monkeypatch: py
 
     seen: dict[str, bool] = {}
 
-    def read(images, boxes, *, adult=False):  # noqa: ANN001
+    def read(images, boxes, *, adult=False, max_people=2):  # noqa: ANN001
         seen["read"] = adult
         return ImportFeatures(setting=["bedroom"], people=[Person("1girl", ["black hair", "large breasts"], 2)], monochrome=True)
 
-    async def name(api_key, people, genre, setting, *, adult=False):  # noqa: ANN001
+    async def name(api_key, people, genre, setting, *, adult=False, lines=None):  # noqa: ANN001
         seen["name"] = adult
         return [{"name": "佐藤 花", "age": 27, "profile": "会社員", "look": ""}]
 
@@ -492,3 +494,105 @@ def test_adult_import_makes_adult_characters(client: TestClient, monkeypatch: py
     # 作った人物は成人(年齢つき)。未成年キャラの安全対策は、コマを描くときにこの年齢で判定される
     assert characters[0]["age"] == 27 and characters[0]["is_adult"] == 1 and characters[0]["is_minor"] == 0
     assert "large breasts" in characters[0]["appearance_tags"]
+
+
+def test_reading_makes_the_cast_in_the_character_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from python import manga_similar
+    from python.manga_similar import ImportFeatures, Person
+    from python.models import MangaImportAutoRequest
+
+    seen: dict[str, object] = {"names": 0}
+
+    def read(images, boxes, *, adult=False, max_people=2):  # noqa: ANN001
+        seen["max_people"] = max_people
+        return ImportFeatures(
+            setting=["classroom"],
+            people=[Person("1girl", ["black hair", "ponytail"], 5), Person("1boy", ["glasses"], 3)],
+            monochrome=True,
+        )
+
+    async def name(api_key, people, genre, setting, *, adult=False, lines=None):  # noqa: ANN001
+        seen["names"] += 1  # type: ignore[operator]
+        seen["lines"] = lines
+        return [
+            {"name": "三枝 楓", "age": 16, "profile": "高校2年生", "look": ""},
+            {"name": "桐谷 怜", "age": 28, "profile": "担任の先生", "look": "brown hair, short hair"},
+        ]
+
+    monkeypatch.setattr(manga_similar, "read_pages", read)
+    monkeypatch.setattr(manga_similar, "name_people", name)
+    conn = db.get_connection()
+    try:
+        # 同じ名前のキャラがあれば、元のキャラは書き換えずに番号を付ける
+        mine = db.save_character(conn, "桐谷 怜", "1boy, red hair", "自分のキャラ")
+    finally:
+        conn.close()
+
+    data = base64.b64encode(_png(_page(_grid()))).decode()
+    res = client.post(
+        "/api/manga-import",
+        json={"title": "学園", "files": [{"name": "p1.png", "data": data}], "use_vision": False, "purpose": "rebuild"},
+        headers={"Authorization": "Bearer k"},
+    )
+    import_id = res.json()["id"]
+    job = _wait(client, import_id)
+    # 読み取りに続けて、絵の人物をキャラ一覧に作る(作り直し用は、セリフを名前の手がかりにする)
+    assert job["status"] == "done" and "キャラ一覧に2人を作りました(三枝 楓、桐谷 怜2)" in job["message"], job
+    assert seen["max_people"] == import_routes.CAST_PEOPLE and seen["lines"] == []
+    item = client.get(f"/api/manga-import/{import_id}").json()
+    conn = db.get_connection()
+    try:
+        cast = [db.get_character(conn, i) for i in item["cast_ids"]]
+        assert db.get_character(conn, mine["id"])["appearance_tags"] == "1boy, red hair"
+    finally:
+        conn.close()
+    assert [c["name"] for c in cast] == ["三枝 楓", "桐谷 怜2"]
+    assert cast[0]["appearance_tags"] == "1girl, black hair, ponytail" and "取り込み「学園」の人物" in cast[0]["notes"]
+    # 全年齢の取り込み: 未成年と考えた人物だけ年齢を入れる(安全対策が効く)。成人と考えた人物は成人にしない
+    assert cast[0]["age"] == 16 and cast[0]["is_minor"] == 1
+    assert cast[1]["age"] is None and not cast[1]["is_adult"]
+    assert "brown hair" in cast[1]["appearance_tags"]
+
+    # 作ってあれば、読み取り直しても、ボタンでも作らない
+    assert client.post(f"/api/manga-import/{import_id}/analyze?use_vision=false", headers={"Authorization": "Bearer k"}).status_code == 200
+    _wait(client, import_id)
+    assert seen["names"] == 1
+    res = client.post(f"/api/manga-import/{import_id}/cast", headers={"Authorization": "Bearer k"})
+    assert res.status_code == 409 and "三枝 楓" in res.json()["detail"]
+
+    # 漫画を作るとき、キャラを選ばなければ作ってある人物を使う
+    class Job:
+        progress = total = 0
+        message = ""
+
+    used, _ = import_routes._used_pages(import_id, 1)
+    characters, _ = asyncio.run(import_routes._prepare_cast(import_id, used, MangaImportAutoRequest(references=False), "k", Job()))
+    assert [c["id"] for c in characters] == item["cast_ids"] and seen["names"] == 1
+
+    # キャラ一覧で消すと、ボタンで作り直せる
+    conn = db.get_connection()
+    try:
+        for i in item["cast_ids"]:
+            conn.execute("DELETE FROM characters WHERE id = ?", (i,))
+        conn.commit()
+    finally:
+        conn.close()
+    res = client.post(f"/api/manga-import/{import_id}/cast", headers={"Authorization": "Bearer k"})
+    assert res.status_code == 200, res.text
+    assert _wait(client, import_id)["message"] == "キャラ一覧に2人を作りました(三枝 楓、桐谷 怜2)"
+    assert seen["names"] == 2
+
+
+def test_reading_without_a_token_does_not_make_the_cast(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import manga_similar
+
+    def read(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("トークンが無ければ人物を読まない")
+
+    monkeypatch.setattr(manga_similar, "read_pages", read)
+    data = base64.b64encode(_png(_page(_grid()))).decode()
+    res = client.post("/api/manga-import", json={"title": "x", "files": [{"name": "p1.png", "data": data}], "use_vision": False})
+    assert _wait(client, res.json()["id"])["status"] == "done"
+    assert client.get(f"/api/manga-import/{res.json()['id']}").json()["cast_ids"] == []

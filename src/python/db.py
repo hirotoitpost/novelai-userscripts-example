@@ -3096,10 +3096,12 @@ def list_panel_characters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 # rebuild: 自分の作品を作り直す(セリフの文面も持つ)
 # genre: 漫画ドラフトのジャンル(日常コメディ など)への割り当て。空は割り当てなし
 # adult: R18(成人誌の漫画)の取り込み。似た漫画を作るとき、性的なタグ・体つきのタグも使う(manga_similar.py)
+# cast_ids: 取り込んだ絵の人物からキャラ一覧に作ったキャラのID(JSON の配列)。漫画を作るときの既定のキャラになる
 _MANGA_IMPORTS_EXTRA_COLUMNS = {
     "purpose": "TEXT NOT NULL DEFAULT 'structure'",
     "genre": "TEXT NOT NULL DEFAULT ''",
     "adult": "INTEGER NOT NULL DEFAULT 0",
+    "cast_ids": "TEXT NOT NULL DEFAULT '[]'",
 }
 
 
@@ -3129,6 +3131,7 @@ def get_manga_import(conn: sqlite3.Connection, import_id: int) -> dict[str, Any]
         return None
     item = dict(row)
     item["analysis"] = json.loads(item["analysis"]) if item["analysis"] else None
+    item["cast_ids"] = json.loads(item.get("cast_ids") or "[]")
     return item
 
 
@@ -3146,7 +3149,10 @@ def update_manga_import(
     purpose: str | None = None,
     genre: str | None = None,
     adult: bool | None = None,
+    cast_ids: list[int] | None = None,
 ) -> None:
+    if cast_ids is not None:
+        conn.execute("UPDATE manga_imports SET cast_ids = ? WHERE id = ?", (json.dumps(cast_ids), import_id))
     if adult is not None:
         conn.execute("UPDATE manga_imports SET adult = ? WHERE id = ?", (int(adult), import_id))
     if genre is not None:

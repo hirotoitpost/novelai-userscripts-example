@@ -200,11 +200,16 @@ def _panel_people(panel: Image.Image, adult: bool = False) -> list[tuple[str, li
 
 
 def read_pages(
-    images: list[Image.Image], panels: list[list[tuple[int, int, int, int]]] | None = None, *, adult: bool = False
+    images: list[Image.Image],
+    panels: list[list[tuple[int, int, int, int]]] | None = None,
+    *,
+    adult: bool = False,
+    max_people: int = MAX_PEOPLE,
 ) -> ImportFeatures:
     """
     取り込んだページの絵から、舞台のタグ・人物の見た目・白黒かどうかを読み取る。panels はページごとの
     コマの位置 (x, y, 幅, 高さ)。あればコマごとに人物を読む(無ければページ全体で)。adult は R18 の取り込み(_is_safe)。
+    人物は多い順に max_people 人まで(cluster_people)。
     """
     from .image_tagger import colour_profile, split_characters, tag_image
 
@@ -235,7 +240,7 @@ def read_pages(
                 guesses.append((person.gender, [t for t in person.tags if _is_look(t, adult)]))
     return ImportFeatures(
         setting=[tag for tag, _ in setting.most_common(_MAX_SETTING_TAGS)],
-        people=cluster_people(guesses, monochrome=grey_pages * 2 >= max(len(images), 1)),
+        people=cluster_people(guesses, monochrome=grey_pages * 2 >= max(len(images), 1), max_people=max_people),
         monochrome=grey_pages * 2 >= max(len(images), 1),
         pages=len(images),
     )
@@ -263,9 +268,11 @@ def _is_look(tag: str, adult: bool = False) -> bool:
     return bool(_words(tag) & words) and _is_safe(tag, adult)
 
 
-def cluster_people(guesses: list[tuple[str, list[str]]], *, monochrome: bool = False) -> list[Person]:
+def cluster_people(
+    guesses: list[tuple[str, list[str]]], *, monochrome: bool = False, max_people: int = MAX_PEOPLE
+) -> list[Person]:
     """
-    ページごとに見つけた人物を、性別と髪の色で同じ人物にまとめ、多い順に MAX_PEOPLE 人まで返す。
+    ページごとに見つけた人物を、性別と髪の色で同じ人物にまとめ、多い順に max_people 人まで返す。
     両方の性別が出てくるなら、まず性別ごとに一番多い人物を選ぶ(女性が髪の色で2人に分かれ、男性が抜けた)。
     白黒の作品(monochrome)では髪の色で分けない(同じ人物が、コマによって金髪にも黒髪にも読まれた)。
     髪・目の色のタグは、それぞれ一番多いものだけを見た目に入れる。白黒の作品では、見た目に入れる割合を下げる。
@@ -277,8 +284,8 @@ def cluster_people(guesses: list[tuple[str, list[str]]], *, monochrome: bool = F
         groups.setdefault((gender, hair), []).append(tags)
     ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
     chosen = [next(g for g in ranked if g[0][0] == gender) for gender in dict.fromkeys(k[0] for k, _ in ranked)]
-    chosen = chosen[:MAX_PEOPLE]
-    chosen += [g for g in ranked if g not in chosen][: MAX_PEOPLE - len(chosen)]
+    chosen = chosen[:max_people]
+    chosen += [g for g in ranked if g not in chosen][: max_people - len(chosen)]
     chosen.sort(key=lambda kv: -len(kv[1]))
     people = []
     for (gender, _), members in chosen:
@@ -307,8 +314,7 @@ _NAMING_SYSTEM = """あなたは漫画のキャラクター設定を作る編集
 日本語の名前(姓と名)と、話を作るための短い人物像を考えてください。JSONだけを返してください(前置きや```は不要):
 {"characters":[{"name":"姓 名","age":年齢(数字),"profile":"人物像(年齢・職業や立場・性格を40文字以内)","look":"足す見た目の英語タグ"}]}
 - characters は渡された人物と同じ数・同じ順
-- 実在の人物や、既存の作品のキャラクターの名前は使わない
-{naming_rule}- look: 髪の色・髪型・目の色のタグが無い人物には、ほかの人物と見分けやすい髪の色と髪型(と目の色)を英語のdanbooruタグで
+{name_source}{naming_rule}- look: 髪の色・髪型・目の色のタグが無い人物には、ほかの人物と見分けやすい髪の色と髪型(と目の色)を英語のdanbooruタグで
   足す(例: "brown hair, short hair, green eyes")。渡されたタグとかぶるもの・矛盾するものは書かない。足りていれば空文字"""
 
 
@@ -316,10 +322,40 @@ _NAMING_SYSTEM = """あなたは漫画のキャラクター設定を作る編集
 ADULT_AGE = 18
 
 
-def _naming_system(adult: bool = False) -> str:
-    """人物づくりの指示文。内容についての決まりは content_guard(DB)にある(空なら足さない)。R18 は成人の決まり。"""
+# 名前の付け方。新しく作る(似た漫画)か、作品のセリフから名前を拾う(自分の作品の作り直し)か
+_NEW_NAMES = "- 実在の人物や、既存の作品のキャラクターの名前は使わない\n"
+_NAMES_FROM_LINES = """- 渡すセリフは、この作品(利用者自身の作品)のもの。セリフの呼びかけ・名乗り・呼び名(「藤堂さん」「楓」など)から
+  その人物の名前が分かれば、その名前を使う。性別・立場・話し方の手がかりで、どの人物の名前か決める
+- 姓だけ・名だけが分かったときは、残りを作品に合うように考える。名前が分からない人物は、作品に合う名前を考える
+- 同じ名前を二人に付けない。実在の人物の名前は使わない
+"""
+# 名前の手がかりとして渡すセリフの長さ(全部で)
+NAMING_LINES_CHARS = 3000
+
+
+def _naming_system(adult: bool = False, from_lines: bool = False) -> str:
+    """
+    人物づくりの指示文。内容についての決まりは content_guard(DB)にある(空なら足さない)。R18 は成人の決まり。
+    from_lines: 作品のセリフから名前を拾う(自分の作品)。
+    """
     rule = content_guard.text("similar.adult_naming_rule" if adult else "similar.naming_rule")
-    return _NAMING_SYSTEM.replace("{naming_rule}", f"- {rule}\n" if rule else "")
+    return _NAMING_SYSTEM.replace("{name_source}", _NAMES_FROM_LINES if from_lines else _NEW_NAMES).replace(
+        "{naming_rule}", f"- {rule}\n" if rule else ""
+    )
+
+
+def _quoted_lines(lines: list[str]) -> str:
+    """名前の手がかりに渡すセリフ。名前の入っていそうな行(敬称・呼びかけ)を先に、全部で NAMING_LINES_CHARS まで。"""
+    texts = list(dict.fromkeys(t.strip() for t in lines if t.strip()))
+    named = re.compile(r"さん|くん|君|ちゃん|様|先生|先輩|部長|課長|社長|\b(?:mr|mrs|ms|miss)\b", re.IGNORECASE)
+    texts.sort(key=lambda t: not named.search(t))
+    out, total = [], 0
+    for text in texts:
+        if total + len(text) > NAMING_LINES_CHARS:
+            break
+        out.append(f"「{text}」")
+        total += len(text)
+    return "\n".join(out)
 
 
 def _age(value: Any) -> int | None:
@@ -330,19 +366,30 @@ def _age(value: Any) -> int | None:
 
 
 async def name_people(
-    api_key: str, people: list[Person], genre: str, setting: list[str], *, adult: bool = False
+    api_key: str,
+    people: list[Person],
+    genre: str,
+    setting: list[str],
+    *,
+    adult: bool = False,
+    lines: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     見た目から、名前・人物像・年齢と、足りない見た目(髪の色・髪型)を作る(NovelAI の文章モデル)。
     白黒の漫画からは髪の色が読めないので、そのままだと人物どうしが似た見た目になる(実機で確認)。
     R18 の取り込み(adult)では、全員が 18 歳以上でなければ作り直させる(3回で作れなければ止める)。
+    lines(自分の作品のセリフ)を渡すと、セリフの呼びかけ・名乗りから名前を拾い、分からなければ考える。
     """
     from .manga_draft import _ask_json
 
-    lines = [f"{i + 1}. {p.gender}, {', '.join(p.tags) or '(見た目のタグなし)'}" for i, p in enumerate(people)]
-    user = f"ジャンル: {genre}\n舞台のタグ: {', '.join(setting) or '(なし)'}\n人物:\n" + "\n".join(lines)
+    rows = [f"{i + 1}. {p.gender}, {', '.join(p.tags) or '(見た目のタグなし)'}" for i, p in enumerate(people)]
+    user = f"ジャンル: {genre}\n舞台のタグ: {', '.join(setting) or '(なし)'}\n人物:\n" + "\n".join(rows)
+    quoted = _quoted_lines(lines or [])
+    if quoted:
+        user += f"\n作品のセリフ(名前の手がかり):\n{quoted}"
+    system = _naming_system(adult, from_lines=bool(quoted))
     for _ in range(3):
-        data = await _ask_json(api_key, _naming_system(adult), user, max_tokens=800, temperature=0.8)
+        data = await _ask_json(api_key, system, user, max_tokens=800, temperature=0.8)
         items = (data or {}).get("characters") if isinstance(data, dict) else None
         if isinstance(items, list) and len(items) >= len(people):
             named = []

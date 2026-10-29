@@ -31,6 +31,8 @@ interface ImportSummary {
   // R18(成人誌の漫画)。似た漫画を作るとき、性的なタグ・体つきのタグも使い、作る人物は全員成人にする
   adult: boolean
   panel_count: number
+  // 取り込んだ絵の人物からキャラ一覧に作ったキャラ(漫画を作るとき、キャラを選ばなければこれを使う)
+  cast_ids: number[]
   created_at: string
 }
 
@@ -111,6 +113,8 @@ export default function MangaImport() {
   const [error, setError] = useState<string | null>(null)
   // 似た漫画を作る(取り込んだページの舞台・見た目と、コマ割りを使って新しい話を漫画にする)
   const [autoManga, setAutoManga] = useLocalStorage('nai_import_auto_manga', false)
+  // 読み取ったら、絵の人物をキャラ一覧に作る(名前は、作り直し用ならセリフから拾い、分からなければ考える)
+  const [importCast, setImportCast] = useLocalStorage('nai_import_cast', true)
   // 取り込みの使い方
   const [purpose, setPurpose] = useLocalStorage<Purpose>('nai_import_purpose', 'similar')
   // 作り直すとき、台本(物語)を作るところまでにする(セリフや割り振りを直してから絵を生成できる)
@@ -139,6 +143,11 @@ export default function MangaImport() {
     }
   }, [token])
 
+  const loadCharacters = useCallback(() => {
+    if (!token) return
+    apiFetch<Character[]>(token, '/api/story/characters').then(setCharacters).catch(() => {})
+  }, [token])
+
   const open = useCallback(async (id: number) => {
     if (!token) return
     setGenreDraft(null)
@@ -147,10 +156,8 @@ export default function MangaImport() {
   }, [token])
 
   useEffect(() => { loadList() }, [loadList])
-  useEffect(() => {
-    if (!token) return
-    apiFetch<Character[]>(token, '/api/story/characters').then(setCharacters).catch(() => {})
-  }, [token])
+  // 処理が終わったら読み直す(読み取りに続けて作った人物を、キャラの選択肢と作った人物の欄に出す)
+  useEffect(() => { if (job?.status !== 'running') loadCharacters() }, [job?.status, loadCharacters])
 
   const makeOptions = (rebuild: boolean) => ({
     character_ids: autoCast, max_pages: autoPages, make_images: !(rebuild && scriptOnly), clean_lines: cleanLines,
@@ -184,9 +191,12 @@ export default function MangaImport() {
       }
       task.update(current.message, current.progress, current.total)
       if (current.status === 'running') continue
-      if (current.status === 'done' && current.story_id) {
+      if (current.status === 'done') {
         task.finish('done', current.message)
-        setMade({ storyId: current.story_id, message: current.message })
+        if (current.story_id) setMade({ storyId: current.story_id, message: current.message })
+        // 人物をキャラ一覧に作ったとき
+        loadCharacters()
+        if (selected?.id === id) void open(id)
       } else if (current.status === 'cancelled') {
         task.finish('cancelled', current.message)
         // 止める前に作り終えたページは物語に残る
@@ -210,15 +220,28 @@ export default function MangaImport() {
     }
   }
 
-  // 読み取り中は進み具合と途中結果を数秒ごとに読み直す
+  /** 読み取った絵の人物を、キャラ一覧に作る(読み取ったときに作らなかった取り込み)。 */
+  const makeCast = async (item: ImportSummary) => {
+    if (!token) return
+    setError(null)
+    try {
+      await apiFetch(token, `/api/manga-import/${item.id}/cast`, {})
+      task.start('登場人物をキャラ一覧に作る')
+      await followJob(item.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  // 読み取り中(読み取りに続けて人物を作っているあいだも)は、進み具合と途中結果を数秒ごとに読み直す
   useEffect(() => {
-    if (!token || !selected || selected.status !== 'analyzing') return
+    if (!token || !selected || (selected.status !== 'analyzing' && job?.status !== 'running')) return
     const timer = setInterval(() => {
       open(selected.id).catch(() => {})
       loadList()
     }, 4000)
     return () => clearInterval(timer)
-  }, [token, selected, open, loadList])
+  }, [token, selected, job?.status, open, loadList])
 
   const upload = async () => {
     if (!token || !files.length || !title.trim()) return
@@ -227,7 +250,7 @@ export default function MangaImport() {
     try {
       const payload = await Promise.all(files.map(async f => ({ name: f.name, data: await readAsDataUrl(f) })))
       const created = await apiFetch<ImportSummary>(token, '/api/manga-import', {
-        title: title.trim(), files: payload, use_vision: useVision, purpose, genre: genre.trim(), adult,
+        title: title.trim(), files: payload, use_vision: useVision, purpose, genre: genre.trim(), adult, import_cast: importCast,
         auto_manga: autoManga ? makeOptions(purpose === 'rebuild') : null,
       })
       setTitle('')
@@ -448,6 +471,11 @@ export default function MangaImport() {
             コマの役割・感情も読み取る(ローカルの画像モデル、1コマ十数秒)
           </label>
           <label className="mi-check">
+            <input type="checkbox" checked={importCast} onChange={e => setImportCast(e.target.checked)} />
+            登場人物をキャラ一覧に取り込む: 絵の人物の見た目(判定モデル)から、多い順に4人まで作ります。名前は、作り直し用ならセリフの呼びかけ・名乗りから拾い、
+            分からなければ作品に合う名前を考えます(似た漫画用は新しい名前)。漫画を作るとき、キャラを選ばなければこの人物を使います
+          </label>
+          <label className="mi-check">
             <input type="checkbox" checked={autoManga} onChange={e => setAutoManga(e.target.checked)} />
             読み取ったら続けて{purpose === 'rebuild' ? '作り直す' : '似た漫画を作る'}
           </label>
@@ -477,7 +505,7 @@ export default function MangaImport() {
               <span>ページまで</span>
             </label>
             <div className="mi-field">
-              <span>使うキャラ(選ばなければ、取り込んだ絵の人物から新しく作ります。参照画像も自動)</span>
+              <span>使うキャラ(選ばなければ、取り込んだときにキャラ一覧に作った人物。無ければ絵の人物から新しく作ります。参照画像も自動)</span>
               <div className="mi-chips">
                 {characters.map(c => (
                   <button
@@ -557,6 +585,19 @@ export default function MangaImport() {
               </p>
             )}
             {job && job.status === 'error' && <p className="mi-error">読み取りに失敗しました: {job.detail}</p>}
+            {selected.purpose !== 'structure' && selected.status === 'analyzed' && (() => {
+              const cast = characters.filter(c => selected.cast_ids.includes(c.id))
+              return (
+                <p className="mi-hint">
+                  {cast.length > 0
+                    ? <>キャラ一覧に作った登場人物: {cast.map(c => c.name).join('、')}(漫画を作るとき、キャラを選ばなければこの人物を使います){' '}
+                        <button type="button" className="mi-item-action" onClick={() => navigate('/characters')}>キャラ一覧で見る</button></>
+                    : <>登場人物はキャラ一覧に作っていません。{' '}
+                        <button type="button" className="mi-item-action" disabled={task.busy || job?.status === 'running'}
+                          onClick={() => void makeCast(selected)}>登場人物をキャラ一覧に取り込む</button></>}
+                </p>
+              )
+            })()}
             <div className="mi-field mi-field--inline mi-genre">
               <label htmlFor="mi-genre-edit">ジャンル</label>
               <input id="mi-genre-edit" list="mi-genres" value={genreDraft ?? selected.genre} maxLength={100}
