@@ -509,7 +509,7 @@ def test_reading_makes_the_cast_in_the_character_list(client: TestClient, monkey
         seen["max_people"] = max_people
         return ImportFeatures(
             setting=["classroom"],
-            people=[Person("1girl", ["black hair", "ponytail"], 5), Person("1boy", ["glasses"], 3)],
+            people=[Person("1girl", ["black hair", "ponytail"], 5), Person("1boy", ["glasses"], 3, "some character")],
             monochrome=True,
         )
 
@@ -553,7 +553,8 @@ def test_reading_makes_the_cast_in_the_character_list(client: TestClient, monkey
     # 全年齢の取り込み: 未成年と考えた人物だけ年齢を入れる(安全対策が効く)。成人と考えた人物は成人にしない
     assert cast[0]["age"] == 16 and cast[0]["is_minor"] == 1
     assert cast[1]["age"] is None and not cast[1]["is_adult"]
-    assert "brown hair" in cast[1]["appearance_tags"]
+    # 判定モデルが見分けたキャラは、キャラ名のタグを容姿に入れる
+    assert cast[1]["appearance_tags"].startswith("1boy, some character, glasses") and "brown hair" in cast[1]["appearance_tags"]
 
     # 作ってあれば、読み取り直しても、ボタンでも作らない
     assert client.post(f"/api/manga-import/{import_id}/analyze?use_vision=false", headers={"Authorization": "Bearer k"}).status_code == 200

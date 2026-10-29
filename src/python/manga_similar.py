@@ -2,8 +2,9 @@
 取り込んだ漫画に似た漫画を作る: 取り込んだページの絵から舞台(場所・時間帯・小物)と人物の見た目を読み取り
 (リバースプロンプトの判定モデル)、それを元に新しい話を作って、取り込んだ作品のコマ割りで漫画にする。
 
-似せるのは構成(コマ割り・コマ運び)と、舞台・見た目の傾向まで。作品のキャラそのものは写さない
-(判定モデルのキャラ名のタグは使わない)。全年齢向けにするため、性的なタグ・体つきのタグも使わない。
+似せるのは構成(コマ割り・コマ運び)と、舞台・見た目の傾向まで。舞台のタグには判定モデルのキャラ名のタグを
+使わない。ただし人物は、判定モデルがキャラ名(既存の作品のキャラ)を見分けたら、そのキャラとして作る
+(名前とキャラ名のタグ。Person.character)。全年齢向けにするため、性的なタグ・体つきのタグも使わない。
 R18 の取り込み(成人誌の漫画。adult)では、性的なタグ・体つきのタグも使う。未成年を思わせるタグはどちらでも使わず、
 作る人物は全員成人(18 歳以上)にする。
 """
@@ -129,6 +130,10 @@ _LOOK_SHARE = 0.4
 # 白黒の作品では、見た目のタグが出にくい(体の寄りのコマが多く、色も読めない。実機: 25コマの女性で最多の
 # ponytail が7コマ)。割合を下げ、2コマ以上に出たものにする
 _LOOK_SHARE_MONOCHROME = 0.2
+# 判定モデルがキャラ名を見分けたコマが、これ以上あればそのキャラとして扱う(1コマだけの見分け違いを除く)
+_MIN_CHARACTER_PANELS = 2
+# cluster_people のまとまりのキーで、キャラ名でまとめたもの(髪の色のタグと混ざらない印)
+_CHARACTER_KEY = "@"
 # 舞台のタグ: 確率がこれ以上のものを、ページをまたいで数える
 _SETTING_PROB = 0.45
 _MAX_SETTING_TAGS = 14
@@ -163,6 +168,8 @@ class Person:
     tags: list[str]
     # この人物と見なした絵の数(多い順に選ぶ)
     count: int = 0
+    # 判定モデルが見分けた既存の作品のキャラ(キャラ名のタグ。hatsune miku など)。見分けられなければ空
+    character: str = ""
 
 
 @dataclass
@@ -179,24 +186,26 @@ class ImportFeatures:
 _LOOK_PROB = 0.5
 
 
-def _panel_people(panel: Image.Image, adult: bool = False) -> list[tuple[str, list[str]]]:
+def _panel_people(panel: Image.Image, adult: bool = False) -> list[tuple[str, list[str], list[str]]]:
     """
-    コマ1つに写っている人物の(性別, 見た目のタグ)。一人ならコマ全体のタグがその人の見た目。
+    コマ1つに写っている人物の(性別, 見た目のタグ, キャラ名のタグ)。一人ならコマ全体のタグがその人の見た目。
     二人以上なら頭の位置で人物ごとに分ける(split_characters)。漫画のページは同じ人物が何コマにも出るので、
     ページ全体で人物を分けると、どの切り抜きにも同じタグが出て誰のものか決まらない(実機で見た目が空になった)。
     """
-    from .image_tagger import split_characters, tag_image
+    from .image_tagger import CHARACTER_THRESHOLD, split_characters, tag_image
 
     people = split_characters(panel)
     if people:
-        return [(p.gender, [t for t in p.tags if _is_look(t, adult)]) for p in people]
-    probs = {s.tag: s.probability for s in tag_image(panel) if s.category == "general"}
+        return [(p.gender, [t for t in p.tags if _is_look(t, adult)], p.characters) for p in people]
+    scores = tag_image(panel)
+    probs = {s.tag: s.probability for s in scores if s.category == "general"}
     genders = [g for g in ("1girl", "1boy") if probs.get(g, 0.0) >= _LOOK_PROB]
     if len(genders) != 1 or any(
         probs.get(t, 0.0) >= _LOOK_PROB for t in ("multiple girls", "multiple boys", "2girls", "2boys")
     ):
         return []
-    return [(genders[0], [t for t, p in probs.items() if p >= _LOOK_PROB and _is_look(t, adult)])]
+    names = [s.tag for s in scores if s.category == "character" and s.probability >= CHARACTER_THRESHOLD]
+    return [(genders[0], [t for t, p in probs.items() if p >= _LOOK_PROB and _is_look(t, adult)], names)]
 
 
 def read_pages(
@@ -214,7 +223,7 @@ def read_pages(
     from .image_tagger import colour_profile, split_characters, tag_image
 
     setting = Counter()
-    guesses: list[tuple[str, list[str]]] = []
+    guesses: list[tuple[str, list[str], list[str]]] = []
     guesses_pages: list[int] = []
     grey_pages = 0
     for image in images:
@@ -237,7 +246,7 @@ def read_pages(
                 guesses.extend(_panel_people(image.crop((x, y, x + w, y + h)), adult))
         else:
             for person in split_characters(image):
-                guesses.append((person.gender, [t for t in person.tags if _is_look(t, adult)]))
+                guesses.append((person.gender, [t for t in person.tags if _is_look(t, adult)], person.characters))
     return ImportFeatures(
         setting=[tag for tag, _ in setting.most_common(_MAX_SETTING_TAGS)],
         people=cluster_people(guesses, monochrome=grey_pages * 2 >= max(len(images), 1), max_people=max_people),
@@ -269,7 +278,10 @@ def _is_look(tag: str, adult: bool = False) -> bool:
 
 
 def cluster_people(
-    guesses: list[tuple[str, list[str]]], *, monochrome: bool = False, max_people: int = MAX_PEOPLE
+    guesses: list[tuple[str, list[str]] | tuple[str, list[str], list[str]]],
+    *,
+    monochrome: bool = False,
+    max_people: int = MAX_PEOPLE,
 ) -> list[Person]:
     """
     ページごとに見つけた人物を、性別と髪の色で同じ人物にまとめ、多い順に max_people 人まで返す。
@@ -277,18 +289,24 @@ def cluster_people(
     白黒の作品(monochrome)では髪の色で分けない(同じ人物が、コマによって金髪にも黒髪にも読まれた)。
     髪・目の色のタグは、それぞれ一番多いものだけを見た目に入れる。白黒の作品では、見た目に入れる割合を下げる。
     見た目のタグは、その人物の絵の _LOOK_SHARE 以上に出てきたもの。
+    判定モデルがキャラ名(既存の作品のキャラ)を見分けた絵は、髪の色より先に、そのキャラごとにまとめる。
+    見分け違いの1コマで人物が増えないよう、_MIN_CHARACTER_PANELS コマ以上で見分けたキャラだけ。
     """
+    names = Counter(name for guess in guesses for name in dict.fromkeys(guess[2] if len(guess) > 2 else []))
+    known = {name for name, n in names.items() if n >= _MIN_CHARACTER_PANELS}
     groups: dict[tuple[str, str], list[list[str]]] = {}
-    for gender, tags in guesses:
+    for guess in guesses:
+        gender, tags = guess[0], guess[1]
+        character = next((n for n in (guess[2] if len(guess) > 2 else []) if n in known), "")
         hair = "" if monochrome else next((t for t in tags if _HAIR_COLOUR.match(t)), "")
-        groups.setdefault((gender, hair), []).append(tags)
+        groups.setdefault((gender, _CHARACTER_KEY + character if character else hair), []).append(tags)
     ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
     chosen = [next(g for g in ranked if g[0][0] == gender) for gender in dict.fromkeys(k[0] for k, _ in ranked)]
     chosen = chosen[:max_people]
     chosen += [g for g in ranked if g not in chosen][: max_people - len(chosen)]
     chosen.sort(key=lambda kv: -len(kv[1]))
     people = []
-    for (gender, _), members in chosen:
+    for (gender, key), members in chosen:
         counts = Counter(t for tags in members for t in set(tags))
         least = (
             max(2, math.ceil(len(members) * _LOOK_SHARE_MONOCHROME))
@@ -306,7 +324,8 @@ def cluster_people(
             if colour:
                 seen.add(colour.group(2))
             kept.append(tag)
-        people.append(Person(gender, kept, len(members)))
+        character = key[len(_CHARACTER_KEY):] if key.startswith(_CHARACTER_KEY) else ""
+        people.append(Person(gender, kept, len(members), character))
     return people
 
 
@@ -323,7 +342,11 @@ ADULT_AGE = 18
 
 
 # 名前の付け方。新しく作る(似た漫画)か、作品のセリフから名前を拾う(自分の作品の作り直し)か
-_NEW_NAMES = "- 実在の人物や、既存の作品のキャラクターの名前は使わない\n"
+_NEW_NAMES = "- キャラ名の無い人物には、実在の人物や、既存の作品のキャラクターの名前は使わない\n"
+# 判定モデルがキャラ名(既存の作品のキャラ)を見分けた人物
+_KNOWN_CHARACTERS = """- 「キャラ名」がある人物は、その既存の作品のキャラクター。name にはそのキャラの名前を日本語の表記で入れ
+  (例: hatsune miku → 初音ミク)、age・profile もそのキャラに合わせる。分からなければ英語のキャラ名を読みやすく書く
+"""
 _NAMES_FROM_LINES = """- 渡すセリフは、この作品(利用者自身の作品)のもの。セリフの呼びかけ・名乗り・呼び名(「藤堂さん」「楓」など)から
   その人物の名前が分かれば、その名前を使う。性別・立場・話し方の手がかりで、どの人物の名前か決める
 - 姓だけ・名だけが分かったときは、残りを作品に合うように考える。名前が分からない人物は、作品に合う名前を考える
@@ -333,13 +356,14 @@ _NAMES_FROM_LINES = """- 渡すセリフは、この作品(利用者自身の作
 NAMING_LINES_CHARS = 3000
 
 
-def _naming_system(adult: bool = False, from_lines: bool = False) -> str:
+def _naming_system(adult: bool = False, from_lines: bool = False, known: bool = False) -> str:
     """
     人物づくりの指示文。内容についての決まりは content_guard(DB)にある(空なら足さない)。R18 は成人の決まり。
-    from_lines: 作品のセリフから名前を拾う(自分の作品)。
+    from_lines: 作品のセリフから名前を拾う(自分の作品)。known: キャラ名を見分けた人物がいる(その名前を使う)。
     """
     rule = content_guard.text("similar.adult_naming_rule" if adult else "similar.naming_rule")
-    return _NAMING_SYSTEM.replace("{name_source}", _NAMES_FROM_LINES if from_lines else _NEW_NAMES).replace(
+    source = (_NAMES_FROM_LINES if from_lines else _NEW_NAMES) + (_KNOWN_CHARACTERS if known else "")
+    return _NAMING_SYSTEM.replace("{name_source}", source).replace(
         "{naming_rule}", f"- {rule}\n" if rule else ""
     )
 
@@ -379,15 +403,19 @@ async def name_people(
     白黒の漫画からは髪の色が読めないので、そのままだと人物どうしが似た見た目になる(実機で確認)。
     R18 の取り込み(adult)では、全員が 18 歳以上でなければ作り直させる(3回で作れなければ止める)。
     lines(自分の作品のセリフ)を渡すと、セリフの呼びかけ・名乗りから名前を拾い、分からなければ考える。
+    判定モデルがキャラ名を見分けた人物(Person.character)は、そのキャラの名前(日本語の表記)にする。
     """
     from .manga_draft import _ask_json
 
-    rows = [f"{i + 1}. {p.gender}, {', '.join(p.tags) or '(見た目のタグなし)'}" for i, p in enumerate(people)]
+    rows = [
+        f"{i + 1}. {p.gender}, {', '.join(p.tags) or '(見た目のタグなし)'}" + (f"(キャラ名: {p.character})" if p.character else "")
+        for i, p in enumerate(people)
+    ]
     user = f"ジャンル: {genre}\n舞台のタグ: {', '.join(setting) or '(なし)'}\n人物:\n" + "\n".join(rows)
     quoted = _quoted_lines(lines or [])
     if quoted:
         user += f"\n作品のセリフ(名前の手がかり):\n{quoted}"
-    system = _naming_system(adult, from_lines=bool(quoted))
+    system = _naming_system(adult, from_lines=bool(quoted), known=any(p.character for p in people))
     for _ in range(3):
         data = await _ask_json(api_key, system, user, max_tokens=800, temperature=0.8)
         items = (data or {}).get("characters") if isinstance(data, dict) else None

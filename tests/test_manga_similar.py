@@ -61,6 +61,46 @@ def test_cluster_people_takes_up_to_max_people() -> None:
     ]
 
 
+def test_cluster_people_groups_by_character_tag() -> None:
+    # 判定モデルがキャラ名を見分けた絵は、髪の色が違って読まれても同じキャラにまとめる。1コマだけの見分けは使わない
+    guesses = [
+        ("1girl", ["aqua hair", "twintails"], ["hatsune miku"]),
+        ("1girl", ["blue hair", "twintails"], ["hatsune miku"]),
+        ("1girl", ["aqua hair", "twintails"], []),
+        ("1girl", ["black hair"], ["kagamine rin"]),
+        ("1girl", ["black hair"], []),
+        ("1boy", ["brown hair"]),
+    ]
+    people = manga_similar.cluster_people(guesses, max_people=4)
+    assert [(p.gender, p.character, p.count) for p in people] == [
+        ("1girl", "hatsune miku", 2), ("1girl", "", 2), ("1boy", "", 1), ("1girl", "", 1)
+    ]
+    assert set(people[0].tags) == {"aqua hair", "twintails"}
+
+
+def test_name_people_uses_the_character_name(monkeypatch) -> None:
+    import asyncio
+
+    from python import manga_draft
+
+    asked: list[tuple[str, str]] = []
+
+    async def ask(api_key, system, user, *, max_tokens, temperature):  # noqa: ANN001
+        asked.append((system, user))
+        return {"characters": [{"name": "初音ミク", "age": 16, "profile": "歌うのが好き", "look": ""}]}
+
+    monkeypatch.setattr(manga_draft, "_ask_json", ask)
+    people = [manga_similar.Person("1girl", ["aqua hair"], 3, "hatsune miku")]
+    asyncio.run(manga_similar.name_people("k", people, "日常", []))
+    system, user = asked[-1]
+    assert "(キャラ名: hatsune miku)" in user and "初音ミク" in system
+    # キャラ名の無い人物だけ、既存の作品のキャラの名前を避ける
+    assert "キャラ名の無い人物には" in system
+    asyncio.run(manga_similar.name_people("k", [manga_similar.Person("1girl", ["aqua hair"], 3)], "日常", []))
+    system, user = asked[-1]
+    assert "キャラ名:" not in user and "hatsune miku" not in system
+
+
 def test_name_people_takes_names_from_the_lines(monkeypatch) -> None:
     import asyncio
 
