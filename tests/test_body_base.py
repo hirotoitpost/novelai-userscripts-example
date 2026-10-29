@@ -474,3 +474,36 @@ def test_swimsuit_base_is_all_ages_for_every_character(client: TestClient) -> No
     assert "bikini" in body_base.prompt(adult, {"kind": "swimsuit"}, body_base.ITEMS["front"], _defaults())
     # 全年齢の素体なので、全年齢で止めるタグは足すタグに入れられない
     assert client.post("/api/lora-dataset/body-bases", json={"name": "z", "kind": "swimsuit", "extra_tags": "nsfw"}).status_code == 422
+
+
+def test_body_parts_can_be_added_and_edited(client: TestClient) -> None:
+    adult = _character(client, "eiko", is_adult=1, age=28)
+    suit = _character(client, "suit")
+    nude_base = _base(client, kind="nude", skin_tone="fair")
+    suit_base = client.post("/api/lora-dataset/body-bases", json={"name": "スーツ", "skin_tone": "pale"}).json()
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": nude_base["id"]})
+    client.put(f"/api/lora-dataset/character/{suit['id']}/body-base", json={"body_base_id": suit_base["id"]})
+
+    res = client.post(
+        "/api/lora-dataset/sheet-items/body",
+        json={"label": "手(横)", "group": "upper_limb", "tags": "hand focus, from side", "check": "親指の付け根の厚み"},
+    )
+    assert res.status_code == 200, res.text
+    key = res.json()["key"]
+    part = {p["key"]: p for p in client.get("/api/lora-dataset/body-bases/options").json()["parts"]}[key]
+    assert part["check"] == "親指の付け根の厚み" and part["nude"] is False
+    # 足した部位は、素体スーツでは描けて、裸の素体では描かない
+    parts = {p["key"]: p for p in client.get(f"/api/lora-dataset/character/{suit['id']}/body-base").json()["parts"]}
+    assert parts[key]["available"] and parts[key]["label"] == "手(横)"
+    assert not {p["key"]: p for p in client.get(f"/api/lora-dataset/character/{adult['id']}/body-base").json()["parts"]}[key]["available"]
+    assert client.post(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"keys": [key]}).status_code == 422
+    res = client.post(f"/api/lora-dataset/character/{suit['id']}/body-base", json={"keys": [key]})
+    assert res.text.count('"status": "ok"') == 1 and "from side" in client.calls[-1][0]  # type: ignore[attr-defined]
+
+    # コードの部位のプロンプトを書き換える(裸の素体で描くかは既定のまま)
+    client.put("/api/lora-dataset/sheet-items/body/front", json={"label": "正面", "group": "whole", "tags": "full body, standing, front view, hands on hips"})
+    res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"keys": ["front"]})
+    assert res.text.count('"status": "ok"') == 1 and "hands on hips" in client.calls[-1][0]  # type: ignore[attr-defined]
+    # 性的な場面のタグは、素体の部位に入れられない
+    bad = client.post("/api/lora-dataset/sheet-items/body", json={"label": "x", "group": "trunk", "tags": "sex, cowboy shot"})
+    assert bad.status_code == 422

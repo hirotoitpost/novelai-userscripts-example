@@ -22,7 +22,7 @@ from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
-from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard
+from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
 from .. import see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
@@ -41,16 +41,18 @@ from ..character_sheet import (
 )
 from ..client import get_client
 from ..face_sheet import BACKGROUND as FACE_BACKGROUND
-from ..face_sheet import ITEMS as FACE_ITEMS
 from ..face_sheet import NEGATIVE as FACE_NEGATIVE
 from ..face_sheet import SIZES as FACE_SIZES
-from ..face_sheet import presets as face_presets
 from ..dataset_variations import clean_value
 from ..dataset_variations import extract as extract_variation_tags
 from .. import guard_password
 from ..guard_password import guard_token
 from ..sessions import require_admin
 from ..db import (
+    delete_sheet_item,
+    list_sheet_items,
+    next_sheet_item_key,
+    save_sheet_item,
     get_character_outfit,
     list_wardrobe_parts,
     PerUser,
@@ -113,6 +115,7 @@ from ..models import (
     CharacterSheetPromptResponse,
     DatasetImportRequest,
     FaceSheetRequest,
+    SheetItemRequest,
     GuardCoreResponse,
     GuardProfileResponse,
     GuardProfileSaveRequest,
@@ -794,10 +797,27 @@ def _face_dir(character: dict, root_name: str) -> Path:
     return _character_root(root_name, character) / "face_sheet"
 
 
+def _sheet_rows(sheet: str) -> list[dict[str, Any]]:
+    """顔・表情シート(face)・素体(body)の項目の上書きと追加(DB)。"""
+    conn = get_connection()
+    try:
+        return list_sheet_items(conn, sheet)
+    finally:
+        conn.close()
+
+
+def _face_items() -> dict[str, face_sheet.FaceItem]:
+    return face_sheet.items(_sheet_rows("face"))
+
+
+def _body_parts() -> dict[str, body_base.BodyPart]:
+    return body_base.parts(_sheet_rows("body"))
+
+
 def _face_entries(character: dict, root_name: str) -> list[dict[str, Any]]:
     folder = _face_dir(character, root_name)
     result = []
-    for item in FACE_ITEMS.values():
+    for item in _face_items().values():
         path = folder / f"{item.key}.png"
         result.append({
             "key": item.key,
@@ -810,9 +830,9 @@ def _face_entries(character: dict, root_name: str) -> list[dict[str, Any]]:
 
 
 @router.get("/face-sheet/presets")
-async def get_face_sheet_presets() -> list[dict[str, str]]:
-    """顔・表情シートの項目(キー・名前・顔の向きか表情か・足すタグ)。"""
-    return face_presets()
+async def get_face_sheet_presets() -> list[dict[str, Any]]:
+    """顔・表情シートの項目(キー・名前・顔の向きか表情か・足すタグ・ネガティブ・サイズ。DB の上書き・追加を重ねたもの)。"""
+    return face_sheet.presets(_sheet_rows("face"))
 
 
 @router.get("/character/{character_id}/face-sheet")
@@ -828,10 +848,11 @@ async def generate_face_sheet(character_id: int, req: FaceSheetRequest, client: 
     描いた絵は <データセットのフォルダ>/face_sheet/<キー>.png に、LoRA 用のキャプション(.txt)と一緒に置く(上書き)。
     """
     character = _load_character(character_id)
-    unknown = [k for k in req.keys if k not in FACE_ITEMS]
+    face_items = _face_items()
+    unknown = [k for k in req.keys if k not in face_items]
     if unknown:
         raise HTTPException(status_code=422, detail=f"顔・表情シートに無い項目です: {unknown}")
-    items = [FACE_ITEMS[k] for k in dict.fromkeys(req.keys)]
+    items = [face_items[k] for k in dict.fromkeys(req.keys)]
     _check_tags(character, ", ".join(i.tags for i in items), _load_guard(None), False)
 
     references = None
@@ -864,7 +885,11 @@ async def generate_face_sheet(character_id: int, req: FaceSheetRequest, client: 
             prompt = join_tags(sheet_prompt(character), item.tags, FACE_BACKGROUND)
             event: dict[str, Any] = {"current": index, "total": len(items), "key": item.key, "label": item.label}
             try:
-                image = await generate_one(client, prompt, FACE_SIZES[item.size], cfg, seed=cfg.seed)
+                # 項目ごとのネガティブを足す
+                item_cfg = dataclasses.replace(
+                    cfg, negative_prompt=join_tags(cfg.negative_prompt, item.negative)
+                ) if item.negative else cfg
+                image = await generate_one(client, prompt, FACE_SIZES[item.size], item_cfg, seed=cfg.seed)
                 path = folder / f"{item.key}.png"
                 image.save(path, "PNG")
                 caption = join_tags(character.get("trigger_word"), character.get("appearance_tags"), item.tags)
@@ -883,6 +908,89 @@ async def generate_face_sheet(character_id: int, req: FaceSheetRequest, client: 
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- 顔・表情シート・素体の項目の追加と、プロンプトの編集 ---
+
+
+def _sheet_groups(sheet: str) -> dict[str, str]:
+    if sheet == "face":
+        return dict(face_sheet.GROUPS)
+    if sheet == "body":
+        return dict(body_base.GROUPS)
+    raise HTTPException(status_code=404, detail="sheet は face(顔・表情シート)か body(素体)です。")
+
+
+def _sheet_presets(sheet: str) -> list[dict[str, Any]]:
+    rows = _sheet_rows(sheet)
+    return face_sheet.presets(rows) if sheet == "face" else body_base.presets(rows)
+
+
+def _check_sheet_item(sheet: str, req: SheetItemRequest) -> dict[str, Any]:
+    """
+    項目の中身を確かめて、DB の行の形にする。素体の部位は、素体の足すタグと同じく性的な場面のタグと、全年齢で
+    止めるタグを入れさせない(素体スーツ・水着素体は全年齢)。顔・表情シートは、描くときにキャラごとに検査する。
+    """
+    groups = _sheet_groups(sheet)
+    if req.group not in groups:
+        raise HTTPException(status_code=422, detail=f"まとまりは {', '.join(groups)} のどれかです。")
+    if sheet == "body":
+        found = sorted(set(blocked_tags(req.tags)) | set(body_base.clean_extra(req.tags)))
+        if found:
+            raise HTTPException(status_code=422, detail=f"素体の部位のタグに入れられないタグです: {', '.join(found)}")
+    return {
+        "label": req.label.strip(), "grp": req.group, "tags": req.tags.strip(), "negative": req.negative.strip(),
+        "size": req.size, "check_text": req.check.strip() if sheet == "body" else "",
+    }
+
+
+@router.get("/sheet-items/{sheet}")
+async def get_sheet_items(sheet: str) -> dict[str, Any]:
+    """顔・表情シート(face)・素体(body)の項目とまとまり。項目はコードの既定に、DB の上書き・追加を重ねたもの。"""
+    groups = _sheet_groups(sheet)
+    return {"groups": [{"id": k, "label": v} for k, v in groups.items()], "items": _sheet_presets(sheet)}
+
+
+@router.post("/sheet-items/{sheet}")
+async def create_sheet_item(sheet: str, req: SheetItemRequest) -> dict[str, Any]:
+    """項目を足す(全キャラ共通)。キーは custom_<番号>。足した素体の部位は、裸の素体では描かない。"""
+    item = _check_sheet_item(sheet, req)
+    conn = get_connection()
+    try:
+        key = next_sheet_item_key(conn, sheet)
+        save_sheet_item(conn, sheet, key, item)
+    finally:
+        conn.close()
+    return {"key": key, **await get_sheet_items(sheet)}
+
+
+@router.put("/sheet-items/{sheet}/{key}")
+async def update_sheet_item(sheet: str, key: str, req: SheetItemRequest) -> dict[str, Any]:
+    """項目の名前・プロンプト(タグ)・ネガティブ・サイズ(素体は確かめる点も)を書き換える。コードの項目も上書きできる。"""
+    item = _check_sheet_item(sheet, req)
+    known = face_sheet.ITEMS if sheet == "face" else body_base.ITEMS
+    if key not in known and key not in {row["key"] for row in _sheet_rows(sheet)}:
+        raise HTTPException(status_code=404, detail="その項目はありません。")
+    conn = get_connection()
+    try:
+        save_sheet_item(conn, sheet, key, item)
+    finally:
+        conn.close()
+    return await get_sheet_items(sheet)
+
+
+@router.delete("/sheet-items/{sheet}/{key}")
+async def delete_sheet_item_route(sheet: str, key: str) -> dict[str, Any]:
+    """足した項目を消す。コードの項目は既定(名前・プロンプト)に戻す。描いた絵のファイルは消さない。"""
+    _sheet_groups(sheet)
+    conn = get_connection()
+    try:
+        found = delete_sheet_item(conn, sheet, key)
+    finally:
+        conn.close()
+    if not found:
+        raise HTTPException(status_code=404, detail="その項目は上書きも追加もしていません。")
+    return await get_sheet_items(sheet)
 
 
 # --- 素体(body_base.py) ---
@@ -946,7 +1054,7 @@ def _body_entries(character: dict, root_name: str) -> dict[str, Any]:
     base = _character_base(character)
     nude_reason, modest = _age_checks(character)
     parts = []
-    for part in body_base.PARTS:
+    for part in _body_parts().values():
         path = _body_dir(character, base, root_name) / f"{base['id']}_{part.key}.png" if base else None
         drawn = path is not None and path.is_file()
         check_path = path.with_suffix(".check.json") if path is not None else None
@@ -984,7 +1092,7 @@ async def get_body_base_options() -> dict[str, Any]:
         "options": {field: [r for r in rows if r["field"] == field] for field in body_base.FIELDS},
         "kinds": [{"value": k, "label": v} for k, v in body_base.KINDS.items()],
         "groups": [{"id": k, "label": v} for k, v in body_base.GROUPS],
-        "parts": body_base.presets(),
+        "parts": body_base.presets(_sheet_rows("body")),
     }
 
 
@@ -1152,11 +1260,12 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
     base = _character_base(character)
     if base is None:
         raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
-    unknown = [k for k in req.keys if k not in body_base.ITEMS]
+    body_parts = _body_parts()
+    unknown = [k for k in req.keys if k not in body_parts]
     if unknown:
         raise HTTPException(status_code=422, detail=f"素体の部位に無い項目です: {unknown}")
     nude = base["kind"] == "nude"
-    parts = [body_base.ITEMS[k] for k in dict.fromkeys(req.keys)]
+    parts = [body_parts[k] for k in dict.fromkeys(req.keys)]
     reason, modest = _age_checks(character)
     if nude:
         if reason:

@@ -4,11 +4,15 @@
 
 キャラの描き分けの確認(漫画で使う前に、その表情・角度がちゃんと描けるか)と、LoRA の学習データ(キャプション付き)の
 両方に使う。キャラシートの基準シードで描くので、項目ごとの違いは向き・表情だけになりやすい。
+
+項目はコードの既定(ANGLES・EXPRESSIONS)に、DB(sheet_items の sheet='face')の上書き(名前・タグ・ネガティブ・サイズ)と、
+利用者が足した項目を重ねたもの(items)。全キャラで共通。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,8 @@ class FaceItem:
     group: str
     # 生成サイズ(portrait 832×1216 / square 1024×1024)
     size: str = "square"
+    # この項目だけに足すネガティブ
+    negative: str = ""
 
 
 _PORTRAIT = "portrait, close-up, looking at viewer"
@@ -73,5 +79,27 @@ BACKGROUND = "simple background, white background"
 SIZES = {"square": (1024, 1024), "portrait": (832, 1216)}
 
 
-def presets() -> list[dict[str, str]]:
-    return [{"key": i.key, "label": i.label, "group": i.group, "tags": i.tags} for i in ITEMS.values()]
+GROUPS: tuple[tuple[str, str], ...] = (("angle", "顔の向き・姿勢"), ("expression", "表情"))
+
+
+def items(rows: list[dict[str, Any]] | None = None) -> dict[str, FaceItem]:
+    """
+    使う項目: コードの既定に、DB の上書き・足した項目(db.list_sheet_items(conn, "face") の行)を重ねる。
+    上書きした項目は既定と同じ位置に、足した項目は後ろに並ぶ。
+    """
+    result = dict(ITEMS)
+    for row in rows or []:
+        result[row["key"]] = FaceItem(row["key"], row["label"], row["tags"], row["grp"], row["size"], row["negative"])
+    return result
+
+
+def presets(rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """画面の項目の一覧。builtin はコードの項目(消すと既定に戻る)、edited は DB で上書き・足したもの。"""
+    edited = {row["key"] for row in rows or []}
+    return [
+        {
+            "key": i.key, "label": i.label, "group": i.group, "tags": i.tags, "negative": i.negative, "size": i.size,
+            "builtin": i.key in ITEMS, "edited": i.key in edited,
+        }
+        for i in items(rows).values()
+    ]
