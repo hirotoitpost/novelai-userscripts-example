@@ -13,6 +13,7 @@ import {
   type CharacterPromptInput,
 } from '../api'
 import ImageCropDialog from '../components/ImageCropDialog'
+import CharacterFromImage from '../components/CharacterFromImage'
 import { canReadClipboard, readClipboardImage, usePasteImage } from '../imagePaste'
 import './LLMPage.css'
 
@@ -819,6 +820,7 @@ function ReversePromptPanel() {
           )}
           <div className="llm-output-actions">
             <button className="llm-use-btn" onClick={handleUse} disabled={!positive && !result.characters.length}>画像生成に使用 →</button>
+            {token && image && <CharacterFromImage token={token} className="llm-use-btn" image={async () => image} />}
           </div>
           {result.characters.length > 0 && (
             <p className="llm-aux-explanation">

@@ -2309,6 +2309,38 @@ async def create_new_character(req: CharacterNewRequest) -> dict[str, Any]:
         conn.close()
 
 
+class CharacterFromImageRequest(BaseModel):
+    # 画像(base64 か data URL)。NovelAI で生成した画像なら、埋め込まれたプロンプトを使う
+    image: str = Field(min_length=1)
+
+
+@router.post("/characters/from-image")
+async def create_characters_from_image(req: CharacterFromImageRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    画像からキャラを自動で作る(character_from_image.py)。人物ごとのプロンプト(埋め込み、無ければ判定モデル)を
+    容姿・服装・画風に分け、名前・人物像を文章モデルで考える(キャラ名のタグがあれば、そのキャラの名前)。
+    1人の画像は、そのまま参照画像にする。戻り値は {source, characters}。
+    """
+    import base64
+    import binascii
+
+    from ..character_from_image import create_from_image
+
+    text = req.image.split(",", 1)[1] if req.image.startswith("data:") else req.image
+    try:
+        data = base64.b64decode(text)
+    except (ValueError, binascii.Error):
+        raise HTTPException(status_code=400, detail="画像を読み取れませんでした。")
+    try:
+        return await create_from_image(client.api_key, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except OSError:
+        raise HTTPException(status_code=400, detail="画像を読み取れませんでした。")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 @router.put("/characters/{character_id}/sheet", response_model=CharacterResponse)
 async def put_character_sheet(
     character_id: int, req: CharacterSheetRequest, token: str | None = Depends(guard_token)
