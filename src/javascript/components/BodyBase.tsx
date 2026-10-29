@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useLocalStorage } from '../hooks/useLocalStorage'
 import { fileUrl } from '../library'
 import FullscreenViewer from './FullscreenViewer'
 import './FaceSheet.css'
@@ -9,6 +10,8 @@ import './BodyBase.css'
  * キャラシートの素体。服を着せる前の体(モデリングでいう素体)を、キャラの顔・髪・目のまま部位ごとに描いて見る。
  * 素体(肌の色・体格・身長・プロポーション など)はキャラとは別に一覧で持ち、ここで作る・直す。キャラにはどれを当てるか選ぶ。
  * 素体スーツ・水着素体(全年齢)はどのキャラにも、裸の素体は成人キャラだけに当てられる(サーバーが判定する)。
+ * 素体が増えても使えるように、一覧は種類・名前で絞り込み・並べ替えでき、一覧・部位のまとまり・2Dモデルはたためる
+ * (開け閉めと絞り込みは端末に残す)。
  */
 
 type BaseKind = 'suit' | 'swimsuit' | 'nude'
@@ -110,6 +113,27 @@ const EMPTY: Omit<Base, 'id'> = {
   extra_tags: '', negative_tags: '', notes: '',
 }
 
+type BaseSort = 'id' | 'new' | 'name' | 'used'
+
+interface ListView {
+  open: boolean
+  kind: BaseKind | 'all'
+  sort: BaseSort
+}
+
+const DEFAULT_LIST_VIEW: ListView = { open: true, kind: 'all', sort: 'id' }
+
+const BASE_SORT_LABELS: Record<BaseSort, string> = { id: '登録順', new: '新しい順', name: '名前順', used: '使っている人数' }
+
+function compareBases(sort: BaseSort): (a: Base, b: Base) => number {
+  switch (sort) {
+    case 'new': return (a, b) => b.id - a.id
+    case 'name': return (a, b) => a.name.localeCompare(b.name, 'ja') || a.id - b.id
+    case 'used': return (a, b) => (b.used_by ?? 0) - (a.used_by ?? 0) || a.id - b.id
+    default: return (a, b) => a.id - b.id
+  }
+}
+
 async function detail(res: Response): Promise<string> {
   const data = await res.json().catch(() => null)
   return typeof data?.detail === 'string' ? data.detail : `HTTP ${res.status}`
@@ -118,6 +142,13 @@ async function detail(res: Response): Promise<string> {
 export default function BodyBase({ characterId, characterName, token, rootName, disabled }: Props) {
   const navigate = useNavigate()
   const [options, setOptions] = useState<Options | null>(null)
+  const [storedListView, setStoredListView] = useLocalStorage<Partial<ListView>>('nai_body_base_list', DEFAULT_LIST_VIEW)
+  const listView: ListView = { ...DEFAULT_LIST_VIEW, ...storedListView }
+  const setListView = (patch: Partial<ListView>) => setStoredListView({ ...listView, ...patch })
+  const [baseQuery, setBaseQuery] = useState('')
+  // たたんだ部位のまとまり・2Dモデルを開いているか
+  const [closedGroups, setClosedGroups] = useLocalStorage<string[]>('nai_body_base_closed_groups', [])
+  const [rigOpen, setRigOpen] = useLocalStorage('nai_body_base_rig_open', false)
   const [bases, setBases] = useState<Base[]>([])
   const [body, setBody] = useState<CharacterBody | null>(null)
   // 編集中の素体(id が無ければ新しく作る)
@@ -416,6 +447,13 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const drawn = groups.flatMap(g => (body?.parts ?? []).filter(p => p.group === g.id && p.path))
   const zoomIndex = drawn.findIndex(p => p.key === zoomKey)
   const zoom = zoomIndex >= 0 ? drawn[zoomIndex] : null
+  const words = baseQuery.toLowerCase().split(/\s+/).filter(Boolean)
+  const shownBases = bases
+    .filter(b => listView.kind === 'all' || b.kind === listView.kind)
+    .filter(b => words.every(w => `${b.name} ${b.notes}`.toLowerCase().includes(w)))
+    .sort(compareBases(listView.sort))
+  const setGroupOpen = (id: string, open: boolean) =>
+    setClosedGroups(open ? closedGroups.filter(g => g !== id) : [...new Set([...closedGroups, id])])
 
   return (
     <section className="fsh bdb">
@@ -435,11 +473,18 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
           onChange={e => void assign(e.target.value ? Number(e.target.value) : null)}
         >
           <option value="">素体なし</option>
-          {bases.map(b => (
-            <option key={b.id} value={b.id} disabled={b.kind === 'nude' && !body?.nude_allowed}>
-              {b.name}({kindLabel(b.kind)})
-            </option>
-          ))}
+          {options
+            ? options.kinds.map(k => {
+                const ofKind = bases.filter(b => b.kind === k.value).sort(compareBases('name'))
+                return ofKind.length > 0 && (
+                  <optgroup key={k.value} label={k.label}>
+                    {ofKind.map(b => (
+                      <option key={b.id} value={b.id} disabled={b.kind === 'nude' && !body?.nude_allowed}>{b.name}</option>
+                    ))}
+                  </optgroup>
+                )
+              })
+            : bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
         {body?.base && <p className="lora-hint">体のタグ: {body.body_tags || '(指定なし)'}</p>}
         {body && !body.nude_allowed && <p className="lora-hint">裸の素体は当てられません: {body.nude_reason}</p>}
@@ -448,9 +493,13 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
         )}
       </div>
 
-      <div className="bdb-list">
-        <div className="fsh-group-head">
+      <details className="bdb-list bdb-fold" open={listView.open}
+        onToggle={e => { if (e.currentTarget.open !== listView.open) setListView({ open: e.currentTarget.open }) }}>
+        <summary className="bdb-fold-head">
           <h4>素体の一覧</h4>
+          <span className="lora-hint">{shownBases.length === bases.length ? `${bases.length} 件` : `${shownBases.length} / ${bases.length} 件`}</span>
+        </summary>
+        <div className="fsh-group-head">
           <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => setEditing({ ...EMPTY })}>
             新しい素体
           </button>
@@ -459,9 +508,25 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
             選択肢を編集
           </button>
         </div>
+        {bases.length > 0 && (
+          <div className="bdb-filter">
+            <input className="lora-input" type="search" placeholder="名前・メモで探す" value={baseQuery}
+              onChange={e => setBaseQuery(e.target.value)} />
+            <select className="lora-select" value={listView.kind} aria-label="種類"
+              onChange={e => setListView({ kind: e.target.value as ListView['kind'] })}>
+              <option value="all">すべての種類</option>
+              {(options?.kinds ?? []).map(k => <option key={k.value} value={k.value}>{k.label}</option>)}
+            </select>
+            <select className="lora-select" value={listView.sort} aria-label="並べ替え"
+              onChange={e => setListView({ sort: e.target.value as BaseSort })}>
+              {(Object.keys(BASE_SORT_LABELS) as BaseSort[]).map(k => <option key={k} value={k}>{BASE_SORT_LABELS[k]}</option>)}
+            </select>
+          </div>
+        )}
         {bases.length === 0 && <p className="lora-hint">まだ素体がありません。</p>}
+        {bases.length > 0 && shownBases.length === 0 && <p className="lora-hint">条件に合う素体がありません。</p>}
         <ul>
-          {bases.map(b => (
+          {shownBases.map(b => (
             <li key={b.id} className={b.id === body?.base?.id ? 'bdb-item bdb-item--on' : 'bdb-item'}>
               <span className="bdb-item-name">{b.name}</span>
               <span className={b.kind === 'nude' ? 'bdb-kind bdb-kind--nude' : 'bdb-kind'}>{kindLabel(b.kind)}</span>
@@ -471,7 +536,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
             </li>
           ))}
         </ul>
-      </div>
+      </details>
 
       {editing && options && (
         <div className="bdb-editor">
@@ -519,9 +584,17 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       {error && <p className="lora-error" role="alert">{error}</p>}
 
       {body?.base && groups.map(group => (
-        <div key={group.id}>
-          <div className="fsh-group-head">
+        <details key={group.id} className="bdb-fold" open={!closedGroups.includes(group.id)}
+          onToggle={e => { if (e.currentTarget.open === closedGroups.includes(group.id)) setGroupOpen(group.id, e.currentTarget.open) }}>
+          <summary className="bdb-fold-head">
             <h4>{group.label}</h4>
+            <span className="lora-hint">
+              描いた {body.parts.filter(p => p.group === group.id && p.path).length} / {body.parts.filter(p => p.group === group.id).length} 枚
+              {body.parts.some(p => p.group === group.id && picked.has(p.key)) &&
+                `・選んでいる ${body.parts.filter(p => p.group === group.id && picked.has(p.key)).length} 枚`}
+            </span>
+          </summary>
+          <div className="fsh-group-head">
             <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => pickGroup(group.id, false)}>全部選ぶ</button>
             <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => pickGroup(group.id, true)}>まだの部位を選ぶ</button>
           </div>
@@ -553,7 +626,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
               </div>
             ))}
           </div>
-        </div>
+        </details>
       ))}
 
       {body?.base && (
@@ -574,210 +647,213 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       )}
 
       {body?.base && rig && (
-        <div className="bdb-rig">
-          <h4>2Dモデル(Blender)</h4>
-          <p className="lora-hint">
-            「Aポーズ(関節の確認)」の絵の形に合わせた平らなメッシュ(2Dの素体)を作り、絵をテクスチャとして貼って、関節に骨を入れた
-            Blender のファイルを作ります。メッシュは骨の重みで皮膚のように曲がります(体で1枚、左右の腕で1枚ずつ)。確かめ用に動きを
-            付けて描き出します。zip にはテクスチャと rig.json(骨・メッシュの頂点・重み)も入ります。Spine(4.1 の JSON・重み付きメッシュ・
-            動き全部)と、Live2D の Cubism Editor に読み込む PSD(部位ごとのレイヤー)も書き出します。
-          </p>
-          <div className="bdb-outfit">
-            <h5>服の層</h5>
+        <details className="bdb-fold" open={rigOpen}
+          onToggle={e => { if (e.currentTarget.open !== rigOpen) setRigOpen(e.currentTarget.open) }}>
+          <summary className="bdb-fold-head"><h4>2Dモデル(Blender)</h4></summary>
+          <div className="bdb-rig">
             <p className="lora-hint">
-              素体の Aポーズの首から下を、服のタグで描き直した絵を作ります(1枚ぶんの Anlas)。素体の絵と違う所を服の層として、
-              同じ骨で動くメッシュにして体の手前に重ねます。Blender では「outfit」のコレクションで表示を切り替えられます。
+              「Aポーズ(関節の確認)」の絵の形に合わせた平らなメッシュ(2Dの素体)を作り、絵をテクスチャとして貼って、関節に骨を入れた
+              Blender のファイルを作ります。メッシュは骨の重みで皮膚のように曲がります(体で1枚、左右の腕で1枚ずつ)。確かめ用に動きを
+              付けて描き出します。zip にはテクスチャと rig.json(骨・メッシュの頂点・重み)も入ります。Spine(4.1 の JSON・重み付きメッシュ・
+              動き全部)と、Live2D の Cubism Editor に読み込む PSD(部位ごとのレイヤー)も書き出します。
             </p>
-            <div className="bdb-outfit-row">
-              {rig.outfit && (
-                <img src={`${fileUrl(rig.outfit.path)}&v=${rig.outfit.updated}`} alt="服を着せた Aポーズ" className="bdb-outfit-thumb" />
-              )}
-              <div className="bdb-outfit-form">
-                <label className="lora-label">着せる服のタグ
-                  <textarea className="lora-textarea" rows={2} value={outfitTags} disabled={busy || outfitRunning}
-                    placeholder="white long-sleeved blouse, navy skirt など(空ならキャラシートの普段の服装)"
-                    onChange={e => setOutfitTags(e.target.value)} />
-                </label>
-                <label className="lora-label">描き直しの強さ {outfitStrength.toFixed(2)}(低いほど素体の姿勢に近く、高いほど服がはっきり変わる)
-                  <input type="range" min={0.5} max={1} step={0.05} value={outfitStrength} disabled={busy || outfitRunning}
-                    onChange={e => setOutfitStrength(Number(e.target.value))} />
-                </label>
-                <div className="fsh-actions">
-                  <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void drawOutfit()}
-                    disabled={busy || outfitRunning || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}>
-                    {outfitRunning ? '描いています…' : rig.outfit ? '服を着せ直す' : '服を着せた絵を描く'}
-                  </button>
-                  {rig.outfit?.drift != null && (
-                    <span className={rig.outfit.drift_warn ? 'lora-error' : 'lora-hint'}>
-                      関節のずれ {(rig.outfit.drift * 100).toFixed(1)}%{rig.outfit.drift_warn ? '(大きめ)' : ''}
-                      {(rig.outfit.attempts ?? 1) > 1 && `・${rig.outfit.attempts}回描いていちばんずれの小さい絵`}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="bdb-outfit">
-            <h5>髪の層(長い髪)</h5>
-            <p className="lora-hint">
-              垂れた髪は髪の層に分けて揺らします。{rig.parsing_model
-                ? '髪は体の部位分けのモデル(see-through)で切り出します。'
-                : '体の部位分けのモデルが無いので、髪は色と形で切り出します(scripts/export_body_parsing.py で入れると正確になります)。'}
-              髪の下に隠れていた体は、ふだんはまわりから埋めます。下のボタンで NovelAI に描き直させると、きれいになります(1枚ぶんの Anlas)。
-            </p>
-            <div className="bdb-outfit-row">
-              {rig.behind_hair && (
-                <img src={`${fileUrl(rig.behind_hair.path)}&v=${rig.behind_hair.updated}`} alt="髪の下を描き直した Aポーズ" className="bdb-outfit-thumb" />
-              )}
-              <div className="bdb-outfit-form">
-                <label className="lora-label">描き直しの強さ {underStrength.toFixed(2)}(強すぎると長い髪をまた描きます)
-                  <input type="range" min={0.3} max={0.8} step={0.05} value={underStrength} disabled={busy || underRunning}
-                    onChange={e => setUnderStrength(Number(e.target.value))} />
-                </label>
-                <details>
-                  <summary className="lora-hint">点で髪を指す(任意)</summary>
-                  <textarea className="lora-textarea" rows={3} value={underPoints} disabled={busy || underRunning}
-                    placeholder='[{"pos": [[265,300],[250,400]], "neg": [[410,330]]}, {"pos": [[545,300]], "neg": [[410,330]]}]'
-                    onChange={e => setUnderPoints(e.target.value)} />
-                </details>
-                <div className="fsh-actions">
-                  <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void drawBehindHair()}
-                    disabled={busy || underRunning || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}>
-                    {underRunning ? '描き直しています…' : rig.behind_hair ? '髪の下の体を描き直す(やり直し)' : '髪の下の体を描き直す(NovelAI)'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          {rig.layers && (
             <div className="bdb-outfit">
-              <h5>see-through で層に分ける(リモートの GPU)</h5>
+              <h5>服の層</h5>
               <p className="lora-hint">
-                絵を、前髪・後ろ髪・顔・目・口・服・腕・脚などの層に分けます(隠れていた所まで描き足します)。層ごとにメッシュを作るので、
-                髪や腕の重なりがきれいに動きます。Colab で notebooks/see_through_colab.ipynb を動かしている間だけ使えます(1枚 8分ほど)。
+                素体の Aポーズの首から下を、服のタグで描き直した絵を作ります(1枚ぶんの Anlas)。素体の絵と違う所を服の層として、
+                同じ骨で動くメッシュにして体の手前に重ねます。Blender では「outfit」のコレクションで表示を切り替えられます。
               </p>
-              {!rig.layers.configured ? (
-                <p className="lora-hint">see-through のサーバーが設定されていません(.env の SEE_THROUGH_BASE_URL・SEE_THROUGH_TOKEN)。</p>
-              ) : (
-                <div className="fsh-actions">
-                  {([['a_pose', false, '素体の絵'], ['outfit', true, '服を着せた絵']] as const).map(([key, outfit, label]) => {
-                    const state = rig.layers![key]
-                    const job = state.job
-                    const hasSource = outfit ? !!rig.outfit : !!body.parts.find(p => p.key === 'a_pose')?.path
-                    if (!hasSource) return null
-                    return (
-                      <span key={key} className="bdb-layers-item">
-                        <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void splitLayers(outfit)}
-                          disabled={busy || rigRunning || job?.status === 'running'}>
-                          {job?.status === 'running'
-                            ? `${label}を分けています…(${Math.floor(job.seconds / 60)}分${job.seconds % 60}秒)`
-                            : state.updated ? `${label}を分け直す` : `${label}を層に分ける`}
-                        </button>
-                        {job?.status === 'error' && <span className="lora-error">{job.error}</span>}
-                        {state.updated && job?.status !== 'running' && <span className="lora-hint">✓ 分けた層あり</span>}
+              <div className="bdb-outfit-row">
+                {rig.outfit && (
+                  <img src={`${fileUrl(rig.outfit.path)}&v=${rig.outfit.updated}`} alt="服を着せた Aポーズ" className="bdb-outfit-thumb" />
+                )}
+                <div className="bdb-outfit-form">
+                  <label className="lora-label">着せる服のタグ
+                    <textarea className="lora-textarea" rows={2} value={outfitTags} disabled={busy || outfitRunning}
+                      placeholder="white long-sleeved blouse, navy skirt など(空ならキャラシートの普段の服装)"
+                      onChange={e => setOutfitTags(e.target.value)} />
+                  </label>
+                  <label className="lora-label">描き直しの強さ {outfitStrength.toFixed(2)}(低いほど素体の姿勢に近く、高いほど服がはっきり変わる)
+                    <input type="range" min={0.5} max={1} step={0.05} value={outfitStrength} disabled={busy || outfitRunning}
+                      onChange={e => setOutfitStrength(Number(e.target.value))} />
+                  </label>
+                  <div className="fsh-actions">
+                    <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void drawOutfit()}
+                      disabled={busy || outfitRunning || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}>
+                      {outfitRunning ? '描いています…' : rig.outfit ? '服を着せ直す' : '服を着せた絵を描く'}
+                    </button>
+                    {rig.outfit?.drift != null && (
+                      <span className={rig.outfit.drift_warn ? 'lora-error' : 'lora-hint'}>
+                        関節のずれ {(rig.outfit.drift * 100).toFixed(1)}%{rig.outfit.drift_warn ? '(大きめ)' : ''}
+                        {(rig.outfit.attempts ?? 1) > 1 && `・${rig.outfit.attempts}回描いていちばんずれの小さい絵`}
                       </span>
-                    )
-                  })}
+                    )}
+                  </div>
                 </div>
+              </div>
+            </div>
+            <div className="bdb-outfit">
+              <h5>髪の層(長い髪)</h5>
+              <p className="lora-hint">
+                垂れた髪は髪の層に分けて揺らします。{rig.parsing_model
+                  ? '髪は体の部位分けのモデル(see-through)で切り出します。'
+                  : '体の部位分けのモデルが無いので、髪は色と形で切り出します(scripts/export_body_parsing.py で入れると正確になります)。'}
+                髪の下に隠れていた体は、ふだんはまわりから埋めます。下のボタンで NovelAI に描き直させると、きれいになります(1枚ぶんの Anlas)。
+              </p>
+              <div className="bdb-outfit-row">
+                {rig.behind_hair && (
+                  <img src={`${fileUrl(rig.behind_hair.path)}&v=${rig.behind_hair.updated}`} alt="髪の下を描き直した Aポーズ" className="bdb-outfit-thumb" />
+                )}
+                <div className="bdb-outfit-form">
+                  <label className="lora-label">描き直しの強さ {underStrength.toFixed(2)}(強すぎると長い髪をまた描きます)
+                    <input type="range" min={0.3} max={0.8} step={0.05} value={underStrength} disabled={busy || underRunning}
+                      onChange={e => setUnderStrength(Number(e.target.value))} />
+                  </label>
+                  <details>
+                    <summary className="lora-hint">点で髪を指す(任意)</summary>
+                    <textarea className="lora-textarea" rows={3} value={underPoints} disabled={busy || underRunning}
+                      placeholder='[{"pos": [[265,300],[250,400]], "neg": [[410,330]]}, {"pos": [[545,300]], "neg": [[410,330]]}]'
+                      onChange={e => setUnderPoints(e.target.value)} />
+                  </details>
+                  <div className="fsh-actions">
+                    <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void drawBehindHair()}
+                      disabled={busy || underRunning || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}>
+                      {underRunning ? '描き直しています…' : rig.behind_hair ? '髪の下の体を描き直す(やり直し)' : '髪の下の体を描き直す(NovelAI)'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {rig.layers && (
+              <div className="bdb-outfit">
+                <h5>see-through で層に分ける(リモートの GPU)</h5>
+                <p className="lora-hint">
+                  絵を、前髪・後ろ髪・顔・目・口・服・腕・脚などの層に分けます(隠れていた所まで描き足します)。層ごとにメッシュを作るので、
+                  髪や腕の重なりがきれいに動きます。Colab で notebooks/see_through_colab.ipynb を動かしている間だけ使えます(1枚 8分ほど)。
+                </p>
+                {!rig.layers.configured ? (
+                  <p className="lora-hint">see-through のサーバーが設定されていません(.env の SEE_THROUGH_BASE_URL・SEE_THROUGH_TOKEN)。</p>
+                ) : (
+                  <div className="fsh-actions">
+                    {([['a_pose', false, '素体の絵'], ['outfit', true, '服を着せた絵']] as const).map(([key, outfit, label]) => {
+                      const state = rig.layers![key]
+                      const job = state.job
+                      const hasSource = outfit ? !!rig.outfit : !!body.parts.find(p => p.key === 'a_pose')?.path
+                      if (!hasSource) return null
+                      return (
+                        <span key={key} className="bdb-layers-item">
+                          <button type="button" className="lora-btn lora-btn--secondary" onClick={() => void splitLayers(outfit)}
+                            disabled={busy || rigRunning || job?.status === 'running'}>
+                            {job?.status === 'running'
+                              ? `${label}を分けています…(${Math.floor(job.seconds / 60)}分${job.seconds % 60}秒)`
+                              : state.updated ? `${label}を分け直す` : `${label}を層に分ける`}
+                          </button>
+                          {job?.status === 'error' && <span className="lora-error">{job.error}</span>}
+                          {state.updated && job?.status !== 'running' && <span className="lora-hint">✓ 分けた層あり</span>}
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="fsh-actions bdb-physics">
+              <span className="lora-hint">揺れもの:</span>
+              <label className="fsh-label" title="目の高さより下に垂れた髪を髪の層に分け、ばねでつないだ骨で、動きや重力・風に遅れて揺らします">
+                <input type="checkbox" checked={hairPhysics} disabled={busy || rigRunning} onChange={e => setHairPhysics(e.target.checked)} />
+                髪の揺れ
+              </label>
+              <label className="fsh-label"
+                title={rig.breast_allowed ? '胸を、体の動きに遅れて揺らします' : '胸の揺れは、成人キャラ(未成年の手がかりの無いキャラ)だけに付けられます'}>
+                <input type="checkbox" checked={breastPhysics && !!rig.breast_allowed} disabled={busy || rigRunning || !rig.breast_allowed}
+                  onChange={e => setBreastPhysics(e.target.checked)} />
+                胸の揺れ{!rig.breast_allowed && '(このキャラには付けられません)'}
+              </label>
+              <label className="fsh-label">風 {wind.toFixed(2)}
+                <input type="range" min={0} max={1} step={0.05} value={wind} disabled={busy || rigRunning || !hairPhysics}
+                  onChange={e => setWind(Number(e.target.value))} />
+              </label>
+              {rig.physics && (
+                <span className="lora-hint">
+                  (今のモデル: 髪 {rig.physics.hair.length ? rig.physics.hair.length + '本の鎖' : 'なし'}・胸 {rig.physics.breasts ? 'あり' : 'なし'}・風 {rig.physics.wind})
+                </span>
               )}
             </div>
-          )}
-          <div className="fsh-actions bdb-physics">
-            <span className="lora-hint">揺れもの:</span>
-            <label className="fsh-label" title="目の高さより下に垂れた髪を髪の層に分け、ばねでつないだ骨で、動きや重力・風に遅れて揺らします">
-              <input type="checkbox" checked={hairPhysics} disabled={busy || rigRunning} onChange={e => setHairPhysics(e.target.checked)} />
-              髪の揺れ
-            </label>
-            <label className="fsh-label"
-              title={rig.breast_allowed ? '胸を、体の動きに遅れて揺らします' : '胸の揺れは、成人キャラ(未成年の手がかりの無いキャラ)だけに付けられます'}>
-              <input type="checkbox" checked={breastPhysics && !!rig.breast_allowed} disabled={busy || rigRunning || !rig.breast_allowed}
-                onChange={e => setBreastPhysics(e.target.checked)} />
-              胸の揺れ{!rig.breast_allowed && '(このキャラには付けられません)'}
-            </label>
-            <label className="fsh-label">風 {wind.toFixed(2)}
-              <input type="range" min={0} max={1} step={0.05} value={wind} disabled={busy || rigRunning || !hairPhysics}
-                onChange={e => setWind(Number(e.target.value))} />
-            </label>
-            {rig.physics && (
-              <span className="lora-hint">
-                (今のモデル: 髪 {rig.physics.hair.length ? rig.physics.hair.length + '本の鎖' : 'なし'}・胸 {rig.physics.breasts ? 'あり' : 'なし'}・風 {rig.physics.wind})
-              </span>
-            )}
-          </div>
-          <div className="fsh-actions">
-            {rig.outfit && (
-              <label className="fsh-label">
-                <input type="checkbox" checked={withOutfit} disabled={busy || rigRunning} onChange={e => setWithOutfit(e.target.checked)} />
-                服の層を重ねる
-              </label>
-            )}
-            {currentLayers?.updated && (
-              <label className="fsh-label" title="see-through で分けた層からモデルを作ります(外すと、絵を骨の範囲で切り分けます)">
-                <input type="checkbox" checked={useLayers} disabled={busy || rigRunning} onChange={e => setUseLayers(e.target.checked)} />
-                分けた層を使う
-              </label>
-            )}
-            <select className="lora-select bdb-rig-motion" value={rigMotion} disabled={busy || rigRunning}
-              onChange={e => setRigMotion(e.target.value)} aria-label="付ける動き">
-              {Object.entries(rig.motions).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-            </select>
-            <button type="button" className="lora-btn" disabled={busy || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}
-              onClick={() => void buildRig()}>
-              {rigRunning ? '作っています…' : rig.files['rig.blend'] ? '2Dモデルを作り直す' : '2Dモデルを作る'}
-            </button>
-            {!body.parts.find(p => p.key === 'a_pose')?.path && <span className="lora-hint">先に「Aポーズ(関節の確認)」を描いてください。</span>}
-            {rigStatus && <span className="lora-hint">{rigStatus}</span>}
-          </div>
-          {rig.quality && (
-            <ul className="bdb-quality">
-              <li className={rig.quality.a_pose_problems.length ? 'bdb-auto--ng' : 'bdb-auto--ok'}>
-                Aポーズ: {rig.quality.a_pose_problems.length ? `⚠ ${rig.quality.a_pose_problems.join('・')}` : '✓ 腕が体から離れ、足首まで写っています'}
-              </li>
-              {rig.quality.outfit_drift != null && (
-                <li className={rig.quality.outfit_drift_warn ? 'bdb-auto--ng' : 'bdb-auto--ok'}>
-                  服の層の関節のずれ: {(rig.quality.outfit_drift * 100).toFixed(1)}%{rig.quality.outfit_drift_warn ? ' ⚠ 大きめ(服を着せ直すと減ります)' : ' ✓'}
+            <div className="fsh-actions">
+              {rig.outfit && (
+                <label className="fsh-label">
+                  <input type="checkbox" checked={withOutfit} disabled={busy || rigRunning} onChange={e => setWithOutfit(e.target.checked)} />
+                  服の層を重ねる
+                </label>
+              )}
+              {currentLayers?.updated && (
+                <label className="fsh-label" title="see-through で分けた層からモデルを作ります(外すと、絵を骨の範囲で切り分けます)">
+                  <input type="checkbox" checked={useLayers} disabled={busy || rigRunning} onChange={e => setUseLayers(e.target.checked)} />
+                  分けた層を使う
+                </label>
+              )}
+              <select className="lora-select bdb-rig-motion" value={rigMotion} disabled={busy || rigRunning}
+                onChange={e => setRigMotion(e.target.value)} aria-label="付ける動き">
+                {Object.entries(rig.motions).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+              </select>
+              <button type="button" className="lora-btn" disabled={busy || rigRunning || !body.parts.find(p => p.key === 'a_pose')?.path}
+                onClick={() => void buildRig()}>
+                {rigRunning ? '作っています…' : rig.files['rig.blend'] ? '2Dモデルを作り直す' : '2Dモデルを作る'}
+              </button>
+              {!body.parts.find(p => p.key === 'a_pose')?.path && <span className="lora-hint">先に「Aポーズ(関節の確認)」を描いてください。</span>}
+              {rigStatus && <span className="lora-hint">{rigStatus}</span>}
+            </div>
+            {rig.quality && (
+              <ul className="bdb-quality">
+                <li className={rig.quality.a_pose_problems.length ? 'bdb-auto--ng' : 'bdb-auto--ok'}>
+                  Aポーズ: {rig.quality.a_pose_problems.length ? `⚠ ${rig.quality.a_pose_problems.join('・')}` : '✓ 腕が体から離れ、足首まで写っています'}
                 </li>
-              )}
-              <li className={rig.quality.frames.ok ? 'bdb-auto--ok' : 'bdb-auto--ng'}>
-                動き: {rig.quality.frames.ok ? '✓ はみ出したかけらはありません' : `⚠ 本体から離れたかけらが出たコマ ${rig.quality.frames.frames.join(', ')}`}
-              </li>
-              {rig.quality.frames.gap_frames.length > 0 && (
-                <li className="lora-hint">
-                  細いすき間が見えるコマ {rig.quality.frames.gap_frames.join(', ')}(腕と胴の間が閉じただけのこともあります。GIF で確かめてください)
+                {rig.quality.outfit_drift != null && (
+                  <li className={rig.quality.outfit_drift_warn ? 'bdb-auto--ng' : 'bdb-auto--ok'}>
+                    服の層の関節のずれ: {(rig.quality.outfit_drift * 100).toFixed(1)}%{rig.quality.outfit_drift_warn ? ' ⚠ 大きめ(服を着せ直すと減ります)' : ' ✓'}
+                  </li>
+                )}
+                <li className={rig.quality.frames.ok ? 'bdb-auto--ok' : 'bdb-auto--ng'}>
+                  動き: {rig.quality.frames.ok ? '✓ はみ出したかけらはありません' : `⚠ 本体から離れたかけらが出たコマ ${rig.quality.frames.frames.join(', ')}`}
                 </li>
+                {rig.quality.frames.gap_frames.length > 0 && (
+                  <li className="lora-hint">
+                    細いすき間が見えるコマ {rig.quality.frames.gap_frames.join(', ')}(腕と胴の間が閉じただけのこともあります。GIF で確かめてください)
+                  </li>
+                )}
+              </ul>
+            )}
+            {(rig.files['overlay.png'] || rig.files['preview.gif']) && (
+              <div className="bdb-rig-views">
+                {rig.files['overlay.png'] && (
+                  <figure><img src={rigUrl('overlay.png')} alt="メッシュと骨" /><figcaption>メッシュと骨(三角形の色がいちばん重い骨、白い線が骨、赤い点が回す軸)</figcaption></figure>
+                )}
+                {rig.files['preview.gif'] && (
+                  <figure>
+                    <img src={rigUrl('preview.gif')} alt="動きの確かめ" />
+                    <figcaption>動きの確かめ{rig.motion ? `(${rig.motions[rig.motion] ?? rig.motion}${rig.with_outfit ? '・服の層あり' : ''}${rig.from_layers ? '・see-through の層' : ''})` : ''}</figcaption>
+                  </figure>
+                )}
+              </div>
+            )}
+            <div className="fsh-actions">
+              {rig.files['rig.blend'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.blend')} download>Blender のファイル(.blend)</a>}
+              {rig.files['rig.zip'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.zip')} download>テクスチャ+rig.json(.zip)</a>}
+              {rig.files['spine.zip'] && (
+                <a className="lora-btn lora-btn--secondary" href={rigUrl('spine.zip')} download
+                  title="Spine 4.1 の skeleton.json・アトラス・テクスチャ。重み付きメッシュと、動き全部がアニメーションとして入ります">
+                  Spine 用(.zip)
+                </a>
               )}
-            </ul>
-          )}
-          {(rig.files['overlay.png'] || rig.files['preview.gif']) && (
-            <div className="bdb-rig-views">
-              {rig.files['overlay.png'] && (
-                <figure><img src={rigUrl('overlay.png')} alt="メッシュと骨" /><figcaption>メッシュと骨(三角形の色がいちばん重い骨、白い線が骨、赤い点が回す軸)</figcaption></figure>
-              )}
-              {rig.files['preview.gif'] && (
-                <figure>
-                  <img src={rigUrl('preview.gif')} alt="動きの確かめ" />
-                  <figcaption>動きの確かめ{rig.motion ? `(${rig.motions[rig.motion] ?? rig.motion}${rig.with_outfit ? '・服の層あり' : ''}${rig.from_layers ? '・see-through の層' : ''})` : ''}</figcaption>
-                </figure>
+              {rig.files['model.psd'] && (
+                <a className="lora-btn lora-btn--secondary" href={rigUrl('model.psd')} download
+                  title="Live2D Cubism Editor に読み込む PSD。部位ごとのレイヤー(体と服の層はフォルダ分け)">
+                  Live2D 用 PSD
+                </a>
               )}
             </div>
-          )}
-          <div className="fsh-actions">
-            {rig.files['rig.blend'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.blend')} download>Blender のファイル(.blend)</a>}
-            {rig.files['rig.zip'] && <a className="lora-btn lora-btn--secondary" href={rigUrl('rig.zip')} download>テクスチャ+rig.json(.zip)</a>}
-            {rig.files['spine.zip'] && (
-              <a className="lora-btn lora-btn--secondary" href={rigUrl('spine.zip')} download
-                title="Spine 4.1 の skeleton.json・アトラス・テクスチャ。重み付きメッシュと、動き全部がアニメーションとして入ります">
-                Spine 用(.zip)
-              </a>
-            )}
-            {rig.files['model.psd'] && (
-              <a className="lora-btn lora-btn--secondary" href={rigUrl('model.psd')} download
-                title="Live2D Cubism Editor に読み込む PSD。部位ごとのレイヤー(体と服の層はフォルダ分け)">
-                Live2D 用 PSD
-              </a>
-            )}
           </div>
-        </div>
+        </details>
       )}
 
       {zoom?.path && (

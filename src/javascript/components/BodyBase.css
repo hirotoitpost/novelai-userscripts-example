@@ -55,7 +55,7 @@
 .bdb-item-name { flex: 1; }
 
 /* 2Dモデル(Blender) */
-.bdb-rig { display: flex; flex-direction: column; gap: 0.5rem; padding-top: 0.6rem; border-top: 1px solid #22224a; }
+.bdb-rig { display: flex; flex-direction: column; gap: 0.5rem; }
 .bdb-rig .lora-btn { flex: 0 0 auto; text-decoration: none; }
 .bdb-rig-motion { max-width: 14rem; }
 .bdb-rig-views { display: flex; flex-wrap: wrap; gap: 0.8rem; }
@@ -77,3 +77,17 @@
 .bdb-auto--ok { color: #7fd39b; }
 .bdb-auto--ng { color: #f0b46a; }
 .bdb-quality { margin: 0; padding-left: 1.1rem; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.15rem; }
+
+/* たためる欄(素体の一覧・部位のまとまり・2Dモデル)。見出しの行を押して開け閉めする */
+.bdb-fold { border-top: 1px solid #22224a; padding-top: 0.3rem; }
+.bdb-fold > summary { cursor: pointer; list-style: none; }
+.bdb-fold > summary::-webkit-details-marker { display: none; }
+.bdb-fold-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.6rem; margin: 0.4rem 0 0.3rem; }
+.bdb-fold-head h4 { margin: 0; }
+.bdb-fold-head::before { content: '▸'; color: #8a8ab0; }
+.bdb-fold[open] > .bdb-fold-head::before { content: '▾'; }
+
+/* 素体の一覧の絞り込み・並べ替え */
+.bdb-filter { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.4rem; }
+.bdb-filter .lora-input { flex: 1 1 12rem; min-width: 0; }
+.bdb-filter .lora-select { flex: 0 1 auto; width: auto; min-width: 0; }
