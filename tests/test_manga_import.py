@@ -160,6 +160,17 @@ def test_classify_page_asks_the_text_model_with_tags_and_lines(monkeypatch: pyte
     ]
     assert asyncio.run(manga_import.classify_page("key", panels, 0, 11)) == [("導入", "喜び"), ("", "照れ")]
     assert "全11ページの1ページ目、2コマ中1コマ目" in asked[0] and "「おはよう」" in asked[0] and "セリフなし" in asked[0]
+    # 成人向けの作品では、性的な場面をボケ・ツッコミにしない決まりを足す
+    systems: list[str] = []
+
+    async def remember(api_key, system, user, **kwargs):
+        systems.append(system)
+        return {"panels": [{"role": "会話", "emotion": "快感"}] * 2}
+
+    monkeypatch.setattr(manga_draft, "_ask_json", remember)
+    asyncio.run(manga_import.classify_page("key", panels, 0, 11))
+    asyncio.run(manga_import.classify_page("key", panels, 0, 11, adult=True))
+    assert "成人向け" not in systems[0] and "成人向け" in systems[1]
 
     # コマ数が足りない答え・答えられないときは None(画像モデルで読む)
     async def short(api_key, system, user, **kwargs):

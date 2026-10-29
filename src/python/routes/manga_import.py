@@ -133,6 +133,7 @@ async def _analyze(
     NovelAI のトークンがあれば文章モデルでページごとに決め、無いか決められなければ画像モデルでコマごとに読む。
     """
     pages: list[dict[str, Any]] = []
+    adult = bool(_require(import_id).get("adult"))
     try:
         for index in range(page_count):
             what = "コマ・場面・セリフ・描き文字" if purpose in ("similar", "rebuild") else "コマ"
@@ -144,7 +145,7 @@ async def _analyze(
                 decided = None
                 if api_key:
                     job.message = f"{index + 1}ページ目のコマの役割を決めています"
-                    decided = await classify_page(api_key, panels, index, page_count)
+                    decided = await classify_page(api_key, panels, index, page_count, adult=adult)
                 if decided is not None:
                     for panel, (role, emotion) in zip(panels, decided):
                         panel.role, panel.emotion = role, emotion
@@ -401,7 +402,7 @@ async def make_rebuild(import_id: int, req: MangaImportAutoRequest, api_key: str
     → コマの生成と合成。
     """
     from ..manga_draft import draft_characters
-    from ..manga_rebuild import assign_page, clean_page, script_panels
+    from ..manga_rebuild import assign_page, clean_page, script_panels, work_terms
 
     item = _require(import_id)
     if (item.get("purpose") or "structure") != "rebuild":
@@ -413,10 +414,15 @@ async def make_rebuild(import_id: int, req: MangaImportAutoRequest, api_key: str
     by_id = {c["id"]: c for c in characters}
     looks = {c.name: (by_id[c.id].get("appearance_tags") or "") for c in cast}
     episodes: list[list[dict[str, Any]]] = []
+    terms: list[str] = []
+    if req.clean_lines:
+        # 作品の用語の正しい表記(読み違いで表記がばらばらになる固有名詞・造語)。漫画にしないページのセリフも手がかりにする
+        job.message = "作品の中の用語を探しています"
+        terms = await work_terms(api_key, [page["panels"] for page in (item.get("analysis") or {}).get("pages") or []])
     for index, panels in enumerate(page_panels):
         if req.clean_lines:
             job.message = f"セリフを整えています(読み違いの直し・日本語に訳す) {index + 1}/{len(page_panels)}ページ"
-            panels = await clean_page(api_key, panels)
+            panels = await clean_page(api_key, panels, terms)
         job.message = f"セリフの話し手を決めています {index + 1}/{len(page_panels)}ページ"
         episodes.append(script_panels(panels, await assign_page(api_key, panels, cast, looks)))
     return await _finish(import_id, item["title"], cast, episodes, req, features.monochrome, api_key, job)

@@ -118,11 +118,17 @@ _LOOK_WORDS = {
 }
 # R18 の取り込みでは、体つきも人物の見た目に入れる(全年齢では similar.excluded_words で使わない)
 _ADULT_LOOK_WORDS = {"breasts", "hips", "thighs", "ass", "abs", "muscular", "curvy", "plump", "toned", "cleavage", "navel"}
-_HAIR_COLOUR = re.compile(r"^(\w+) hair$")
+_COLOURS = "black|brown|light brown|dark brown|blonde|red|blue|green|pink|purple|white|grey|silver|orange|aqua|multicolored"
+_HAIR_COLOUR = re.compile(rf"^({_COLOURS}) hair$")
+# 色のタグ(髪・目)。一人の見た目には、それぞれ一番多いものだけを入れる(白黒の作品では色を読み違える)
+_COLOUR_TAG = re.compile(rf"^({_COLOURS}) (hair|eyes)$")
 # 人物は多い順に、この人数まで(台本の人数と、参照画像の生成を増やしすぎないため)
 MAX_PEOPLE = 2
 # 人物の見た目に入れるタグ: その人物と見なした絵のうち、この割合以上に出てきたもの
 _LOOK_SHARE = 0.4
+# 白黒の作品では、見た目のタグが出にくい(体の寄りのコマが多く、色も読めない。実機: 25コマの女性で最多の
+# ponytail が7コマ)。割合を下げ、2コマ以上に出たものにする
+_LOOK_SHARE_MONOCHROME = 0.2
 # 舞台のタグ: 確率がこれ以上のものを、ページをまたいで数える
 _SETTING_PROB = 0.45
 _MAX_SETTING_TAGS = 14
@@ -229,7 +235,7 @@ def read_pages(
                 guesses.append((person.gender, [t for t in person.tags if _is_look(t, adult)]))
     return ImportFeatures(
         setting=[tag for tag, _ in setting.most_common(_MAX_SETTING_TAGS)],
-        people=cluster_people(guesses),
+        people=cluster_people(guesses, monochrome=grey_pages * 2 >= max(len(images), 1)),
         monochrome=grey_pages * 2 >= max(len(images), 1),
         pages=len(images),
     )
@@ -257,20 +263,43 @@ def _is_look(tag: str, adult: bool = False) -> bool:
     return bool(_words(tag) & words) and _is_safe(tag, adult)
 
 
-def cluster_people(guesses: list[tuple[str, list[str]]]) -> list[Person]:
+def cluster_people(guesses: list[tuple[str, list[str]]], *, monochrome: bool = False) -> list[Person]:
     """
     ページごとに見つけた人物を、性別と髪の色で同じ人物にまとめ、多い順に MAX_PEOPLE 人まで返す。
+    両方の性別が出てくるなら、まず性別ごとに一番多い人物を選ぶ(女性が髪の色で2人に分かれ、男性が抜けた)。
+    白黒の作品(monochrome)では髪の色で分けない(同じ人物が、コマによって金髪にも黒髪にも読まれた)。
+    髪・目の色のタグは、それぞれ一番多いものだけを見た目に入れる。白黒の作品では、見た目に入れる割合を下げる。
     見た目のタグは、その人物の絵の _LOOK_SHARE 以上に出てきたもの。
     """
     groups: dict[tuple[str, str], list[list[str]]] = {}
     for gender, tags in guesses:
-        hair = next((t for t in tags if _HAIR_COLOUR.match(t)), "")
+        hair = "" if monochrome else next((t for t in tags if _HAIR_COLOUR.match(t)), "")
         groups.setdefault((gender, hair), []).append(tags)
+    ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+    chosen = [next(g for g in ranked if g[0][0] == gender) for gender in dict.fromkeys(k[0] for k, _ in ranked)]
+    chosen = chosen[:MAX_PEOPLE]
+    chosen += [g for g in ranked if g not in chosen][: MAX_PEOPLE - len(chosen)]
+    chosen.sort(key=lambda kv: -len(kv[1]))
     people = []
-    for (gender, _), members in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:MAX_PEOPLE]:
+    for (gender, _), members in chosen:
         counts = Counter(t for tags in members for t in set(tags))
-        tags = [t for t, n in counts.most_common() if n >= max(1, math.ceil(len(members) * _LOOK_SHARE))]
-        people.append(Person(gender, tags, len(members)))
+        least = (
+            max(2, math.ceil(len(members) * _LOOK_SHARE_MONOCHROME))
+            if monochrome
+            else max(1, math.ceil(len(members) * _LOOK_SHARE))
+        )
+        tags = [t for t, n in counts.most_common() if n >= least]
+        # 髪・目の色は、それぞれ一番多いもの(most_common の順)だけ
+        seen: set[str] = set()
+        kept = []
+        for tag in tags:
+            colour = _COLOUR_TAG.match(tag)
+            if colour and colour.group(2) in seen:
+                continue
+            if colour:
+                seen.add(colour.group(2))
+            kept.append(tag)
+        people.append(Person(gender, kept, len(members)))
     return people
 
 

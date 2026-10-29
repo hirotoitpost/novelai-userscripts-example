@@ -167,6 +167,28 @@ def test_clean_page_keeps_the_read_text_when_the_model_fails(monkeypatch: pytest
     assert calls == []
 
 
+def test_terms_fix_misread_kanji_and_must_appear_in_the_text() -> None:
+    text = "擁乳科って何? / こちら捧乳科の窓口です / 搾乳しながら / 母乳が出る / １00０搾った"
+    # 出てこない用語(高僑)と、先に挙げた用語の読み違い(捧乳)は外す。漢字1字違いの読み違いは「出てくる」に数える
+    assert manga_rebuild.checked_terms(["搾乳科", "捧乳", "高僑", "母乳"], text) == ["搾乳科", "母乳"]
+    assert manga_rebuild.fix_terms("こちら捧乳科の窓口です。１00０搾った", ["搾乳科"]) == "こちら搾乳科の窓口です。1000搾った"
+    # 2字の用語では直さない(「母乳」を「搾乳」にしてしまう)
+    assert manga_rebuild.fix_terms("母乳が出る", ["搾乳"]) == "母乳が出る"
+
+
+def test_japanese_pages_are_not_rewritten_by_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    async def rewrite(api_key, system, user, **kwargs):
+        raise AssertionError("日本語のページは文章モデルに書き換えさせない")
+
+    monkeypatch.setattr(manga_rebuild, "_ask_json", rewrite)
+    panels = [{"lines": [{"text": "藤堂の擁乳科は狭いな", "box": [1, 2, 3, 4]}, {"text": "おっちんぽ"}, {"text": "OK"}]}]
+    cleaned = asyncio.run(manga_rebuild.clean_page("key", panels, ["搾乳科"]))
+    assert [line["text"] for line in cleaned[0]["lines"]] == ["藤堂の搾乳科は狭いな", "おっちんぽ", "OK"]
+    assert cleaned[0]["lines"][0]["box"] == [1, 2, 3, 4]
+
+
 def test_cast_tags_fill_in_people_the_detector_missed(monkeypatch: pytest.MonkeyPatch) -> None:
     # 顔の見えない体の寄りや、重なった2人は、顔・体の検出では数え漏れる。写っている人のタグの人数を使う
     assert manga_import.tagged_people(["1girl", "1boy"]) == 2 and manga_import.tagged_people(["6+girls"]) == 6
