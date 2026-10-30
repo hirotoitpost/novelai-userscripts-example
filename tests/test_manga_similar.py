@@ -78,6 +78,17 @@ def test_cluster_people_groups_by_character_tag() -> None:
     assert set(people[0].tags) == {"aqua hair", "twintails"}
 
 
+def test_cluster_people_ignores_rare_or_cross_gender_character_tags() -> None:
+    # オリジナルの主人公を、少ないコマ(11コマ中2コマ)だけ既存のキャラと見分けても使わない(主人公が分かれない)。
+    # 男性の人物の絵で女性のキャラ名を見分けても、性別ごとに数えるので、男性の名前にはならない
+    girl = ("1girl", ["blonde hair", "long hair"])
+    guesses = [(*girl, ["kirisame marisa"])] * 2 + [(*girl, [])] * 9 + [
+        ("1boy", ["brown hair"], ["kirisame marisa"]), ("1boy", ["brown hair"], []), ("1boy", ["brown hair"], []),
+    ]
+    people = manga_similar.cluster_people(guesses, max_people=4)
+    assert [(p.gender, p.character, p.count) for p in people] == [("1girl", "", 11), ("1boy", "", 3)]
+
+
 def test_name_people_uses_the_character_name(monkeypatch) -> None:
     import asyncio
 
