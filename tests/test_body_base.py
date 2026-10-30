@@ -299,6 +299,19 @@ def test_rear_parts_drop_tags_seen_only_from_the_front() -> None:
     assert "parted bangs" in front and "medium breasts" in front
 
 
+def test_side_parts_draw_one_figure_in_profile() -> None:
+    # 横向きは、正面と横の2人並び(設定画)にならないよう、重みを付けて1人の真横にし、並びと正面向きを抑える
+    character = {"appearance_tags": "1girl, blonde hair"}
+    for key in ("side", "head_side"):
+        part = body_base.ITEMS[key]
+        tags = body_base.prompt(character, {"kind": "swimsuit"}, part, _defaults())
+        assert "solo" in tags and "1.3::from side::" in tags
+        for tag in ("1.4::multiple views::", "front and side", "2girls", "front view"):
+            assert tag in part.negative
+    assert "barefoot" in body_base.prompt(character, {"kind": "suit"}, body_base.ITEMS["side"], _defaults())
+    assert "high heels" in body_base.ITEMS["side"].negative
+
+
 def test_whole_body_parts_are_barefoot() -> None:
     # 全身の部位ははだし(靴はネガティブ)。服を着せる絵は衣装の靴を使うので、はだしにしない
     character = {"appearance_tags": "1girl"}
