@@ -26,14 +26,18 @@ from python.routes import lora_dataset as lora_routes  # noqa: E402
 from python.routes import story as story_routes  # noqa: E402
 
 
-def _defaults() -> body_base.Options:
-    """はじめの選択肢(DB に入れる前の db.DEFAULT_BODY_BASE_OPTIONS)。"""
-    rows = [
+def _option_rows() -> list[dict]:
+    """はじめの選択肢の行(DB に入れる前の db.DEFAULT_BODY_BASE_OPTIONS)。"""
+    return [
         {"field": field, "value": v, "label": label, "tags": tags, "rear_tags": rear}
         for field, choices in db.DEFAULT_BODY_BASE_OPTIONS.items()
         for v, label, tags, rear in choices
     ]
-    return body_base.options_map(rows)
+
+
+def _defaults() -> body_base.Options:
+    """はじめの選択肢(DB に入れる前の db.DEFAULT_BODY_BASE_OPTIONS)。"""
+    return body_base.options_map(_option_rows())
 
 
 def test_parts_follow_anatomical_regions() -> None:
@@ -255,14 +259,21 @@ def test_guard_values_come_from_the_db(client: TestClient) -> None:
 
 
 def test_rear_parts_describe_the_chest_from_behind() -> None:
-    # 真後ろの部位では、正面の胸のタグ(large breasts)の代わりに、後ろから見える形のタグにする
+    # 真後ろの部位では、正面の胸のタグ(large breasts)の代わりに、後ろからのぞく胸と後頭部のタグにする。胸の横の
+    # タグ(sideboob)は振り返りに引き戻すので入れない
     base = {"kind": "suit", "chest": "large", "build": "curvy"}
     character = {"appearance_tags": "1girl, brown hair"}
     back = body_base.prompt(character, base, body_base.ITEMS["back"], _defaults())
-    assert "sideboob" in back and "breasts peek" in back and "large breasts" not in back
+    assert "breasts peek" in back and "back of head" in back
+    assert "large breasts" not in back and "sideboob" not in back
     assert "large breasts" in body_base.prompt(character, base, body_base.ITEMS["front"], _defaults())
     # 控えめに描くキャラでも、体型の設定はそのまま使う
     assert "breasts peek" in body_base.prompt(character, base, body_base.ITEMS["back"], _defaults(), modest=True)
+    # DB で真後ろのタグに sideboob を入れても、真後ろの部位では外す
+    rows = [{**o, "rear_tags": "sideboob, breasts peek, anus"} if o["field"] == "chest" and o["value"] == "large" else o
+            for o in _option_rows()]
+    back = body_base.prompt(character, base, body_base.ITEMS["back"], body_base.options_map(rows))
+    assert "sideboob" not in back and "breasts peek" in back and "anus" in back
 
 
 def test_rear_parts_drop_tags_seen_only_from_the_front() -> None:
@@ -276,6 +287,16 @@ def test_rear_parts_drop_tags_seen_only_from_the_front() -> None:
     assert "long hair" in back and "1.4::from behind::" in back and "shoulder blades" in back
     front = body_base.prompt(adult, base, body_base.ITEMS["front"], _defaults())
     assert "brown eyes" in front and "nipples" in front
+
+    # 前髪・額・表情・胸のタグ(キャラの容姿・素体の足すタグ)も外す。髪の色・長さは残す
+    character = {"appearance_tags": "1girl, blonde hair, long hair, parted bangs, forehead, energetic smile, grin"}
+    base = {"kind": "swimsuit", "extra_tags": "slender, medium breasts"}
+    back = body_base.prompt(character, base, body_base.ITEMS["back"], _defaults())
+    for tag in ("parted bangs", "forehead", "energetic smile", "grin", "medium breasts", "expressionless"):
+        assert tag not in back
+    assert "blonde hair" in back and "long hair" in back and "slender" in back
+    front = body_base.prompt(character, base, body_base.ITEMS["front"], _defaults())
+    assert "parted bangs" in front and "medium breasts" in front
 
 
 def test_whole_body_parts_are_barefoot() -> None:

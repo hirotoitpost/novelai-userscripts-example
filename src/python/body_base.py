@@ -64,9 +64,13 @@ _BARE_FEET_NEGATIVE = "high heels, shoes, boots, sandals, footwear"
 # 出た(2026-10 実機)ので、強調の重みを付ける
 _FROM_BEHIND = "solo, 1.4::from behind::, 1.3::facing away::, straight-back, back view, back of head, head facing away"
 # 真後ろからは見えない物のタグ(目・乳首・股・臍・肩の前に垂らした髪)。入れると正面に引き戻される
-# (2026-10 実機: 裸の素体の nipples・キャラの brown eyes などで、背面が3回とも正面向きになった)ので、真後ろの部位では外す
+# (2026-10 実機: 裸の素体の nipples・キャラの brown eyes などで、背面が3回とも正面向きになった)ので、真後ろの部位では外す。
+# 前髪・額・表情・胸の大きさ・胸の横のタグも外す(2026-10-30 実機: parted bangs・forehead・smile・medium breasts で、
+# 振り返った斜め後ろになった)。後ろからのぞく胸(breasts peek)は残す
 _REAR_HIDDEN_RE = re.compile(
-    r"\beyes\b|\beyelashes\b|\bnipples?\b|featureless crotch|\bnavel\b|hair over (shoulders?|breasts?)", re.IGNORECASE
+    r"\beyes\b|\beyelashes\b|\bnipples?\b|featureless crotch|\bnavel\b|hair over (shoulders?|breasts?)"
+    r"|bangs\b|\bforehead\b|\bsmil(e|ing)\b|\bgrin\b|\bexpressionless\b|\bbreasts?\b(?! peek)|\bsideboob\b",
+    re.IGNORECASE,
 )
 _BACK_NEGATIVE = (
     "1.3::looking back::, looking at viewer, looking over shoulder, front view, facing viewer, face, profile, "

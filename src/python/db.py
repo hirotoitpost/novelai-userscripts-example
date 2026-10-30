@@ -3415,8 +3415,8 @@ DEFAULT_BODY_BASE_OPTIONS: dict[str, list[tuple[str, str, str, str | None]]] = {
     "chest": [
         ("", "指定しない", "", None),
         ("small", "小さめ", "small breasts", ""),
-        ("medium", "ふつう", "medium breasts", "breasts peek"),
-        ("large", "大きめ", "large breasts", "sideboob, breasts peek"),
+        ("medium", "ふつう", "medium breasts", "breasts peek, back of head"),
+        ("large", "大きめ", "large breasts", "breasts peek, back of head"),
         ("pectorals", "胸筋", "pectorals", ""),
     ],
     "muscle": [
