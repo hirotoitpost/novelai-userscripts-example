@@ -76,6 +76,13 @@ _BACK_NEGATIVE = (
     "1.3::looking back::, looking at viewer, looking over shoulder, front view, facing viewer, face, profile, "
     "turning head, 1.4::multiple views::, 1.3::turnaround::, two views, front and back, 2girls"
 )
+# 真横。重みなしでは、正面と横の2人並び(設定画)が出た(2026-10-30 実機: スーツ・水着で3回とも)ので、強調の重みを付け、
+# 並びと正面向きをネガティブで抑える
+_FROM_SIDE = "solo, 1.3::from side::, 1.2::profile::, side view"
+_SIDE_NEGATIVE = (
+    "1.4::multiple views::, 1.3::turnaround::, two views, front and side, 2girls, front view, facing viewer, "
+    "looking at viewer, from behind"
+)
 # 手は、こちらへ突き出すと遠近で縮んで指の長さが分からない(2026-10 実機)。顔の横に平らに上げた手にする
 _HAND = "hand focus, close-up, open hand, hand up, flat hand, fingers together"
 _HAND_NEGATIVE = "foreshortening, reaching towards viewer, outstretched hand, extra fingers, fused fingers, multiple views"
@@ -83,9 +90,9 @@ PARTS: tuple[BodyPart, ...] = (
     BodyPart("front", "正面(解剖学的正位)", f"{_STAND}, front view, facing viewer, palms facing forward, feet together", "whole",
              "成人で7〜7.5頭身。肩幅は頭幅の約2倍(女性は1.5〜2倍)。腕を下ろすと指先は大腿の中ほど、手首は大転子(股関節)の高さ。"
              "臍は全身のほぼ中ほどより少し上", "portrait", negative=_BARE_FEET_NEGATIVE),
-    BodyPart("side", "側面(矢状面)", f"{_STAND}, from side, profile", "whole",
+    BodyPart("side", "側面(矢状面)", f"{_STAND}, {_FROM_SIDE}", "whole",
              "耳・肩・大転子・膝・外くるぶしがほぼ一直線(重心線)。脊柱は頸と腰で前に、胸で後ろに弯曲(S字)。"
-             "胸郭は前後に厚く、骨盤は前に傾く", "portrait", negative=_BARE_FEET_NEGATIVE),
+             "胸郭は前後に厚く、骨盤は前に傾く", "portrait", negative=f"{_SIDE_NEGATIVE}, {_BARE_FEET_NEGATIVE}"),
     # from behind だけだと振り返って顔を見せやすい(2026-10 実機)。頭も真後ろを向かせ、振り返りをネガティブで抑える
     BodyPart("back", "背面(真後ろ)", f"{_STAND}, {_FROM_BEHIND}, back, shoulder blades, ass", "whole",
              "後頭部は頭の高さの下1/3で首へ細くなり、外後頭隆起の下に項のくぼみ。肩甲骨は第2〜7肋骨の高さ、内側の縁は脊柱から"
@@ -101,8 +108,9 @@ PARTS: tuple[BodyPart, ...] = (
              "腕を開いても鎖骨・三角筋の形が崩れないか", "portrait", negative=_BARE_FEET_NEGATIVE),
     BodyPart("head_front", "頭部(正面)", "portrait, close-up, front view, facing viewer, looking at viewer, expressionless", "head",
              "目は頭の高さのほぼ中ほど。目と目の間は目1つ分。耳は眉から鼻の下までの高さ"),
-    BodyPart("head_side", "頭部(側面)", "portrait, close-up, from side, profile, expressionless", "head",
-             "耳は頭の前後の中ほどより後ろ。下顎角から耳の下へ顎のラインがつながる。後頭部が平らになっていないか"),
+    BodyPart("head_side", "頭部(側面)", f"portrait, close-up, {_FROM_SIDE}, expressionless", "head",
+             "耳は頭の前後の中ほどより後ろ。下顎角から耳の下へ顎のラインがつながる。後頭部が平らになっていないか",
+             negative=_SIDE_NEGATIVE),
     BodyPart("head_back", "頭部(後面・後頭部)", f"upper body, close-up, {_FROM_BEHIND}, nape, hair", "head",
              "後頭部は丸く、頭頂から外後頭隆起へ張り出す(絶壁になっていないか)。耳は後ろから見ると頭の幅から少し出る。"
              "首の付け根(項)は頭の幅より細く、僧帽筋で肩へ広がる。髪の分け目・つむじの位置",
