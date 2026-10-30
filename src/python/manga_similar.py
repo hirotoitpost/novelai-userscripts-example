@@ -132,6 +132,9 @@ _LOOK_SHARE = 0.4
 _LOOK_SHARE_MONOCHROME = 0.2
 # 判定モデルがキャラ名を見分けたコマが、これ以上あればそのキャラとして扱う(1コマだけの見分け違いを除く)
 _MIN_CHARACTER_PANELS = 2
+# さらに、同じ性別の人物の絵のうち、この割合以上でキャラ名を見分けたときだけ使う。2026-10-30 実機: オリジナルの
+# 金髪の主人公を、11コマ中2コマ(18%)だけ既存の作品のキャラと見分け、主人公が別の人物に分かれた・男性の名前にも使われた
+_CHARACTER_SHARE = 0.3
 # cluster_people のまとまりのキーで、キャラ名でまとめたもの(髪の色のタグと混ざらない印)
 _CHARACTER_KEY = "@"
 # 舞台のタグ: 確率がこれ以上のものを、ページをまたいで数える
@@ -290,14 +293,21 @@ def cluster_people(
     髪・目の色のタグは、それぞれ一番多いものだけを見た目に入れる。白黒の作品では、見た目に入れる割合を下げる。
     見た目のタグは、その人物の絵の _LOOK_SHARE 以上に出てきたもの。
     判定モデルがキャラ名(既存の作品のキャラ)を見分けた絵は、髪の色より先に、そのキャラごとにまとめる。
-    見分け違いの1コマで人物が増えないよう、_MIN_CHARACTER_PANELS コマ以上で見分けたキャラだけ。
+    見分け違いで人物が増えないよう、_MIN_CHARACTER_PANELS コマ以上、かつ同じ性別の人物の絵の _CHARACTER_SHARE 以上で
+    見分けたキャラだけ。性別ごとに数えるので、女性のキャラ名が男性の人物に付くことはない。
     """
-    names = Counter(name for guess in guesses for name in dict.fromkeys(guess[2] if len(guess) > 2 else []))
-    known = {name for name, n in names.items() if n >= _MIN_CHARACTER_PANELS}
+    per_gender = Counter(guess[0] for guess in guesses)
+    names = Counter(
+        (guess[0], name) for guess in guesses for name in dict.fromkeys(guess[2] if len(guess) > 2 else [])
+    )
+    known = {
+        key for key, n in names.items()
+        if n >= _MIN_CHARACTER_PANELS and n >= per_gender[key[0]] * _CHARACTER_SHARE
+    }
     groups: dict[tuple[str, str], list[list[str]]] = {}
     for guess in guesses:
         gender, tags = guess[0], guess[1]
-        character = next((n for n in (guess[2] if len(guess) > 2 else []) if n in known), "")
+        character = next((n for n in (guess[2] if len(guess) > 2 else []) if (gender, n) in known), "")
         hair = "" if monochrome else next((t for t in tags if _HAIR_COLOUR.match(t)), "")
         groups.setdefault((gender, _CHARACTER_KEY + character if character else hair), []).append(tags)
     ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
