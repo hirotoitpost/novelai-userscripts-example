@@ -138,3 +138,43 @@ def test_insert_reorder_remove_scenes(tools: _FakeMCP) -> None:
     assert [s["id"] for s in tools.calls[-1][2]["scenes"]] == [10, 12]  # type: ignore[attr-defined]
     with pytest.raises(ValueError):
         asyncio.run(tools.tools["manga_remove_scenes"](5, [0, 1, 2, 3]))
+
+
+def test_model_3d_tools_start_wait_and_show_the_poses(tools: _FakeMCP, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    from PIL import Image
+
+    monkeypatch.setattr(mcp_manga, "_JOB_POLL_SECONDS", 0)
+    url = "/api/lora-dataset/character/9/model-3d"
+    running = {"bases": [{"base_id": 3, "assigned": True, "job": {"status": "running"}, "poses": []}]}
+    done = {
+        "bases": [{
+            "base_id": 3, "assigned": True, "job": {"status": "done"},
+            "poses": [{"name": "poses/sit_chair_front_line.png"}, {"name": "poses/stand_front_line.png"}],
+        }],
+    }
+    tools.responses[("POST", url)] = running  # type: ignore[attr-defined]
+    tools.responses[("POST", f"{url}/pose")] = running  # type: ignore[attr-defined]
+    tools.responses[("GET", url)] = done  # type: ignore[attr-defined]
+
+    entry = asyncio.run(tools.tools["manga_make_model_3d"](9, seed=7))
+    assert entry["job"]["status"] == "done"
+    assert tools.calls[0] == ("POST", url, {"base_id": None, "seed": 7})  # type: ignore[attr-defined]
+
+    fetched: list[str] = []
+
+    async def fake_bytes(method: str, path: str, body: Any = None, timeout: float = 600) -> bytes:
+        fetched.append(path)
+        buf = io.BytesIO()
+        Image.new("RGB", (83, 121), (200, 200, 200)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    monkeypatch.setattr(mcp_manga, "_call_bytes", fake_bytes)
+    result = asyncio.run(tools.tools["manga_model_3d_pose"](9, "sit_chair", ["front"], "line"))
+    assert tools.calls[-2] == (  # type: ignore[attr-defined]
+        "POST", f"{url}/pose", {"base_id": None, "pose": "sit_chair", "cameras": ["front"], "style": "line"},
+    )
+    # 頼んだポーズの絵だけを取りに行き、並べて返す
+    assert fetched == [f"{url}/file?base_id=3&name=poses/sit_chair_front_line.png"]
+    assert result[0].text.startswith("sit_chair") and result[1].type == "image"
