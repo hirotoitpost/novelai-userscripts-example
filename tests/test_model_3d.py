@@ -78,6 +78,65 @@ def test_generate_needs_the_front(tmp_path: Path) -> None:
         model_3d.generate(tmp_path, 3, tmp_path / "out")
 
 
+def test_silhouette_iou_finds_the_best_shift() -> None:
+    a = np.zeros((100, 60), bool)
+    a[:, 20:40] = True
+    b = np.zeros((200, 200), bool)
+    b[:, 150:190] = True  # 高さも位置も違うが、形は同じ
+    assert model_3d.silhouette_iou(a, b) == pytest.approx(1.0, abs=0.02)
+    wide = np.zeros((100, 60), bool)
+    wide[:, 0:60] = True
+    assert model_3d.silhouette_iou(a, wide) < 0.5
+    assert model_3d.silhouette_iou(a, np.zeros((10, 10), bool)) == 0.0
+
+
+def test_check_compares_each_view(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import anime_seg
+
+    _draw(tmp_path, 3, ("front", "side"))
+    person = np.zeros((8, 8), np.float32)
+    person[:, 2:6] = 1
+    monkeypatch.setattr(anime_seg, "person_mask", lambda _image: person)
+    still = np.zeros((8, 8, 4), np.uint8)
+    still[:, 2:6, 3] = 255
+    Image.fromarray(still).save(tmp_path / "front.png")
+    still[:, :, 3] = 255  # 横は形が太すぎる
+    Image.fromarray(still).save(tmp_path / "side.png")
+    result = model_3d.check(tmp_path, 3, tmp_path)
+    assert result["views"]["front"] > 0.95 and result["views"]["left"] < model_3d.MIN_VIEW_IOU
+    # 後ろは描いていないので比べない
+    assert "back" not in result["views"] and not result["passed"] and "横" in result["reasons"][0]
+
+
+def test_make_retries_with_another_seed_and_keeps_the_best(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seeds: list[int] = []
+    scores = iter([0.5, 0.6, 0.55])
+
+    def fake_generate(folder: Path, base_id: int, out: Path, *, seed: int, on_status=None) -> dict:  # noqa: ANN001
+        seeds.append(seed)
+        out.mkdir(parents=True)
+        (out / "model.glb").write_bytes(str(seed).encode())
+        (out / "meta.json").write_text(json.dumps({"seed": seed}), encoding="utf-8")
+        return {}
+
+    def fake_clean_and_check(blender: str, folder: Path, base_id: int, out: Path, height: float) -> dict:
+        score = next(scores)
+        result = {"views": {"left": score}, "score": score, "passed": False, "reasons": ["横"]}
+        model_3d._record_check(out, result)
+        return result
+
+    monkeypatch.setattr(model_3d, "generate", fake_generate)
+    monkeypatch.setattr(model_3d, "clean_and_check", fake_clean_and_check)
+    out = tmp_path / "out"
+    (out).mkdir()
+    (out / "model_clean.glb").write_bytes(b"old")  # 前に作った形の残り
+    meta = model_3d.make(tmp_path, 3, out, blender="blender", height=1.6, seed=10, attempts=3)
+    assert seeds == [10, 10 + model_3d._SEED_STEP, 10 + 2 * model_3d._SEED_STEP]
+    # いちばん重なりのよい2回目を残す
+    assert (out / "model.glb").read_bytes() == str(seeds[1]).encode() and meta["check"]["attempts"] == 3
+    assert meta["check"]["score"] == 0.6 and not (out / "model_clean.glb").exists() and not (out / "_tries").exists()
+
+
 def test_height_follows_the_base_sex_and_height() -> None:
     assert model_3d.height_of({"sex": "female", "height": ""}) == 1.60
     assert model_3d.height_of({"sex": "male", "height": "tall"}) == 1.83
@@ -134,6 +193,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
 
     monkeypatch.setattr(model_3d, "generate", fake_generate)
     monkeypatch.setattr(model_3d, "clean", fake_clean)
+    # 影絵の比べ(anime_seg)は呼ばず、いつも合格にする
+    monkeypatch.setattr(model_3d, "check", lambda *_a, **_k: {"views": {}, "score": 1.0, "passed": True, "reasons": []})
     monkeypatch.setattr(body_rig, "find_blender", lambda _configured: "blender")
     app = FastAPI()
     app.include_router(story_routes.router)
@@ -188,10 +249,13 @@ def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: P
     assert client.post(url, json={"seed": 9}).status_code == 200
     entry = _wait(client, character["id"], base["id"])
     assert entry["job"]["status"] == "done" and entry["job"]["remote"] == "cleaning"
-    assert set(entry["files"]) == {"model.glb", "model_clean.glb", "meta.json"} and entry["meta"] == {"seed": 9}
+    assert set(entry["files"]) == {"model.glb", "model_clean.glb", "meta.json"}
+    assert entry["meta"]["seed"] == 9 and entry["meta"]["check"]["attempts"] == 1
     out = tmp_path / f"outputs/training_data/eiko/model_3d/{base['id']}"
-    # 作ったあと、素体の身長(女性・ふつう)にそろえて整える
-    assert client.calls == [(folder, base["id"], out, 9), ("clean", "blender", out, 1.60)]  # type: ignore[attr-defined]
+    # 作ったあと、素体の身長(女性・ふつう)にそろえて整える。作業用のフォルダは残さない
+    work = out / "_tries" / "0"
+    assert client.calls == [(folder, base["id"], work, 9), ("clean", "blender", work, 1.60)]  # type: ignore[attr-defined]
+    assert not (out / "_tries").exists()
 
     # 整え直すだけ(GPU は使わない)
     assert client.post(f"{url}/clean", json={}).status_code == 200

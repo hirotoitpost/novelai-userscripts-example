@@ -2,7 +2,8 @@
 素体の正面・横・後ろの絵から、3D の形(GLB)を作る(docs/model_3d_plan_jp.md のステップ 3)。形はリモートの GPU の
 Hunyuan3D-2mv(model3d_remote)で作り、キャラ別データセットの `model_3d(_r18)/<素体の id>/` に置く。
 できた形は手元の Blender で整え(scripts/blender/clean_model.py: 破片を消す・面を減らす・身長と位置をそろえる)、
-確かめ用の静止画と1周の GIF を描き出す(ステップ 4)。
+確かめ用の静止画と1周の GIF を描き出す(ステップ 4)。整えた形の正面・横・後ろの影絵を、元の素体の絵の影絵と
+重ねて比べる(ステップ 5。check)。
 
 素体の部位の絵を、Hunyuan3D-2mv の向きの名前に当てて送る。横の絵は左を向いた真横として送るので、右を向いて描かれた
 絵は骨格の点(鼻と耳)で見分けて左右を反転する。年齢・裸の判定は呼び出し側(routes/lora_dataset.py)で行う。
@@ -11,6 +12,7 @@ Hunyuan3D-2mv(model3d_remote)で作り、キャラ別データセットの `mode
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -56,6 +58,18 @@ def height_of(base: dict) -> float:
     """素体の性別と身長の設定から、身長(m)。"""
     heights = HEIGHTS.get(base.get("sex") or "female", HEIGHTS["female"])
     return heights.get(base.get("height") or "", heights[""])
+
+
+def read_meta(out_dir: Path) -> dict:
+    path = out_dir / "meta.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def write_meta(out_dir: Path, meta: dict) -> None:
+    """meta.json を書く。画面が状態を聞くたびに読むので、書きかけ(空のファイル)を読まれないよう、別の名前に書いてから入れ替える。"""
+    tmp = out_dir / "meta.json.tmp"
+    tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, out_dir / "meta.json")
 
 
 def source_paths(folder: Path, base_id: int) -> dict[str, Path]:
@@ -114,7 +128,7 @@ def generate(folder: Path, base_id: int, out_dir: Path, *, seed: int = 12345, on
         "model": MODEL, "seed": seed, "views": sorted(sources), "side_flipped": flipped,
         "seconds": round(time.time() - started), "created": time.time(),
     }
-    (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    write_meta(out_dir, meta)
     return meta
 
 
@@ -139,8 +153,124 @@ def clean(blender: str, out_dir: Path, height: float, *, max_faces: int = MAX_FA
     turntable = out_dir / "turntable"
     frames_to_gif(sorted(turntable.glob("*.png")), out_dir / "preview.gif")
     shutil.rmtree(turntable)
-    meta_path = out_dir / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+    meta = read_meta(out_dir)
     meta["clean"] = report
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    write_meta(out_dir, meta)
     return report
+
+
+# 影絵を比べるときの高さ(画素)と、左右にずらして探す幅(高さに対する割合)
+_CHECK_HEIGHT = 512
+_CHECK_SHIFT = 0.12
+# 静止画の名前 → 素体の向き
+_STILLS = {"front.png": "front", "side.png": "left", "back.png": "back"}
+# 向きごとの重なりがこれより低ければ、合わないとみなす。2026-11 の実機: 正しい素体で 0.76〜0.79、別の素体の絵とでも
+# 0.6〜0.8(立った人の影絵は似る)、崩れた絵(2人並び・正面向きの横の絵)で 0.29〜0.41。別人までは見分けられず、
+# 崩れた形・合わない入力を拾うためのもの
+MIN_VIEW_IOU = 0.65
+VIEW_LABELS = {"front": "正面", "left": "横", "back": "後ろ"}
+# 作り直すときの、シードのずらし幅
+_SEED_STEP = 7919
+
+
+def _fit(mask: np.ndarray) -> np.ndarray:
+    """影絵を上下の端で切り、高さを _CHECK_HEIGHT にそろえる。"""
+    ys, xs = np.nonzero(mask)
+    crop = mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    width = max(1, round(crop.shape[1] * _CHECK_HEIGHT / crop.shape[0]))
+    return np.asarray(Image.fromarray(crop.astype(np.uint8) * 255).resize((width, _CHECK_HEIGHT))) > 127
+
+
+def silhouette_iou(a: np.ndarray, b: np.ndarray) -> float:
+    """2つの影絵(True が人)の重なり(IoU)。高さをそろえ、左右にずらしていちばん重なる所で測る。"""
+    if not a.any() or not b.any():
+        return 0.0
+    a, b = _fit(a), _fit(b)
+    shift = round(_CHECK_HEIGHT * _CHECK_SHIFT)
+    width = max(a.shape[1], b.shape[1]) + 2 * shift
+    base = np.zeros((_CHECK_HEIGHT, width), bool)
+    x0 = (width - a.shape[1]) // 2
+    base[:, x0:x0 + a.shape[1]] = a
+    best = 0.0
+    for dx in range(-shift, shift + 1, 2):
+        other = np.zeros_like(base)
+        x1 = (width - b.shape[1]) // 2 + dx
+        other[:, x1:x1 + b.shape[1]] = b
+        best = max(best, float((base & other).sum() / (base | other).sum()))
+    return best
+
+
+def check(folder: Path, base_id: int, out_dir: Path, *, side_flipped: bool = False) -> dict:
+    """
+    整えた形の静止画(clean が描いた front・side・back。背景は透明)の影絵を、素体の同じ向きの絵の影絵(anime_seg で
+    人を切り出す)と比べる。向きごとの重なり(IoU)と、その平均(score)を返す。描いていない向きは比べない。
+    """
+    from .anime_seg import person_mask
+
+    sources = source_paths(folder, base_id)
+    views: dict[str, float] = {}
+    for still, view in _STILLS.items():
+        render = out_dir / still
+        if not sources[view].is_file() or not render.is_file():
+            continue
+        image = Image.open(sources[view]).convert("RGB")
+        if view == "left" and side_flipped:
+            image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        source_mask = person_mask(image) > 0.5
+        render_mask = np.asarray(Image.open(render).convert("RGBA"))[..., 3] > 127
+        views[view] = round(silhouette_iou(source_mask, render_mask), 3)
+    score = round(float(np.mean(list(views.values()))), 3) if views else 0.0
+    reasons = [
+        f"{VIEW_LABELS[view]}の絵と形の影絵が合わない(重なり {iou:.2f})" for view, iou in views.items() if iou < MIN_VIEW_IOU
+    ]
+    return {"views": views, "score": score, "passed": not reasons, "reasons": reasons}
+
+
+def _record_check(out_dir: Path, result: dict) -> None:
+    meta = read_meta(out_dir)
+    meta["check"] = result
+    write_meta(out_dir, meta)
+
+
+def clean_and_check(blender: str, folder: Path, base_id: int, out_dir: Path, height: float) -> dict:
+    """整えて(clean)、影絵を比べ(check)、結果を meta.json に残す。チェックの結果を返す。"""
+    clean(blender, out_dir, height)
+    meta = read_meta(out_dir)
+    result = check(folder, base_id, out_dir, side_flipped=bool(meta.get("side_flipped")))
+    _record_check(out_dir, result)
+    return result
+
+
+def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: float, seed: int = 12345,
+         attempts: int = 1, on_status=None) -> dict:
+    """
+    形を作り(generate)、整え、影絵を比べる。合わなければシードを変えて作り直す(最初の1回も含めて attempts 回まで)。
+    いちばん重なりのよい回の形を out_dir に残し、meta.json の check に結果(作った回数も)を書く。
+    """
+    best: tuple[float, Path] | None = None
+    tries = out_dir / "_tries"
+    tries.mkdir(parents=True, exist_ok=True)
+    try:
+        for attempt in range(max(1, attempts)):
+            work = tries / str(attempt)
+            if on_status is not None:
+                on_status("queued", 0)
+            generate(folder, base_id, work, seed=seed + attempt * _SEED_STEP, on_status=on_status)
+            if on_status is not None:
+                on_status("cleaning", 0)
+            result = clean_and_check(blender, folder, base_id, work, height)
+            if best is None or result["score"] > best[0]:
+                best = (result["score"], work)
+            if result["passed"]:
+                break
+        _, chosen = best
+        meta = read_meta(chosen)
+        meta["check"]["attempts"] = attempt + 1
+        write_meta(chosen, meta)
+        for name in FILES:
+            (out_dir / name).unlink(missing_ok=True)
+            if (chosen / name).is_file():
+                shutil.move(chosen / name, out_dir / name)
+        return meta
+    finally:
+        shutil.rmtree(tries, ignore_errors=True)
