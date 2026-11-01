@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import sqlite3
+import subprocess
 import time
 import zipfile
 from pathlib import Path
@@ -1887,29 +1888,75 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
     folder = _body_dir(character, base, req.root_name)
     if not model_3d.source_paths(folder, base["id"])["front"].is_file():
         raise HTTPException(status_code=422, detail="素体の「正面」の絵をまだ描いていません。先に描いてください。")
+    blender = _model_3d_blender()
+    out = _model_3d_dir(character, base, req.root_name)
+
+    def work(job: dict[str, Any]) -> None:
+        def status(remote: str, _seconds: int) -> None:
+            job["remote"] = remote
+
+        model_3d.generate(folder, base["id"], out, seed=req.seed, on_status=status)
+        job["remote"] = "cleaning"
+        model_3d.clean(blender, out, model_3d.height_of(base))
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
+@router.post("/character/{character_id}/model-3d/clean")
+async def clean_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+    """作った形(model.glb)を、Blender で整え直す(GPU は使わない)。後処理を変えたあと、作り直さずに試す用。"""
+    character = _load_character(character_id)
+    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
+    base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    out = _model_3d_dir(character, base, req.root_name)
+    if not (out / "model.glb").is_file():
+        raise HTTPException(status_code=422, detail="この素体の 3D の形をまだ作っていません。")
+    blender = _model_3d_blender()
+
+    def work(job: dict[str, Any]) -> None:
+        job["remote"] = "cleaning"
+        model_3d.clean(blender, out, model_3d.height_of(base))
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
+def _model_3d_blender() -> str:
+    blender = body_rig.find_blender(str(app_settings.get("blender.path") or ""))
+    if blender is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Blender が見つかりません。開発管理者のページの「Blender の実行ファイル」に blender.exe の場所を入れてください。",
+        )
+    return blender
+
+
+def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN001
+    """3D の仕事を切り離して始める。同じキャラ・素体で動いている間は 409。"""
     key = (character["id"], base["id"])
     running = _model_3d_jobs.get(key)
     if running is not None and running["status"] == "running":
         raise HTTPException(status_code=409, detail="この素体の 3D はいま作っています。終わるまで待ってください。")
     job: dict[str, Any] = {"status": "running", "started": time.time()}
     _model_3d_jobs[key] = job
-    out = _model_3d_dir(character, base, req.root_name)
-
-    def status(remote: str, _seconds: int) -> None:
-        job["remote"] = remote
 
     async def run() -> None:
         try:
-            await asyncio.to_thread(model_3d.generate, folder, base["id"], out, seed=req.seed, on_status=status)
+            await asyncio.to_thread(work, job)
             job["status"] = "done"
-        except (model3d_remote.Model3DError, model_3d.Model3DInputError, OSError) as exc:
+        except (
+            model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError, body_rig.RigError,
+            subprocess.TimeoutExpired, OSError,
+        ) as exc:
             job["status"] = "error"
             job["error"] = str(exc)
         finally:
             job["finished"] = time.time()
 
     job["task"] = asyncio.create_task(run())
-    return _model_3d_entries(character, req.root_name)
 
 
 @router.get("/character/{character_id}/model-3d/file")
