@@ -23,7 +23,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
-from .. import see_through_remote, wardrobe
+from .. import model3d_remote, model_3d, see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -100,6 +100,7 @@ from ..lora_dataset import (
 from ..models import (
     BodyHairUnderRequest,
     BodyLayersRequest,
+    Model3DRequest,
     BodyOutfitRequest,
     BodyRigRequest,
     BodyBaseOptionOrderRequest,
@@ -1796,6 +1797,135 @@ async def build_body_rig(character_id: int, req: BodyRigRequest) -> dict[str, An
     except body_rig.RigError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return _rig_entries(character, req.root_name)
+
+
+def _model_3d_dir(character: dict, base: dict, root_name: str) -> Path:
+    folder = "model_3d_r18" if base["kind"] == "nude" else "model_3d"
+    return _character_root(root_name, character) / folder / str(base["id"])
+
+
+# 動いている 3D の形の仕事((キャラ, 素体) → 状態)。1体に数分かかるので、切り離して画面から状態を聞く
+_model_3d_jobs: PerUser[tuple[int, int], dict[str, Any]] = PerUser()
+
+
+def _model_3d_bases(character: dict, root_name: str) -> list[dict]:
+    """3D を作れる素体: キャラに当てた素体と、このキャラの正面の絵を描いた素体。裸の素体は、当てられるキャラだけ。"""
+    conn = get_connection()
+    try:
+        bases = list_body_bases(conn)
+    finally:
+        conn.close()
+    nude_reason, _ = _age_checks(character)
+    result = []
+    for base in bases:
+        if base["kind"] == "nude" and nude_reason:
+            continue
+        front = model_3d.source_paths(_body_dir(character, base, root_name), base["id"])["front"]
+        if base["id"] == character.get("body_base_id") or front.is_file():
+            result.append(base)
+    return result
+
+
+def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
+    entries = []
+    for base in _model_3d_bases(character, root_name):
+        sources = model_3d.source_paths(_body_dir(character, base, root_name), base["id"])
+        folder = _model_3d_dir(character, base, root_name)
+        meta_path = folder / "meta.json"
+        job = _model_3d_jobs.get((character["id"], base["id"]))
+        entries.append({
+            "base_id": base["id"], "name": base["name"], "kind": base["kind"],
+            "assigned": base["id"] == character.get("body_base_id"),
+            # 送る向きごとに、素体の絵を描いてあるか(正面は必須)
+            "views": {view: path.is_file() for view, path in sources.items()},
+            "files": {
+                name: {"label": label, "updated": (folder / name).stat().st_mtime}
+                for name, label in model_3d.FILES.items() if (folder / name).is_file()
+            },
+            "meta": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else None,
+            "job": None if job is None else {
+                "status": job["status"], "remote": job.get("remote"), "error": job.get("error"),
+                "seconds": round((job.get("finished") or time.time()) - job["started"]),
+            },
+        })
+    return {"configured": model3d_remote.configured(), "bases": entries}
+
+
+@router.get("/character/{character_id}/model-3d")
+async def get_model_3d(character_id: int, root_name: str = "training_data") -> dict[str, Any]:
+    """素体ごとの 3D の形(作れる素体・描いてある向き・作ったファイル・動いている仕事)。"""
+    return _model_3d_entries(_load_character(character_id), root_name)
+
+
+@router.post("/character/{character_id}/model-3d")
+async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+    """
+    素体の正面・横・後ろの絵から、リモートの GPU の Hunyuan3D-2mv で 3D の形を作る(model_3d.py)。1体に数分かかるので、
+    仕事を切り離してすぐ返す。状態は GET .../model-3d で見る。裸の素体は、裸の素体を当てられるキャラだけ。
+    """
+    character = _load_character(character_id)
+    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
+    if base_id is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    conn = get_connection()
+    try:
+        base = get_body_base(conn, base_id)
+    finally:
+        conn.close()
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    if base["kind"] == "nude":
+        reason, _ = _age_checks(character)
+        if reason:
+            raise HTTPException(status_code=403, detail=reason)
+    if not model3d_remote.configured():
+        raise HTTPException(
+            status_code=422,
+            detail="3D のサーバーが設定されていません。notebooks/model3d_colab.ipynb を動かし、.env に "
+                   "MODEL3D_BASE_URL と MODEL3D_TOKEN を書いて、バックエンドを起動し直してください。",
+        )
+    folder = _body_dir(character, base, req.root_name)
+    if not model_3d.source_paths(folder, base["id"])["front"].is_file():
+        raise HTTPException(status_code=422, detail="素体の「正面」の絵をまだ描いていません。先に描いてください。")
+    key = (character["id"], base["id"])
+    running = _model_3d_jobs.get(key)
+    if running is not None and running["status"] == "running":
+        raise HTTPException(status_code=409, detail="この素体の 3D はいま作っています。終わるまで待ってください。")
+    job: dict[str, Any] = {"status": "running", "started": time.time()}
+    _model_3d_jobs[key] = job
+    out = _model_3d_dir(character, base, req.root_name)
+
+    def status(remote: str, _seconds: int) -> None:
+        job["remote"] = remote
+
+    async def run() -> None:
+        try:
+            await asyncio.to_thread(model_3d.generate, folder, base["id"], out, seed=req.seed, on_status=status)
+            job["status"] = "done"
+        except (model3d_remote.Model3DError, model_3d.Model3DInputError, OSError) as exc:
+            job["status"] = "error"
+            job["error"] = str(exc)
+        finally:
+            job["finished"] = time.time()
+
+    job["task"] = asyncio.create_task(run())
+    return _model_3d_entries(character, req.root_name)
+
+
+@router.get("/character/{character_id}/model-3d/file")
+async def get_model_3d_file(character_id: int, base_id: int, name: str, root_name: str = "training_data") -> FileResponse:
+    """3D の形のファイル(model_3d.FILES の名前だけ)。GLB は保存用の名前を付けて返す。"""
+    if name not in model_3d.FILES:
+        raise HTTPException(status_code=404, detail="not found")
+    character = _load_character(character_id)
+    base = next((b for b in _model_3d_bases(character, root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="not found")
+    path = _model_3d_dir(character, base, root_name) / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    download = f"{_safe_name(character['name'])}_{base['id']}_{name}" if path.suffix == ".glb" else None
+    return FileResponse(path, filename=download, media_type="model/gltf-binary" if path.suffix == ".glb" else None)
 
 
 @router.post("/character/{character_id}/import")

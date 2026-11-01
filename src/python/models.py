@@ -447,6 +447,14 @@ class BodyLayersRequest(BaseModel):
     with_outfit: bool = False
 
 
+class Model3DRequest(BaseModel):
+    """素体の正面・横・後ろの絵から、リモートの Hunyuan3D-2mv で 3D の形を作る(model_3d.py)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
+    seed: int = Field(12345, ge=0, le=2**32 - 1)
+
+
 class HairPointPrompt(BaseModel):
     """点で指して髪を切り出すときの、1つのまとまり(左の髪など)の、入れたい点と外したい点(絵の画素)。"""
 

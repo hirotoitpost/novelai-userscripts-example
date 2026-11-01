@@ -123,22 +123,26 @@
   `MODEL3D_BASE_URL` と `MODEL3D_TOKEN`。
 - テスト: `tests/test_model3d_remote.py`(サーバーのモデルを差し替えて、合言葉・仕事の流れ・失敗を確かめる。GPU なしで通る)。
 
-### ステップ 3: バックエンド(生成・保存・判定)
+### ステップ 3: バックエンド(生成・保存・判定)(実装済み)
 
-- `src/python/model_3d.py`: サーバーへの送信、結果の保存、状態の管理。2D モデルの `body_layers.py` と同じ「離して走るジョブ」
-  (detached job、画面からはポーリング)にする。
-- エンドポイント(`routes/lora_dataset.py`):
-  - `POST /character/{id}/model-3d`: 素体と部位(既定は a_pose)を選んで生成を始める。素体の既定は、成人で裸の素体が
-    あればそれ、無ければ水着の素体(ステップ 0 の決定)。
-  - `GET /character/{id}/model-3d`: 状態とファイルの一覧を返す。
-  - `GET /character/{id}/model-3d/file`: GLB・プレビューを返す。
+- `src/python/model_3d.py`: 素体の絵を向きに当てて `model3d_remote.generate` に送り、結果を保存する。
+  - 送る絵: 素体の「正面」(front)→ front、「側面」(side)→ left、「背面」(back)→ back。正面は必須で、
+    横・後ろは描いてあれば送る(計画の a_pose ではなく、ステップ 1 の試作と同じ正面の絵にした)。
+  - 横の絵は左向きとして送る。右を向いて描かれた絵は、骨格の点(鼻と耳、取れなければ肩)で見分けて左右を反転する。
+- エンドポイント(`routes/lora_dataset.py`)。2D モデルの see-through と同じく、仕事を切り離して画面からポーリングする。
+  - `POST /character/{id}/model-3d`: 生成を始める(`base_id` を省くとキャラに当てた素体。`seed` は既定 12345)。
+    同じキャラ・素体で動いている間は 409。
+  - `GET /character/{id}/model-3d`: 作れる素体ごとに、描いてある向き・作ったファイル・meta・仕事の状態を返す。
+    作れる素体は、当てた素体と、このキャラの正面の絵を描いた素体。
+  - `GET /character/{id}/model-3d/file?base_id=&name=`: `model.glb`・`meta.json` を返す。
 - 保存先: `<dataset>/model_3d(_r18)/<base_id>/`。
   - `model.glb`(生のもの)
-  - `model_clean.glb`(後処理後)
-  - `preview.gif`(ターンテーブル)
-  - `meta.json`(モデル・設定・時間)
-- 判定: 素体の描画と同じ `_age_checks` / `nude_block_reason` を通す。裸の素体からは成人のキャラだけにする。
-- テスト: サーバーを差し替えたスタブで、ジョブの流れと判定を確かめる(GPU なしで通る)。
+  - `meta.json`(モデル・seed・送った向き・横を反転したか・時間)
+  - 後処理後の `model_clean.glb` とプレビューは、ステップ 4 で足す。
+- 判定: 裸の素体は `_age_checks`(`nude_block_reason`)を通るキャラだけ。通らないキャラには、裸の素体を候補にも出さない。
+- テスト: `tests/test_model_3d.py`(向きの見分け・反転・仕事の流れ・裸の素体の判定。GPU なしで通る)。
+- 実機(2026-11-01): テスト素体の水着の素体(18)で、PC から Colab(L4)へ送って GLB ができた(生成 190 秒、受け取りまで 321 秒)。
+  実際の素体の横の絵 16 枚の向きは、どれも正しく見分けられた(左右反転した絵も右向きと判定)。
 
 ### ステップ 4: 後処理(Blender)
 
