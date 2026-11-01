@@ -30,3 +30,12 @@
 .m3d-shape-editor input[type="range"] { width: min(100%, 22rem); }
 .m3d-shape-set { display: inline-flex; gap: 0.15rem; }
 .m3d-set-name { width: 12rem; }
+
+/* 最前面に浮かせた 3D(値を調整しながら見る)。見出しをつかんで動かす */
+.m3d-float {
+  position: fixed; z-index: 900; width: min(360px, calc(100vw - 24px)); padding: 0.4rem;
+  border-radius: 10px; background: #14142a; border: 1px solid #3a3a6a; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+.m3d-float-head { display: flex; align-items: center; gap: 0.4rem; cursor: move; user-select: none; touch-action: none; margin-bottom: 0.3rem; }
+.m3d-float-head span { flex: 1; font-size: 0.8rem; color: #c0c0e0; }
+.m3d-float .m3d-viewer { width: 100%; }

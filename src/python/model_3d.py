@@ -38,6 +38,7 @@ FILES = {
     "model_rigged.glb": "骨と動きの入った形(GLB)",
     "model.blend": "骨の入った Blender のファイル(手でポーズを付ける用)",
     "motion.gif": "動きの確かめ",
+    "shape_preview.glb": "形の値の試し(GLB。モデル本体とは別)",
     "meta.json": "作ったときの記録",
 }
 _CLEAN_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "blender" / "clean_model.py"
@@ -326,7 +327,7 @@ def hand_ratios(folder: Path, base_id: int) -> dict:
 
 
 def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None = None, shapes: dict | None = None,
-        shape_weights: dict[str, float] | None = None, timeout: float = 900) -> dict:
+        shape_weights: dict[str, float] | None = None, preview_only: bool = False, timeout: float = 900) -> dict:
     """
     整えた形(model_clean.glb)に人型の骨を入れ、body_motions の動きを全部付ける(model_rigged.glb・model.blend)。
     関節は、正面の静止画(front.png)の骨格推定の点から求める。手は人形の手に付け替え、形の割合は hand(hand_ratios。
@@ -362,6 +363,8 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
         sent = {"points": joints, "hand": hand["ratios"]}
         if shapes:
             sent.update(shapes=shapes, shape_weights=shape_weights or {})
+        if preview_only:
+            sent["preview_only"] = True
         joints_path.write_text(json.dumps(sent), encoding="utf-8")
         motions_path = Path(tmp) / "motions.json"
         motions_path.write_text(json.dumps({k: m.to_json() for k, m in body_motions.MOTIONS.items()}), encoding="utf-8")
@@ -377,6 +380,8 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
         raise Model3DRigError(f"Blender で骨を入れられませんでした(終了コード {result.returncode}):\n{tail}")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     report_path.unlink()
+    if preview_only:
+        return report
     frames = out_dir / "frames"
     frames_to_gif(sorted(frames.glob("*.png")), out_dir / "motion.gif")
     shutil.rmtree(frames)
@@ -391,6 +396,31 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
         meta.pop("shapes", None)
     write_meta(out_dir, meta)
     return meta["rig"]
+
+
+PREVIEW_FILE = "shape_preview.glb"
+
+
+def preview_shapes(blender: str, out_dir: Path, *, hand: dict | None, shapes: dict, shape_weights: dict[str, float],
+                   timeout: float = 600) -> Path:
+    """
+    形の値の試し: 整えた形を作業用のフォルダに写し、渡した形(形の値を変えたもの)で骨と形状パーツを入れて、GLB だけを
+    out_dir/shape_preview.glb に置く。モデル本体(model_rigged.glb・model.blend・meta.json)は書き換えない。動き・確かめの
+    コマ・Blender のファイルは作らないので、骨を入れ直すより速い。
+    """
+    # 試しでは、強さの入った形だけを作る(全部の形の部品とシェイプキーを作ると、骨を入れ直すのと変わらない時間がかかった)
+    used = {k for k, w in shape_weights.items() if w > 0}
+    shapes = {**shapes, "presets": {k: p for k, p in shapes["presets"].items() if k in used}}
+    with tempfile.TemporaryDirectory(prefix="model3d_preview_") as tmp:
+        work = Path(tmp)
+        for name in ("model_clean.glb", "front.png", "meta.json"):
+            if not (out_dir / name).is_file():
+                raise Model3DRigError("整えた形がありません。先に形を作ってください。")
+            shutil.copyfile(out_dir / name, work / name)
+        rig(blender, work, hand=hand, shapes=shapes, shape_weights=shape_weights, preview_only=True, timeout=timeout)
+        target = out_dir / PREVIEW_FILE
+        shutil.copyfile(work / "model_rigged.glb", target)
+    return target
 
 
 class Model3DPoseError(RuntimeError):

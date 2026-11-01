@@ -17,9 +17,19 @@ interface Props {
   onAnimations?: (names: string[]) => void
   /** 形状パーツの強さ(形の名前 → 0〜2) */
   shapes?: Record<string, number>
+  /**
+   * カメラの位置と注目点を覚えておく入れ物(呼ぶ側が持つ)。あれば、読み込み直しても(形の値の試し・モデル本体の
+   * 切り替えなど)そこから表示し、回すたびに書き換える。無い・空なら、全身が入る位置から始める
+   */
+  view?: { current: CameraView | null }
 }
 
-export default function Model3DViewer({ src, animation, onAnimations, shapes }: Props) {
+export interface CameraView {
+  position: [number, number, number]
+  target: [number, number, number]
+}
+
+export default function Model3DViewer({ src, animation, onAnimations, shapes, view }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const mixerRef = useRef<THREE.AnimationMixer | null>(null)
   const morphRef = useRef<THREE.Mesh[]>([])
@@ -50,6 +60,9 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes }: 
     camera.position.set(0, 1, 4)
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
+    controls.addEventListener('change', () => {
+      if (view) view.current = { position: camera.position.toArray(), target: controls.target.toArray() }
+    })
     const clock = new THREE.Clock()
     let frame = 0
     let disposed = false
@@ -92,8 +105,15 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes }: 
         const box = new THREE.Box3().setFromObject(model)
         const size = box.getSize(new THREE.Vector3())
         const center = box.getCenter(new THREE.Vector3())
-        controls.target.copy(center)
-        camera.position.set(center.x, center.y + size.y * 0.1, center.z + size.y * 2.2)
+        if (view?.current) {
+          // 前に見ていた位置から(読み込み直しても、回した向き・寄った具合を保つ)
+          controls.target.fromArray(view.current.target)
+          camera.position.fromArray(view.current.position)
+        } else {
+          controls.target.copy(center)
+          camera.position.set(center.x, center.y + size.y * 0.1, center.z + size.y * 2.2)
+        }
+        controls.update()
         mixerRef.current = gltf.animations.length ? new THREE.AnimationMixer(model) : null
         clipsRef.current = gltf.animations
         onAnimations?.(gltf.animations.map(clip => clip.name))

@@ -35,6 +35,10 @@ interface Props {
   onInfo: (info: unknown) => void
   /** 骨を入れ直す(自分の形をモデルに入れる) */
   onRig: () => Promise<void>
+  /** 形の値を開いたとき(3D を最前面に浮かせる) */
+  onEditStart?: () => void
+  /** 形の値の試し(編集中の値で 3D を作って見る) */
+  onPreview?: (part: string, params: Record<string, number | string>) => void
 }
 
 async function detail(res: Response): Promise<string> {
@@ -44,7 +48,7 @@ async function detail(res: Response): Promise<string> {
 
 const PRESET_URL = '/api/lora-dataset/body-shape-presets'
 
-export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft, onDraft, onInfo, onRig }: Props) {
+export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft, onDraft, onInfo, onRig, onEditStart, onPreview }: Props) {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [editing, setEditing] = useState<{ part: string; base: string; params: Record<string, number | string>; label: string; tags: string } | null>(null)
   const [setName, setSetName] = useState('')
@@ -108,6 +112,7 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
       ?? Object.keys(shapes.options[part]?.presets ?? {})[0]
     const preset = catalog?.presets.find(p => p.key === key)
     if (!preset) return
+    onEditStart?.()
     setEditing({
       part, base: preset.key, params: { ...preset.params },
       label: preset.builtin ? `${preset.label}(自分の形)` : preset.label, tags: preset.builtin ? '' : preset.tags.join(', '),
@@ -218,6 +223,11 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
                     <input className="lora-input" value={editing.tags} placeholder="puffy areolae など" onChange={e => setEditing({ ...editing, tags: e.target.value })} />
                   </label>
                   <div className="fsh-actions">
+                    {onPreview && (
+                      <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+                        title="いまの値で 3D を作って、浮かせた窓に出します(15 秒ほど。モデル本体は変わりません)"
+                        onClick={() => onPreview(editing.part, editing.params)}>この値で試す</button>
+                    )}
                     <button type="button" className="lora-btn" disabled={!editing.label.trim()} onClick={() => void savePreset(false)}>新しい形として保存</button>
                     {catalog.presets.find(p => p.key === editing.base && !p.builtin) && (
                       <>

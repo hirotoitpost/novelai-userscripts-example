@@ -106,6 +106,7 @@ from ..models import (
     BodyLayersRequest,
     Model3DPoseRequest,
     Model3DShapesRequest,
+    Model3DShapePreviewRequest,
     BodyShapePresetRequest,
     Model3DRequest,
     BodyOutfitRequest,
@@ -1891,6 +1892,8 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
             "meta": model_3d.read_meta(folder) or None,
             "job": None if job is None else {
                 "status": job["status"], "remote": job.get("remote"), "error": job.get("error"),
+                # 形の値の試しを作ったときの強さ(試しの 3D の表示に使う)
+                "preview_weights": job.get("preview_weights"),
                 "seconds": round((job.get("finished") or time.time()) - job["started"]),
             },
         })
@@ -2086,6 +2089,52 @@ async def save_model_3d_shapes(character_id: int, req: Model3DShapesRequest) -> 
         shapes["weights"] = weights
     meta["shapes"] = shapes
     model_3d.write_meta(out, meta)
+    return _model_3d_entries(character, req.root_name)
+
+
+# 形の値の試しで、編集中の形に付ける名前(DB の自分の形は 1 から)
+_PREVIEW_ID = 0
+
+
+@router.post("/character/{character_id}/model-3d/shape-preview")
+async def preview_model_3d_shape(character_id: int, req: Model3DShapePreviewRequest) -> dict[str, Any]:
+    """
+    形の値の試し: いまの画面の強さで、部位の形だけ編集中の値(custom_0)に差し替えた 3D を作り、shape_preview.glb に置く
+    (15 秒ほど。モデル本体は書き換えない)。画面は custom_0 の強さを入れて表示する。
+    """
+    character = _load_character(character_id)
+    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
+    base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    out = _model_3d_dir(character, base, req.root_name)
+    if not (out / "model_clean.glb").is_file():
+        raise HTTPException(status_code=422, detail="この素体の 3D の形をまだ作っていません。")
+    flags = _shape_flags(character, base)
+    if req.part not in body_shapes.PARTS or not body_shapes.allowed(req.part, nude=flags["nude"], modest=flags["modest"]):
+        raise HTTPException(status_code=422, detail=f"このモデルには当てられない部位です: {req.part}")
+    try:
+        params = body_shapes.clean_params(req.part, req.params)
+    except body_shapes.ShapeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    weights = _check_shape_weights(character, base, req.weights)
+    allowed = body_shapes.presets_for(**flags)
+    # その部位のいまの形を外し、編集中の形に差し替える(強さは前の形のもの、無ければ 1)
+    previous = [w for k, w in weights.items() if allowed[k].part == req.part and w > 0]
+    weights = {k: w for k, w in weights.items() if allowed[k].part != req.part}
+    key = f"{body_shapes.CUSTOM_PREFIX}{_PREVIEW_ID}"
+    weights[key] = previous[0] if previous else 1.0
+    trial = {"id": _PREVIEW_ID, "part": req.part, "label": "試し", "tags": "", "params": params}
+    shapes = body_shapes.to_json(nude=flags["nude"], modest=flags["modest"], custom=[*flags["custom"], trial])
+    blender = _model_3d_blender()
+    folder = _body_dir(character, base, req.root_name)
+
+    def work(job: dict[str, Any]) -> None:
+        job["remote"] = "previewing"
+        model_3d.preview_shapes(blender, out, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes, shape_weights=weights)
+        job["preview_weights"] = weights
+
+    _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
 
 
