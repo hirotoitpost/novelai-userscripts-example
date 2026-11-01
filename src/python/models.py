@@ -456,6 +456,16 @@ class Model3DRequest(BaseModel):
     motion: str = Field("wave", description="骨を入れたあと、確かめの GIF に描き出す動き(body_motions.MOTIONS)")
 
 
+class Model3DPoseRequest(BaseModel):
+    """素体の 3D モデルにポーズを当て、カメラの向きごとに参考の絵を描き出す(model_3d.render_pose)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
+    pose: str = Field(description="ポーズ(body_poses.POSES)")
+    cameras: list[str] = Field(default_factory=lambda: ["front", "three_quarter", "side"], min_length=1, max_length=6)
+    style: str = Field("shade", description="shade(灰色の陰影)か line(線画風)")
+
+
 class HairPointPrompt(BaseModel):
     """点で指して髪を切り出すときの、1つのまとまり(左の髪など)の、入れたい点と外したい点(絵の画素)。"""
 

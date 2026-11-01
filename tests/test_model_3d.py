@@ -22,7 +22,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from python import body_rig, db, hand_shape, model3d_remote, model_3d  # noqa: E402
+from python import body_poses, body_rig, db, hand_shape, model3d_remote, model_3d  # noqa: E402
 from python.client import get_client  # noqa: E402
 from python.routes import lora_dataset as lora_routes  # noqa: E402
 from python.routes import story as story_routes  # noqa: E402
@@ -224,6 +224,48 @@ def test_hand_ratios_fall_back_to_the_defaults(tmp_path: Path, monkeypatch: pyte
     assert model_3d.hand_ratios(tmp_path, 3) == measured
 
 
+def test_poses_use_known_bones_and_shapes() -> None:
+    bones = {"torso", "head"} | {
+        f"{part}.{side}" for part in ("upper_arm", "forearm", "hand", "thigh", "shin", "foot") for side in ("L", "R")
+    }
+    for pose in body_poses.POSES.values():
+        assert set(pose.bones) <= bones, pose.label
+        assert set(pose.hands) == {"L", "R"} and set(pose.hands.values()) <= set(body_poses.HAND_SHAPES)
+    sent = body_poses.render_json("sit_chair", ["front", "low"])
+    assert sent["prop"] == "chair" and sent["cameras"] == {"front": [0, 0.55, 1.0], "low": [20, 0.02, 0.92]}
+
+
+def test_render_pose_runs_blender_and_names_the_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "model.blend").write_bytes(b"blend")
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        commands.append(command)
+        sent = json.loads(Path(command[-3]).read_text(encoding="utf-8"))
+        renders = Path(command[-2])
+        renders.mkdir()
+        for camera in sent["cameras"]:
+            Image.new("RGB", (8, 8)).save(renders / f"{camera}.png")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    paths = model_3d.render_pose("blender", tmp_path, "sit_chair", ["front", "low"], "line")
+    assert [p.name for p in paths] == ["sit_chair_front_line.png", "sit_chair_low_line.png"]
+    assert commands[0][2] == str(tmp_path / "model.blend") and commands[0][-1] == "line"
+    assert {i["name"] for i in model_3d.pose_images(tmp_path)} == {"poses/sit_chair_front_line.png", "poses/sit_chair_low_line.png"}
+    # 名前の分からない絵は一覧に出さない
+    Image.new("RGB", (8, 8)).save(tmp_path / "poses" / "x_y_z.png")
+    assert len(model_3d.pose_images(tmp_path)) == 2
+
+    with pytest.raises(model_3d.Model3DPoseError, match="ポーズ"):
+        model_3d.render_pose("blender", tmp_path, "dance", ["front"])
+    with pytest.raises(model_3d.Model3DPoseError, match="カメラ"):
+        model_3d.render_pose("blender", tmp_path, "stand", ["top"])
+    monkeypatch.setattr(model_3d.subprocess, "run", lambda command, **_kw: subprocess.CompletedProcess(command, 1, "", "boom"))
+    with pytest.raises(model_3d.Model3DPoseError, match="boom"):
+        model_3d.render_pose("blender", tmp_path, "stand", ["front"])
+
+
 def test_height_follows_the_base_sex_and_height() -> None:
     assert model_3d.height_of({"sex": "female", "height": ""}) == 1.60
     assert model_3d.height_of({"sex": "male", "height": "tall"}) == 1.83
@@ -328,7 +370,7 @@ def _wait(client: TestClient, character_id: int, base_id: int) -> dict:
     raise AssertionError("仕事が終わらない")
 
 
-def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: Path) -> None:
+def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     character = _character(client, "eiko")
     base = _base(client, "水着")
     client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": base["id"]})
@@ -366,6 +408,30 @@ def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: P
     assert client.post(f"{url}/rig", json={"motion": "dance"}).status_code == 422
     assert client.post(url, json={"motion": "dance"}).status_code == 422
     assert "wave" in client.get(url).json()["motions"]
+
+    # ポーズの絵: 骨を入れた形(model.blend)が要る
+    assert client.post(f"{url}/pose", json={"pose": "stand"}).status_code == 422
+    (out / "model.blend").write_bytes(b"blend")
+
+    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str) -> list[Path]:
+        client.calls.append(("pose", pose, cameras, style))  # type: ignore[attr-defined]
+        (folder_ / "poses").mkdir(exist_ok=True)
+        for camera in cameras:
+            (folder_ / "poses" / f"{pose}_{camera}_{style}.png").write_bytes(b"png")
+        return []
+
+    monkeypatch.setattr(model_3d, "render_pose", fake_render)
+    res = client.post(f"{url}/pose", json={"pose": "sit_chair", "cameras": ["low", "low", "front"], "style": "line"})
+    assert res.status_code == 200
+    entry = _wait(client, character["id"], base["id"])
+    assert client.calls[-1] == ("pose", "sit_chair", ["low", "front"], "line")  # type: ignore[attr-defined]
+    assert {i["name"] for i in entry["poses"]} == {"poses/sit_chair_low_line.png", "poses/sit_chair_front_line.png"}
+    image = client.get(f"{url}/file", params={"base_id": base["id"], "name": "poses/sit_chair_low_line.png"})
+    assert image.status_code == 200 and image.content == b"png"
+    assert client.get(f"{url}/file", params={"base_id": base["id"], "name": "poses/../meta.json"}).status_code == 404
+    assert client.post(f"{url}/pose", json={"pose": "dance"}).status_code == 422
+    assert client.post(f"{url}/pose", json={"pose": "stand", "cameras": ["top"]}).status_code == 422
+    assert "sit_chair" in client.get(url).json()["pose_options"]["poses"]
 
     res = client.get(f"{url}/file", params={"base_id": base["id"], "name": "model.glb"})
     assert res.status_code == 200 and res.content == b"glTF"

@@ -3,7 +3,8 @@
 Hunyuan3D-2mv(model3d_remote)で作り、キャラ別データセットの `model_3d(_r18)/<素体の id>/` に置く。
 できた形は手元の Blender で整え(scripts/blender/clean_model.py: 破片を消す・面を減らす・身長と位置をそろえる)、
 確かめ用の静止画と1周の GIF を描き出す(ステップ 4)。整えた形の正面・横・後ろの影絵を、元の素体の絵の影絵と
-重ねて比べる(ステップ 5。check)。正面の静止画の骨格の点から人型の骨を入れ、2D モデルと同じ動きを付ける(ステップ 6。rig)。
+重ねて比べる(ステップ 5。check)。正面の静止画の骨格の点から人型の骨を入れ、2D モデルと同じ動きを付ける(ステップ 6。rig)。骨にポーズを当て、
+カメラの向きを選んで漫画のコマの参考の絵を描き出す(ステップ 7。render_pose)。
 
 素体の部位の絵を、Hunyuan3D-2mv の向きの名前に当てて送る。横の絵は左を向いた真横として送るので、右を向いて描かれた
 絵は骨格の点(鼻と耳)で見分けて左右を反転する。年齢・裸の判定は呼び出し側(routes/lora_dataset.py)で行う。
@@ -41,6 +42,9 @@ FILES = {
 }
 _CLEAN_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "blender" / "clean_model.py"
 _RIG_SCRIPT = _CLEAN_SCRIPT.with_name("rig_model.py")
+_POSE_SCRIPT = _CLEAN_SCRIPT.with_name("pose_render.py")
+# ポーズの絵を置くフォルダ(形のフォルダの中)。名前は <ポーズ>_<カメラ>_<絵の種類>.png
+POSE_DIR = "poses"
 # clean_model.py の静止画の大きさと、正投影のカメラの写す高さ(身長に対する割合)。画素から m に戻すのに使う
 _STILL_SIZE = (360, 600)
 _STILL_SPAN = 1.1
@@ -150,9 +154,10 @@ def clean(blender: str, out_dir: Path, height: float, *, max_faces: int = MAX_FA
     """
     from .body_rig import frames_to_gif
 
-    # 前に入れた骨は、整え直した形と合わなくなるので消す
+    # 前に入れた骨とポーズの絵は、整え直した形と合わなくなるので消す
     for name in ("model_rigged.glb", "model.blend", "motion.gif"):
         (out_dir / name).unlink(missing_ok=True)
+    shutil.rmtree(out_dir / POSE_DIR, ignore_errors=True)
     result = subprocess.run(
         [blender, "--background", "--factory-startup", "--python", str(_CLEAN_SCRIPT), "--",
          str(out_dir), str(height), str(max_faces)],
@@ -345,6 +350,8 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     if missing:
         raise Model3DRigError(f"形の正面の絵から関節が取れませんでした({', '.join(missing)})")
     joints = {n: still_to_world(float(points[n][0]), float(points[n][1]), height) for n in _RIG_POINTS}
+    # 前のポーズの絵は、入れ直した骨と合わなくなるので消す
+    shutil.rmtree(out_dir / POSE_DIR, ignore_errors=True)
     with tempfile.TemporaryDirectory(prefix="model3d_rig_") as tmp:
         joints_path = Path(tmp) / "joints.json"
         joints_path.write_text(json.dumps({"points": joints, "hand": hand["ratios"]}), encoding="utf-8")
@@ -368,3 +375,63 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     meta["rig"] = {"motion": motion, "hand": hand, **report}
     write_meta(out_dir, meta)
     return meta["rig"]
+
+
+class Model3DPoseError(RuntimeError):
+    """ポーズの絵を描けなかった。"""
+
+
+def pose_images(out_dir: Path) -> list[dict]:
+    """描いたポーズの絵(新しい順)。"""
+    from . import body_poses
+
+    folder = out_dir / POSE_DIR
+    result = []
+    for path in folder.glob("*.png") if folder.is_dir() else []:
+        pose, camera, style = (path.stem.rsplit("_", 2) + ["", ""])[:3]
+        if pose in body_poses.POSES and camera in body_poses.CAMERAS and style in body_poses.STYLES:
+            result.append({
+                "name": f"{POSE_DIR}/{path.name}", "pose": pose, "camera": camera, "style": style,
+                "updated": path.stat().st_mtime,
+            })
+    return sorted(result, key=lambda item: -item["updated"])
+
+
+def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], style: str = "shade", *,
+                timeout: float = 600) -> list[Path]:
+    """
+    骨を入れた形(model.blend)にポーズを当て、カメラごとに参考の絵を描き出す(poses/<ポーズ>_<カメラ>_<種類>.png)。
+    描いた絵のパスを返す。
+    """
+    from . import body_poses
+
+    if pose not in body_poses.POSES:
+        raise Model3DPoseError(f"ポーズの種類が違います: {pose}")
+    unknown = [c for c in cameras if c not in body_poses.CAMERAS]
+    if unknown or not cameras:
+        raise Model3DPoseError(f"カメラの向きが違います: {', '.join(unknown) or '(なし)'}")
+    if style not in body_poses.STYLES:
+        raise Model3DPoseError(f"絵の種類が違います: {style}")
+    if not (out_dir / "model.blend").is_file():
+        raise Model3DPoseError("骨を入れた形がありません。先に形を作ってください。")
+    folder = out_dir / POSE_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="model3d_pose_") as tmp:
+        pose_path = Path(tmp) / "pose.json"
+        pose_path.write_text(json.dumps(body_poses.render_json(pose, cameras)), encoding="utf-8")
+        renders = Path(tmp) / "renders"
+        result = subprocess.run(
+            [blender, "--background", str(out_dir / "model.blend"), "--python-exit-code", "1", "--python",
+             str(_POSE_SCRIPT), "--", str(pose_path), str(renders), style],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
+        missing = [c for c in cameras if not (renders / f"{c}.png").is_file()]
+        if result.returncode != 0 or missing:
+            tail = "\n".join((result.stdout + result.stderr).splitlines()[-15:])
+            raise Model3DPoseError(f"Blender でポーズの絵を描けませんでした(終了コード {result.returncode}):\n{tail}")
+        paths = []
+        for camera in cameras:
+            target = folder / f"{pose}_{camera}_{style}.png"
+            shutil.move(renders / f"{camera}.png", target)
+            paths.append(target)
+    return paths

@@ -8,7 +8,9 @@ model_dir/model_clean.glb(clean_model.py が整えた形。Z 上・正面 -Y・�
   正面から後ろへ光線を通し、形に入る所と出る所の真ん中にする。
 - 骨の名前と親子は 2D モデル(body_rig)と同じ(torso・head・upper_arm/forearm/hand・thigh/shin/foot の .L/.R)ので、
   body_motions の動きをそのまま使える。2D の「絵の面の中の回転」は、正面から見た軸(Y)のまわりの回転にする。
-- 重みは Blender の自動(heat)。うまく付かなかった頂点は、いちばん近い骨に付ける。
+- 重みは Blender の自動(heat)。うまく付かなかった頂点は、いちばん近い骨に付ける。そのあと、左右でくっついた膝から下を
+  切り離し、反対側の脚の重みを外す(足をそろえて立つ絵から作ると、脚を開いたとき間が膜のように伸びる。切り離してから
+  自動の重みを付けると、切り口の重なった頂点で全部失敗した)。
 - 手は付け替える(Hunyuan3D-2mv は指を作れず、指のくっついたひれの形になる): 作った形の手首から先を切り取り、人形の手
   (手のひら+5本の指・3節ずつ。節ごとに骨)を置く。大きさは前腕の長さ、形の割合は joints.json の hand(素体の手の絵から
   hand_shape.measure が測ったもの)。
@@ -195,6 +197,52 @@ def bind(obj: bpy.types.Object, arm: bpy.types.Object) -> dict:
     return {"vertices": len(obj.data.vertices), "nearest_bone": orphans}
 
 
+def separate_legs(obj: bpy.types.Object, j: dict[str, Vector]) -> int:
+    """
+    左右の脚の、膝より下のくっついた所を切り離す。素体の正面の絵は足をそろえて立つので、作った形は足首・足が左右で
+    つながっていて、脚を開くとその間が膜のように伸びた(2026-11 実機)。左右の足首の真ん中の面(YZ 面)で、膝より下の
+    面だけを切り、切り口で分けてふさぐ。重みを付けたあとに呼ぶ。切った辺の数を返す。
+    """
+    knee = min(j["left_knee"].z, j["right_knee"].z)
+    x = (j["left_ankle"].x + j["right_ankle"].x) / 2
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    faces = [f for f in bm.faces if all(v.co.z < knee for v in f.verts)]
+    edges = list({e for f in faces for e in f.edges})
+    verts = list({v for f in faces for v in f.verts})
+    result = bmesh.ops.bisect_plane(bm, geom=faces + edges + verts, plane_co=Vector((x, 0, 0)), plane_no=Vector((1, 0, 0)))
+    cut = [e for e in result["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
+    # 切った辺のうち、両側に面がある(左右の脚がつながっていた)所だけを分ける
+    inner = [e for e in cut if len(e.link_faces) == 2]
+    if inner:
+        bmesh.ops.split_edges(bm, edges=inner)
+        boundary = [e for e in bm.edges if e.is_boundary]
+        bmesh.ops.holes_fill(bm, edges=boundary, sides=0)
+    # 膝より下の頂点から、反対側の脚の骨の重みを外す(くっついた形で付けた重みは、左右が混ざっている)
+    names = {g.index: g.name for g in obj.vertex_groups}
+    deform = bm.verts.layers.deform.verify()
+    for v in bm.verts:
+        if v.co.z >= knee:
+            continue
+        # 切り口の頂点は面の上にちょうど乗るので、つながる面(ふさいだ多角形を除く)の真ん中で左右を決める
+        centers = [f.calc_center_median().x for f in v.link_faces if len(f.verts) <= 4]
+        side_x = sum(centers) / len(centers) if centers else v.co.x
+        other = ".R" if side_x > x else ".L"
+        weights = v[deform]
+        for i in [i for i in weights.keys() if names[i].endswith(other) and names[i].split(".")[0] in LEG_PARTS]:
+            del weights[i]
+        total = sum(weights.values())
+        if total > 0:
+            for i in list(weights.keys()):
+                weights[i] /= total
+    bm.to_mesh(obj.data)
+    bm.free()
+    return len(inner)
+
+
+LEG_PARTS = {"thigh", "shin", "foot"}
+
+
 def cut_hands(obj: bpy.types.Object, hands: dict[str, dict]) -> int:
     """
     作った形の手(指のくっついた形)を、手首の面で平らに切り取り、切り口をふさぐ。切るのは、自動の重みで手と指の骨に
@@ -355,6 +403,7 @@ def main() -> None:
     hands = {side: hand_layout(j, key, height, joints["hand"]) for side, key in (("L", "left"), ("R", "right"))}
     arm = build_armature(j, height, hands)
     weights = bind(obj, arm)
+    weights["legs_split"] = separate_legs(obj, j)
     weights["hand_cut"] = cut_hands(obj, hands)
     make_hands(arm, hands)
     actions = {name: add_motion(arm, name, motion, height) for name, motion in motions.items()}
