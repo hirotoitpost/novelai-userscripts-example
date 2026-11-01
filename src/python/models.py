@@ -453,6 +453,7 @@ class Model3DRequest(BaseModel):
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
     base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
     seed: int = Field(12345, ge=0, le=2**32 - 1)
+    motion: str = Field("wave", description="骨を入れたあと、確かめの GIF に描き出す動き(body_motions.MOTIONS)")
 
 
 class HairPointPrompt(BaseModel):

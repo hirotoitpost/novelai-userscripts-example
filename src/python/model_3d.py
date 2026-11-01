@@ -3,7 +3,7 @@
 Hunyuan3D-2mv(model3d_remote)で作り、キャラ別データセットの `model_3d(_r18)/<素体の id>/` に置く。
 できた形は手元の Blender で整え(scripts/blender/clean_model.py: 破片を消す・面を減らす・身長と位置をそろえる)、
 確かめ用の静止画と1周の GIF を描き出す(ステップ 4)。整えた形の正面・横・後ろの影絵を、元の素体の絵の影絵と
-重ねて比べる(ステップ 5。check)。
+重ねて比べる(ステップ 5。check)。正面の静止画の骨格の点から人型の骨を入れ、2D モデルと同じ動きを付ける(ステップ 6。rig)。
 
 素体の部位の絵を、Hunyuan3D-2mv の向きの名前に当てて送る。横の絵は左を向いた真横として送るので、右を向いて描かれた
 絵は骨格の点(鼻と耳)で見分けて左右を反転する。年齢・裸の判定は呼び出し側(routes/lora_dataset.py)で行う。
@@ -34,9 +34,20 @@ FILES = {
     "front.png": "正面",
     "side.png": "横(左向き)",
     "back.png": "後ろ",
+    "model_rigged.glb": "骨と動きの入った形(GLB)",
+    "model.blend": "骨の入った Blender のファイル(手でポーズを付ける用)",
+    "motion.gif": "動きの確かめ",
     "meta.json": "作ったときの記録",
 }
 _CLEAN_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "blender" / "clean_model.py"
+_RIG_SCRIPT = _CLEAN_SCRIPT.with_name("rig_model.py")
+# clean_model.py の静止画の大きさと、正投影のカメラの写す高さ(身長に対する割合)。画素から m に戻すのに使う
+_STILL_SIZE = (360, 600)
+_STILL_SPAN = 1.1
+# 骨を置くのに要る関節の点
+_RIG_POINTS = tuple(
+    f"{side}_{part}" for side in ("left", "right") for part in ("shoulder", "elbow", "wrist", "hip", "knee", "ankle")
+)
 # 整えた形の面の数の上限(計画の 5〜10万面)
 MAX_FACES = 80_000
 # 身長(m): 素体の性別 → 素体の身長の設定("" ふつう・short 低め・tall 高め)
@@ -139,6 +150,9 @@ def clean(blender: str, out_dir: Path, height: float, *, max_faces: int = MAX_FA
     """
     from .body_rig import frames_to_gif
 
+    # 前に入れた骨は、整え直した形と合わなくなるので消す
+    for name in ("model_rigged.glb", "model.blend", "motion.gif"):
+        (out_dir / name).unlink(missing_ok=True)
     result = subprocess.run(
         [blender, "--background", "--factory-startup", "--python", str(_CLEAN_SCRIPT), "--",
          str(out_dir), str(height), str(max_faces)],
@@ -274,3 +288,64 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
         return meta
     finally:
         shutil.rmtree(tries, ignore_errors=True)
+
+
+class Model3DRigError(RuntimeError):
+    """骨を入れられなかった。"""
+
+
+def still_to_world(px: float, py: float, height: float) -> tuple[float, float]:
+    """正面の静止画の画素を、形の左右 x・高さ z(m)に戻す(カメラは高さ height/2 の正投影で、画像の高さに height*1.1 を写す)。"""
+    width, tall = _STILL_SIZE
+    scale = height * _STILL_SPAN / tall
+    return (px - width / 2) * scale, height / 2 + (tall / 2 - py) * scale
+
+
+def rig(blender: str, out_dir: Path, *, motion: str = "wave", timeout: float = 900) -> dict:
+    """
+    整えた形(model_clean.glb)に人型の骨を入れ、body_motions の動きを全部付ける(model_rigged.glb・model.blend)。
+    関節は、正面の静止画(front.png)の骨格推定の点から求める。motion の動きで motion.gif を描き出す。結果を meta.json の rig に足す。
+    """
+    from . import body_motions
+    from .body_rig import RigError, detect, frames_to_gif
+
+    if motion not in body_motions.MOTIONS:
+        raise Model3DRigError(f"動きの種類が違います: {motion}")
+    meta = read_meta(out_dir)
+    height = float(meta.get("clean", {}).get("height") or 0)
+    if not height or not (out_dir / "model_clean.glb").is_file() or not (out_dir / "front.png").is_file():
+        raise Model3DRigError("整えた形がありません。先に形を作ってください。")
+    still = Image.open(out_dir / "front.png").convert("RGBA")
+    white = Image.new("RGBA", still.size, (255, 255, 255, 255))
+    white.alpha_composite(still)
+    try:
+        _, points = detect(white.convert("RGB"))
+    except RigError as exc:
+        raise Model3DRigError(f"形の正面の絵から関節が取れませんでした: {exc}") from exc
+    missing = [n for n in _RIG_POINTS if n not in points]
+    if missing:
+        raise Model3DRigError(f"形の正面の絵から関節が取れませんでした({', '.join(missing)})")
+    joints = {n: still_to_world(float(points[n][0]), float(points[n][1]), height) for n in _RIG_POINTS}
+    with tempfile.TemporaryDirectory(prefix="model3d_rig_") as tmp:
+        joints_path = Path(tmp) / "joints.json"
+        joints_path.write_text(json.dumps({"points": joints}), encoding="utf-8")
+        motions_path = Path(tmp) / "motions.json"
+        motions_path.write_text(json.dumps({k: m.to_json() for k, m in body_motions.MOTIONS.items()}), encoding="utf-8")
+        result = subprocess.run(
+            [blender, "--background", "--factory-startup", "--python", str(_RIG_SCRIPT), "--",
+             str(out_dir), str(joints_path), str(motions_path), motion],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    report_path = out_dir / "rig.json"
+    if result.returncode != 0 or not report_path.is_file() or not (out_dir / "model_rigged.glb").is_file():
+        tail = "\n".join((result.stdout + result.stderr).splitlines()[-15:])
+        raise Model3DRigError(f"Blender で骨を入れられませんでした(終了コード {result.returncode}):\n{tail}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report_path.unlink()
+    frames = out_dir / "frames"
+    frames_to_gif(sorted(frames.glob("*.png")), out_dir / "motion.gif")
+    shutil.rmtree(frames)
+    meta = read_meta(out_dir)
+    meta["rig"] = {"motion": motion, **report}
+    write_meta(out_dir, meta)
+    return meta["rig"]

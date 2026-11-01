@@ -137,6 +137,48 @@ def test_make_retries_with_another_seed_and_keeps_the_best(tmp_path: Path, monke
     assert meta["check"]["score"] == 0.6 and not (out / "model_clean.glb").exists() and not (out / "_tries").exists()
 
 
+def test_still_to_world_inverts_the_front_camera() -> None:
+    # 静止画の真ん中は、左右 0・身長の半分。上の端は身長の 1.05 倍(写す高さが身長の 1.1 倍)
+    assert model_3d.still_to_world(180, 300, 1.6) == pytest.approx((0.0, 0.8))
+    assert model_3d.still_to_world(180, 0, 1.6) == pytest.approx((0.0, 1.68))
+    x, _ = model_3d.still_to_world(240, 300, 1.6)
+    assert x == pytest.approx(60 * 1.6 * 1.1 / 600)
+
+
+def test_rig_finds_joints_and_runs_blender(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "model_clean.glb").write_bytes(b"glTF")
+    Image.new("RGBA", (360, 600)).save(tmp_path / "front.png")
+    model_3d.write_meta(tmp_path, {"clean": {"height": 1.6}})
+    points = {n: np.array([180.0, 300.0]) for n in model_3d._RIG_POINTS}
+    monkeypatch.setattr(body_rig, "detect", lambda _image: (None, points))
+    sent: dict = {}
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        sent["joints"] = json.loads(Path(command[-3]).read_text(encoding="utf-8"))
+        sent["motions"] = json.loads(Path(command[-2]).read_text(encoding="utf-8"))
+        sent["motion"] = command[-1]
+        (tmp_path / "model_rigged.glb").write_bytes(b"glTF")
+        (tmp_path / "frames").mkdir()
+        Image.new("RGBA", (20, 30)).save(tmp_path / "frames" / "001.png")
+        (tmp_path / "rig.json").write_text(json.dumps({"weights": {"nearest_bone": 0}}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    report = model_3d.rig("blender", tmp_path, motion="walk")
+    assert sent["joints"]["points"]["left_knee"] == pytest.approx([0.0, 0.8])
+    assert "wave" in sent["motions"] and sent["motion"] == "walk"
+    assert report == {"motion": "walk", "weights": {"nearest_bone": 0}}
+    assert (tmp_path / "motion.gif").is_file() and not (tmp_path / "frames").exists()
+    assert model_3d.read_meta(tmp_path)["rig"] == report
+
+    # 関節が足りなければ、Blender を呼ばずに止める
+    monkeypatch.setattr(body_rig, "detect", lambda _image: (None, {"nose": np.array([1.0, 1.0])}))
+    with pytest.raises(model_3d.Model3DRigError, match="left_shoulder"):
+        model_3d.rig("blender", tmp_path)
+    with pytest.raises(model_3d.Model3DRigError, match="動き"):
+        model_3d.rig("blender", tmp_path, motion="dance")
+
+
 def test_height_follows_the_base_sex_and_height() -> None:
     assert model_3d.height_of({"sex": "female", "height": ""}) == 1.60
     assert model_3d.height_of({"sex": "male", "height": "tall"}) == 1.83
@@ -191,8 +233,14 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
         (out / "model_clean.glb").write_bytes(b"clean")
         return {"height": height}
 
+    def fake_rig(blender: str, out: Path, *, motion: str) -> dict:
+        calls.append(("rig", out, motion))
+        (out / "model_rigged.glb").write_bytes(b"rigged")
+        return {"motion": motion}
+
     monkeypatch.setattr(model_3d, "generate", fake_generate)
     monkeypatch.setattr(model_3d, "clean", fake_clean)
+    monkeypatch.setattr(model_3d, "rig", fake_rig)
     # 影絵の比べ(anime_seg)は呼ばず、いつも合格にする
     monkeypatch.setattr(model_3d, "check", lambda *_a, **_k: {"views": {}, "score": 1.0, "passed": True, "reasons": []})
     monkeypatch.setattr(body_rig, "find_blender", lambda _configured: "blender")
@@ -248,19 +296,30 @@ def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: P
     assert info["configured"] and info["bases"][0]["views"] == {"front": True, "left": True, "back": False}
     assert client.post(url, json={"seed": 9}).status_code == 200
     entry = _wait(client, character["id"], base["id"])
-    assert entry["job"]["status"] == "done" and entry["job"]["remote"] == "cleaning"
-    assert set(entry["files"]) == {"model.glb", "model_clean.glb", "meta.json"}
+    assert entry["job"]["status"] == "done" and entry["job"]["remote"] == "rigging"
+    assert set(entry["files"]) == {"model.glb", "model_clean.glb", "model_rigged.glb", "meta.json"}
     assert entry["meta"]["seed"] == 9 and entry["meta"]["check"]["attempts"] == 1
     out = tmp_path / f"outputs/training_data/eiko/model_3d/{base['id']}"
     # 作ったあと、素体の身長(女性・ふつう)にそろえて整える。作業用のフォルダは残さない
     work = out / "_tries" / "0"
-    assert client.calls == [(folder, base["id"], work, 9), ("clean", "blender", work, 1.60)]  # type: ignore[attr-defined]
+    # 整えたあと、残した形に骨を入れる
+    assert client.calls == [  # type: ignore[attr-defined]
+        (folder, base["id"], work, 9), ("clean", "blender", work, 1.60), ("rig", out, "wave"),
+    ]
     assert not (out / "_tries").exists()
 
     # 整え直すだけ(GPU は使わない)
     assert client.post(f"{url}/clean", json={}).status_code == 200
     assert _wait(client, character["id"], base["id"])["job"]["status"] == "done"
-    assert client.calls[-1] == ("clean", "blender", out, 1.60)  # type: ignore[attr-defined]
+    assert client.calls[-2:] == [("clean", "blender", out, 1.60), ("rig", out, "wave")]  # type: ignore[attr-defined]
+
+    # 骨だけ入れ直す(確かめの動きを変える)。知らない動きは断る
+    assert client.post(f"{url}/rig", json={"motion": "walk"}).status_code == 200
+    assert _wait(client, character["id"], base["id"])["job"]["status"] == "done"
+    assert client.calls[-1] == ("rig", out, "walk")  # type: ignore[attr-defined]
+    assert client.post(f"{url}/rig", json={"motion": "dance"}).status_code == 422
+    assert client.post(url, json={"motion": "dance"}).status_code == 422
+    assert "wave" in client.get(url).json()["motions"]
 
     res = client.get(f"{url}/file", params={"base_id": base["id"], "name": "model.glb"})
     assert res.status_code == 200 and res.content == b"glTF"

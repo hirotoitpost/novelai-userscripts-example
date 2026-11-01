@@ -24,7 +24,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
-from .. import model3d_remote, model_3d, see_through_remote, wardrobe
+from .. import body_motions, model3d_remote, model_3d, see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -1848,7 +1848,7 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 "seconds": round((job.get("finished") or time.time()) - job["started"]),
             },
         })
-    return {"configured": model3d_remote.configured(), "bases": entries}
+    return {"configured": model3d_remote.configured(), "bases": entries, "motions": body_motions.labels()}
 
 
 @router.get("/character/{character_id}/model-3d")
@@ -1863,6 +1863,8 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
     素体の正面・横・後ろの絵から、リモートの GPU の Hunyuan3D-2mv で 3D の形を作る(model_3d.py)。1体に数分かかるので、
     仕事を切り離してすぐ返す。状態は GET .../model-3d で見る。裸の素体は、裸の素体を当てられるキャラだけ。
     """
+    if req.motion not in body_motions.MOTIONS:
+        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
     character = _load_character(character_id)
     base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
     if base_id is None:
@@ -1898,6 +1900,8 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
             folder, base["id"], out, blender=blender, height=model_3d.height_of(base), seed=req.seed,
             attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status,
         )
+        job["remote"] = "rigging"
+        model_3d.rig(blender, out, motion=req.motion)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1921,6 +1925,31 @@ async def clean_model_3d(character_id: int, req: Model3DRequest) -> dict[str, An
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "cleaning"
         model_3d.clean_and_check(blender, folder, base["id"], out, model_3d.height_of(base))
+        job["remote"] = "rigging"
+        model_3d.rig(blender, out, motion=req.motion)
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
+@router.post("/character/{character_id}/model-3d/rig")
+async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+    """整えた形に、骨と動きを入れ直す(GPU は使わない)。確かめの GIF を別の動きで描き直すときにも使う。"""
+    if req.motion not in body_motions.MOTIONS:
+        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
+    character = _load_character(character_id)
+    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
+    base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    out = _model_3d_dir(character, base, req.root_name)
+    if not (out / "model_clean.glb").is_file():
+        raise HTTPException(status_code=422, detail="この素体の 3D の形をまだ作っていません。")
+    blender = _model_3d_blender()
+
+    def work(job: dict[str, Any]) -> None:
+        job["remote"] = "rigging"
+        model_3d.rig(blender, out, motion=req.motion)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1950,7 +1979,8 @@ def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN
             await asyncio.to_thread(work, job)
             job["status"] = "done"
         except (
-            model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError, body_rig.RigError,
+            model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError,
+            model_3d.Model3DRigError, body_rig.RigError,
             subprocess.TimeoutExpired, OSError,
         ) as exc:
             job["status"] = "error"
