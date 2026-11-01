@@ -42,6 +42,8 @@ FILES = {
     "meta.json": "作ったときの記録",
     "input_front.png": "3D に送った正面(乳首なしの写し)",
     "input_left.png": "3D に送った横(乳首なしの写し)",
+    "blender_edits.json": "Blender で直した所(取り込んだもの。骨を入れ直しても入れる)",
+    "rig_ref.npz": "骨を入れたときの形(Blender で直した所を比べる元)",
 }
 # 3D に送る乳首なしの写し(裸の素体のモデル)。形を作り直しても消さない(もとの絵が変わるまで使い回す)
 INPUT_FILES = {"input_front.png": "front", "input_left.png": "left"}
@@ -50,6 +52,10 @@ _RIG_SCRIPT = _CLEAN_SCRIPT.with_name("rig_model.py")
 # Windows で Blender を呼ぶとき窓を開かせない(body_rig.NO_WINDOW と同じ。窓なしのバックエンドから呼ぶと、Blender が窓を開いた)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _POSE_SCRIPT = _CLEAN_SCRIPT.with_name("pose_render.py")
+_IMPORT_SCRIPT = _CLEAN_SCRIPT.with_name("import_blend.py")
+# 取り込んだ結果を書くファイル(読んだら消す)と、比べる元
+_IMPORT_REPORT = "import.json"
+EDITS_FILE = "blender_edits.json"
 # ポーズの絵を置くフォルダ(形のフォルダの中)。名前は <ポーズ>_<カメラ>_<絵の種類>.png
 POSE_DIR = "poses"
 # clean_model.py の静止画の大きさと、正投影のカメラの写す高さ(身長に対する割合)。画素から m に戻すのに使う
@@ -607,11 +613,59 @@ def preview_shapes(blender: str, out_dir: Path, *, hand: dict | None, shapes: di
             if not (out_dir / name).is_file():
                 raise Model3DRigError("整えた形がありません。先に形を作ってください。")
             shutil.copyfile(out_dir / name, work / name)
+        # Blender で直した所も、試しに入れる
+        if (out_dir / EDITS_FILE).is_file():
+            shutil.copyfile(out_dir / EDITS_FILE, work / EDITS_FILE)
         rig(blender, work, hand=hand, shapes=shapes, shape_weights=shape_weights, nipples=nipples, preview_only=True,
             smooth=smooth, timeout=timeout)
         target = out_dir / PREVIEW_FILE
         shutil.copyfile(work / "model_rigged.glb", target)
     return target
+
+
+class Model3DImportError(RuntimeError):
+    """Blender で直したファイルを取り込めなかった。"""
+
+
+def open_blender(blender: str, out_dir: Path) -> None:
+    """
+    骨の入った model.blend を、手元の Blender の画面で開く(手直し用。待たない)。窓を出すのが目的なので NO_WINDOW は
+    付けず、コンソールの窓を出さない blender-launcher.exe があればそれで開く。
+    """
+    path = out_dir / "model.blend"
+    if not path.is_file():
+        raise Model3DImportError("この素体の 3D の形に、まだ骨を入れていません。")
+    launcher = Path(blender).with_name("blender-launcher.exe")
+    subprocess.Popen([str(launcher if launcher.is_file() else blender), str(path)], cwd=str(out_dir))
+
+
+def import_blend(blender: str, out_dir: Path, *, timeout: float = 300) -> dict:
+    """
+    Blender で直して保存した model.blend を、骨を入れたときの形(rig_ref.npz)と比べ、直した所を blender_edits.json に
+    書く(scripts/blender/import_blend.py)。直した所は、このあと骨を入れ直すと形に焼き込まれる(骨を入れ直すたびに入る)。
+    結果(体を直した頂点の数・直したシェイプキー・まだ取り込めない足したシェイプキー)を meta.json の blender_import に
+    残して返す。
+    """
+    if not (out_dir / "model.blend").is_file() or not (out_dir / "rig_ref.npz").is_file():
+        raise Model3DImportError("比べる元がありません。骨を入れ直してから、Blender で開いて直してください。")
+    report_path = out_dir / _IMPORT_REPORT
+    report_path.unlink(missing_ok=True)
+    result = subprocess.run(
+        [blender, "--background", "--factory-startup", str(out_dir / "model.blend"), "--python", str(_IMPORT_SCRIPT),
+         "--python-exit-code", "1", "--", str(out_dir)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW,
+    )
+    if result.returncode != 0 or not report_path.is_file():
+        tail = "\n".join((result.stdout + result.stderr).splitlines()[-10:])
+        raise Model3DImportError(f"Blender のファイルを読めませんでした(終了コード {result.returncode}):\n{tail}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report_path.unlink()
+    if "error" in report:
+        raise Model3DImportError(report["error"])
+    meta = read_meta(out_dir)
+    meta["blender_import"] = {**report, "imported": time.time()}
+    write_meta(out_dir, meta)
+    return report
 
 
 class Model3DPoseError(RuntimeError):

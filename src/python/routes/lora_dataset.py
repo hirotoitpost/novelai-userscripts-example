@@ -2117,6 +2117,53 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
     return _model_3d_entries(character, req.root_name)
 
 
+def _model_3d_rigged(character_id: int, req: Model3DRequest) -> tuple[dict, dict, Path]:
+    """骨を入れた 3D の形のあるキャラ・素体・フォルダ(無ければ 404・422)。"""
+    character = _load_character(character_id)
+    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
+    base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    out = _model_3d_dir(character, base, req.root_name)
+    if not (out / "model.blend").is_file():
+        raise HTTPException(status_code=422, detail="この素体の 3D の形に、まだ骨を入れていません。")
+    return character, base, out
+
+
+@router.post("/character/{character_id}/model-3d/open-blender")
+async def open_model_3d_blender(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+    """骨の入った model.blend を、このパソコンの Blender の画面で開く(手直し用。直して保存したら取り込む)。"""
+    character, base, out = _model_3d_rigged(character_id, req)
+    model_3d.open_blender(_model_3d_blender(), out)
+    return _model_3d_entries(character, req.root_name)
+
+
+@router.post("/character/{character_id}/model-3d/import-blend")
+async def import_model_3d_blend(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+    """
+    Blender で直して保存した model.blend から、直した所(体の形・シェイプキー)を取り込み、骨を入れ直して形に入れる。
+    取り込んだ所は、このあと骨を入れ直すたびに入る(形を作り直すと消える)。
+    """
+    character, base, out = _model_3d_rigged(character_id, req)
+    if req.motion not in body_motions.MOTIONS:
+        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
+    blender = _model_3d_blender()
+    folder = _body_dir(character, base, req.root_name)
+
+    def work(job: dict[str, Any]) -> None:
+        job["remote"] = "importing"
+        model_3d.import_blend(blender, out)
+        job["remote"] = "rigging"
+        shapes, weights = _shape_settings(character, base, out)
+        model_3d.rig(
+            blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
+            shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
+        )
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
 @router.post("/character/{character_id}/model-3d/pose")
 async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str, Any]:
     """骨を入れた形にポーズを当て、カメラの向きごとに漫画のコマの参考の絵を描き出す(GPU は使わない)。"""
@@ -2338,7 +2385,7 @@ def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN
             job["status"] = "done"
         except (
             model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError,
-            model_3d.Model3DRigError, model_3d.Model3DPoseError, body_rig.RigError,
+            model_3d.Model3DRigError, model_3d.Model3DPoseError, model_3d.Model3DImportError, body_rig.RigError,
             subprocess.TimeoutExpired, OSError,
         ) as exc:
             job["status"] = "error"

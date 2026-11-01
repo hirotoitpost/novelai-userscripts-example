@@ -16,7 +16,7 @@ const Model3DViewer = lazy(() => import('./Model3DViewer'))
 type CameraView = import('./Model3DViewer').CameraView
 type Marker = import('./Model3DViewer').Marker
 
-type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing'
+type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing' | 'importing'
 
 interface Job {
   status: 'running' | 'done' | 'error'
@@ -41,8 +41,10 @@ interface Meta {
     motion: string
     bones?: number
     hand?: { ratios: Record<string, number>; source: string | null; score: number | null }
-    weights?: { nearest_bone: number; hand_cut: number; legs_split?: number }
+    weights?: { nearest_bone: number; hand_cut: number; legs_split?: number; sculpted?: number }
   }
+  /** Blender で直した所を取り込んだ結果 */
+  blender_import?: { sculpt: number; keys: Record<string, number>; added: string[]; imported: number }
 }
 
 interface BaseEntry {
@@ -83,6 +85,7 @@ const JOB_LABELS: Record<JobState, string> = {
   rigging: 'Blender で骨と手を入れています',
   posing: 'ポーズの絵を描いています',
   previewing: '形の値の試しを作っています(15 秒ほど)',
+  importing: 'Blender で直した所を読んでいます',
 }
 
 async function detail(res: Response): Promise<string> {
@@ -425,6 +428,34 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 onInfo={next => setInfo(next as Model3DInfo)}
                 onRig={() => post('/rig', { motion }, '骨を入れ直しています(ならす所を入れます)')}
                 onPreview={spots => { setPicking(false); void startSmoothPreview(spots) }} />
+            )}
+
+            {entry.files['model.blend'] && (
+              <div className="m3d-blender">
+                <h5>Blender で直す</h5>
+                <p className="lora-hint">
+                  Blender で開き、体を選んで、シェイプキーの「edit」を選んだまま彫って(スカルプト)直し、保存(Ctrl+S)してから
+                  「Blender から取り込む」を押します。ほかのシェイプキー(胸の形など)を選んで彫ると、その形が直ります。
+                  直した所は、骨を入れ直しても入ります(形を作り直すと消えます)。頂点を足したり減らしたりする直し方
+                  (リメッシュ・ダイナミックトポロジー)は取り込めません。Blender で開いている間は、骨を入れ直さないでください
+                  (開いているファイルが置き換わります)。
+                </p>
+                <div className="fsh-actions">
+                  <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+                    onClick={() => void post('/open-blender', {}, 'Blender で開きました(Blender の窓を見てください)')}>Blender で開く</button>
+                  <button type="button" className="lora-btn" disabled={busy}
+                    onClick={() => void post('/import-blend', { motion }, 'Blender で直した所を取り込み、骨を入れ直しています')}>Blender から取り込む</button>
+                </div>
+                {meta?.blender_import && (
+                  <p className="lora-hint">
+                    取り込んだ所: 体 {meta.blender_import.sculpt} 頂点
+                    {Object.keys(meta.blender_import.keys).length > 0 &&
+                      `・シェイプキー ${Object.entries(meta.blender_import.keys).map(([k, n]) => `${k}(${n})`).join('・')}`}
+                    {meta.blender_import.added.length > 0 &&
+                      `(足したシェイプキー ${meta.blender_import.added.join('・')} は、まだ取り込めません)`}
+                  </p>
+                )}
+              </div>
             )}
 
             {entry.files['model.blend'] && (

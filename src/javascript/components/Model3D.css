@@ -46,3 +46,4 @@
 .m3d-smooth-list li { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: center; }
 .m3d-smooth-list input[type="range"] { width: 9rem; }
 .m3d-viewer--picking canvas { cursor: crosshair; }
+.m3d-blender { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.8rem; }

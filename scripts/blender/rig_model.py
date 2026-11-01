@@ -972,6 +972,110 @@ def smooth_spots(obj: bpy.types.Object, spots: list) -> int:
     return done
 
 
+# Blender で手直しするときのシェイプキー(model.blend にだけ入れる。強さ 1・選んだ状態で保存する)と、骨を入れたときの
+# 形を残すファイル(Blender から取り込むとき、ここからの違いを直した所として読む。import_blend.py)
+EDIT_KEY = "edit"
+EDITS_FILE = "blender_edits.json"
+REF_FILE = "rig_ref.npz"
+# 直した所を、骨を入れ直した形の頂点に移すとき、同じ頂点とみなす距離(m)
+EDIT_REACH = 0.002
+
+
+def _edit_targets(co, refs):
+    """直した所の元の位置 refs に、いまの形でいちばん近い頂点(EDIT_REACH より離れていれば -1)。"""
+    import numpy as np
+    from mathutils.kdtree import KDTree
+
+    tree = KDTree(len(co))
+    for i, c in enumerate(co):
+        tree.insert(c, i)
+    tree.balance()
+    found = []
+    for ref in refs:
+        _, index, dist = tree.find(ref)
+        found.append(index if index is not None and dist <= EDIT_REACH else -1)
+    return np.array(found, dtype=int)
+
+
+def apply_sculpt(obj: bpy.types.Object, edits: dict, orig) -> int:
+    """
+    Blender で直した体の形(blender_edits.json の sculpt: 直す前の位置と動き)を、いまの形の同じ所の頂点に足して焼き込む
+    (シェイプキーを作る前に呼ぶ。orig はいまの、直す前の頂点の位置)。移せた頂点の数を返す。
+    """
+    import numpy as np
+
+    sculpt = edits.get("sculpt") or {}
+    if not sculpt.get("ref"):
+        return 0
+    targets = _edit_targets(orig, sculpt["ref"])
+    ok = targets >= 0
+    co = orig.copy()
+    co[targets[ok]] += np.array(sculpt["delta"], dtype=float)[ok]
+    obj.data.vertices.foreach_set("co", co.ravel())
+    obj.data.update()
+    return int(ok.sum())
+
+
+def key_offsets(obj: bpy.types.Object) -> dict:
+    """シェイプキーごとの、体の形(Basis)からの動き(頂点の数, 3)。"""
+    import numpy as np
+
+    blocks = obj.data.shape_keys.key_blocks if obj.data.shape_keys else []
+    arrays = {}
+    for kb in blocks:
+        data = np.empty(len(kb.data) * 3)
+        kb.data.foreach_get("co", data)
+        arrays[kb.name] = data.reshape(-1, 3)
+    basis = arrays.get("Basis")
+    return {} if basis is None else {name: data - basis for name, data in arrays.items() if name != "Basis"}
+
+
+def apply_key_edits(obj: bpy.types.Object, edits: dict, orig) -> dict:
+    """
+    Blender で直したシェイプキー(blender_edits.json の keys: 形の名前 → 直す前の位置と、体の形からの動きの変わり)を、
+    いまのシェイプキーに足す(add_shape_keys のあと)。形の名前ごとに移せた頂点の数を返す(無い形は 0)。
+    """
+    import numpy as np
+
+    result = {}
+    if not edits.get("keys") or not obj.data.shape_keys:
+        return result
+    blocks = obj.data.shape_keys.key_blocks
+    for name, change in edits["keys"].items():
+        block = blocks.get(name)
+        if block is None:
+            result[name] = 0
+            continue
+        targets = _edit_targets(orig, change["ref"])
+        ok = targets >= 0
+        data = np.empty(len(orig) * 3)
+        block.data.foreach_get("co", data)
+        data = data.reshape(-1, 3)
+        data[targets[ok]] += np.array(change["delta"], dtype=float)[ok]
+        block.data.foreach_set("co", data.ravel())
+        result[name] = int(ok.sum())
+    obj.data.update()
+    return result
+
+
+def add_edit_key(obj: bpy.types.Object, folder: Path, orig, made: dict) -> None:
+    """
+    Blender で手直しするためのシェイプキー(EDIT_KEY。強さ 1)を足して選んだ状態にし、取り込むときの比べる元を REF_FILE に
+    残す: 直す前の頂点の位置(orig)と、作ったシェイプキーの体の形からの動き(made。直したキーを足す前)。取り込みでは、
+    いまの形との違いを、前に取り込んだ分も含めて全部読み直す。GLB に書き出したあと、model.blend を保存する前に呼ぶ。
+    """
+    import numpy as np
+
+    if not obj.data.shape_keys:
+        obj.shape_key_add(name="Basis", from_mix=False)
+    block = obj.shape_key_add(name=EDIT_KEY, from_mix=False)
+    block.value = 1.0
+    obj.active_shape_key_index = len(obj.data.shape_keys.key_blocks) - 1
+    arrays = {"orig": np.asarray(orig, dtype=np.float32)}
+    arrays.update({f"made:{name}": np.asarray(data, dtype=np.float32) for name, data in made.items()})
+    np.savez_compressed(folder / REF_FILE, **arrays)
+
+
 def bake_caps(obj: bpy.types.Object, anchors: dict) -> dict:
     """
     胸の先を、なめらかな面に作り直して体の形(シェイプキーの前の形)に焼き込む(乳首・乳輪は、この上に部品として付ける)。
@@ -1298,8 +1402,17 @@ def main() -> None:
             anchors = bake_caps(obj, anchors)
     # 画面で選んだ「ならす所」も体の形に焼き込む(シェイプキーは、ならした形から作る)
     weights["smoothed"] = smooth_spots(obj, joints.get("smooth") or [])
+    # Blender で直した所(取り込んだもの)も、同じ所の頂点に焼き込む
+    edits_path = folder / EDITS_FILE
+    edits = json.loads(edits_path.read_text(encoding="utf-8")) if edits_path.is_file() else {}
+    orig = mesh_arrays(obj)[0]
+    weights["sculpted"] = apply_sculpt(obj, edits, orig)
+    made = {}
     if shapes:
         shape_report = add_shape_keys(obj, j, shapes, shape_weights, anchors)
+        # 直したシェイプキーは、部品に写す(make_parts)前に足す。作ったままの動きは、取り込みの比べる元に残す
+        made = key_offsets(obj)
+        shape_report["edited_keys"] = apply_key_edits(obj, edits, orig)
         shape_report.update(make_parts(obj, arm, shapes, shape_weights, anchors))
     # 形の値の試し(joints.json の preview_only): 形だけ見るので、動き・確かめのコマ・Blender のファイルは作らない
     preview_only = bool(joints.get("preview_only"))
@@ -1316,6 +1429,7 @@ def main() -> None:
     )
     if not preview_only:
         render_motion(arm, actions[preview], motions[preview]["frames"], height, folder / "frames")
+        add_edit_key(obj, folder, orig, made)
         bpy.ops.wm.save_as_mainfile(filepath=str(folder / "model.blend"))
     report = {
         "joints": {k: [round(c, 4) for c in v] for k, v in j.items()},
