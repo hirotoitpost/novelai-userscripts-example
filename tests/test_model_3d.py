@@ -130,11 +130,16 @@ def test_make_retries_with_another_seed_and_keeps_the_best(tmp_path: Path, monke
     out = tmp_path / "out"
     (out).mkdir()
     (out / "model_clean.glb").write_bytes(b"old")  # 前に作った形の残り
+    # 前の形で選んでいた形状パーツ(強さ・組み合わせ・乳首の位置のずらし)
+    shapes = {"weights": {"nipple_puffy": 1.0}, "sets": {"水着": {"nipple_small": 1.0}}, "offsets": {"L": [3, -2]}}
+    model_3d.write_meta(out, {"seed": 1, "shapes": shapes})
     meta = model_3d.make(tmp_path, 3, out, blender="blender", height=1.6, seed=10, attempts=3)
     assert seeds == [10, 10 + model_3d._SEED_STEP, 10 + 2 * model_3d._SEED_STEP]
     # いちばん重なりのよい2回目を残す
     assert (out / "model.glb").read_bytes() == str(seeds[1]).encode() and meta["check"]["attempts"] == 3
     assert meta["check"]["score"] == 0.6 and not (out / "model_clean.glb").exists() and not (out / "_tries").exists()
+    # 作り直しても、形状パーツの選択は引き継ぐ
+    assert meta["shapes"] == shapes and model_3d.read_meta(out)["shapes"] == shapes
 
 
 def test_still_to_world_inverts_the_front_camera() -> None:
@@ -526,7 +531,9 @@ def test_rig_sends_shapes_and_keeps_the_made_weights(tmp_path: Path, monkeypatch
 
     (tmp_path / "model_clean.glb").write_bytes(b"glTF")
     Image.new("RGBA", (360, 600)).save(tmp_path / "front.png")
-    model_3d.write_meta(tmp_path, {"clean": {"height": 1.6}})
+    # 場面ごとの組み合わせ・乳首の位置のずらしは、骨を入れ直しても残す
+    saved = {"weights": {"repair": 0.5}, "sets": {"水着": {"repair": 1.0}}, "offsets": {"R": [-4, 2]}}
+    model_3d.write_meta(tmp_path, {"clean": {"height": 1.6}, "shapes": saved})
     points = {n: np.array([180.0, 300.0]) for n in model_3d._RIG_POINTS}
     monkeypatch.setattr(body_rig, "detect", lambda _image: (None, points))
     sent: dict = {}
@@ -546,7 +553,9 @@ def test_rig_sends_shapes_and_keeps_the_made_weights(tmp_path: Path, monkeypatch
     model_3d.rig("blender", tmp_path, shapes=shapes, shape_weights=weights)
     assert sent["shapes"] == shapes and sent["shape_weights"]["belly_flat"] == 1.0
     # 作れなかった形(お腹の点が見つからなかったなど)の強さは残さない。部品(乳首)は、作った部品の形として残す
-    assert model_3d.read_meta(tmp_path)["shapes"] == {"weights": {"repair": 1.0, "navel_normal": 1.0, "nipple_large": 1.0}}
+    assert model_3d.read_meta(tmp_path)["shapes"] == {
+        "weights": {"repair": 1.0, "navel_normal": 1.0, "nipple_large": 1.0}, "sets": saved["sets"], "offsets": saved["offsets"],
+    }
 
 
 def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

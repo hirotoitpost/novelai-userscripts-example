@@ -276,8 +276,10 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
          attempts: int = 1, on_status=None, inputs: dict[str, Path] | None = None) -> dict:
     """
     形を作り(generate)、整え、影絵を比べる。合わなければシードを変えて作り直す(最初の1回も含めて attempts 回まで)。
-    いちばん重なりのよい回の形を out_dir に残し、meta.json の check に結果(作った回数も)を書く。
+    いちばん重なりのよい回の形を out_dir に残し、meta.json の check に結果(作った回数も)を書く。前の形で選んでいた
+    形状パーツ(meta.json の shapes: 強さ・場面ごとの組み合わせ・乳首の位置のずらし)は、新しい形にも引き継ぐ。
     """
+    kept = read_meta(out_dir).get("shapes")
     best: tuple[float, Path] | None = None
     tries = out_dir / "_tries"
     tries.mkdir(parents=True, exist_ok=True)
@@ -297,6 +299,8 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
         _, chosen = best
         meta = read_meta(chosen)
         meta["check"]["attempts"] = attempt + 1
+        if kept:
+            meta["shapes"] = kept
         write_meta(chosen, meta)
         for name in FILES:
             if name in INPUT_FILES:
@@ -570,9 +574,12 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
         # 作ったシェイプキーと、作った部品(part_<形>_<L|R>)の形の強さだけ残す
         made = set((report.get("shapes") or {}).get("keys", {}))
         made |= {name[len("part_"):-2] for name in (report.get("shapes") or {}).get("parts", {})}
-        meta["shapes"] = {"weights": {k: v for k, v in (shape_weights or {}).items() if k in made}}
+        # 場面ごとの組み合わせ・乳首の位置のずらしは、そのまま残す
+        meta["shapes"] = {**meta.get("shapes", {}), "weights": {k: v for k, v in (shape_weights or {}).items() if k in made}}
     else:
-        meta.pop("shapes", None)
+        meta.get("shapes", {}).pop("weights", None)
+        if not meta.get("shapes"):
+            meta.pop("shapes", None)
     write_meta(out_dir, meta)
     return meta["rig"]
 
