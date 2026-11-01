@@ -590,6 +590,7 @@ def test_custom_shape_presets_are_shared_checked_and_used(client: TestClient, tm
     url = "/api/lora-dataset/body-shape-presets"
     catalog = client.get(url).json()
     assert catalog["params"]["socket_lip_width"]["max"] == 1.0 and "part" in catalog["parts"]["areola"]["ops"]
+    assert "socket_lip_roll" in catalog["op_params"]["part"]
     # 範囲の外・部位に合わない変形のしかたは断る
     assert client.post(url, json={"part": "areola", "label": "x", "params": {"op": "part", "radius": 9, "height": 0.1}}).status_code == 422
     assert client.post(url, json={"part": "areola", "label": "x", "params": {"op": "lift", "radius": 1, "height": 0.1}}).status_code == 422

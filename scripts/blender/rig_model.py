@@ -876,7 +876,7 @@ def frame(normal) -> tuple:
 def socket_delta(co, anchor: dict, params: dict):
     """
     陥没乳首の体のへこみ。乳輪の真ん中に、横に長い切れ目(横:縦 = socket_aspect)のくぼみを、socket_depth の深さで作り、
-    切れ目のふちに唇のような盛り上がり(高さ socket_lip、幅 socket_lip_width)を付ける(利用者の参考の絵: 丸い穴でなく横長の切れ目で、上下が少し
+    切れ目のふちに唇のような盛り上がり(高さ socket_lip、幅 socket_lip_width、折り返し socket_lip_roll)を付ける(利用者の参考の絵: 丸い穴でなく横長の切れ目で、上下が少し
     盛り上がって内へ巻き込む)。
     """
     import numpy as np
@@ -894,7 +894,15 @@ def socket_delta(co, anchor: dict, params: dict):
     width = float(params.get("socket_lip_width", 0.45))
     lip = float(params.get("socket_lip", 0.0)) * anchor["size"] * np.exp(-(((t - 1.05) / width) ** 2))
     lift = np.where(near & (t < 2.0), dent + lip, 0.0)
-    return lift[:, None] * n[None, :]
+    delta = lift[:, None] * n[None, :]
+    # 唇の折り返し(socket_lip_roll): 唇のあたりを、面に沿って切れ目の中心線(横の線)へ寄せる。上の唇は下へ、下の唇は上へ
+    # 寄って切れ目に覆いかぶさり、巻き込んだ厚みになる(利用者の要望)
+    roll = float(params.get("socket_lip_roll", 0.0)) * anchor["size"]
+    if roll > 0:
+        ring = np.exp(-(((t - 0.95) / (0.8 * width)) ** 2))
+        ring = np.where(near & (t < 2.0) & (np.abs(b) > 1e-6), ring, 0.0)
+        delta += (-np.sign(b) * roll * ring)[:, None] * v[None, :]
+    return delta
 
 
 def add_part_bones(arm: bpy.types.Object, anchors: dict) -> list[str]:

@@ -69,7 +69,7 @@ PRESETS: dict[str, Preset] = {
         {
             "op": "part", "radius": 0.22, "height": 0.08, "edge": 0.5, "aspect": 2.6,
             "socket_radius": 0.45, "socket_depth": 0.3, "socket_aspect": 3.2, "socket_lip": 0.06,
-            "socket_lip_width": 0.45,
+            "socket_lip_width": 0.45, "socket_lip_roll": 0.04,
         },
     ),
     "areola_flat": Preset("areola", "平ら", (), {"op": "part", "radius": 1.0, "height": 0.02, "edge": 0.2}),
@@ -113,6 +113,7 @@ PARAMS: dict[str, tuple[str, float, float, float]] = {
     "socket_aspect": ("切れ目の横:縦", 1.0, 5.0, 0.1),
     "socket_lip": ("唇の高さ", 0.0, 0.2, 0.005),
     "socket_lip_width": ("唇の幅", 0.1, 1.0, 0.01),
+    "socket_lip_roll": ("唇の折り返し(切れ目への巻き込み)", 0.0, 0.1, 0.005),
     "depth": ("へこみとみなす深さ(m)", 0.001, 0.01, 0.0005),
     "size": ("直すかたまりの大きさの上限(m)", 0.01, 0.1, 0.005),
 }
@@ -122,7 +123,7 @@ OP_PARAMS: dict[str, tuple[str, ...]] = {
     "bump": ("radius", "height", "edge"),
     "lift": ("radius", "height"),
     "part": ("radius", "height", "edge", "aspect", "socket_radius", "socket_depth", "socket_aspect", "socket_lip",
-             "socket_lip_width"),
+             "socket_lip_width", "socket_lip_roll"),
 }
 # 部位 → 使える変形のしかた
 PART_OPS: dict[str, tuple[str, ...]] = {
