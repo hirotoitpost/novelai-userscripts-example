@@ -310,7 +310,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     sent_inputs: list[dict | None] = []
     rig_nipples: list[dict | None] = []
     # 乳首なしの写し: 乳首・乳輪が見つからないことにする(元の絵を写す。NovelAI は呼ばない)
-    monkeypatch.setattr(model_3d, "areola_mask", lambda image: None)
+    monkeypatch.setattr(model_3d, "areola_mask", lambda image, outline=False: None)
     # 乳首の位置は、絵を読まずに決まった値を返す(人物の切り出し・骨格推定のモデルを使わない)
     monkeypatch.setattr(model_3d, "nipple_hint", lambda folder, base_id: {"L": [0.06, 0.7], "R": [-0.06, 0.7], "score": 2.0, "source": "x"})
 
@@ -760,7 +760,7 @@ def test_featureless_inputs_redraw_only_the_areolas(client: TestClient, tmp_path
     _draw(tmp_path / "outputs/training_data/rumi/body_base", suit["id"], ("front", "side"))
     mask = np.zeros((8, 8), dtype=bool)
     mask[2:4, 2:4] = True
-    monkeypatch.setattr(model_3d, "areola_mask", lambda image: mask)
+    monkeypatch.setattr(model_3d, "areola_mask", lambda image, outline=False: mask)
     drawn: list[tuple[str, str]] = []
 
     async def fake_draw(client_, prompt, size, cfg, seed=None, inpaint=None):  # noqa: ANN001

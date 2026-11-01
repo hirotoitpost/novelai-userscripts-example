@@ -1939,7 +1939,7 @@ async def get_model_3d(character_id: int, root_name: str = "training_data") -> d
 
 
 # 乳首なしの写しを描くときの描き直しの強さ(乳輪のまわりだけを、まわりの肌に合わせて描き直す)
-_FEATURELESS_STRENGTH = 0.75
+_FEATURELESS_STRENGTH = 0.9
 
 
 async def _featureless_inputs(character: dict, base: dict, folder: Path, out: Path, client: AsyncNovelAI) -> dict[str, Path]:
@@ -1962,7 +1962,7 @@ async def _featureless_inputs(character: dict, base: dict, folder: Path, out: Pa
             continue
         out.mkdir(parents=True, exist_ok=True)
         image = Image.open(source).convert("RGB")
-        mask = await asyncio.to_thread(model_3d.areola_mask, image)
+        mask = await asyncio.to_thread(model_3d.areola_mask, image, outline=view == "left")
         if mask is None:
             shutil.copyfile(source, target)
             result[view] = target

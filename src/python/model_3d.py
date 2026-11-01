@@ -420,11 +420,12 @@ def nipple_hint(folder: Path, base_id: int) -> dict | None:
     return {**hint, "gaps": gaps, "score": found["score"], "source": path.name}
 
 
-def areola_mask(image: Image.Image) -> np.ndarray | None:
+def areola_mask(image: Image.Image, *, outline: bool = False) -> np.ndarray | None:
     """
     素体の絵(正面・横)の乳首・乳輪の所(描き直して乳首なしの写しにする範囲)。骨格の点(肩・腰)から胸の高さの帯を決め、
     人物の中で肌より赤い所(find_nipples と同じ赤み)のうち、丸いかたまり(乳輪)だけを、絵の高さの 1.5% だけ広げる。
-    胸の下のピンクの影も赤いが、細長い(丸さ 0.54〜0.72。乳輪は 0.94〜0.98。2026-11 矢野栄子)ので外す。無ければ None。
+    胸の下のピンクの影も赤いが、細長い(丸さ 0.54〜0.72。乳輪は 0.94〜0.98。2026-11 矢野栄子)ので外す。outline(横の絵)
+    なら、人物の輪郭に届いた所は外へも同じ幅だけ含める。無ければ None。
     """
     import cv2
 
@@ -465,8 +466,14 @@ def areola_mask(image: Image.Image) -> np.ndarray | None:
     if not hot.any():
         return None
     radius = max(3, int(0.015 * rgb.height))
-    grown = cv2.dilate(hot.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)))
-    return grown.astype(bool) & cv2.dilate(person.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    inside = cv2.dilate(hot.astype(np.uint8), disc).astype(bool) & cv2.dilate(person.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    if not outline:
+        return inside
+    # 横の絵で乳首が出ていた所の輪郭を丸く描き直せるように、外も含める(含めないと胸の先の輪郭に角が残り、3D の胸に
+    # しわができた。矢野栄子、2026-11)。正面の絵では胸の下の線・腕まで入るので含めない
+    outside = cv2.dilate(inside.astype(np.uint8), disc).astype(bool) & ~person
+    return inside | outside
 
 
 def featureless_prompt(prompt: str) -> str:
