@@ -198,11 +198,11 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
     window.addEventListener('pointerup', up)
   }
 
-  async function startPreview(part: string, params: Record<string, number | string>) {
+  async function startPreview(part: string, params: Record<string, number | string>, offsets?: Record<string, [number, number]>) {
     setFloating(true)
     setViewing(true)
     setShowPreview(true)
-    await post('/shape-preview', { part, params, weights: shapeWeights }, '形の値の試しを作っています(15 秒ほど)')
+    await post('/shape-preview', { part, params, weights: shapeWeights, ...(offsets ? { offsets } : {}) }, '形の値の試しを作っています(15 秒ほど)')
   }
   const stills = (['front.png', 'side.png', 'back.png'] as const).filter(name => entry?.files[name])
   const poses = entry?.poses ?? []
@@ -369,7 +369,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 draft={shapeDraft} onDraft={setShapeDraft} onInfo={next => setInfo(next as Model3DInfo)}
                 onRig={() => post('/rig', { motion }, '骨を入れ直しています(自分の形を入れます)')}
                 onEditStart={() => { if (modelSrc) { setViewing(true); setFloating(true) } }}
-                onPreview={(part, params) => void startPreview(part, params)} />
+                onPreview={(part, params, offsets) => void startPreview(part, params, offsets)} />
             )}
 
             {entry.files['model.blend'] && (

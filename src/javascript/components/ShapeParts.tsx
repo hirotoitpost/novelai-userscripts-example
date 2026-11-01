@@ -14,6 +14,10 @@ export interface ShapeInfo {
   weights: Record<string, number>
   /** 場面ごとの組み合わせ(名前 → 強さ) */
   sets: Record<string, Record<string, number>>
+  /** 乳首の位置をずらす量(L・R → [左右, 上下] mm。左右は体の左が正) */
+  offsets: Record<string, [number, number]>
+  /** 乳首の位置を、素体の正面の絵から測れたか(測れなければ胸の形から決めた位置) */
+  nipple_source: boolean
 }
 
 interface Catalog {
@@ -38,7 +42,7 @@ interface Props {
   /** 形の値を開いたとき(3D を最前面に浮かせる) */
   onEditStart?: () => void
   /** 形の値の試し(編集中の値で 3D を作って見る) */
-  onPreview?: (part: string, params: Record<string, number | string>) => void
+  onPreview?: (part: string, params: Record<string, number | string>, offsets?: Record<string, [number, number]>) => void
 }
 
 async function detail(res: Response): Promise<string> {
@@ -53,6 +57,9 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
   const [editing, setEditing] = useState<{ part: string; base: string; params: Record<string, number | string>; label: string; tags: string } | null>(null)
   const [setName, setSetName] = useState('')
   const [status, setStatus] = useState<string | null>(null)
+  // 乳首の位置をずらす量(保存前。null なら保存した量)と、位置の欄を開いているか
+  const [offsetDraft, setOffsetDraft] = useState<Record<string, [number, number]> | null>(null)
+  const [positionOpen, setPositionOpen] = useState(false)
 
   function loadCatalog() {
     fetch(PRESET_URL).then(r => (r.ok ? r.json() : null)).then(setCatalog).catch(() => setCatalog(null))
@@ -60,6 +67,23 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
   useEffect(loadCatalog, [])
 
   const weights = draft ?? shapes.weights
+  const offsets = offsetDraft ?? shapes.offsets ?? {}
+  const dirty = !!draft || !!offsetDraft
+  // 保存した量が変わったら(保存した・素体を替えた)編集中の量を捨てる。状態を聞き直すたびに新しい入れ物が届くので、中身で比べる
+  const savedOffsets = JSON.stringify(shapes.offsets ?? {})
+  useEffect(() => setOffsetDraft(null), [baseId, savedOffsets])
+
+  /** 乳首の位置: side の乳首を「外へ」out mm・「上へ」up mm(体の左右で、外の向きは逆) */
+  function setOffset(side: 'L' | 'R', out: number, up: number) {
+    setOffsetDraft({ ...offsets, [side]: [side === 'L' ? out : -out, up] })
+  }
+  const outward = (side: 'L' | 'R') => (side === 'L' ? 1 : -1) * (offsets[side]?.[0] ?? 0)
+
+  function previewPosition() {
+    const key = Object.keys(shapes.options.nipple?.presets ?? {}).find(k => (weights[k] ?? 0) > 0)
+    const preset = catalog?.presets.find(p => p.key === key)
+    if (preset && onPreview) onPreview('nipple', preset.params, offsets)
+  }
   // 選べない形(消した自分の形など)の強さは送らない
   const known = new Set(Object.values(shapes.options).flatMap(spec => Object.keys(spec.presets)))
   const clean = (w: Record<string, number>) => Object.fromEntries(Object.entries(w).filter(([key]) => known.has(key)))
@@ -90,14 +114,20 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
   }
 
   async function saveWeights(name?: string) {
-    const body = { root_name: rootName, base_id: baseId, weights: clean(weights), ...(name ? { set_name: name } : {}) }
+    const body = {
+      root_name: rootName, base_id: baseId, weights: clean(weights), ...(name ? { set_name: name } : {}),
+      ...(!name && offsetDraft ? { offsets: offsetDraft } : {}),
+    }
     const res = await fetch(`${url}/shapes`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     if (!res.ok) {
       setStatus(`保存できませんでした: ${await detail(res)}`)
       return false
     }
     onInfo(await res.json())
-    if (!name) onDraft(null)
+    if (!name) {
+      onDraft(null)
+      setOffsetDraft(null)
+    }
     setStatus(name ? `組み合わせ「${name}」を残しました(ポーズの絵で選べます)` : '形状パーツを保存しました(ポーズの絵に使います)')
     return true
   }
@@ -153,13 +183,14 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
 
   async function saveAndRig() {
     // 保存した強さは骨を入れ直すときにも使うので、自分の形(まだモデルに無い)も強さに入れて送る
-    const body = { root_name: rootName, base_id: baseId, weights: draft ?? shapes.weights }
+    const body = { root_name: rootName, base_id: baseId, weights: draft ?? shapes.weights, ...(offsetDraft ? { offsets: offsetDraft } : {}) }
     const res = await fetch(`${url}/shapes`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     if (!res.ok) {
       setStatus(`保存できませんでした: ${await detail(res)}`)
       return
     }
     onDraft(null)
+    setOffsetDraft(null)
     await onRig()
   }
 
@@ -204,6 +235,43 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
               {part !== 'repair' && catalog && (
                 <button type="button" className="lora-btn lora-btn--secondary" disabled={busy} onClick={() => startEdit(part)}>形の値</button>
               )}
+              {part === 'nipple' && (
+                <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+                  onClick={() => { setPositionOpen(o => !o); onEditStart?.() }}>位置</button>
+              )}
+              {part === 'nipple' && positionOpen && (
+                <div className="m3d-shape-editor">
+                  <span className="lora-hint">
+                    {shapes.nipple_source
+                      ? '初めの位置は、素体の正面の絵から測った乳首の位置です。'
+                      : '素体の正面の絵から乳首の位置を測れなかったので、初めの位置は胸の形(いちばん前の点)から決めています。'}
+                    乳輪も一緒に動きます。
+                  </span>
+                  {(['L', 'R'] as const).map(side => (
+                    <div key={side} className="m3d-position-row">
+                      <span className="m3d-shape-label">{side === 'L' ? '左の乳首' : '右の乳首'}</span>
+                      <label className="fsh-label">外へ {outward(side).toFixed(0)}mm
+                        <input type="range" min={-40} max={40} step={1} value={outward(side)} disabled={busy}
+                          onChange={e => setOffset(side, Number(e.target.value), offsets[side]?.[1] ?? 0)} />
+                      </label>
+                      <label className="fsh-label">上へ {(offsets[side]?.[1] ?? 0).toFixed(0)}mm
+                        <input type="range" min={-40} max={40} step={1} value={offsets[side]?.[1] ?? 0} disabled={busy}
+                          onChange={e => setOffset(side, outward(side), Number(e.target.value))} />
+                      </label>
+                    </div>
+                  ))}
+                  <div className="fsh-actions">
+                    {onPreview && (
+                      <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+                        title="いまの位置で 3D を作って、浮かせた窓に出します(15 秒ほど。モデル本体は変わりません)"
+                        onClick={previewPosition}>この位置で試す</button>
+                    )}
+                    <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+                      onClick={() => setOffsetDraft({})}>絵の位置に戻す</button>
+                  </div>
+                  <span className="lora-hint">位置は「保存して骨を入れ直す」でモデルに入ります。</span>
+                </div>
+              )}
               {editing?.part === part && catalog && (
                 <div className="m3d-shape-editor">
                   <label className="lora-label">名前
@@ -226,7 +294,7 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
                     {onPreview && (
                       <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
                         title="いまの値で 3D を作って、浮かせた窓に出します(15 秒ほど。モデル本体は変わりません)"
-                        onClick={() => onPreview(editing.part, editing.params)}>この値で試す</button>
+                        onClick={() => onPreview(editing.part, editing.params, offsets)}>この値で試す</button>
                     )}
                     <button type="button" className="lora-btn" disabled={!editing.label.trim()} onClick={() => void savePreset(false)}>新しい形として保存</button>
                     {catalog.presets.find(p => p.key === editing.base && !p.builtin) && (
@@ -249,11 +317,13 @@ export default function ShapeParts({ url, rootName, baseId, shapes, busy, draft,
         })}
       </div>
       <div className="fsh-actions">
-        <button type="button" className="lora-btn" disabled={busy || !draft} onClick={() => void saveWeights()}>保存する</button>
+        <button type="button" className="lora-btn" disabled={busy || !dirty} onClick={() => void saveWeights()}>保存する</button>
         <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
           title="いまの形と強さを保存し、骨を入れ直して、自分の形をモデルに入れます(20 秒ほど)"
           onClick={() => void saveAndRig()}>保存して骨を入れ直す</button>
-        {draft && <button type="button" className="lora-btn lora-btn--secondary" onClick={() => onDraft(null)}>元に戻す</button>}
+        {dirty && (
+          <button type="button" className="lora-btn lora-btn--secondary" onClick={() => { onDraft(null); setOffsetDraft(null) }}>元に戻す</button>
+        )}
       </div>
       <div className="fsh-actions">
         <span className="lora-hint">場面ごとの組み合わせ:</span>

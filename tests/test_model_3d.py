@@ -171,7 +171,7 @@ def test_rig_finds_joints_and_runs_blender(tmp_path: Path, monkeypatch: pytest.M
     assert sent["joints"]["hand"] == hand_shape.DEFAULTS
     assert report == {
         "motion": "walk", "weights": {"nearest_bone": 0},
-        "hand": {"ratios": hand_shape.DEFAULTS, "source": None, "score": None},
+        "hand": {"ratios": hand_shape.DEFAULTS, "source": None, "score": None}, "nipples": None,
     }
     assert (tmp_path / "motion.gif").is_file() and not (tmp_path / "frames").exists()
     assert model_3d.read_meta(tmp_path)["rig"] == report
@@ -307,6 +307,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setattr(model3d_remote, "configured", lambda: True)
     calls: list[tuple[Path, int, Path, int]] = []
     rig_shapes: list[tuple[dict, dict]] = []
+    rig_nipples: list[dict | None] = []
+    # 乳首の位置は、絵を読まずに決まった値を返す(人物の切り出し・骨格推定のモデルを使わない)
+    monkeypatch.setattr(model_3d, "nipple_hint", lambda folder, base_id: {"L": [0.06, 0.7], "R": [-0.06, 0.7], "score": 2.0, "source": "x"})
 
     def fake_generate(folder: Path, base_id: int, out: Path, *, seed: int, on_status=None) -> dict:  # noqa: ANN001
         calls.append((folder, base_id, out, seed))
@@ -321,8 +324,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
         (out / "model_clean.glb").write_bytes(b"clean")
         return {"height": height}
 
-    def fake_rig(blender: str, out: Path, *, motion: str, hand: dict, shapes: dict, shape_weights: dict) -> dict:
+    def fake_rig(blender: str, out: Path, *, motion: str, hand: dict, shapes: dict, shape_weights: dict, nipples=None) -> dict:  # noqa: ANN001
         calls.append(("rig", out, motion))
+        rig_nipples.append(nipples)
         assert set(hand["ratios"]) == set(hand_shape.DEFAULTS)
         rig_shapes.append((shapes, shape_weights))
         (out / "model_rigged.glb").write_bytes(b"rigged")
@@ -341,6 +345,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     with TestClient(app) as test_client:
         test_client.calls = calls  # type: ignore[attr-defined]
         test_client.rig_shapes = rig_shapes  # type: ignore[attr-defined]
+        test_client.rig_nipples = rig_nipples  # type: ignore[attr-defined]
         yield test_client
 
 
@@ -551,6 +556,9 @@ def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_pa
     _wait(client, adult["id"], nude["id"])
     shapes, weights = client.rig_shapes[-1]  # type: ignore[attr-defined]
     assert "nipple_puffy" in shapes["presets"] and weights["nipple_puffy"] == 1.0
+    assert client.rig_nipples[-1] == {  # type: ignore[attr-defined]
+        "hint": {"L": [0.06, 0.7], "R": [-0.06, 0.7], "score": 2.0, "source": "x"}, "offsets": {},
+    }
 
     out = tmp_path / f"outputs/training_data/rumi/model_3d_r18/{nude['id']}"
     (out / "model.blend").write_bytes(b"blend")
@@ -559,6 +567,14 @@ def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_pa
     assert entry["shapes"]["weights"] == {"repair": 1.0, "nipple_large": 0.7}
     assert "nipple" in entry["shapes"]["options"]
     assert client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {"repair": 3}}).status_code == 422
+    # 乳首の位置をずらす量(mm)を保存し、骨を入れ直すときに渡す
+    res = client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {"repair": 1}, "offsets": {"L": [3, -5]}})
+    assert next(b for b in res.json()["bases"] if b["base_id"] == nude["id"])["shapes"]["offsets"] == {"L": [3.0, -5.0]}
+    assert client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {}, "offsets": {"L": [50, 0]}}).status_code == 422
+    assert client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {}, "offsets": {"X": [0, 0]}}).status_code == 422
+    client.post(f"{url}/rig", json={"base_id": nude["id"]})
+    _wait(client, adult["id"], nude["id"])
+    assert client.rig_nipples[-1]["offsets"] == {"L": [3.0, -5.0]}  # type: ignore[attr-defined]
 
     # 全年齢の素体のモデルには、乳首の形は当てられない
     assert client.post(url, json={"base_id": suit["id"]}).status_code == 200
@@ -569,6 +585,7 @@ def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_pa
     assert res.status_code == 422 and "nipple_large" in res.text
     suit_entry = next(b for b in client.get(url).json()["bases"] if b["base_id"] == suit["id"])
     assert "nipple" not in suit_entry["shapes"]["options"]
+    assert client.rig_nipples[-1] is None  # type: ignore[attr-defined]
 
     # ポーズの絵: 場面ごとの強さを渡す(省くと保存した強さ)
     rendered: list[dict | None] = []
@@ -662,9 +679,11 @@ def test_shape_preview_swaps_the_part_and_keeps_the_model(client: TestClient, tm
         client.post(model, json={"base_id": base["id"]})
         _wait(client, adult["id"], base["id"])
     calls: list[tuple[dict, dict]] = []
+    previews: list[dict | None] = []
 
-    def fake_preview(blender: str, out: Path, *, hand: dict, shapes: dict, shape_weights: dict) -> Path:
+    def fake_preview(blender: str, out: Path, *, hand: dict, shapes: dict, shape_weights: dict, nipples=None) -> Path:  # noqa: ANN001
         calls.append((shapes, shape_weights))
+        previews.append(nipples)
         (out / model_3d.PREVIEW_FILE).write_bytes(b"glTF")
         return out / model_3d.PREVIEW_FILE
 

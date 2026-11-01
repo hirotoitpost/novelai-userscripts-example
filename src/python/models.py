@@ -477,6 +477,8 @@ class Model3DShapesRequest(BaseModel):
     weights: dict[str, float] = Field(description="形の名前 → 強さ(0〜2)。書いていない形は 0")
     set_name: str | None = Field(
         None, max_length=40, description="あれば、いまの強さは変えず、この名前の組み合わせ(場面ごと)として残す")
+    offsets: dict[str, tuple[float, float]] | None = Field(
+        None, description="乳首の位置をずらす量(L・R → [左右, 上下] mm。±40)。省くと変えない")
 
 
 class Model3DShapePreviewRequest(BaseModel):
@@ -487,6 +489,7 @@ class Model3DShapePreviewRequest(BaseModel):
     part: str = Field(description="値を変えている部位(body_shapes.PARTS)")
     params: dict[str, float | str] = Field(description="編集中の形の値")
     weights: dict[str, float] = Field(default_factory=dict, description="いまの画面の強さ(保存前も含む)")
+    offsets: dict[str, tuple[float, float]] | None = Field(None, description="乳首の位置をずらす量(L・R → [左右, 上下] mm)")
 
 
 class BodyShapePresetRequest(BaseModel):

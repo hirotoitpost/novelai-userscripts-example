@@ -733,6 +733,39 @@ def add_shape_keys(obj: bpy.types.Object, j: dict[str, Vector], shapes: dict, we
     }
 
 
+def place_nipples(obj: bpy.types.Object, anchors: dict, nipples: dict, height: float) -> dict:
+    """
+    乳首・乳輪の点を、正面の絵から測った位置(nipples の hint。身長を 1 とした左右 x・高さ z)に、ずらす量(offsets。mm)を
+    足した所へ置く。その (x, z) に正面から光線を当て、体の前の面に当たった所にする。面を細かくする前に呼ぶ(細かくする所も、
+    この位置に合わせる)。置いた点には placed を付け、bake_caps で上書きしない。
+    """
+    import numpy as np
+
+    anchors = dict(anchors)
+    hint = nipples.get("hint") or {}
+    offsets = nipples.get("offsets") or {}
+    for side in ("L", "R"):
+        dx, dz = (offsets.get(side) or [0.0, 0.0])
+        base = hint.get(side)
+        if base is not None:
+            x, z = base[0] * height, base[1] * height
+        elif (dx or dz) and f"nipple.{side}" in anchors:
+            # 絵から測れなかったときは、胸の形から決めた点をずらす
+            center = anchors[f"nipple.{side}"]["center"]
+            x, z = float(center[0]), float(center[2])
+        else:
+            continue
+        x, z = x + dx / 1000, z + dz / 1000
+        ok, loc, normal, _ = obj.ray_cast(Vector((x, -10.0, z)), Vector((0, 1, 0)))
+        if not ok:
+            continue
+        for part in ("nipple", "areola"):
+            name = f"{part}.{side}"
+            if name in anchors:
+                anchors[name] = {**anchors[name], "center": np.array(loc), "normal": np.array(normal), "placed": True}
+    return anchors
+
+
 def bake_caps(obj: bpy.types.Object, anchors: dict) -> dict:
     """
     胸の先を、なめらかな面に作り直して体の形(シェイプキーの前の形)に焼き込む(乳首・乳輪は、この上に部品として付ける)。
@@ -760,7 +793,8 @@ def bake_caps(obj: bpy.types.Object, anchors: dict) -> dict:
             if name not in anchors:
                 continue
             index = craters.get(side)
-            if index is None:
+            if index is None or anchors[name].get("placed"):
+                # 絵から測って置いた点(placed)は、その場所のまま作り直した面の上へ移す
                 index = int(np.argmin(np.linalg.norm(co - anchors[name]["center"], axis=1)))
             center = baked[index].copy()
             near = np.linalg.norm(baked - center, axis=1) < 0.012
@@ -1037,8 +1071,10 @@ def main() -> None:
     weights = bind(obj, arm)
     weights["legs_split"] = separate_legs(obj, j)
     if joints.get("shapes"):
-        # 部位の点は、細かくする前の形で決める
+        # 部位の点は、細かくする前の形で決める。乳首は、正面の絵から測った位置があればそこ(ずらす量も足す)
         anchors = shape_anchors(*mesh_arrays(obj), j)
+        if joints.get("nipples"):
+            anchors = place_nipples(obj, anchors, joints["nipples"], height)
         # 細かくするのは重みを付けたあと(先に細かくすると、自動の重みが全部失敗した)。新しい頂点の重みはとなりから写す
         weights["refined_edges"] = refine_regions(obj, anchors)
         weights["refined_unweighted"] = sum(1 for v in obj.data.vertices if not any(g.weight > 1e-4 for g in v.groups))
