@@ -22,7 +22,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from python import body_rig, db, model3d_remote, model_3d  # noqa: E402
+from python import body_rig, db, hand_shape, model3d_remote, model_3d  # noqa: E402
 from python.client import get_client  # noqa: E402
 from python.routes import lora_dataset as lora_routes  # noqa: E402
 from python.routes import story as story_routes  # noqa: E402
@@ -167,7 +167,12 @@ def test_rig_finds_joints_and_runs_blender(tmp_path: Path, monkeypatch: pytest.M
     report = model_3d.rig("blender", tmp_path, motion="walk")
     assert sent["joints"]["points"]["left_knee"] == pytest.approx([0.0, 0.8])
     assert "wave" in sent["motions"] and sent["motion"] == "walk"
-    assert report == {"motion": "walk", "weights": {"nearest_bone": 0}}
+    # 手の割合を省くと標準の割合で、Blender にも渡す
+    assert sent["joints"]["hand"] == hand_shape.DEFAULTS
+    assert report == {
+        "motion": "walk", "weights": {"nearest_bone": 0},
+        "hand": {"ratios": hand_shape.DEFAULTS, "source": None, "score": None},
+    }
     assert (tmp_path / "motion.gif").is_file() and not (tmp_path / "frames").exists()
     assert model_3d.read_meta(tmp_path)["rig"] == report
 
@@ -177,6 +182,46 @@ def test_rig_finds_joints_and_runs_blender(tmp_path: Path, monkeypatch: pytest.M
         model_3d.rig("blender", tmp_path)
     with pytest.raises(model_3d.Model3DRigError, match="動き"):
         model_3d.rig("blender", tmp_path, motion="dance")
+
+
+def _hand_points(scale: float = 1.0, bent: str | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """手の21点(手首が下、指が上へまっすぐ伸びた手。中指の長さは手の長さの 0.43)。"""
+    points = np.zeros((21, 2), np.float32)
+    points[0] = (0, 0)
+    bases = {"thumb": -45, "index": -30, "middle": -10, "ring": 10, "little": 30}
+    lengths = {"thumb": 30, "index": 39.5, "middle": 43, "ring": 41, "little": 32.5}
+    for name, chain in hand_shape.FINGERS.items():
+        x = bases[name]
+        y0 = -40 if name == "thumb" else -57
+        for k, i in enumerate(chain):
+            points[i] = (x, y0 - lengths[name] * k / 3)
+        if name == bent:
+            points[chain[-1]] = points[chain[1]]  # 先が付け根の近くへ曲がった指
+    points *= scale
+    return points, np.ones(21, np.float32)
+
+
+def test_hand_ratios_from_points() -> None:
+    ratios = hand_shape._ratios(*_hand_points())
+    assert ratios["middle"] == pytest.approx(0.43, abs=0.01)
+    assert ratios["index"] == pytest.approx(39.5 / 43, abs=0.01)
+    # 付け根の間 60 → 手のひらの幅 75 → 手の長さ 100 に対して 0.75 は範囲の外なので上限
+    assert ratios["width"] == hand_shape.RANGES["width"][1]
+    # 曲がった指は標準の値。大きさが違っても割合は同じ
+    bent = hand_shape._ratios(*_hand_points(scale=3.0, bent="little"))
+    assert bent["little"] == hand_shape.DEFAULTS["little"] and bent["index"] == ratios["index"]
+    # 中指が取れなければ、全部標準
+    points, scores = _hand_points()
+    scores[12] = 0.1
+    assert hand_shape._ratios(points, scores) == hand_shape.DEFAULTS
+
+
+def test_hand_ratios_fall_back_to_the_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert model_3d.hand_ratios(tmp_path, 3) == {"ratios": hand_shape.DEFAULTS, "source": None, "score": None}
+    _draw(tmp_path, 3, ("hand_back",))
+    measured = {"ratios": {**hand_shape.DEFAULTS, "width": 0.5}, "score": 0.8, "source": "3_hand_back.png"}
+    monkeypatch.setattr(hand_shape, "measure", lambda path: measured if path.name == "3_hand_back.png" else None)
+    assert model_3d.hand_ratios(tmp_path, 3) == measured
 
 
 def test_height_follows_the_base_sex_and_height() -> None:
@@ -233,8 +278,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
         (out / "model_clean.glb").write_bytes(b"clean")
         return {"height": height}
 
-    def fake_rig(blender: str, out: Path, *, motion: str) -> dict:
+    def fake_rig(blender: str, out: Path, *, motion: str, hand: dict) -> dict:
         calls.append(("rig", out, motion))
+        assert set(hand["ratios"]) == set(hand_shape.DEFAULTS)
         (out / "model_rigged.glb").write_bytes(b"rigged")
         return {"motion": motion}
 
