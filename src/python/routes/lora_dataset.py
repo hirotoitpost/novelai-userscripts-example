@@ -1938,11 +1938,61 @@ async def get_model_3d(character_id: int, root_name: str = "training_data") -> d
     return _model_3d_entries(_load_character(character_id), root_name)
 
 
+# 乳首なしの写しを描くときの描き直しの強さ(乳輪のまわりだけを、まわりの肌に合わせて描き直す)
+_FEATURELESS_STRENGTH = 0.9
+
+
+async def _featureless_inputs(character: dict, base: dict, folder: Path, out: Path, client: AsyncNovelAI) -> dict[str, Path]:
+    """
+    3D に送る乳首なしの写し(正面・横)。素体の絵の乳首・乳輪の所(model_3d.areola_mask)だけを、乳首を描かないタグ
+    (nipples → featureless breasts)で NovelAI のインペイントで描き直し、その所だけ元の絵に重ねる(姿勢・位置はそのまま。
+    乳首の位置は元の絵で測る)。写しは out/input_<向き>.png に残し、元の絵が新しくなるまで使い回す。乳首・乳輪が
+    見つからなければ元の絵を写す。1 枚ぶんの Anlas を、描き直した向きごとに使う。
+    """
+    result: dict[str, Path] = {}
+    options = _options()
+    for name, view in model_3d.INPUT_FILES.items():
+        part = model_3d.VIEW_PARTS[view]
+        source = folder / f"{base['id']}_{part}.png"
+        if not source.is_file():
+            continue
+        target = out / name
+        if target.is_file() and target.stat().st_mtime >= source.stat().st_mtime:
+            result[view] = target
+            continue
+        out.mkdir(parents=True, exist_ok=True)
+        image = Image.open(source).convert("RGB")
+        mask = await asyncio.to_thread(model_3d.areola_mask, image, outline=view == "left")
+        if mask is None:
+            shutil.copyfile(source, target)
+            result[view] = target
+            continue
+        item = body_base.ITEMS[part]
+        prompt = model_3d.featureless_prompt(body_base.prompt(character, base, item, options, modest=False))
+        _check_tags(character, prompt, _load_guard(None), True)
+        negative = join_tags(body_base.negative(base, item), model_3d.FEATURELESS_NEGATIVE)
+        seed = character.get("seed") if character.get("seed") is not None else 12345
+        cfg = GenConfig(
+            output_root=out, model="nai-diffusion-4-5-full", steps=23, scale=5.0,
+            negative_prompt=sheet_negative(character, r18=True, extra=negative), seed=seed,
+        )
+        redraw = Image.fromarray((mask * 255).astype(np.uint8)).convert("RGB")
+        params = InpaintParams(image=_png(image), mask=_png(redraw), strength=_FEATURELESS_STRENGTH, seed=seed)
+        drawn = await generate_one(client, prompt, image.size, cfg, seed=seed, inpaint=params)
+        drawn = drawn.convert("RGB").resize(image.size) if drawn.size != image.size else drawn.convert("RGB")
+        merged = np.where(mask[..., None], np.asarray(drawn), np.asarray(image))
+        Image.fromarray(merged.astype(np.uint8)).save(target, "PNG")
+        result[view] = target
+    return result
+
+
 @router.post("/character/{character_id}/model-3d")
-async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDep) -> dict[str, Any]:
     """
     素体の正面・横・後ろの絵から、リモートの GPU の Hunyuan3D-2mv で 3D の形を作る(model_3d.py)。1体に数分かかるので、
     仕事を切り離してすぐ返す。状態は GET .../model-3d で見る。裸の素体は、裸の素体を当てられるキャラだけ。
+    裸の素体のモデルでは(featureless)、乳首は部品で付けるので、正面・横の絵の乳首・乳輪だけを描き直した乳首なしの写しを
+    送る(乳首を描いた絵を送ると、陰影が胸の先の穴・平たさになった)。写しは仕事を始める前に描く(Anlas を使う)。
     """
     if req.motion not in body_motions.MOTIONS:
         raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
@@ -1972,6 +2022,9 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
         raise HTTPException(status_code=422, detail="素体の「正面」の絵をまだ描いていません。先に描いてください。")
     blender = _model_3d_blender()
     out = _model_3d_dir(character, base, req.root_name)
+    inputs = None
+    if req.featureless and _shape_flags(character, base)["nude"]:
+        inputs = await _featureless_inputs(character, base, folder, out, client)
 
     def work(job: dict[str, Any]) -> None:
         def status(remote: str, _seconds: int) -> None:
@@ -1979,7 +2032,7 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
 
         model_3d.make(
             folder, base["id"], out, blender=blender, height=model_3d.height_of(base), seed=req.seed,
-            attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status,
+            attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status, inputs=inputs,
         )
         job["remote"] = "rigging"
         shapes, weights = _shape_settings(character, base, out)

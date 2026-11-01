@@ -454,6 +454,8 @@ class Model3DRequest(BaseModel):
     base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
     seed: int = Field(12345, ge=0, le=2**32 - 1)
     motion: str = Field("wave", description="骨を入れたあと、確かめの GIF に描き出す動き(body_motions.MOTIONS)")
+    featureless: bool = Field(
+        True, description="裸の素体のモデルで、正面・横の絵の乳首・乳輪だけを描き直した乳首なしの写しを 3D に送る(Anlas を使う)")
 
 
 class Model3DPoseRequest(BaseModel):

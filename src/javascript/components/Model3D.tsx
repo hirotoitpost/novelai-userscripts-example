@@ -105,6 +105,9 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [floatPos, setFloatPos] = useLocalStorage('nai_model3d_float_pos', { right: 16, bottom: 16 })
   // 浮かせた窓で、形の値の試し(shape_preview.glb)を見ているか
   const [showPreview, setShowPreview] = useState(false)
+  // 裸の素体のモデルで、乳首なしの写しを 3D に送るか(写しを描いている間は、作るボタンを止める)
+  const [featureless, setFeatureless] = useState(true)
+  const [drawingInputs, setDrawingInputs] = useState(false)
   // 3D のカメラの位置(読み込み直しても保つ。素体を替えたら初めから)
   const cameraView = useRef<CameraView | null>(null)
   const [animations, setAnimations] = useState<string[]>([])
@@ -198,6 +201,16 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
     window.addEventListener('pointerup', up)
   }
 
+  async function makeModel() {
+    const drawing = featureless && entry?.kind === 'nude'
+    setDrawingInputs(drawing)
+    try {
+      await post('', { seed, motion, featureless }, '作り始めました(数分かかります)')
+    } finally {
+      setDrawingInputs(false)
+    }
+  }
+
   async function startPreview(part: string, params: Record<string, number | string>, offsets?: Record<string, [number, number]>) {
     setFloating(true)
     setViewing(true)
@@ -252,9 +265,15 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 <input type="number" className="lora-input m3d-seed" value={seed} min={0} disabled={busy}
                   onChange={e => setSeed(Number(e.target.value))} />
               </label>
-              <button type="button" className="lora-btn" disabled={busy || !info.configured || !entry.views.front}
-                onClick={() => void post('', { seed, motion }, '作り始めました(数分かかります)')}>
-                {entry.files['model.glb'] ? '3D の形を作り直す' : '3D の形を作る'}
+              {entry.kind === 'nude' && (
+                <label className="fsh-label" title="乳首は部品で付けるので、正面・横の絵の乳首・乳輪だけを描き直した写しを 3D に送ります(乳首を描いた絵だと、陰影が胸の先の穴・平たさになります)。写しは元の絵が変わるまで使い回します">
+                  <input type="checkbox" checked={featureless} disabled={busy || drawingInputs} onChange={e => setFeatureless(e.target.checked)} />
+                  乳首なしの写しで作る(Anlas 2 枚ぶん)
+                </label>
+              )}
+              <button type="button" className="lora-btn" disabled={busy || drawingInputs || !info.configured || !entry.views.front}
+                onClick={() => void makeModel()}>
+                {drawingInputs ? '乳首なしの写しを描いています…' : entry.files['model.glb'] ? '3D の形を作り直す' : '3D の形を作る'}
               </button>
               <button type="button" className="lora-btn lora-btn--secondary" disabled={busy || !entry.files['model.glb']}
                 title="作った形を Blender で整え直し、素体の絵と比べ直して、骨を入れ直します(GPU は使いません)"
@@ -347,9 +366,9 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
               </div>
             )}
 
-            {(stills.length > 0 || entry.files['preview.gif'] || entry.files['motion.gif']) && (
+            {(stills.length > 0 || entry.files['preview.gif'] || entry.files['motion.gif'] || entry.files['input_front.png']) && (
               <div className="bdb-rig-views m3d-stills">
-                {stills.map(name => (
+                {[...stills, ...(['input_front.png', 'input_left.png'] as const).filter(name => entry.files[name])].map(name => (
                   <figure key={name}><img src={fileUrl(name)} alt={entry.files[name].label} /><figcaption>{entry.files[name].label}</figcaption></figure>
                 ))}
                 {entry.files['preview.gif'] && (
