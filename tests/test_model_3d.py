@@ -306,6 +306,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setattr(lora_routes, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(model3d_remote, "configured", lambda: True)
     calls: list[tuple[Path, int, Path, int]] = []
+    rig_shapes: list[tuple[dict, dict]] = []
 
     def fake_generate(folder: Path, base_id: int, out: Path, *, seed: int, on_status=None) -> dict:  # noqa: ANN001
         calls.append((folder, base_id, out, seed))
@@ -320,9 +321,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
         (out / "model_clean.glb").write_bytes(b"clean")
         return {"height": height}
 
-    def fake_rig(blender: str, out: Path, *, motion: str, hand: dict) -> dict:
+    def fake_rig(blender: str, out: Path, *, motion: str, hand: dict, shapes: dict, shape_weights: dict) -> dict:
         calls.append(("rig", out, motion))
         assert set(hand["ratios"]) == set(hand_shape.DEFAULTS)
+        rig_shapes.append((shapes, shape_weights))
         (out / "model_rigged.glb").write_bytes(b"rigged")
         return {"motion": motion}
 
@@ -338,6 +340,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     app.dependency_overrides[get_client] = lambda: object()
     with TestClient(app) as test_client:
         test_client.calls = calls  # type: ignore[attr-defined]
+        test_client.rig_shapes = rig_shapes  # type: ignore[attr-defined]
         yield test_client
 
 
@@ -367,7 +370,7 @@ def _wait(client: TestClient, character_id: int, base_id: int) -> dict:
         if entry["job"] and entry["job"]["status"] != "running":
             return entry
         time.sleep(0.01)
-    raise AssertionError("仕事が終わらない")
+    raise AssertionError(f"仕事が終わらない: {entry}")
 
 
 def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -413,7 +416,7 @@ def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: P
     assert client.post(f"{url}/pose", json={"pose": "stand"}).status_code == 422
     (out / "model.blend").write_bytes(b"blend")
 
-    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str) -> list[Path]:
+    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None) -> list[Path]:  # noqa: ANN001
         client.calls.append(("pose", pose, cameras, style))  # type: ignore[attr-defined]
         (folder_ / "poses").mkdir(exist_ok=True)
         for camera in cameras:
@@ -482,3 +485,94 @@ def test_model_3d_needs_blender(client: TestClient, tmp_path: Path, monkeypatch:
     res = client.post(url, json={"base_id": base["id"]})
     assert res.status_code == 422 and "Blender" in res.text
     assert client.calls == []  # type: ignore[attr-defined]
+
+
+def test_shape_presets_follow_tags_and_age_rules() -> None:
+    from python import body_shapes
+
+    chosen = body_shapes.choose("1girl, 1.2::large nipples::, Plump_Areola, huge breasts", nude=True, modest=False)
+    assert chosen == {
+        "repair": "repair", "nipple": "nipple_large", "areola": "areola_plump", "breast": "breast_larger",
+        "navel": "navel_normal", "belly": "belly_flat",
+    }
+    # 乳首・乳輪は裸の素体のモデルだけ。胸の大きさは、控えめに描くキャラには当てない
+    suit = body_shapes.choose("large nipples, huge breasts", nude=False, modest=False)
+    assert "nipple" not in suit and "areola" not in suit and suit["breast"] == "breast_larger"
+    modest = body_shapes.choose("huge breasts", nude=False, modest=True)
+    assert set(modest) == {"repair", "navel", "belly"}
+    assert set(body_shapes.to_json(nude=False, modest=True)["parts"]) == {"repair", "navel", "belly"}
+    assert "nipple" in body_shapes.labels(nude=True, modest=False)
+
+
+def test_rig_sends_shapes_and_keeps_the_made_weights(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import body_shapes
+
+    (tmp_path / "model_clean.glb").write_bytes(b"glTF")
+    Image.new("RGBA", (360, 600)).save(tmp_path / "front.png")
+    model_3d.write_meta(tmp_path, {"clean": {"height": 1.6}})
+    points = {n: np.array([180.0, 300.0]) for n in model_3d._RIG_POINTS}
+    monkeypatch.setattr(body_rig, "detect", lambda _image: (None, points))
+    sent: dict = {}
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        sent.update(json.loads(Path(command[-3]).read_text(encoding="utf-8")))
+        (tmp_path / "model_rigged.glb").write_bytes(b"glTF")
+        (tmp_path / "frames").mkdir(exist_ok=True)
+        Image.new("RGBA", (20, 30)).save(tmp_path / "frames" / "001.png")
+        report = {"shapes": {"keys": {"repair": {}, "navel_normal": {}}, "anchors": {}}}
+        (tmp_path / "rig.json").write_text(json.dumps(report), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    shapes = body_shapes.to_json(nude=False, modest=True)
+    model_3d.rig("blender", tmp_path, shapes=shapes, shape_weights={"repair": 1.0, "navel_normal": 1.0, "belly_flat": 1.0})
+    assert sent["shapes"] == shapes and sent["shape_weights"]["belly_flat"] == 1.0
+    # 作れなかった形(お腹の点が見つからなかったなど)の強さは残さない
+    assert model_3d.read_meta(tmp_path)["shapes"] == {"weights": {"repair": 1.0, "navel_normal": 1.0}}
+
+
+def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    adult = _character(client, "rumi", is_adult=1, age=28, appearance_tags="1girl, puffy nipples")
+    nude = _base(client, "裸", kind="nude")
+    suit = _base(client, "スーツ")
+    for base in (nude, suit):
+        folder = "body_base_r18" if base["kind"] == "nude" else "body_base"
+        _draw(tmp_path / f"outputs/training_data/rumi/{folder}", base["id"], ("front",))
+    url = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    assert client.post(url, json={"base_id": nude["id"]}).status_code == 200
+    _wait(client, adult["id"], nude["id"])
+    shapes, weights = client.rig_shapes[-1]  # type: ignore[attr-defined]
+    assert "nipple_puffy" in shapes["presets"] and weights["nipple_puffy"] == 1.0
+
+    out = tmp_path / f"outputs/training_data/rumi/model_3d_r18/{nude['id']}"
+    (out / "model.blend").write_bytes(b"blend")
+    res = client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {"repair": 1, "nipple_large": 0.7}})
+    entry = next(b for b in res.json()["bases"] if b["base_id"] == nude["id"])
+    assert entry["shapes"]["weights"] == {"repair": 1.0, "nipple_large": 0.7}
+    assert "nipple" in entry["shapes"]["options"]
+    assert client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {"repair": 3}}).status_code == 422
+
+    # 全年齢の素体のモデルには、乳首の形は当てられない
+    assert client.post(url, json={"base_id": suit["id"]}).status_code == 200
+    _wait(client, adult["id"], suit["id"])
+    suit_out = tmp_path / f"outputs/training_data/rumi/model_3d/{suit['id']}"
+    (suit_out / "model.blend").write_bytes(b"blend")
+    res = client.put(f"{url}/shapes", json={"base_id": suit["id"], "weights": {"nipple_large": 1}})
+    assert res.status_code == 422 and "nipple_large" in res.text
+    suit_entry = next(b for b in client.get(url).json()["bases"] if b["base_id"] == suit["id"])
+    assert "nipple" not in suit_entry["shapes"]["options"]
+
+    # ポーズの絵: 場面ごとの強さを渡す(省くと保存した強さ)
+    rendered: list[dict | None] = []
+
+    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None) -> list[Path]:  # noqa: ANN001
+        rendered.append(shape_weights)
+        return []
+
+    monkeypatch.setattr(model_3d, "render_pose", fake_render)
+    client.post(f"{url}/pose", json={"base_id": nude["id"], "pose": "stand", "shapes": {"nipple_inverted": 1}})
+    _wait(client, adult["id"], nude["id"])
+    client.post(f"{url}/pose", json={"base_id": nude["id"], "pose": "stand"})
+    _wait(client, adult["id"], nude["id"])
+    assert rendered == [{"nipple_inverted": 1.0}, None]
+    assert client.post(f"{url}/pose", json={"base_id": suit["id"], "pose": "stand", "shapes": {"nipple_large": 1}}).status_code == 422

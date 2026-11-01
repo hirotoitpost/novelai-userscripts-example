@@ -464,6 +464,16 @@ class Model3DPoseRequest(BaseModel):
     pose: str = Field(description="ポーズ(body_poses.POSES)")
     cameras: list[str] = Field(default_factory=lambda: ["front", "three_quarter", "side"], min_length=1, max_length=6)
     style: str = Field("shade", description="shade(灰色の陰影)か line(線画風)")
+    shapes: dict[str, float] | None = Field(
+        None, description="形状パーツの強さ(形の名前 → 0〜2)。省くと保存した強さ。場面ごとに変えるとき")
+
+
+class Model3DShapesRequest(BaseModel):
+    """素体の 3D モデルの形状パーツの強さを保存する(body_shapes.py。ポーズの絵・画面の 3D に使う)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
+    weights: dict[str, float] = Field(description="形の名前 → 強さ(0〜2)。書いていない形は 0")
 
 
 class HairPointPrompt(BaseModel):

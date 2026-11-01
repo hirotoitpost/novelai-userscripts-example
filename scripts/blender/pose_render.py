@@ -66,6 +66,13 @@ def apply_pose(arm: bpy.types.Object, pose: dict) -> None:
                 pb = arm.pose.bones.get(f"{finger}.{i:02d}.{side}")
                 if pb is not None:
                     pb.rotation_quaternion = Quaternion(Vector((1, 0, 0)), math.radians(deg))
+    # 形状パーツ(シェイプキー)の強さ。書いていないキーは 0
+    weights = pose.get("shapes") or {}
+    for obj in bpy.data.objects:
+        keys = obj.data.shape_keys if obj.type == "MESH" else None
+        if keys is not None:
+            for block in keys.key_blocks[1:]:
+                block.value = float(weights.get(block.name, 0.0))
     bpy.context.view_layer.update()
 
 

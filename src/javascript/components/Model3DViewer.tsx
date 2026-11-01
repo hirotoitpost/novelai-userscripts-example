@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 /**
  * 素体の 3D モデル(GLB)を見る。ドラッグで回す・ホイールで寄る。GLB に入った動き(骨のアニメーション)を選んで再生する。
+ * 形状パーツ(GLB のモーフ = Blender のシェイプキー)には shapes の強さを当てる(書いていない形は 0)。
  * three.js は大きいので、Model3D から必要になったときだけ読み込む(React.lazy)。
  */
 
@@ -14,11 +15,14 @@ interface Props {
   animation: string | null
   /** 読み込んだ GLB に入っていた動きの名前 */
   onAnimations?: (names: string[]) => void
+  /** 形状パーツの強さ(形の名前 → 0〜2) */
+  shapes?: Record<string, number>
 }
 
-export default function Model3DViewer({ src, animation, onAnimations }: Props) {
+export default function Model3DViewer({ src, animation, onAnimations, shapes }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const mixerRef = useRef<THREE.AnimationMixer | null>(null)
+  const morphRef = useRef<THREE.Mesh[]>([])
   const clipsRef = useRef<THREE.AnimationClip[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -70,6 +74,12 @@ export default function Model3DViewer({ src, animation, onAnimations }: Props) {
             mesh.frustumCulled = false
           }
         })
+        const morphs: THREE.Mesh[] = []
+        model.traverse(obj => {
+          const mesh = obj as THREE.Mesh
+          if (mesh.isMesh && mesh.morphTargetDictionary) morphs.push(mesh)
+        })
+        morphRef.current = morphs
         scene.add(model)
         // 足の裏から頭の上までが入るよう、カメラを置く
         const box = new THREE.Box3().setFromObject(model)
@@ -107,6 +117,16 @@ export default function Model3DViewer({ src, animation, onAnimations }: Props) {
     const clip = clipsRef.current.find(c => c.name === animation)
     if (clip) mixer.clipAction(clip).reset().play()
   }, [animation, loading])
+
+  useEffect(() => {
+    if (!shapes) return
+    for (const mesh of morphRef.current) {
+      const names = mesh.morphTargetDictionary ?? {}
+      const influences = mesh.morphTargetInfluences
+      if (!influences) continue
+      for (const [name, index] of Object.entries(names)) influences[index] = shapes[name] ?? 0
+    }
+  }, [shapes, loading])
 
   return (
     <div className="m3d-viewer">
