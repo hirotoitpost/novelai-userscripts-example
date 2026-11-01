@@ -143,6 +143,17 @@ SETTINGS: tuple[Setting, ...] = (
         "plain navy tankini, swim shorts, matte fabric, barefoot",
     ),
     Setting(
+        "model_3d.check_attempts",
+        "素体の3Dモデル",
+        "自動チェックで作る回数",
+        "素体の 3D の形を作るとき、正面・横・後ろの影絵が素体の絵と合わなければ、シードを変えて作り直す。最初の1回も含めた"
+        "最大の回数(1 なら作り直さない)。1回に Colab の GPU で 3 分ほどかかる。",
+        "int",
+        2,
+        1,
+        4,
+    ),
+    Setting(
         "blender.path",
         "素体の2Dモデル(Blender)",
         "Blender の実行ファイル",

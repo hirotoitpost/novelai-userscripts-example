@@ -1895,9 +1895,10 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
         def status(remote: str, _seconds: int) -> None:
             job["remote"] = remote
 
-        model_3d.generate(folder, base["id"], out, seed=req.seed, on_status=status)
-        job["remote"] = "cleaning"
-        model_3d.clean(blender, out, model_3d.height_of(base))
+        model_3d.make(
+            folder, base["id"], out, blender=blender, height=model_3d.height_of(base), seed=req.seed,
+            attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status,
+        )
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1905,7 +1906,7 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
 
 @router.post("/character/{character_id}/model-3d/clean")
 async def clean_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]:
-    """作った形(model.glb)を、Blender で整え直す(GPU は使わない)。後処理を変えたあと、作り直さずに試す用。"""
+    """作った形(model.glb)を、Blender で整え直し、影絵を比べ直す(GPU は使わない)。後処理を変えたあと、作り直さずに試す用。"""
     character = _load_character(character_id)
     base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
     base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
@@ -1916,9 +1917,11 @@ async def clean_model_3d(character_id: int, req: Model3DRequest) -> dict[str, An
         raise HTTPException(status_code=422, detail="この素体の 3D の形をまだ作っていません。")
     blender = _model_3d_blender()
 
+    folder = _body_dir(character, base, req.root_name)
+
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "cleaning"
-        model_3d.clean(blender, out, model_3d.height_of(base))
+        model_3d.clean_and_check(blender, folder, base["id"], out, model_3d.height_of(base))
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
