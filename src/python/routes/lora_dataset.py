@@ -24,7 +24,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
-from .. import body_motions, model3d_remote, model_3d, see_through_remote, wardrobe
+from .. import body_motions, body_poses, model3d_remote, model_3d, see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -101,6 +101,7 @@ from ..lora_dataset import (
 from ..models import (
     BodyHairUnderRequest,
     BodyLayersRequest,
+    Model3DPoseRequest,
     Model3DRequest,
     BodyOutfitRequest,
     BodyRigRequest,
@@ -1842,13 +1843,18 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 name: {"label": label, "updated": (folder / name).stat().st_mtime}
                 for name, label in model_3d.FILES.items() if (folder / name).is_file()
             },
+            # ポーズの参考の絵(新しい順)
+            "poses": model_3d.pose_images(folder),
             "meta": model_3d.read_meta(folder) or None,
             "job": None if job is None else {
                 "status": job["status"], "remote": job.get("remote"), "error": job.get("error"),
                 "seconds": round((job.get("finished") or time.time()) - job["started"]),
             },
         })
-    return {"configured": model3d_remote.configured(), "bases": entries, "motions": body_motions.labels()}
+    return {
+        "configured": model3d_remote.configured(), "bases": entries, "motions": body_motions.labels(),
+        "pose_options": body_poses.labels(),
+    }
 
 
 @router.get("/character/{character_id}/model-3d")
@@ -1956,6 +1962,35 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
     return _model_3d_entries(character, req.root_name)
 
 
+@router.post("/character/{character_id}/model-3d/pose")
+async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str, Any]:
+    """骨を入れた形にポーズを当て、カメラの向きごとに漫画のコマの参考の絵を描き出す(GPU は使わない)。"""
+    if req.pose not in body_poses.POSES:
+        raise HTTPException(status_code=422, detail=f"ポーズの種類が違います: {req.pose}")
+    unknown = [c for c in req.cameras if c not in body_poses.CAMERAS]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"カメラの向きが違います: {', '.join(unknown)}")
+    if req.style not in body_poses.STYLES:
+        raise HTTPException(status_code=422, detail=f"絵の種類が違います: {req.style}")
+    character = _load_character(character_id)
+    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
+    base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    out = _model_3d_dir(character, base, req.root_name)
+    if not (out / "model.blend").is_file():
+        raise HTTPException(status_code=422, detail="この素体の 3D の形に、まだ骨を入れていません。")
+    blender = _model_3d_blender()
+    cameras = list(dict.fromkeys(req.cameras))
+
+    def work(job: dict[str, Any]) -> None:
+        job["remote"] = "posing"
+        model_3d.render_pose(blender, out, req.pose, cameras, req.style)
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
 def _model_3d_blender() -> str:
     blender = body_rig.find_blender(str(app_settings.get("blender.path") or ""))
     if blender is None:
@@ -1981,7 +2016,7 @@ def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN
             job["status"] = "done"
         except (
             model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError,
-            model_3d.Model3DRigError, body_rig.RigError,
+            model_3d.Model3DRigError, model_3d.Model3DPoseError, body_rig.RigError,
             subprocess.TimeoutExpired, OSError,
         ) as exc:
             job["status"] = "error"
@@ -1994,14 +2029,15 @@ def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN
 
 @router.get("/character/{character_id}/model-3d/file")
 async def get_model_3d_file(character_id: int, base_id: int, name: str, root_name: str = "training_data") -> FileResponse:
-    """3D の形のファイル(model_3d.FILES の名前だけ)。GLB は保存用の名前を付けて返す。"""
-    if name not in model_3d.FILES:
-        raise HTTPException(status_code=404, detail="not found")
+    """3D の形のファイル(model_3d.FILES の名前と、ポーズの絵 poses/<ポーズ>_<カメラ>_<種類>.png だけ)。GLB は保存用の名前を付けて返す。"""
     character = _load_character(character_id)
     base = next((b for b in _model_3d_bases(character, root_name) if b["id"] == base_id), None)
     if base is None:
         raise HTTPException(status_code=404, detail="not found")
-    path = _model_3d_dir(character, base, root_name) / name
+    folder = _model_3d_dir(character, base, root_name)
+    if name not in model_3d.FILES and name not in {item["name"] for item in model_3d.pose_images(folder)}:
+        raise HTTPException(status_code=404, detail="not found")
+    path = folder / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
     download = f"{_safe_name(character['name'])}_{base['id']}_{name}" if path.suffix == ".glb" else None
