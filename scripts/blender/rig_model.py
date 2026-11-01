@@ -402,6 +402,39 @@ def render_motion(arm: bpy.types.Object, action: bpy.types.Action, frames: int, 
 # ---- 形状パーツ(シェイプキー。body_shapes.py) ----
 
 
+def unfold(obj: bpy.types.Object, co, delta, edges, rounds: int = 10) -> tuple:
+    """
+    シェイプキーの動き delta で裏返る(折れる)面があれば、その頂点を、となりの頂点の真ん中へ寄せて戻す(元の形で
+    もともと裏返っている面はそのまま)。細かくした所のふちの細い面は、少し動かすだけで折れて小さな穴に見えた(矢野栄子の
+    左胸の下、2026-11)。戻した頂点の数も返す。
+    """
+    import numpy as np
+
+    mesh = obj.data
+    tris = np.array([p.vertices[:3] for p in mesh.polygons])
+
+    def face_normals(points):
+        a, b, c = (points[tris[:, k]] for k in range(3))
+        return np.cross(b - a, c - a)
+
+    before = face_normals(co)
+    target = co + delta
+    degree = np.bincount(edges.ravel(), minlength=len(co)).astype(float)[:, None]
+    degree[degree == 0] = 1
+    fixed: set[int] = set()
+    for _ in range(rounds):
+        folded = (face_normals(target) * before).sum(axis=1) < 0
+        if not folded.any():
+            break
+        verts = np.unique(tris[folded].ravel())
+        fixed.update(int(v) for v in verts)
+        total = np.zeros_like(target)
+        np.add.at(total, edges[:, 0], target[edges[:, 1]])
+        np.add.at(total, edges[:, 1], target[edges[:, 0]])
+        target[verts] = (total / degree)[verts]
+    return target - co, len(fixed)
+
+
 def mesh_arrays(obj: bpy.types.Object) -> tuple:
     """頂点の位置・法線(n, 3)と、辺(m, 2)。"""
     import numpy as np
@@ -551,30 +584,47 @@ def repair_delta(co, normals, edges, j: dict[str, Vector], params: dict, keep_ou
 CREASE_REACH = 0.012
 CREASE_DEPTH = 0.0001
 CREASE_PASSES = 3
+# 胸の下のほうの小さなくぼみを見つける: 半径 DIMPLE_REACH m の 2 次の面より DIMPLE_DEPTH m 以上へこんだ所。胸の幅の半分の
+# DIMPLE_EXTENT 倍まで(しわより広く、胸の下のふちの近くまで)。下を向いた面(胸の下のすじ)は形のうちなので除く
+DIMPLE_REACH = 0.025
+DIMPLE_DEPTH = 0.0002
+DIMPLE_EXTENT = 1.3
+DIMPLE_DOWN = -0.85
+# くぼみを置き換える半径(m)と、片方の胸で直すくぼみの数
+DIMPLE_RADIUS = 0.012
+DIMPLE_COUNT = 3
 
 
-def crease_delta(co, normals, anchor: dict) -> tuple:
+def crease_delta(co, normals, anchor: dict, *, reach_m: float = CREASE_REACH, depth: float = CREASE_DEPTH,
+                 extent: float = 1.0, dents_only: bool = False) -> tuple:
     """
     胸(anchor のまわり、胸の幅の半分まで)の面の細いしわ・小さなくぼみをならす動き。AI の形は、胸の先のまわりに
     浅いすじを作った(矢野栄子の乳首なしの写しから作った形、2026-11)。頂点ごとに、まわりの点に 2 次の面を当てはめて
     その面へ寄せる(胸の丸みは 2 次の面に入るので、胸の先は平たくならない)。となりの頂点ではなく距離で決めるので、面を
-    細かくした所でも同じに効く。動かした頂点の数も返す。
+    細かくした所でも同じに効く。動かした頂点の数も返す。dents_only なら、へこんだ所だけを持ち上げる(広い reach_m で
+    胸の下のほうの小さなくぼみを埋めるとき。矢野栄子の左胸の下、深さ 1.2mm・幅 1.5cm ほど、2026-11)。
     """
     import numpy as np
     from mathutils.kdtree import KDTree
 
     reach = np.linalg.norm(co - anchor["center"], axis=1)
-    inside = np.nonzero(reach < anchor["size"])[0]
+    size = anchor["size"] * extent
+    inside = np.nonzero(reach < size)[0]
+    if dents_only:
+        # 胸の真ん中より下で、胸の谷間(体の真ん中から、胸の真ん中までの半分より内)は除く(谷間は形のうち)
+        center = anchor["center"]
+        inside = inside[(normals[inside, 2] > DIMPLE_DOWN) & (co[inside, 2] < center[2])
+                        & (np.abs(co[inside, 0]) > 0.5 * abs(center[0]))]
     delta = np.zeros_like(co)
     if not len(inside):
         return delta, 0
-    near = np.nonzero(reach < anchor["size"] + CREASE_REACH)[0]
+    near = np.nonzero(reach < size + reach_m)[0]
     tree = KDTree(len(near))
     for k, i in enumerate(near):
         tree.insert(co[i], k)
     tree.balance()
     for i in inside:
-        found = tree.find_range(co[i], CREASE_REACH)
+        found = tree.find_range(co[i], reach_m)
         if len(found) < 12:
             continue
         n = normals[i] / (np.linalg.norm(normals[i]) + 1e-9)
@@ -583,12 +633,12 @@ def crease_delta(co, normals, anchor: dict) -> tuple:
         t2 = np.cross(n, t1)
         rel = np.array([co[near[k]] for _, k, _ in found]) - co[i]
         u, v, h = rel @ t1, rel @ t2, rel @ n
-        w = np.sqrt(np.exp(-((np.linalg.norm(rel, axis=1) / (0.5 * CREASE_REACH)) ** 2)))
+        w = np.sqrt(np.exp(-((np.linalg.norm(rel, axis=1) / (0.5 * reach_m)) ** 2)))
         a = np.stack([np.ones_like(u), u, v, u * u, u * v, v * v], axis=1)
         fit = np.linalg.lstsq(a * w[:, None], h * w, rcond=None)[0]
-        if abs(fit[0]) > CREASE_DEPTH:
+        if fit[0] > depth if dents_only else abs(fit[0]) > depth:
             # 胸のふちへ向けて弱める(段がつかないように)
-            fade = 1.0 - (reach[i] / anchor["size"]) ** 2
+            fade = 1.0 - (reach[i] / size) ** (4 if dents_only else 2)
             delta[i] = fit[0] * fade * n
     return delta, int((np.linalg.norm(delta, axis=1) > 1e-6).sum())
 
@@ -793,10 +843,22 @@ def add_shape_keys(obj: bpy.types.Object, j: dict[str, Vector], shapes: dict, we
                     fill = np.zeros_like(co)
                     for _ in range(CREASE_PASSES):
                         fill += crease_delta(co + fill, normals, anchors[f"breast.{side}"])[0]
+                    # 胸の下のほうの小さなくぼみ: いちばん深い所から順に、まわりから当てはめたなめらかな面に置き換える
+                    # (へこんだ頂点だけを持ち上げると、細かくした所のふちの細い面が折れて小さな穴に見えた)
+                    for _ in range(DIMPLE_COUNT):
+                        lift = crease_delta(co + fill, normals, anchors[f"breast.{side}"], reach_m=DIMPLE_REACH,
+                                            depth=DIMPLE_DEPTH, extent=DIMPLE_EXTENT, dents_only=True)[0]
+                        amount = np.linalg.norm(lift, axis=1)
+                        if amount.max() < DIMPLE_DEPTH:
+                            break
+                        deepest = int(np.argmax(amount))
+                        spot = {"center": (co + fill)[deepest], "normal": normals[deepest], "size": DIMPLE_RADIUS / CAP_RADIUS}
+                        fill += cap_delta(co + fill, normals, edges, spot)[0]
                     fill[np.linalg.norm(delta, axis=1) > 0] = 0  # へこみ補正で直した所は重ねない
                     delta += fill
                     creases += int((np.linalg.norm(fill, axis=1) > 1e-6).sum())
-            made[key] = {"fixed": fixed, "creases": creases}
+            delta, unfolded = unfold(obj, co, delta, edges)
+            made[key] = {"fixed": fixed, "creases": creases, "unfolded": unfolded}
         elif preset["op"] == "part":
             if "socket_depth" not in preset or not found:
                 continue
