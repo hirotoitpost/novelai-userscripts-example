@@ -850,3 +850,63 @@ def test_rig_sends_the_saved_smooth_spots(tmp_path: Path, monkeypatch: pytest.Mo
     assert sent[0]["smooth"] == spots and "smooth" not in sent[1]
     # 保存したならす所は、骨を入れ直しても残す
     assert model_3d.read_meta(tmp_path)["shapes"]["smooth"] == spots
+
+
+def test_import_blend_records_the_edits_and_reports_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(model_3d.Model3DImportError, match="比べる元"):
+        model_3d.import_blend("blender", tmp_path)
+    (tmp_path / "model.blend").write_bytes(b"blend")
+    (tmp_path / "rig_ref.npz").write_bytes(b"ref")
+    model_3d.write_meta(tmp_path, {"seed": 1})
+    commands: list[list[str]] = []
+    report: dict = {"sculpt": 21, "keys": {"breast_larger": 300}, "added": ["my_key"]}
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        commands.append(command)
+        (tmp_path / "import.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    assert model_3d.import_blend("blender", tmp_path) == report
+    # 直したファイルを開いて、取り込みのスクリプトを動かす。結果は meta.json に残し、結果のファイルは消す
+    assert commands[0][3] == str(tmp_path / "model.blend") and commands[0][-1] == str(tmp_path)
+    assert model_3d.read_meta(tmp_path)["blender_import"]["sculpt"] == 21 and not (tmp_path / "import.json").exists()
+    # 取り込めない理由(頂点の数が変わったなど)は、そのまま伝える
+    report = {"error": "頂点の数が変わっています"}
+    with pytest.raises(model_3d.Model3DImportError, match="頂点の数"):
+        model_3d.import_blend("blender", tmp_path)
+
+
+def test_blender_round_trip_routes(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    adult = _character(client, "rumi", is_adult=1, age=28)
+    nude = _base(client, "裸", kind="nude")
+    _draw(tmp_path / "outputs/training_data/rumi/body_base_r18", nude["id"], ("front",))
+    url = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    client.post(url, json={"base_id": nude["id"]})
+    _wait(client, adult["id"], nude["id"])
+    out = tmp_path / f"outputs/training_data/rumi/model_3d_r18/{nude['id']}"
+    # 骨を入れる前(model.blend が無い)は、開けない・取り込めない
+    assert client.post(f"{url}/open-blender", json={"base_id": nude["id"]}).status_code == 422
+    assert client.post(f"{url}/import-blend", json={"base_id": nude["id"]}).status_code == 422
+    (out / "model.blend").write_bytes(b"blend")
+    opened: list[Path] = []
+    monkeypatch.setattr(model_3d, "open_blender", lambda blender, folder: opened.append(folder))
+    assert client.post(f"{url}/open-blender", json={"base_id": nude["id"]}).status_code == 200 and opened == [out]
+
+    imported: list[Path] = []
+    monkeypatch.setattr(model_3d, "import_blend", lambda blender, folder: imported.append(folder) or {"sculpt": 3, "keys": {}, "added": []})
+    rigs = len(client.calls)  # type: ignore[attr-defined]
+    assert client.post(f"{url}/import-blend", json={"base_id": nude["id"]}).status_code == 200
+    entry = _wait(client, adult["id"], nude["id"])
+    # 取り込んだら、骨を入れ直して形に入れる
+    assert imported == [out] and entry["job"]["status"] == "done"
+    assert client.calls[rigs:] == [("rig", out, "wave")]  # type: ignore[attr-defined]
+
+    # 取り込めなければ、その理由を仕事の失敗として出す
+    def fail(blender: str, folder: Path) -> dict:
+        raise model_3d.Model3DImportError("頂点の数が変わっています")
+
+    monkeypatch.setattr(model_3d, "import_blend", fail)
+    client.post(f"{url}/import-blend", json={"base_id": nude["id"]})
+    entry = _wait(client, adult["id"], nude["id"])
+    assert entry["job"]["status"] == "error" and "頂点の数" in entry["job"]["error"]
