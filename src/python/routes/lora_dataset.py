@@ -66,6 +66,9 @@ from ..db import (
     reorder_body_base_options,
     update_body_base_option,
     delete_body_base,
+    delete_body_shape_preset,
+    list_body_shape_presets,
+    save_body_shape_preset,
     get_body_base,
     list_body_bases,
     save_body_base,
@@ -103,6 +106,7 @@ from ..models import (
     BodyLayersRequest,
     Model3DPoseRequest,
     Model3DShapesRequest,
+    BodyShapePresetRequest,
     Model3DRequest,
     BodyOutfitRequest,
     BodyRigRequest,
@@ -1829,9 +1833,17 @@ def _model_3d_bases(character: dict, root_name: str) -> list[dict]:
     return result
 
 
-def _shape_flags(character: dict, base: dict) -> dict[str, bool]:
-    """形状パーツを当てられる範囲(nude: 裸の素体のモデル。modest: 未成年の手がかりがあるキャラ)。"""
-    return {"nude": base["kind"] == "nude" and not _age_checks(character)[0], "modest": _age_checks(character)[1]}
+def _shape_flags(character: dict, base: dict) -> dict[str, Any]:
+    """
+    形状パーツを当てられる範囲(nude: 裸の素体のモデル。modest: 未成年の手がかりがあるキャラ)と、自分で値を変えた形
+    (custom。DB の共有の一覧)。body_shapes の関数にそのまま渡す。
+    """
+    conn = get_connection()
+    try:
+        custom = list_body_shape_presets(conn)
+    finally:
+        conn.close()
+    return {"nude": base["kind"] == "nude" and not _age_checks(character)[0], "modest": _age_checks(character)[1], "custom": custom}
 
 
 def _shape_settings(character: dict, base: dict, out: Path) -> tuple[dict, dict[str, float]]:
@@ -1873,6 +1885,8 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
             "shapes": {
                 "options": body_shapes.labels(**_shape_flags(character, base)),
                 "weights": model_3d.read_meta(folder).get("shapes", {}).get("weights", {}),
+                # 場面ごとの組み合わせ(名前 → 強さ)
+                "sets": model_3d.read_meta(folder).get("shapes", {}).get("sets", {}),
             },
             "meta": model_3d.read_meta(folder) or None,
             "job": None if job is None else {
@@ -2024,6 +2038,11 @@ async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str,
     blender = _model_3d_blender()
     cameras = list(dict.fromkeys(req.cameras))
     shapes = _check_shape_weights(character, base, req.shapes) if req.shapes is not None else None
+    if req.shape_set:
+        sets = model_3d.read_meta(_model_3d_dir(character, base, req.root_name)).get("shapes", {}).get("sets", {})
+        if req.shape_set not in sets:
+            raise HTTPException(status_code=422, detail=f"形の組み合わせがありません: {req.shape_set}")
+        shapes = _check_shape_weights(character, base, sets[req.shape_set])
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "posing"
@@ -2060,9 +2079,78 @@ async def save_model_3d_shapes(character_id: int, req: Model3DShapesRequest) -> 
         raise HTTPException(status_code=422, detail="この素体の 3D の形に、まだ骨を入れていません。")
     weights = _check_shape_weights(character, base, req.weights)
     meta = model_3d.read_meta(out)
-    meta["shapes"] = {"weights": weights}
+    shapes = meta.get("shapes", {})
+    if req.set_name and req.set_name.strip():
+        shapes.setdefault("sets", {})[req.set_name.strip()] = weights
+    else:
+        shapes["weights"] = weights
+    meta["shapes"] = shapes
     model_3d.write_meta(out, meta)
     return _model_3d_entries(character, req.root_name)
+
+
+@router.delete("/character/{character_id}/model-3d/shapes/sets/{set_name}")
+async def delete_model_3d_shape_set(character_id: int, set_name: str, base_id: int, root_name: str = "training_data") -> dict[str, Any]:
+    """場面ごとの形の組み合わせを消す。"""
+    character = _load_character(character_id)
+    base = next((b for b in _model_3d_bases(character, root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    out = _model_3d_dir(character, base, root_name)
+    meta = model_3d.read_meta(out)
+    if meta.get("shapes", {}).get("sets", {}).pop(set_name, None) is None:
+        raise HTTPException(status_code=404, detail="その組み合わせはありません。")
+    model_3d.write_meta(out, meta)
+    return _model_3d_entries(character, root_name)
+
+
+@router.get("/body-shape-presets")
+async def get_body_shape_presets() -> dict[str, Any]:
+    """形状パーツの形の一覧(組み込みと自分で値を変えた形)・値の範囲・部位ごとの変形のしかた。"""
+    conn = get_connection()
+    try:
+        return body_shapes.catalog(list_body_shape_presets(conn))
+    finally:
+        conn.close()
+
+
+def _save_shape_preset(req: BodyShapePresetRequest, preset_id: int | None) -> dict[str, Any]:
+    try:
+        params = body_shapes.clean_params(req.part, req.params)
+    except body_shapes.ShapeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    conn = get_connection()
+    try:
+        saved = save_body_shape_preset(conn, req.part, req.label.strip(), params, req.tags.strip(), preset_id)
+        if saved is None:
+            raise HTTPException(status_code=404, detail="その形はありません。")
+        return {"key": f"{body_shapes.CUSTOM_PREFIX}{saved['id']}", **body_shapes.catalog(list_body_shape_presets(conn))}
+    finally:
+        conn.close()
+
+
+@router.post("/body-shape-presets")
+async def add_body_shape_preset(req: BodyShapePresetRequest) -> dict[str, Any]:
+    """自分で値を変えた形を足す(どのモデルにも当てられる。モデルに入れるには、骨を入れ直す)。"""
+    return _save_shape_preset(req, None)
+
+
+@router.put("/body-shape-presets/{preset_id}")
+async def update_body_shape_preset(preset_id: int, req: BodyShapePresetRequest) -> dict[str, Any]:
+    """自分で値を変えた形を直す(使っているモデルは、骨を入れ直すと新しい値になる)。"""
+    return _save_shape_preset(req, preset_id)
+
+
+@router.delete("/body-shape-presets/{preset_id}")
+async def remove_body_shape_preset(preset_id: int) -> dict[str, Any]:
+    """自分で値を変えた形を消す(使っていたモデルは、骨を入れ直すと、その形が外れる)。"""
+    conn = get_connection()
+    try:
+        if not delete_body_shape_preset(conn, preset_id):
+            raise HTTPException(status_code=404, detail="その形はありません。")
+        return body_shapes.catalog(list_body_shape_presets(conn))
+    finally:
+        conn.close()
 
 
 def _model_3d_blender() -> str:

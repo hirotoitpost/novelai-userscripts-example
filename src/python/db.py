@@ -837,6 +837,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (field, value, label, tags, rear_tags, order, now),
                 )
+    # 素体の 3D モデルの、自分で値を変えた形状パーツの形(body_shapes.py)。キャラに依らず、どのモデルにも当てる。
+    # params は形の値(JSON。op と radius・height など)、tags はその形を表すタグ(カンマ区切り)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS body_shape_presets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            part TEXT NOT NULL,
+            label TEXT NOT NULL,
+            params TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     # 衣装(wardrobe.py): 部品(部位ごとの服の種類・色・柄)と、キャラごとの衣装。部品は衣装の設定のページで編集する。
     # 初めて表を作るときだけ、はじめの部品を入れる(消したものが、起動のたびに戻らないように)
     first_wardrobe = (
@@ -3560,6 +3574,49 @@ def reorder_wardrobe_parts(conn: sqlite3.Connection, slot: str, ids: list[int]) 
     for order, part_id in enumerate(ids):
         conn.execute("UPDATE wardrobe_parts SET sort_order = ? WHERE id = ? AND slot = ?", (order, part_id, slot))
     conn.commit()
+
+
+def _shape_preset_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["params"] = json.loads(item["params"])
+    return item
+
+
+def list_body_shape_presets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """自分で値を変えた形状パーツの形(部位ごと、作った順)。"""
+    return [_shape_preset_row(r) for r in conn.execute("SELECT * FROM body_shape_presets ORDER BY part, id")]
+
+
+def get_body_shape_preset(conn: sqlite3.Connection, preset_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM body_shape_presets WHERE id = ?", (preset_id,)).fetchone()
+    return _shape_preset_row(row) if row else None
+
+
+def save_body_shape_preset(
+    conn: sqlite3.Connection, part: str, label: str, params: dict[str, Any], tags: str, preset_id: int | None = None,
+) -> dict[str, Any] | None:
+    """形を足す(preset_id が無ければ)か、直す。直す形が無ければ None。"""
+    if preset_id is None:
+        cur = conn.execute(
+            "INSERT INTO body_shape_presets (part, label, params, tags, created_at) VALUES (?, ?, ?, ?, ?)",
+            (part, label, json.dumps(params), tags, datetime.now(timezone.utc).isoformat()),
+        )
+        preset_id = cur.lastrowid
+    else:
+        cur = conn.execute(
+            "UPDATE body_shape_presets SET part = ?, label = ?, params = ?, tags = ? WHERE id = ?",
+            (part, label, json.dumps(params), tags, preset_id),
+        )
+        if cur.rowcount == 0:
+            return None
+    conn.commit()
+    return get_body_shape_preset(conn, preset_id)
+
+
+def delete_body_shape_preset(conn: sqlite3.Connection, preset_id: int) -> bool:
+    cur = conn.execute("DELETE FROM body_shape_presets WHERE id = ?", (preset_id,))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def outfits_using_part(conn: sqlite3.Connection, slot: str, value: str) -> list[str]:

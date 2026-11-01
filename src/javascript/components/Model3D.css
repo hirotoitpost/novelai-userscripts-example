@@ -20,3 +20,13 @@
 .m3d-pose-grid figcaption a { color: #9ab4ff; }
 .m3d-pose-thumb { padding: 0; border: 0; background: none; cursor: zoom-in; }
 .m3d-pose-thumb img { width: 100%; border-radius: 6px; background: #fff; display: block; }
+
+/* 形状パーツ(ShapeParts.tsx) */
+.m3d-shapes { display: flex; flex-direction: column; gap: 0.35rem; }
+.m3d-shape-row { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
+.m3d-shape-label { min-width: 7.5rem; font-size: 0.82rem; }
+.m3d-shape-strength input { width: 8rem; }
+.m3d-shape-editor { flex: 1 1 100%; display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem; border-radius: 8px; background: rgba(120, 120, 200, 0.08); }
+.m3d-shape-editor input[type="range"] { width: min(100%, 22rem); }
+.m3d-shape-set { display: inline-flex; gap: 0.15rem; }
+.m3d-set-name { width: 12rem; }
