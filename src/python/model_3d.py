@@ -40,7 +40,11 @@ FILES = {
     "motion.gif": "動きの確かめ",
     "shape_preview.glb": "形の値の試し(GLB。モデル本体とは別)",
     "meta.json": "作ったときの記録",
+    "input_front.png": "3D に送った正面(乳首なしの写し)",
+    "input_left.png": "3D に送った横(乳首なしの写し)",
 }
+# 3D に送る乳首なしの写し(裸の素体のモデル)。形を作り直しても消さない(もとの絵が変わるまで使い回す)
+INPUT_FILES = {"input_front.png": "front", "input_left.png": "left"}
 _CLEAN_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "blender" / "clean_model.py"
 _RIG_SCRIPT = _CLEAN_SCRIPT.with_name("rig_model.py")
 # Windows で Blender を呼ぶとき窓を開かせない(body_rig.NO_WINDOW と同じ。窓なしのバックエンドから呼ぶと、Blender が窓を開いた)
@@ -119,12 +123,15 @@ def _side_facing(image: Image.Image) -> str | None:
     return facing(points)
 
 
-def generate(folder: Path, base_id: int, out_dir: Path, *, seed: int = 12345, on_status=None) -> dict:
+def generate(folder: Path, base_id: int, out_dir: Path, *, seed: int = 12345, on_status=None,
+             inputs: dict[str, Path] | None = None) -> dict:
     """
     素体の正面(必須)・横・後ろの絵から形を作り、out_dir に model.glb と meta.json を置く。meta(使った向き・
-    横の絵を反転したか・かかった秒数など)を返す。
+    横の絵を反転したか・かかった秒数など)を返す。inputs(向き → 絵)があれば、その向きはその絵を送る(乳首なしの写し)。
     """
     sources = {view: path for view, path in source_paths(folder, base_id).items() if path.is_file()}
+    replaced = sorted(v for v, p in (inputs or {}).items() if v in sources and p.is_file())
+    sources.update({v: (inputs or {})[v] for v in replaced})
     if "front" not in sources:
         raise Model3DInputError("素体の「正面」の絵をまだ描いていません。先に描いてください。")
     started = time.time()
@@ -138,12 +145,13 @@ def generate(folder: Path, base_id: int, out_dir: Path, *, seed: int = 12345, on
                 side.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(views["left"], "PNG")
                 flipped = True
         out_dir.mkdir(parents=True, exist_ok=True)
-        # 前に作った形から整えたもの・静止画は、新しい形と合わなくなるので消す
+        # 前に作った形から整えたもの・静止画は、新しい形と合わなくなるので消す(乳首なしの写しは残す)
         for name in FILES:
-            (out_dir / name).unlink(missing_ok=True)
+            if name not in INPUT_FILES:
+                (out_dir / name).unlink(missing_ok=True)
         model3d_remote.generate(views, out_dir / "model.glb", seed=seed, on_status=on_status)
     meta = {
-        "model": MODEL, "seed": seed, "views": sorted(sources), "side_flipped": flipped,
+        "model": MODEL, "seed": seed, "views": sorted(sources), "side_flipped": flipped, "featureless": replaced,
         "seconds": round(time.time() - started), "created": time.time(),
     }
     write_meta(out_dir, meta)
@@ -265,7 +273,7 @@ def clean_and_check(blender: str, folder: Path, base_id: int, out_dir: Path, hei
 
 
 def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: float, seed: int = 12345,
-         attempts: int = 1, on_status=None) -> dict:
+         attempts: int = 1, on_status=None, inputs: dict[str, Path] | None = None) -> dict:
     """
     形を作り(generate)、整え、影絵を比べる。合わなければシードを変えて作り直す(最初の1回も含めて attempts 回まで)。
     いちばん重なりのよい回の形を out_dir に残し、meta.json の check に結果(作った回数も)を書く。
@@ -278,7 +286,7 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
             work = tries / str(attempt)
             if on_status is not None:
                 on_status("queued", 0)
-            generate(folder, base_id, work, seed=seed + attempt * _SEED_STEP, on_status=on_status)
+            generate(folder, base_id, work, seed=seed + attempt * _SEED_STEP, on_status=on_status, inputs=inputs)
             if on_status is not None:
                 on_status("cleaning", 0)
             result = clean_and_check(blender, folder, base_id, work, height)
@@ -291,6 +299,8 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
         meta["check"]["attempts"] = attempt + 1
         write_meta(chosen, meta)
         for name in FILES:
+            if name in INPUT_FILES:
+                continue
             (out_dir / name).unlink(missing_ok=True)
             if (chosen / name).is_file():
                 shutil.move(chosen / name, out_dir / name)
@@ -408,6 +418,64 @@ def nipple_hint(folder: Path, base_id: int) -> dict | None:
     # 3D の胸の下のふちからこの距離に置くほうが、胸の上の位置が絵に合う(2026-11 矢野栄子)
     gaps = {side: found.get(f"gap_{side}") for side in ("L", "R")}
     return {**hint, "gaps": gaps, "score": found["score"], "source": path.name}
+
+
+def areola_mask(image: Image.Image) -> np.ndarray | None:
+    """
+    素体の絵(正面・横)の乳首・乳輪の所(描き直して乳首なしの写しにする範囲)。骨格の点(肩・腰)から胸の高さの帯を決め、
+    人物の中で肌より赤い所(find_nipples と同じ赤み)のうち、丸いかたまり(乳輪)だけを、絵の高さの 1.5% だけ広げる。
+    胸の下のピンクの影も赤いが、細長い(丸さ 0.54〜0.72。乳輪は 0.94〜0.98。2026-11 矢野栄子)ので外す。無ければ None。
+    """
+    import cv2
+
+    from .body_rig import RigError, detect
+
+    rgb = image.convert("RGB")
+    try:
+        person, points = detect(rgb)
+    except RigError:
+        return None
+    shoulders = [points[n][1] for n in ("left_shoulder", "right_shoulder") if n in points]
+    hips = [points[n][1] for n in ("left_hip", "right_hip") if n in points]
+    if not shoulders or not hips:
+        return None
+    top, bottom = float(np.mean(shoulders)), float(np.mean(hips))
+    band = np.zeros(person.shape, dtype=bool)
+    band[int(top + 0.12 * (bottom - top)):int(top + 0.65 * (bottom - top)), :] = True
+    skin = band & person
+    if skin.sum() < 200:
+        return None
+    redness = cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2LAB)[..., 1].astype(np.float32)
+    score = (redness - np.median(redness[skin])) / (redness[skin].std() + 1e-6)
+    score = cv2.GaussianBlur(np.where(skin, score, 0).astype(np.float32), (0, 0), max(2.0, 0.005 * rgb.height))
+    hot = ((score > 2.0) & skin).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(hot)
+    keep = np.zeros(hot.shape, dtype=bool)
+    min_area = 60 * (rgb.height / 1216) ** 2
+    for k in range(1, count):
+        area = stats[k, cv2.CC_STAT_AREA]
+        if area < min_area:
+            continue
+        component = labels == k
+        contours, _ = cv2.findContours(component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        perimeter = cv2.arcLength(contours[0], True)
+        if perimeter > 0 and 4 * np.pi * area / perimeter ** 2 >= 0.85:
+            keep |= component
+    hot = keep
+    if not hot.any():
+        return None
+    radius = max(3, int(0.015 * rgb.height))
+    grown = cv2.dilate(hot.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)))
+    return grown.astype(bool) & cv2.dilate(person.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+
+
+def featureless_prompt(prompt: str) -> str:
+    """素体の絵のタグの nipples を featureless breasts にする(乳首なしの写しを描くとき)。"""
+    tags = [t.strip() for t in prompt.split(",")]
+    return ", ".join("featureless breasts" if t.lower() == "nipples" else t for t in tags if t)
+
+
+FEATURELESS_NEGATIVE = "nipples, areolae, areola, puffy nipples, inverted nipples"
 
 
 def hand_ratios(folder: Path, base_id: int) -> dict:

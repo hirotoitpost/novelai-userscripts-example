@@ -808,8 +808,10 @@ def bake_caps(obj: bpy.types.Object, anchors: dict) -> dict:
     for side in ("L", "R"):
         if f"breast.{side}" in anchors:
             cap, crater = cap_delta(co, normals, edges, anchors[f"breast.{side}"])
-            delta += cap
+            # 作り直すのは穴があるときだけ(乳首なしの写しから作った形には穴ができない。穴の無い胸の先を作り直すと、
+            # 2 次の面で平たくなり、ふちに段が出た)
             if crater is not None:
+                delta += cap
                 craters[side] = crater
     baked = co + delta
     obj.data.vertices.foreach_set("co", baked.ravel())

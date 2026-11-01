@@ -112,7 +112,7 @@ def test_make_retries_with_another_seed_and_keeps_the_best(tmp_path: Path, monke
     seeds: list[int] = []
     scores = iter([0.5, 0.6, 0.55])
 
-    def fake_generate(folder: Path, base_id: int, out: Path, *, seed: int, on_status=None) -> dict:  # noqa: ANN001
+    def fake_generate(folder: Path, base_id: int, out: Path, *, seed: int, on_status=None, inputs=None) -> dict:  # noqa: ANN001
         seeds.append(seed)
         out.mkdir(parents=True)
         (out / "model.glb").write_bytes(str(seed).encode())
@@ -307,12 +307,16 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setattr(model3d_remote, "configured", lambda: True)
     calls: list[tuple[Path, int, Path, int]] = []
     rig_shapes: list[tuple[dict, dict]] = []
+    sent_inputs: list[dict | None] = []
     rig_nipples: list[dict | None] = []
+    # 乳首なしの写し: 乳首・乳輪が見つからないことにする(元の絵を写す。NovelAI は呼ばない)
+    monkeypatch.setattr(model_3d, "areola_mask", lambda image: None)
     # 乳首の位置は、絵を読まずに決まった値を返す(人物の切り出し・骨格推定のモデルを使わない)
     monkeypatch.setattr(model_3d, "nipple_hint", lambda folder, base_id: {"L": [0.06, 0.7], "R": [-0.06, 0.7], "score": 2.0, "source": "x"})
 
-    def fake_generate(folder: Path, base_id: int, out: Path, *, seed: int, on_status=None) -> dict:  # noqa: ANN001
+    def fake_generate(folder: Path, base_id: int, out: Path, *, seed: int, on_status=None, inputs=None) -> dict:  # noqa: ANN001
         calls.append((folder, base_id, out, seed))
+        sent_inputs.append(inputs)
         on_status("running", 1)
         out.mkdir(parents=True, exist_ok=True)
         (out / "model.glb").write_bytes(b"glTF")
@@ -346,6 +350,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
         test_client.calls = calls  # type: ignore[attr-defined]
         test_client.rig_shapes = rig_shapes  # type: ignore[attr-defined]
         test_client.rig_nipples = rig_nipples  # type: ignore[attr-defined]
+        test_client.sent_inputs = sent_inputs  # type: ignore[attr-defined]
         yield test_client
 
 
@@ -741,3 +746,56 @@ def test_underbust_gap_finds_the_first_line_below_the_nipple() -> None:
     near = np.full((400, 50), 220.0)
     near[125:128, :] = 5
     assert model_3d._underbust_gap(near, (25.0, 122.0), torso=300.0, hip_y=350.0) is None
+
+
+
+def test_featureless_inputs_redraw_only_the_areolas(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    adult = _character(client, "rumi", is_adult=1, age=28)
+    nude = _base(client, "裸", kind="nude")
+    suit = _base(client, "スーツ")
+    folder = tmp_path / "outputs/training_data/rumi/body_base_r18"
+    _draw(folder, nude["id"], ("front", "side", "back"))
+    _draw(tmp_path / "outputs/training_data/rumi/body_base", suit["id"], ("front", "side"))
+    mask = np.zeros((8, 8), dtype=bool)
+    mask[2:4, 2:4] = True
+    monkeypatch.setattr(model_3d, "areola_mask", lambda image: mask)
+    drawn: list[tuple[str, str]] = []
+
+    async def fake_draw(client_, prompt, size, cfg, seed=None, inpaint=None):  # noqa: ANN001
+        drawn.append((prompt, cfg.negative_prompt))
+        return Image.new("RGB", size, (0, 255, 0))
+
+    monkeypatch.setattr(lora_routes, "generate_one", fake_draw)
+    url = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    assert client.post(url, json={"base_id": nude["id"]}).status_code == 200
+    _wait(client, adult["id"], nude["id"])
+    out = tmp_path / f"outputs/training_data/rumi/model_3d_r18/{nude['id']}"
+    # 正面・横を描き直し、後ろはそのまま。描き直すのは乳首・乳輪の所だけ
+    assert client.sent_inputs[-1] == {"front": out / "input_front.png", "left": out / "input_left.png"}  # type: ignore[attr-defined]
+    front = Image.open(out / "input_front.png")
+    assert front.getpixel((2, 2)) == (0, 255, 0) and front.getpixel((6, 6)) == (200, 200, 200)
+    prompt, negative = drawn[0]
+    assert "featureless breasts" in prompt and "nipples" not in [t.strip() for t in prompt.split(",")]
+    assert "areolae" in negative and len(drawn) == 2
+    entry = next(b for b in client.get(url).json()["bases"] if b["base_id"] == nude["id"])
+    assert {"input_front.png", "input_left.png"} <= set(entry["files"])
+
+    # 2 回目は写しを使い回す(Anlas を使わない)。元の絵が新しくなったら描き直す
+    client.post(url, json={"base_id": nude["id"]})
+    _wait(client, adult["id"], nude["id"])
+    assert len(drawn) == 2 and (out / "input_front.png").is_file()
+    later = (out / "input_front.png").stat().st_mtime + 10
+    os.utime(folder / f"{nude['id']}_front.png", (later, later))
+    client.post(url, json={"base_id": nude["id"]})
+    _wait(client, adult["id"], nude["id"])
+    assert len(drawn) == 3
+
+    # 乳首なしの写しを使わない・全年齢の素体のモデルでは描かない
+    client.post(url, json={"base_id": nude["id"], "featureless": False})
+    _wait(client, adult["id"], nude["id"])
+    assert client.sent_inputs[-1] is None  # type: ignore[attr-defined]
+    client.post(url, json={"base_id": suit["id"]})
+    _wait(client, adult["id"], suit["id"])
+    assert client.sent_inputs[-1] is None and len(drawn) == 3  # type: ignore[attr-defined]
