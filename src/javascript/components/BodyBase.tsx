@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { fileUrl } from '../library'
 import FullscreenViewer from './FullscreenViewer'
+import Model3D from './Model3D'
 import SheetItemEditor, { type SheetItem } from './SheetItemEditor'
 import './FaceSheet.css'
 import './BodyBase.css'
@@ -870,6 +871,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
             </div>
           </div>
         </details>
+      )}
+
+      {body?.base && (
+        <Model3D characterId={characterId} rootName={rootName} baseId={body.base.id} disabled={disabled} />
       )}
 
       {editingPart && options && (

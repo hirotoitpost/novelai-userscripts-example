@@ -256,6 +256,21 @@ async def _speaker_report(story_id: int) -> list[dict[str, Any]]:
     ]
 
 
+async def _wait_model_3d(character_id: int, info: dict[str, Any], base_id: int | None, timeout_seconds: float) -> dict[str, Any]:
+    """素体の 3D の仕事が終わるまで待ち、その素体の状態を返す(base_id を省くとキャラに当てた素体)。"""
+    def pick(data: dict[str, Any]) -> dict[str, Any]:
+        bases = data["bases"]
+        return next((b for b in bases if b["base_id"] == base_id), None) or next((b for b in bases if b["assigned"]), bases[0])
+
+    entry = pick(info)
+    elapsed = 0.0
+    while (entry.get("job") or {}).get("status") == "running" and elapsed < timeout_seconds:
+        await asyncio.sleep(_JOB_POLL_SECONDS)
+        elapsed += _JOB_POLL_SECONDS
+        entry = pick(await _call("GET", f"/api/lora-dataset/character/{character_id}/model-3d"))
+    return entry
+
+
 def register_manga_tools(mcp: MCPServer) -> None:
     """漫画作成のツールを MCP サーバーに登録する。"""
 
@@ -798,6 +813,72 @@ def register_manga_tools(mcp: MCPServer) -> None:
         if not shown:
             return [TextContent(type="text", text="まだ描いた項目はありません(manga_face_sheet で描けます)")]
         return [TextContent(type="text", text=f"{len(shown)} 枚"), _face_grid(shown, tile_size)]
+
+    @mcp.tool()
+    async def manga_model_3d(character_id: int, base_id: int | None = None) -> dict[str, Any]:
+        """
+        キャラの素体の 3D モデル(漫画のポーズの参考)の状態: 作れる素体ごとの、送る絵(正面・横・後ろ)・作ったファイル・
+        素体の絵との重なりのチェック・動いている仕事・描いたポーズの絵。ポーズ・カメラ・絵の種類の名前(pose_options)も返す。
+        base_id を渡すと、その素体だけ。
+        """
+        info = await _call("GET", f"/api/lora-dataset/character/{character_id}/model-3d")
+        if base_id is not None:
+            info["bases"] = [b for b in info["bases"] if b["base_id"] == base_id]
+        return info
+
+    @mcp.tool()
+    async def manga_make_model_3d(
+        character_id: int, base_id: int | None = None, seed: int = 12345, wait: bool = True, timeout_seconds: float = 1200,
+    ) -> dict[str, Any]:
+        """
+        素体の正面・横・後ろの絵から 3D の形を作る(Colab の GPU で 3〜6 分。notebooks/model3d_colab.ipynb を動かし、.env に
+        MODEL3D_BASE_URL・MODEL3D_TOKEN を書いておく)。手元の Blender で整え、骨と人形の手を入れるところまで続けて行う。
+        base_id を省くとキャラに当てた素体。wait=True なら終わるまで待って、その素体の状態を返す。
+        """
+        info = await _call("POST", f"/api/lora-dataset/character/{character_id}/model-3d", {"base_id": base_id, "seed": seed})
+        return await _wait_model_3d(character_id, info, base_id, timeout_seconds if wait else 0)
+
+    @mcp.tool()
+    async def manga_model_3d_pose(
+        character_id: int,
+        pose: str,
+        cameras: list[str] | None = None,
+        style: str = "shade",
+        base_id: int | None = None,
+        tile_size: int = 384,
+    ) -> list[TextContent | ImageContent]:
+        """
+        骨を入れた素体の 3D にポーズを当て、カメラの向きごとに漫画のコマの参考の絵を描いて、並べた画像を返す(GPU は使わない。
+        1枚 3〜5 秒)。pose・cameras・style の名前は manga_model_3d の pose_options(例: pose "sit_chair"、cameras
+        ["front", "three_quarter", "low"]、style "shade"(灰色の陰影)か "line"(線画風))。
+        """
+        cameras = cameras or ["front", "three_quarter", "side"]
+        body = {"base_id": base_id, "pose": pose, "cameras": cameras, "style": style}
+        info = await _call("POST", f"/api/lora-dataset/character/{character_id}/model-3d/pose", body)
+        entry = await _wait_model_3d(character_id, info, base_id, 600)
+        names = {f"poses/{pose}_{camera}_{style}.png": camera for camera in cameras}
+        shown = []
+        for item in entry["poses"]:
+            if item["name"] in names:
+                data = await _call_bytes(
+                    "GET", f"/api/lora-dataset/character/{character_id}/model-3d/file?base_id={entry['base_id']}&name={item['name']}"
+                )
+                with Image.open(io.BytesIO(data)) as src:
+                    shown.append((names[item["name"]], src.convert("RGB")))
+        if not shown:
+            raise RuntimeError(f"ポーズの絵を描けませんでした: {(entry.get('job') or {}).get('error')}")
+        tile = max(128, min(tile_size, 768))
+        sheet = Image.new("RGB", (tile * len(shown), round(tile * 1216 / 832)), (255, 255, 255))
+        for i, (_, image) in enumerate(shown):
+            image.thumbnail((tile, sheet.height))
+            sheet.paste(image, (i * tile, 0))
+        buf = io.BytesIO()
+        sheet.save(buf, format="JPEG", quality=85)
+        note = f"{pose}・{style}: " + "・".join(camera for camera, _ in shown)
+        return [
+            TextContent(type="text", text=note),
+            ImageContent(type="image", data=base64.b64encode(buf.getvalue()).decode(), mime_type="image/jpeg"),
+        ]
 
     @mcp.tool()
     async def manga_face_sheet_presets() -> list[dict[str, str]]:

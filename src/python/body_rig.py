@@ -690,6 +690,11 @@ _BLENDER_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "b
 MOTIONS = body_motions.labels()
 
 
+# Windows で Blender(コンソールのプログラム)を呼ぶとき、窓を開かせない。バックエンドは窓なしで動いているので、
+# 指定しないと Blender が自分の窓を開いた(2026-11 実機)。ほかの OS では 0(何もしない)
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def find_blender(configured: str | None = None) -> str | None:
     """Blender の実行ファイル。設定(blender.path)→ 環境変数 BLENDER_PATH → PATH の順に探す。"""
     for candidate in (configured, os.environ.get("BLENDER_PATH"), shutil.which("blender")):
@@ -716,7 +721,7 @@ def run_blender(blender: str, rig_dir: Path, motion: str, *, timeout: float = 60
     result = subprocess.run(
         [blender, "--background", "--factory-startup", "--python", str(_BLENDER_SCRIPT), "--",
          str(rig_dir), str(motion_file)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW,
     )
     if result.returncode != 0 or not (rig_dir / "rig.blend").is_file():
         tail = "\n".join((result.stdout + result.stderr).splitlines()[-15:])

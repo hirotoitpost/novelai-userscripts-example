@@ -42,6 +42,8 @@ FILES = {
 }
 _CLEAN_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "blender" / "clean_model.py"
 _RIG_SCRIPT = _CLEAN_SCRIPT.with_name("rig_model.py")
+# Windows で Blender を呼ぶとき窓を開かせない(body_rig.NO_WINDOW と同じ。窓なしのバックエンドから呼ぶと、Blender が窓を開いた)
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _POSE_SCRIPT = _CLEAN_SCRIPT.with_name("pose_render.py")
 # ポーズの絵を置くフォルダ(形のフォルダの中)。名前は <ポーズ>_<カメラ>_<絵の種類>.png
 POSE_DIR = "poses"
@@ -162,6 +164,7 @@ def clean(blender: str, out_dir: Path, height: float, *, max_faces: int = MAX_FA
         [blender, "--background", "--factory-startup", "--python", str(_CLEAN_SCRIPT), "--",
          str(out_dir), str(height), str(max_faces)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        creationflags=NO_WINDOW,
     )
     report_path = out_dir / "clean.json"
     if result.returncode != 0 or not report_path.is_file() or not (out_dir / "model_clean.glb").is_file():
@@ -361,6 +364,7 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
             [blender, "--background", "--factory-startup", "--python", str(_RIG_SCRIPT), "--",
              str(out_dir), str(joints_path), str(motions_path), motion],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=NO_WINDOW,
         )
     report_path = out_dir / "rig.json"
     if result.returncode != 0 or not report_path.is_file() or not (out_dir / "model_rigged.glb").is_file():
@@ -424,6 +428,7 @@ def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], styl
             [blender, "--background", str(out_dir / "model.blend"), "--python-exit-code", "1", "--python",
              str(_POSE_SCRIPT), "--", str(pose_path), str(renders), style],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=NO_WINDOW,
         )
         missing = [c for c in cameras if not (renders / f"{c}.png").is_file()]
         if result.returncode != 0 or missing:
