@@ -1865,6 +1865,32 @@ def _shape_settings(character: dict, base: dict, out: Path) -> tuple[dict, dict[
     return body_shapes.to_json(**flags), weights
 
 
+# 乳首の位置をずらす量の上限(mm)
+_NIPPLE_OFFSET_MAX = 40.0
+
+
+def _check_offsets(offsets: dict[str, tuple[float, float]]) -> dict[str, list[float]]:
+    if set(offsets) - {"L", "R"}:
+        raise HTTPException(status_code=422, detail="乳首の位置は L・R で指定します")
+    if any(abs(v) > _NIPPLE_OFFSET_MAX for pair in offsets.values() for v in pair):
+        raise HTTPException(status_code=422, detail=f"ずらす量は ±{_NIPPLE_OFFSET_MAX:.0f}mm までです")
+    return {k: [float(v[0]), float(v[1])] for k, v in offsets.items()}
+
+
+def _nipple_settings(character: dict, base: dict, root_name: str, offsets: dict | None = None) -> dict | None:
+    """
+    乳首の位置: 素体の正面の絵(乳首あり)から測った位置と、ずらす量(保存したもの、か offsets)。乳首の部品を当てられる
+    モデル(裸の素体を当てられるキャラの裸の素体)だけ。
+    """
+    if not _shape_flags(character, base)["nude"]:
+        return None
+    out = _model_3d_dir(character, base, root_name)
+    if offsets is None:
+        offsets = model_3d.read_meta(out).get("shapes", {}).get("offsets", {})
+    hint = model_3d.nipple_hint(_body_dir(character, base, root_name), base["id"])
+    return {"hint": hint, "offsets": offsets}
+
+
 def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
     entries = []
     for base in _model_3d_bases(character, root_name):
@@ -1888,6 +1914,9 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 "weights": model_3d.read_meta(folder).get("shapes", {}).get("weights", {}),
                 # 場面ごとの組み合わせ(名前 → 強さ)
                 "sets": model_3d.read_meta(folder).get("shapes", {}).get("sets", {}),
+                # 乳首の位置をずらす量(L・R → [左右, 上下] mm)と、正面の絵から測れたか
+                "offsets": model_3d.read_meta(folder).get("shapes", {}).get("offsets", {}),
+                "nipple_source": ((model_3d.read_meta(folder).get("rig") or {}).get("nipples") or {}).get("hint") is not None,
             },
             "meta": model_3d.read_meta(folder) or None,
             "job": None if job is None else {
@@ -1956,7 +1985,7 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
         shapes, weights = _shape_settings(character, base, out)
         model_3d.rig(
             blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
-            shape_weights=weights,
+            shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
         )
 
     _start_model_3d_job(character, base, work)
@@ -1985,7 +2014,7 @@ async def clean_model_3d(character_id: int, req: Model3DRequest) -> dict[str, An
         shapes, weights = _shape_settings(character, base, out)
         model_3d.rig(
             blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
-            shape_weights=weights,
+            shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
         )
 
     _start_model_3d_job(character, base, work)
@@ -2013,7 +2042,7 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
         shapes, weights = _shape_settings(character, base, out)
         model_3d.rig(
             blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
-            shape_weights=weights,
+            shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
         )
 
     _start_model_3d_job(character, base, work)
@@ -2083,6 +2112,8 @@ async def save_model_3d_shapes(character_id: int, req: Model3DShapesRequest) -> 
     weights = _check_shape_weights(character, base, req.weights)
     meta = model_3d.read_meta(out)
     shapes = meta.get("shapes", {})
+    if req.offsets is not None:
+        shapes["offsets"] = _check_offsets(req.offsets)
     if req.set_name and req.set_name.strip():
         shapes.setdefault("sets", {})[req.set_name.strip()] = weights
     else:
@@ -2128,10 +2159,14 @@ async def preview_model_3d_shape(character_id: int, req: Model3DShapePreviewRequ
     shapes = body_shapes.to_json(nude=flags["nude"], modest=flags["modest"], custom=[*flags["custom"], trial])
     blender = _model_3d_blender()
     folder = _body_dir(character, base, req.root_name)
+    offsets = _check_offsets(req.offsets) if req.offsets is not None else None
+    nipples = _nipple_settings(character, base, req.root_name, offsets)
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "previewing"
-        model_3d.preview_shapes(blender, out, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes, shape_weights=weights)
+        model_3d.preview_shapes(
+            blender, out, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes, shape_weights=weights, nipples=nipples,
+        )
         job["preview_weights"] = weights
 
     _start_model_3d_job(character, base, work)

@@ -310,6 +310,106 @@ def still_to_world(px: float, py: float, height: float) -> tuple[float, float]:
     return (px - width / 2) * scale, height / 2 + (tall / 2 - py) * scale
 
 
+def find_nipples(image: Image.Image) -> dict | None:
+    """
+    素体の正面の絵(乳首を描いたもの)から、左右の乳首の位置(絵の画素)を測る。骨格の点(肩・腰)から胸の範囲を決め、
+    その中で肌より赤い所(乳輪)を色の差で探し、左右それぞれのいちばん強い所のまわりの重心にする(暗さも足すと、胸の下の
+    影を拾った。2026-11 実機)。
+    {"L": (x, y), "R": (x, y), "score": 確からしさ}。見つからなければ None。L はキャラの左(絵の右)。
+    """
+    import cv2
+
+    from .body_rig import RigError, detect
+
+    rgb = image.convert("RGB")
+    try:
+        mask, points = detect(rgb)
+    except RigError:
+        return None
+    need = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    if any(n not in points for n in need):
+        return None
+    shoulder_y = (points["left_shoulder"][1] + points["right_shoulder"][1]) / 2
+    hip_y = (points["left_hip"][1] + points["right_hip"][1]) / 2
+    torso = hip_y - shoulder_y
+    x0 = min(points["left_shoulder"][0], points["right_shoulder"][0])
+    x1 = max(points["left_shoulder"][0], points["right_shoulder"][0])
+    mid = (x0 + x1) / 2
+    y0, y1 = int(shoulder_y + 0.12 * torso), int(shoulder_y + 0.6 * torso)
+    lab = cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2LAB).astype(np.float32)
+    box = np.zeros(mask.shape, dtype=bool)
+    box[max(y0, 0):max(y1, 0), max(int(x0), 0):max(int(x1), 0)] = True
+    skin = box & mask
+    if skin.sum() < 200:
+        return None
+    redness = lab[..., 1]
+    # 肌(胸の範囲のふつうの色)からの赤みの差
+    score = (redness - np.median(redness[skin])) / (redness[skin].std() + 1e-6)
+    score = cv2.GaussianBlur(np.where(skin, score, 0).astype(np.float32), (0, 0), max(2.0, 0.01 * rgb.height))
+    result: dict = {}
+    strength = []
+    xs = np.arange(score.shape[1])[None, :]
+    for side, pick in (("L", xs > mid), ("R", xs < mid)):
+        half = np.where(pick & skin, score, -np.inf)
+        y, x = np.unravel_index(np.argmax(half), half.shape)
+        peak = float(half[y, x])
+        if not np.isfinite(peak) or peak < 1.2:
+            return None
+        near = (half > 0.6 * peak) & (np.hypot(*np.mgrid[0:half.shape[0], 0:half.shape[1]][::-1] - np.array([x, y])[:, None, None]) < 0.06 * torso)
+        ys, xs_ = np.nonzero(near)
+        result[side] = (float(xs_.mean()), float(ys.mean()))
+        strength.append(peak)
+        # 胸の下のふち(正面から見た胸の輪郭の、乳首の真下の黒い線画の線)までの距離を、肩から腰までの長さに対する割合で
+        result[f"gap_{side}"] = _underbust_gap(lab[..., 0], result[side], torso, hip_y)
+    result["score"] = round(min(strength), 2)
+    result["torso"] = float(torso)
+    return result
+
+
+def _underbust_gap(lightness, nipple: tuple[float, float], torso: float, hip_y: float) -> float | None:
+    """乳首の真下をたどり、最初の黒い線(線画の胸の輪郭)の真ん中までの距離(肩から腰までの長さに対する割合)。無ければ None。"""
+    x, y = int(round(nipple[0])), int(round(nipple[1]))
+    lo, hi = max(x - 3, 0), min(x + 4, lightness.shape[1])
+    profile = lightness[:, lo:hi].min(axis=1)
+    start, end = int(y + 0.03 * torso), min(int(hip_y), lightness.shape[0])
+    run = []
+    for yy in range(start, end):
+        if profile[yy] < 60:
+            run.append(yy)
+        elif run:
+            break
+    if len(run) < 2:
+        return None
+    return round(float((np.mean(run) - y) / torso), 4)
+
+
+def nipple_hint(folder: Path, base_id: int) -> dict | None:
+    """
+    素体の正面の絵から測った乳首の位置を、3D の形の左右 x・高さ z(m の割合。身長を 1 とした値)にする。絵の人物の範囲と、
+    3D の形の範囲(clean で、足の裏を 0・左右の真ん中を 0 にしたもの)は、同じ正面の絵から作ったので、高さでそろえて
+    対応させる。{"L": [x, z], "R": [x, z], "score", "source"}。測れなければ None。
+    """
+    from .anime_seg import person_mask
+
+    path = folder / f"{base_id}_front.png"
+    if not path.is_file():
+        return None
+    image = Image.open(path).convert("RGB")
+    found = find_nipples(image)
+    if found is None:
+        return None
+    mask = person_mask(image) > 0.5
+    ys, xs = np.nonzero(mask)
+    top, bottom = float(ys.min()), float(ys.max())
+    center = (float(xs.min()) + float(xs.max())) / 2
+    tall = max(bottom - top, 1.0)
+    hint = {side: [round((found[side][0] - center) / tall, 4), round((bottom - found[side][1]) / tall, 4)] for side in ("L", "R")}
+    # 胸の下のふちからの距離(肩から腰までの長さに対する割合)。3D の胸は絵ほど下がらないことがあるので、高さそのままより、
+    # 3D の胸の下のふちからこの距離に置くほうが、胸の上の位置が絵に合う(2026-11 矢野栄子)
+    gaps = {side: found.get(f"gap_{side}") for side in ("L", "R")}
+    return {**hint, "gaps": gaps, "score": found["score"], "source": path.name}
+
+
 def hand_ratios(folder: Path, base_id: int) -> dict:
     """
     素体の手の絵(手のひら、無ければ手の甲)から、人形の手の形の割合。測れなければ標準の割合。
@@ -327,7 +427,8 @@ def hand_ratios(folder: Path, base_id: int) -> dict:
 
 
 def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None = None, shapes: dict | None = None,
-        shape_weights: dict[str, float] | None = None, preview_only: bool = False, timeout: float = 900) -> dict:
+        shape_weights: dict[str, float] | None = None, nipples: dict | None = None, preview_only: bool = False,
+        timeout: float = 900) -> dict:
     """
     整えた形(model_clean.glb)に人型の骨を入れ、body_motions の動きを全部付ける(model_rigged.glb・model.blend)。
     関節は、正面の静止画(front.png)の骨格推定の点から求める。手は人形の手に付け替え、形の割合は hand(hand_ratios。
@@ -365,6 +466,9 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
             sent.update(shapes=shapes, shape_weights=shape_weights or {})
         if preview_only:
             sent["preview_only"] = True
+        if nipples:
+            # 乳首の位置: 正面の絵から測った位置(nipple_hint。身長を 1 とした値)と、ずらす量(mm)
+            sent["nipples"] = nipples
         joints_path.write_text(json.dumps(sent), encoding="utf-8")
         motions_path = Path(tmp) / "motions.json"
         motions_path.write_text(json.dumps({k: m.to_json() for k, m in body_motions.MOTIONS.items()}), encoding="utf-8")
@@ -386,7 +490,7 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     frames_to_gif(sorted(frames.glob("*.png")), out_dir / "motion.gif")
     shutil.rmtree(frames)
     meta = read_meta(out_dir)
-    meta["rig"] = {"motion": motion, "hand": hand, **report}
+    meta["rig"] = {"motion": motion, "hand": hand, **report, "nipples": nipples}
     if shapes:
         # 作ったシェイプキーと、作った部品(part_<形>_<L|R>)の形の強さだけ残す
         made = set((report.get("shapes") or {}).get("keys", {}))
@@ -402,7 +506,7 @@ PREVIEW_FILE = "shape_preview.glb"
 
 
 def preview_shapes(blender: str, out_dir: Path, *, hand: dict | None, shapes: dict, shape_weights: dict[str, float],
-                   timeout: float = 600) -> Path:
+                   nipples: dict | None = None, timeout: float = 600) -> Path:
     """
     形の値の試し: 整えた形を作業用のフォルダに写し、渡した形(形の値を変えたもの)で骨と形状パーツを入れて、GLB だけを
     out_dir/shape_preview.glb に置く。モデル本体(model_rigged.glb・model.blend・meta.json)は書き換えない。動き・確かめの
@@ -417,7 +521,8 @@ def preview_shapes(blender: str, out_dir: Path, *, hand: dict | None, shapes: di
             if not (out_dir / name).is_file():
                 raise Model3DRigError("整えた形がありません。先に形を作ってください。")
             shutil.copyfile(out_dir / name, work / name)
-        rig(blender, work, hand=hand, shapes=shapes, shape_weights=shape_weights, preview_only=True, timeout=timeout)
+        rig(blender, work, hand=hand, shapes=shapes, shape_weights=shape_weights, nipples=nipples, preview_only=True,
+            timeout=timeout)
         target = out_dir / PREVIEW_FILE
         shutil.copyfile(work / "model_rigged.glb", target)
     return target

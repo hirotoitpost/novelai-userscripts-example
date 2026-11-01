@@ -39,3 +39,5 @@
 .m3d-float-head { display: flex; align-items: center; gap: 0.4rem; cursor: move; user-select: none; touch-action: none; margin-bottom: 0.3rem; }
 .m3d-float-head span { flex: 1; font-size: 0.8rem; color: #c0c0e0; }
 .m3d-float .m3d-viewer { width: 100%; }
+.m3d-position-row { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: center; }
+.m3d-position-row input[type="range"] { width: 9rem; }
