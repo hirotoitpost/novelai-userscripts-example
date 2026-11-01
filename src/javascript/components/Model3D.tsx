@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import FullscreenViewer from './FullscreenViewer'
 import ShapeParts, { type ShapeInfo } from './ShapeParts'
@@ -11,6 +11,8 @@ import './Model3D.css'
  */
 
 const Model3DViewer = lazy(() => import('./Model3DViewer'))
+
+type CameraView = import('./Model3DViewer').CameraView
 
 type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing'
 
@@ -103,6 +105,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [floatPos, setFloatPos] = useLocalStorage('nai_model3d_float_pos', { right: 16, bottom: 16 })
   // 浮かせた窓で、形の値の試し(shape_preview.glb)を見ているか
   const [showPreview, setShowPreview] = useState(false)
+  // 3D のカメラの位置(読み込み直しても保つ。素体を替えたら初めから)
+  const cameraView = useRef<CameraView | null>(null)
   const [animations, setAnimations] = useState<string[]>([])
   const [animation, setAnimation] = useState<string | null>(null)
   const [pose, setPose] = useState('stand')
@@ -133,6 +137,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
     setZoom(null)
   }, [characterId])
   useEffect(() => setShapeDraft(null), [entry?.base_id, entry?.files['model.blend']?.updated])
+  useEffect(() => { cameraView.current = null }, [characterId, entry?.base_id])
 
   const running = !!info?.bases.some(b => b.job?.status === 'running')
   useEffect(() => {
@@ -315,7 +320,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 </div>
                 {viewing && !floating && (
                   <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
-                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} />
+                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView} />
                   </Suspense>
                 )}
                 {viewing && floating && (
@@ -335,7 +340,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                       <p className="lora-hint">{JOB_LABELS.previewing}…({duration(job.seconds)})</p>
                     )}
                     <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
-                      <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} />
+                      <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView} />
                     </Suspense>
                   </div>
                 )}
