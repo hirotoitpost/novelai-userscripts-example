@@ -301,13 +301,32 @@ def still_to_world(px: float, py: float, height: float) -> tuple[float, float]:
     return (px - width / 2) * scale, height / 2 + (tall / 2 - py) * scale
 
 
-def rig(blender: str, out_dir: Path, *, motion: str = "wave", timeout: float = 900) -> dict:
+def hand_ratios(folder: Path, base_id: int) -> dict:
+    """
+    素体の手の絵(手のひら、無ければ手の甲)から、人形の手の形の割合。測れなければ標準の割合。
+    {"ratios": {...}, "source": 測った絵の名前か None, "score": 確からしさ}
+    """
+    from . import hand_shape
+
+    for part in ("hand_palm", "hand_back"):
+        path = folder / f"{base_id}_{part}.png"
+        if path.is_file():
+            measured = hand_shape.measure(path)
+            if measured is not None:
+                return measured
+    return {"ratios": dict(hand_shape.DEFAULTS), "source": None, "score": None}
+
+
+def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None = None, timeout: float = 900) -> dict:
     """
     整えた形(model_clean.glb)に人型の骨を入れ、body_motions の動きを全部付ける(model_rigged.glb・model.blend)。
-    関節は、正面の静止画(front.png)の骨格推定の点から求める。motion の動きで motion.gif を描き出す。結果を meta.json の rig に足す。
+    関節は、正面の静止画(front.png)の骨格推定の点から求める。手は人形の手に付け替え、形の割合は hand(hand_ratios。
+    省くと標準)。motion の動きで motion.gif を描き出す。結果を meta.json の rig に足す。
     """
-    from . import body_motions
+    from . import body_motions, hand_shape
     from .body_rig import RigError, detect, frames_to_gif
+
+    hand = hand or {"ratios": dict(hand_shape.DEFAULTS), "source": None, "score": None}
 
     if motion not in body_motions.MOTIONS:
         raise Model3DRigError(f"動きの種類が違います: {motion}")
@@ -328,7 +347,7 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", timeout: float = 9
     joints = {n: still_to_world(float(points[n][0]), float(points[n][1]), height) for n in _RIG_POINTS}
     with tempfile.TemporaryDirectory(prefix="model3d_rig_") as tmp:
         joints_path = Path(tmp) / "joints.json"
-        joints_path.write_text(json.dumps({"points": joints}), encoding="utf-8")
+        joints_path.write_text(json.dumps({"points": joints, "hand": hand["ratios"]}), encoding="utf-8")
         motions_path = Path(tmp) / "motions.json"
         motions_path.write_text(json.dumps({k: m.to_json() for k, m in body_motions.MOTIONS.items()}), encoding="utf-8")
         result = subprocess.run(
@@ -346,6 +365,6 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", timeout: float = 9
     frames_to_gif(sorted(frames.glob("*.png")), out_dir / "motion.gif")
     shutil.rmtree(frames)
     meta = read_meta(out_dir)
-    meta["rig"] = {"motion": motion, **report}
+    meta["rig"] = {"motion": motion, "hand": hand, **report}
     write_meta(out_dir, meta)
     return meta["rig"]

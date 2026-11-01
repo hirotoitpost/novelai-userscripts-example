@@ -1901,7 +1901,7 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
             attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status,
         )
         job["remote"] = "rigging"
-        model_3d.rig(blender, out, motion=req.motion)
+        model_3d.rig(blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]))
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1926,7 +1926,7 @@ async def clean_model_3d(character_id: int, req: Model3DRequest) -> dict[str, An
         job["remote"] = "cleaning"
         model_3d.clean_and_check(blender, folder, base["id"], out, model_3d.height_of(base))
         job["remote"] = "rigging"
-        model_3d.rig(blender, out, motion=req.motion)
+        model_3d.rig(blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]))
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1946,10 +1946,11 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
     if not (out / "model_clean.glb").is_file():
         raise HTTPException(status_code=422, detail="この素体の 3D の形をまだ作っていません。")
     blender = _model_3d_blender()
+    folder = _body_dir(character, base, req.root_name)
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "rigging"
-        model_3d.rig(blender, out, motion=req.motion)
+        model_3d.rig(blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]))
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
