@@ -12,6 +12,7 @@ Hunyuan3D-2mv(model3d_remote)で作り、キャラ別データセットの `mode
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -57,6 +58,18 @@ def height_of(base: dict) -> float:
     """素体の性別と身長の設定から、身長(m)。"""
     heights = HEIGHTS.get(base.get("sex") or "female", HEIGHTS["female"])
     return heights.get(base.get("height") or "", heights[""])
+
+
+def read_meta(out_dir: Path) -> dict:
+    path = out_dir / "meta.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def write_meta(out_dir: Path, meta: dict) -> None:
+    """meta.json を書く。画面が状態を聞くたびに読むので、書きかけ(空のファイル)を読まれないよう、別の名前に書いてから入れ替える。"""
+    tmp = out_dir / "meta.json.tmp"
+    tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, out_dir / "meta.json")
 
 
 def source_paths(folder: Path, base_id: int) -> dict[str, Path]:
@@ -115,7 +128,7 @@ def generate(folder: Path, base_id: int, out_dir: Path, *, seed: int = 12345, on
         "model": MODEL, "seed": seed, "views": sorted(sources), "side_flipped": flipped,
         "seconds": round(time.time() - started), "created": time.time(),
     }
-    (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    write_meta(out_dir, meta)
     return meta
 
 
@@ -140,10 +153,9 @@ def clean(blender: str, out_dir: Path, height: float, *, max_faces: int = MAX_FA
     turntable = out_dir / "turntable"
     frames_to_gif(sorted(turntable.glob("*.png")), out_dir / "preview.gif")
     shutil.rmtree(turntable)
-    meta_path = out_dir / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+    meta = read_meta(out_dir)
     meta["clean"] = report
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    write_meta(out_dir, meta)
     return report
 
 
@@ -215,16 +227,15 @@ def check(folder: Path, base_id: int, out_dir: Path, *, side_flipped: bool = Fal
 
 
 def _record_check(out_dir: Path, result: dict) -> None:
-    meta_path = out_dir / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+    meta = read_meta(out_dir)
     meta["check"] = result
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    write_meta(out_dir, meta)
 
 
 def clean_and_check(blender: str, folder: Path, base_id: int, out_dir: Path, height: float) -> dict:
     """整えて(clean)、影絵を比べ(check)、結果を meta.json に残す。チェックの結果を返す。"""
     clean(blender, out_dir, height)
-    meta = json.loads((out_dir / "meta.json").read_text(encoding="utf-8"))
+    meta = read_meta(out_dir)
     result = check(folder, base_id, out_dir, side_flipped=bool(meta.get("side_flipped")))
     _record_check(out_dir, result)
     return result
@@ -253,9 +264,9 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
             if result["passed"]:
                 break
         _, chosen = best
-        meta = json.loads((chosen / "meta.json").read_text(encoding="utf-8"))
+        meta = read_meta(chosen)
         meta["check"]["attempts"] = attempt + 1
-        (chosen / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        write_meta(chosen, meta)
         for name in FILES:
             (out_dir / name).unlink(missing_ok=True)
             if (chosen / name).is_file():

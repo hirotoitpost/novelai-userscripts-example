@@ -1832,7 +1832,6 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
     for base in _model_3d_bases(character, root_name):
         sources = model_3d.source_paths(_body_dir(character, base, root_name), base["id"])
         folder = _model_3d_dir(character, base, root_name)
-        meta_path = folder / "meta.json"
         job = _model_3d_jobs.get((character["id"], base["id"]))
         entries.append({
             "base_id": base["id"], "name": base["name"], "kind": base["kind"],
@@ -1843,7 +1842,7 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 name: {"label": label, "updated": (folder / name).stat().st_mtime}
                 for name, label in model_3d.FILES.items() if (folder / name).is_file()
             },
-            "meta": json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else None,
+            "meta": model_3d.read_meta(folder) or None,
             "job": None if job is None else {
                 "status": job["status"], "remote": job.get("remote"), "error": job.get("error"),
                 "seconds": round((job.get("finished") or time.time()) - job["started"]),
