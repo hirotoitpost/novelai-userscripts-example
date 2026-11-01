@@ -1,6 +1,6 @@
 """
-素体の 3D の形(model_3d.py と /api/lora-dataset/character/{id}/model-3d)のテスト。リモートの GPU は呼ばず、
-model3d_remote.generate を差し替える。DB と出力先は一時フォルダに差し替える。
+素体の 3D の形(model_3d.py と /api/lora-dataset/character/{id}/model-3d)のテスト。リモートの GPU と Blender は呼ばず、
+model3d_remote.generate と Blender の実行を差し替える。DB と出力先は一時フォルダに差し替える。
 
 実行方法:
   uv run pytest tests/test_model_3d.py -v
@@ -9,6 +9,7 @@ model3d_remote.generate を差し替える。DB と出力先は一時フォル�
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -21,7 +22,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from python import db, model3d_remote, model_3d  # noqa: E402
+from python import body_rig, db, model3d_remote, model_3d  # noqa: E402
 from python.client import get_client  # noqa: E402
 from python.routes import lora_dataset as lora_routes  # noqa: E402
 from python.routes import story as story_routes  # noqa: E402
@@ -77,6 +78,40 @@ def test_generate_needs_the_front(tmp_path: Path) -> None:
         model_3d.generate(tmp_path, 3, tmp_path / "out")
 
 
+def test_height_follows_the_base_sex_and_height() -> None:
+    assert model_3d.height_of({"sex": "female", "height": ""}) == 1.60
+    assert model_3d.height_of({"sex": "male", "height": "tall"}) == 1.83
+    assert model_3d.height_of({"sex": None, "height": "unknown"}) == 1.60
+
+
+def test_clean_runs_blender_and_makes_the_preview(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "model.glb").write_bytes(b"glTF")
+    (tmp_path / "meta.json").write_text(json.dumps({"seed": 1}), encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        commands.append(command)
+        (tmp_path / "model_clean.glb").write_bytes(b"glTF")
+        (tmp_path / "turntable").mkdir()
+        for i in range(3):
+            Image.new("RGBA", (20, 30), (200, 200, 200, 255)).save(tmp_path / "turntable" / f"{i:03d}.png")
+        (tmp_path / "clean.json").write_text(json.dumps({"faces_in": 9, "faces": 5, "fragments": 1, "height": 1.6}))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    report = model_3d.clean("blender", tmp_path, 1.6)
+    assert report["fragments"] == 1
+    assert commands[0][-3:] == [str(tmp_path), "1.6", str(model_3d.MAX_FACES)]
+    # 1周のコマは GIF にまとめて消す。結果は meta.json に足す
+    assert (tmp_path / "preview.gif").is_file() and not (tmp_path / "turntable").exists()
+    assert not (tmp_path / "clean.json").exists()
+    assert json.loads((tmp_path / "meta.json").read_text(encoding="utf-8")) == {"seed": 1, "clean": report}
+
+    monkeypatch.setattr(model_3d.subprocess, "run", lambda command, **_kw: subprocess.CompletedProcess(command, 1, "", "boom"))
+    with pytest.raises(model_3d.Model3DCleanError, match="boom"):
+        model_3d.clean("blender", tmp_path / "missing", 1.6)
+
+
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setattr(db, "_DB_PATH", tmp_path / "app.db")
@@ -92,7 +127,14 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
         (out / "meta.json").write_text(json.dumps({"seed": seed}), encoding="utf-8")
         return {"seed": seed}
 
+    def fake_clean(blender: str, out: Path, height: float) -> dict:
+        calls.append(("clean", blender, out, height))
+        (out / "model_clean.glb").write_bytes(b"clean")
+        return {"height": height}
+
     monkeypatch.setattr(model_3d, "generate", fake_generate)
+    monkeypatch.setattr(model_3d, "clean", fake_clean)
+    monkeypatch.setattr(body_rig, "find_blender", lambda _configured: "blender")
     app = FastAPI()
     app.include_router(story_routes.router)
     app.include_router(lora_routes.router)
@@ -145,10 +187,16 @@ def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: P
     assert info["configured"] and info["bases"][0]["views"] == {"front": True, "left": True, "back": False}
     assert client.post(url, json={"seed": 9}).status_code == 200
     entry = _wait(client, character["id"], base["id"])
-    assert entry["job"]["status"] == "done" and entry["job"]["remote"] == "running"
-    assert set(entry["files"]) == {"model.glb", "meta.json"} and entry["meta"] == {"seed": 9}
+    assert entry["job"]["status"] == "done" and entry["job"]["remote"] == "cleaning"
+    assert set(entry["files"]) == {"model.glb", "model_clean.glb", "meta.json"} and entry["meta"] == {"seed": 9}
     out = tmp_path / f"outputs/training_data/eiko/model_3d/{base['id']}"
-    assert client.calls == [(folder, base["id"], out, 9)]  # type: ignore[attr-defined]
+    # 作ったあと、素体の身長(女性・ふつう)にそろえて整える
+    assert client.calls == [(folder, base["id"], out, 9), ("clean", "blender", out, 1.60)]  # type: ignore[attr-defined]
+
+    # 整え直すだけ(GPU は使わない)
+    assert client.post(f"{url}/clean", json={}).status_code == 200
+    assert _wait(client, character["id"], base["id"])["job"]["status"] == "done"
+    assert client.calls[-1] == ("clean", "blender", out, 1.60)  # type: ignore[attr-defined]
 
     res = client.get(f"{url}/file", params={"base_id": base["id"], "name": "model.glb"})
     assert res.status_code == 200 and res.content == b"glTF"
@@ -185,3 +233,17 @@ def test_model_3d_needs_a_base_and_the_server(client: TestClient, monkeypatch: p
     monkeypatch.setattr(model3d_remote, "configured", lambda: False)
     res = client.post(url, json={"base_id": base["id"]})
     assert res.status_code == 422 and "MODEL3D_BASE_URL" in res.text
+    # 整え直すのは、形を作ったあとだけ
+    assert client.post(f"{url}/clean", json={"base_id": base["id"]}).status_code == 404  # 正面の絵が無い素体は候補に出ない
+
+
+def test_model_3d_needs_blender(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    character = _character(client, "test")
+    base = _base(client, "スーツ")
+    _draw(tmp_path / "outputs/training_data/test/body_base", base["id"], ("front",))
+    url = f"/api/lora-dataset/character/{character['id']}/model-3d"
+    assert client.post(f"{url}/clean", json={"base_id": base["id"]}).status_code == 422
+    monkeypatch.setattr(body_rig, "find_blender", lambda _configured: None)
+    res = client.post(url, json={"base_id": base["id"]})
+    assert res.status_code == 422 and "Blender" in res.text
+    assert client.calls == []  # type: ignore[attr-defined]
