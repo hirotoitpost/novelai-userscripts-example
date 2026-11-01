@@ -794,7 +794,9 @@ def main() -> None:
     bpy.context.scene.render.fps = 24
     bpy.ops.export_scene.gltf(
         filepath=str(folder / "model_rigged.glb"), export_format="GLB", export_animations=True,
-        export_animation_mode="NLA_TRACKS", export_morph_normal=False,
+        # モーフの法線も入れる(入れないと、ブラウザ(three.js)は元の形の法線で陰影を付け、ならした胸の先の穴がそのまま
+        # 見えた。Blender は形を変えたあと法線を計算し直すので、Blender の絵では出なかった)
+        export_animation_mode="NLA_TRACKS", export_morph_normal=True,
     )
     render_motion(arm, actions[preview], motions[preview]["frames"], height, folder / "frames")
     bpy.ops.wm.save_as_mainfile(filepath=str(folder / "model.blend"))
