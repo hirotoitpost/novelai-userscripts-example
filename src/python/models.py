@@ -466,6 +466,7 @@ class Model3DPoseRequest(BaseModel):
     style: str = Field("shade", description="shade(灰色の陰影)か line(線画風)")
     shapes: dict[str, float] | None = Field(
         None, description="形状パーツの強さ(形の名前 → 0〜2)。省くと保存した強さ。場面ごとに変えるとき")
+    shape_set: str | None = Field(None, description="保存した形の組み合わせの名前(shapes より後。どちらも省くと保存した強さ)")
 
 
 class Model3DShapesRequest(BaseModel):
@@ -474,6 +475,17 @@ class Model3DShapesRequest(BaseModel):
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
     base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
     weights: dict[str, float] = Field(description="形の名前 → 強さ(0〜2)。書いていない形は 0")
+    set_name: str | None = Field(
+        None, max_length=40, description="あれば、いまの強さは変えず、この名前の組み合わせ(場面ごと)として残す")
+
+
+class BodyShapePresetRequest(BaseModel):
+    """自分で値を変えた形状パーツの形(body_shapes.clean_params で確かめる)。どのモデルにも当てる共有の一覧。"""
+
+    part: str = Field(description="部位(body_shapes.PARTS)")
+    label: str = Field(min_length=1, max_length=40)
+    params: dict[str, float | str] = Field(description="形の値(op と radius・height など)")
+    tags: str = Field("", max_length=300, description="この形を表すタグ(カンマ区切り。素体・キャラシートにあれば既定の形にする)")
 
 
 class HairPointPrompt(BaseModel):

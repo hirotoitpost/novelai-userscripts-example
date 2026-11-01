@@ -584,3 +584,67 @@ def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_pa
     _wait(client, adult["id"], nude["id"])
     assert rendered == [{"nipple_inverted": 1.0}, None]
     assert client.post(f"{url}/pose", json={"base_id": suit["id"], "pose": "stand", "shapes": {"nipple_large": 1}}).status_code == 422
+
+
+def test_custom_shape_presets_are_shared_checked_and_used(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "/api/lora-dataset/body-shape-presets"
+    catalog = client.get(url).json()
+    assert catalog["params"]["socket_lip_width"]["max"] == 1.0 and "part" in catalog["parts"]["areola"]["ops"]
+    assert "socket_lip_roll" in catalog["op_params"]["part"]
+    # 範囲の外・部位に合わない変形のしかたは断る
+    assert client.post(url, json={"part": "areola", "label": "x", "params": {"op": "part", "radius": 9, "height": 0.1}}).status_code == 422
+    assert client.post(url, json={"part": "areola", "label": "x", "params": {"op": "lift", "radius": 1, "height": 0.1}}).status_code == 422
+    params = {"op": "part", "radius": 1.6, "height": 0.35, "edge": 0.1, "unused": 1}
+    res = client.post(url, json={"part": "areola", "label": "大きな丘", "params": params, "tags": "huge areolae"})
+    assert res.status_code == 200
+    key = res.json()["key"]
+    custom = next(p for p in res.json()["presets"] if p["key"] == key)
+    assert custom["params"] == {"op": "part", "radius": 1.6, "height": 0.35, "edge": 0.1} and not custom["builtin"]
+    # 直すときは丸ごと置き換える(タグも送る)
+    edited = client.put(f"{url}/{custom['id']}", json={
+        "part": "areola", "label": "大きな丘2", "params": {**params, "height": 0.4}, "tags": "huge areolae",
+    })
+    assert next(p for p in edited.json()["presets"] if p["key"] == key)["params"]["height"] == 0.4
+
+    # タグに合う自分の形が、骨を入れるときの既定になる(裸の素体のモデル)。全年齢のモデルには当てない
+    adult = _character(client, "rumi", is_adult=1, age=28, appearance_tags="1girl, huge areolae")
+    nude = _base(client, "裸", kind="nude")
+    suit = _base(client, "スーツ")
+    for base in (nude, suit):
+        folder = "body_base_r18" if base["kind"] == "nude" else "body_base"
+        _draw(tmp_path / f"outputs/training_data/rumi/{folder}", base["id"], ("front",))
+    model = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    client.post(model, json={"base_id": nude["id"]})
+    _wait(client, adult["id"], nude["id"])
+    shapes, weights = client.rig_shapes[-1]  # type: ignore[attr-defined]
+    assert shapes["presets"][key]["height"] == 0.4 and weights[key] == 1.0
+    client.post(model, json={"base_id": suit["id"]})
+    _wait(client, adult["id"], suit["id"])
+    assert key not in client.rig_shapes[-1][0]["presets"]  # type: ignore[attr-defined]
+
+    # 場面ごとの組み合わせ: いまの強さは変えずに名前を付けて残し、ポーズの絵で選ぶ
+    out = tmp_path / f"outputs/training_data/rumi/model_3d_r18/{nude['id']}"
+    (out / "model.blend").write_bytes(b"blend")
+    shapes_url = f"{model}/shapes"
+    client.put(shapes_url, json={"base_id": nude["id"], "weights": {"repair": 1, key: 1}})
+    res = client.put(shapes_url, json={"base_id": nude["id"], "weights": {"repair": 1, "nipple_inverted": 1}, "set_name": "陥没"})
+    entry = next(b for b in res.json()["bases"] if b["base_id"] == nude["id"])
+    assert entry["shapes"]["weights"] == {"repair": 1.0, key: 1.0} and entry["shapes"]["sets"]["陥没"]["nipple_inverted"] == 1.0
+    rendered: list[dict | None] = []
+
+    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None) -> list[Path]:  # noqa: ANN001
+        rendered.append(shape_weights)
+        return []
+
+    monkeypatch.setattr(model_3d, "render_pose", fake_render)
+    client.post(f"{model}/pose", json={"base_id": nude["id"], "pose": "stand", "shape_set": "陥没"})
+    _wait(client, adult["id"], nude["id"])
+    assert rendered == [{"repair": 1.0, "nipple_inverted": 1.0}]
+    assert client.post(f"{model}/pose", json={"base_id": nude["id"], "pose": "stand", "shape_set": "無い"}).status_code == 422
+    res = client.delete(f"{shapes_url}/sets/陥没", params={"base_id": nude["id"]})
+    assert next(b for b in res.json()["bases"] if b["base_id"] == nude["id"])["shapes"]["sets"] == {}
+
+    # 消すと一覧から外れる
+    assert client.delete(f"{url}/{custom['id']}").status_code == 200
+    assert all(p["key"] != key for p in client.get(url).json()["presets"])
+    assert client.delete(f"{url}/{custom['id']}").status_code == 404

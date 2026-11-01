@@ -69,7 +69,7 @@ PRESETS: dict[str, Preset] = {
         {
             "op": "part", "radius": 0.22, "height": 0.08, "edge": 0.5, "aspect": 2.6,
             "socket_radius": 0.45, "socket_depth": 0.3, "socket_aspect": 3.2, "socket_lip": 0.06,
-            "socket_lip_width": 0.45,
+            "socket_lip_width": 0.45, "socket_lip_roll": 0.04,
         },
     ),
     "areola_flat": Preset("areola", "平ら", (), {"op": "part", "radius": 1.0, "height": 0.02, "edge": 0.2}),
@@ -101,6 +101,85 @@ def _words(text: str) -> set[str]:
     return words
 
 
+# 形の値の範囲(名前 → (画面の名前, 最小, 最大, 刻み))。自分で値を変えた形(DB の body_shape_presets)を確かめ、
+# 画面のスライダーにも使う。大きさ・高さは、部位の大きさ(胸の幅など)に対する割合
+PARAMS: dict[str, tuple[str, float, float, float]] = {
+    "radius": ("広さ", 0.05, 2.5, 0.01),
+    "height": ("高さ(負でへこむ)", -0.6, 0.6, 0.01),
+    "edge": ("ふちの切り立ち", 0.0, 0.95, 0.05),
+    "aspect": ("横:縦", 1.0, 4.0, 0.1),
+    "socket_radius": ("へこみの広さ", 0.1, 1.0, 0.01),
+    "socket_depth": ("へこみの深さ", 0.0, 0.6, 0.01),
+    "socket_aspect": ("切れ目の横:縦", 1.0, 5.0, 0.1),
+    "socket_lip": ("唇の高さ", 0.0, 0.2, 0.005),
+    "socket_lip_width": ("唇の幅", 0.1, 1.0, 0.01),
+    "socket_lip_roll": ("唇の折り返し(切れ目への巻き込み)", 0.0, 0.1, 0.005),
+    "depth": ("へこみとみなす深さ(m)", 0.001, 0.01, 0.0005),
+    "size": ("直すかたまりの大きさの上限(m)", 0.01, 0.1, 0.005),
+}
+# 変形のしかた → 使う値
+OP_PARAMS: dict[str, tuple[str, ...]] = {
+    "repair": ("depth", "size"),
+    "bump": ("radius", "height", "edge"),
+    "lift": ("radius", "height"),
+    "part": ("radius", "height", "edge", "aspect", "socket_radius", "socket_depth", "socket_aspect", "socket_lip",
+             "socket_lip_width", "socket_lip_roll"),
+}
+# 部位 → 使える変形のしかた
+PART_OPS: dict[str, tuple[str, ...]] = {
+    "repair": ("repair",), "nipple": ("part",), "areola": ("part",), "breast": ("bump", "lift"),
+    "navel": ("bump",), "belly": ("bump",),
+}
+CUSTOM_PREFIX = "custom_"
+
+
+class ShapeError(ValueError):
+    """形の値が使えない。"""
+
+
+def clean_params(part: str, params: dict) -> dict:
+    """自分で値を変えた形の値を確かめる(部位で使える変形のしかたと、値の範囲)。使わない値は外す。"""
+    if part not in PARTS:
+        raise ShapeError(f"部位が違います: {part}")
+    op = params.get("op")
+    if op not in PART_OPS[part]:
+        raise ShapeError(f"{PARTS[part].label}の変形のしかたは {', '.join(PART_OPS[part])} です")
+    cleaned: dict[str, float | str] = {"op": op}
+    for name in OP_PARAMS[op]:
+        if name not in params:
+            continue
+        label, low, high, _ = PARAMS[name]
+        value = float(params[name])
+        if not low <= value <= high:
+            raise ShapeError(f"{label}は {low}〜{high} です")
+        cleaned[name] = value
+    needed = {"repair": ("depth", "size"), "bump": ("radius", "height"), "lift": ("radius", "height"),
+              "part": ("radius", "height")}[op]
+    missing = [PARAMS[n][0] for n in needed if n not in cleaned]
+    if missing:
+        raise ShapeError(f"値が足りません: {', '.join(missing)}")
+    # へこみ(socket)は 3 つそろって使う
+    if any(n in cleaned for n in ("socket_radius", "socket_depth")) and not all(n in cleaned for n in ("socket_radius", "socket_depth")):
+        raise ShapeError("へこみの広さと深さは、両方入れてください")
+    return cleaned
+
+
+def custom_presets(rows: list[dict] | None) -> dict[str, Preset]:
+    """DB の自分で値を変えた形を、形の名前(custom_<番号>)→ Preset にする。"""
+    result = {}
+    for row in rows or []:
+        if row["part"] not in PARTS:
+            continue
+        tags = tuple(t.strip().lower().replace("_", " ") for t in (row.get("tags") or "").split(",") if t.strip())
+        result[f"{CUSTOM_PREFIX}{row['id']}"] = Preset(row["part"], row["label"], tags, dict(row["params"]))
+    return result
+
+
+def all_presets(custom: list[dict] | None = None) -> dict[str, Preset]:
+    """組み込みの形と、自分で値を変えた形(あとに並ぶ)。"""
+    return {**PRESETS, **custom_presets(custom)}
+
+
 def allowed(part: str, *, nude: bool, modest: bool) -> bool:
     """この部位を、このモデルに当てられるか(nude: 裸の素体のモデル、modest: 控えめに描くキャラ)。"""
     spec = PARTS[part]
@@ -109,17 +188,17 @@ def allowed(part: str, *, nude: bool, modest: bool) -> bool:
     return not (spec.adult_only and modest)
 
 
-def presets_for(*, nude: bool, modest: bool) -> dict[str, Preset]:
-    """このモデルに当てられる形の全部(シェイプキーにするもの)。"""
-    return {key: p for key, p in PRESETS.items() if allowed(p.part, nude=nude, modest=modest)}
+def presets_for(*, nude: bool, modest: bool, custom: list[dict] | None = None) -> dict[str, Preset]:
+    """このモデルに当てられる形の全部(シェイプキー・部品にするもの)。custom は DB の自分で値を変えた形。"""
+    return {key: p for key, p in all_presets(custom).items() if allowed(p.part, nude=nude, modest=modest)}
 
 
-def choose(tags: str, *, nude: bool, modest: bool) -> dict[str, str]:
-    """部位 → 既定の形。タグに合う形があればそれ、無ければ部位の最初の形(ふつう・そのまま)。"""
+def choose(tags: str, *, nude: bool, modest: bool, custom: list[dict] | None = None) -> dict[str, str]:
+    """部位 → 既定の形。タグに合う形があればそれ(自分の形が組み込みより優先)、無ければ部位の最初の形(ふつう・そのまま)。"""
     words = _words(tags)
     result: dict[str, str] = {}
     tagged: set[str] = set()
-    for key, preset in presets_for(nude=nude, modest=modest).items():
+    for key, preset in presets_for(nude=nude, modest=modest, custom=custom).items():
         if preset.part not in result:
             result[preset.part] = key
         if any(tag in words for tag in preset.tags):
@@ -131,19 +210,34 @@ def choose(tags: str, *, nude: bool, modest: bool) -> dict[str, str]:
     return result
 
 
-def to_json(*, nude: bool, modest: bool) -> dict:
+def to_json(*, nude: bool, modest: bool, custom: list[dict] | None = None) -> dict:
     """rig_model.py に渡す形の一覧(部位ごとの左右の有無と、形の値)。"""
-    presets = presets_for(nude=nude, modest=modest)
+    presets = presets_for(nude=nude, modest=modest, custom=custom)
     return {
         "parts": {k: {"sides": p.sides} for k, p in PARTS.items() if allowed(k, nude=nude, modest=modest)},
         "presets": {k: {"part": p.part, **p.params} for k, p in presets.items()},
     }
 
 
-def labels(*, nude: bool, modest: bool) -> dict:
+def labels(*, nude: bool, modest: bool, custom: list[dict] | None = None) -> dict:
     """画面に出す名前(部位 → 名前と、選べる形)。"""
-    presets = presets_for(nude=nude, modest=modest)
+    presets = presets_for(nude=nude, modest=modest, custom=custom)
     return {
         part: {"label": spec.label, "presets": {k: p.label for k, p in presets.items() if p.part == part}}
         for part, spec in PARTS.items() if allowed(part, nude=nude, modest=modest)
+    }
+
+
+def catalog(custom: list[dict] | None = None) -> dict:
+    """形の一覧のページ用: 部位、組み込みと自分の形(値とタグ)、値の範囲、部位ごとの変形のしかた。"""
+    return {
+        "parts": {k: {"label": p.label, "nude_only": p.nude_only, "adult_only": p.adult_only, "ops": PART_OPS[k]}
+                  for k, p in PARTS.items()},
+        "presets": [
+            {"key": k, "part": p.part, "label": p.label, "tags": list(p.tags), "params": p.params,
+             "builtin": not k.startswith(CUSTOM_PREFIX), "id": int(k[len(CUSTOM_PREFIX):]) if k.startswith(CUSTOM_PREFIX) else None}
+            for k, p in all_presets(custom).items()
+        ],
+        "params": {k: {"label": v[0], "min": v[1], "max": v[2], "step": v[3]} for k, v in PARAMS.items()},
+        "op_params": OP_PARAMS,
     }
