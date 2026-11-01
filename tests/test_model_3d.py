@@ -730,3 +730,14 @@ def test_preview_shapes_sends_only_the_used_shapes(tmp_path: Path, monkeypatch: 
     out = model_3d.preview_shapes("blender", tmp_path, hand=None, shapes=shapes, shape_weights={"repair": 1.0, "nipple_large": 0.0})
     assert out.read_bytes() == b"preview" and (tmp_path / "model_rigged.glb").read_bytes() == b"x"
     assert set(seen["shapes"]["presets"]) == {"repair"} and seen["preview_only"] is True
+
+
+def test_underbust_gap_finds_the_first_line_below_the_nipple() -> None:
+    lightness = np.full((400, 50), 220.0)
+    lightness[150:156, :] = 5  # 胸の輪郭(乳首の 30px 下)
+    lightness[200:204, :] = 5  # その下の胴のすじ(拾わない)
+    assert model_3d._underbust_gap(lightness, (25.0, 122.0), torso=300.0, hip_y=350.0) == pytest.approx((152.5 - 122) / 300, abs=1e-3)
+    # 乳首のすぐ下(肩から腰の 3% 以内)の線は、乳首の縁なので数えない。線が無ければ None
+    near = np.full((400, 50), 220.0)
+    near[125:128, :] = 5
+    assert model_3d._underbust_gap(near, (25.0, 122.0), torso=300.0, hip_y=350.0) is None

@@ -359,8 +359,28 @@ def find_nipples(image: Image.Image) -> dict | None:
         ys, xs_ = np.nonzero(near)
         result[side] = (float(xs_.mean()), float(ys.mean()))
         strength.append(peak)
+        # 胸の下のふち(正面から見た胸の輪郭の、乳首の真下の黒い線画の線)までの距離を、肩から腰までの長さに対する割合で
+        result[f"gap_{side}"] = _underbust_gap(lab[..., 0], result[side], torso, hip_y)
     result["score"] = round(min(strength), 2)
+    result["torso"] = float(torso)
     return result
+
+
+def _underbust_gap(lightness, nipple: tuple[float, float], torso: float, hip_y: float) -> float | None:
+    """乳首の真下をたどり、最初の黒い線(線画の胸の輪郭)の真ん中までの距離(肩から腰までの長さに対する割合)。無ければ None。"""
+    x, y = int(round(nipple[0])), int(round(nipple[1]))
+    lo, hi = max(x - 3, 0), min(x + 4, lightness.shape[1])
+    profile = lightness[:, lo:hi].min(axis=1)
+    start, end = int(y + 0.03 * torso), min(int(hip_y), lightness.shape[0])
+    run = []
+    for yy in range(start, end):
+        if profile[yy] < 60:
+            run.append(yy)
+        elif run:
+            break
+    if len(run) < 2:
+        return None
+    return round(float((np.mean(run) - y) / torso), 4)
 
 
 def nipple_hint(folder: Path, base_id: int) -> dict | None:
@@ -384,7 +404,10 @@ def nipple_hint(folder: Path, base_id: int) -> dict | None:
     center = (float(xs.min()) + float(xs.max())) / 2
     tall = max(bottom - top, 1.0)
     hint = {side: [round((found[side][0] - center) / tall, 4), round((bottom - found[side][1]) / tall, 4)] for side in ("L", "R")}
-    return {**hint, "score": found["score"], "source": path.name}
+    # 胸の下のふちからの距離(肩から腰までの長さに対する割合)。3D の胸は絵ほど下がらないことがあるので、高さそのままより、
+    # 3D の胸の下のふちからこの距離に置くほうが、胸の上の位置が絵に合う(2026-11 矢野栄子)
+    gaps = {side: found.get(f"gap_{side}") for side in ("L", "R")}
+    return {**hint, "gaps": gaps, "score": found["score"], "source": path.name}
 
 
 def hand_ratios(folder: Path, base_id: int) -> dict:
