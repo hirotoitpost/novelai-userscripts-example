@@ -41,3 +41,8 @@
 .m3d-float .m3d-viewer { width: 100%; }
 .m3d-position-row { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: center; }
 .m3d-position-row input[type="range"] { width: 9rem; }
+.m3d-smooth { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.8rem; }
+.m3d-smooth-list { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.m3d-smooth-list li { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: center; }
+.m3d-smooth-list input[type="range"] { width: 9rem; }
+.m3d-viewer--picking canvas { cursor: crosshair; }

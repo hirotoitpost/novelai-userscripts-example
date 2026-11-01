@@ -7,7 +7,21 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
  * 素体の 3D モデル(GLB)を見る。ドラッグで回す・ホイールで寄る。GLB に入った動き(骨のアニメーション)を選んで再生する。
  * 形状パーツ(GLB のモーフ = Blender のシェイプキー)には shapes の強さを当てる(書いていない形は 0)。
  * three.js は大きいので、Model3D から必要になったときだけ読み込む(React.lazy)。
+ * onPick があれば、体の上をクリック(ドラッグせずに離す)した点を、休んだ姿勢(動き・形状パーツを当てる前)の位置にして
+ * Blender の座標(m。Z 上・正面 -Y)で渡す(ならす所を選ぶ)。markers の所に、半透明の球を出す。
  */
+
+/** Blender の座標(Z 上・正面 -Y)の点。GLB(Y 上・正面 +Z)とは軸が入れ替わる */
+export type BlenderPoint = [number, number, number]
+
+export interface Marker {
+  at: BlenderPoint
+  /** 半径(mm) */
+  radius: number
+}
+
+const toBlender = (v: THREE.Vector3): BlenderPoint => [v.x, -v.z, v.y]
+const fromBlender = ([x, y, z]: BlenderPoint) => new THREE.Vector3(x, z, -y)
 
 interface Props {
   src: string
@@ -22,6 +36,10 @@ interface Props {
    * 切り替えなど)そこから表示し、回すたびに書き換える。無い・空なら、全身が入る位置から始める
    */
   view?: { current: CameraView | null }
+  /** 体の上をクリックした点(休んだ姿勢の位置。Blender の座標)を受け取る。無ければクリックで選ばない */
+  onPick?: (at: BlenderPoint) => void
+  /** 印を出す所(ならす所) */
+  markers?: Marker[]
 }
 
 export interface CameraView {
@@ -29,13 +47,33 @@ export interface CameraView {
   target: [number, number, number]
 }
 
-export default function Model3DViewer({ src, animation, onAnimations, shapes, view }: Props) {
+/** 当たった三角形の上の点を、同じ三角形の休んだ姿勢(モーフ・骨を当てる前)の位置に移す(世界の座標) */
+function restPoint(hit: THREE.Intersection): THREE.Vector3 | null {
+  const mesh = hit.object as THREE.Mesh
+  const face = hit.face
+  const position = mesh.geometry?.attributes.position
+  if (!face || !position) return null
+  const posed = [face.a, face.b, face.c].map(i => mesh.getVertexPosition(i, new THREE.Vector3()))
+  const local = mesh.worldToLocal(hit.point.clone())
+  const bary = THREE.Triangle.getBarycoord(local, posed[0], posed[1], posed[2], new THREE.Vector3())
+  if (!bary) return null
+  const rest = new THREE.Vector3()
+  ;[face.a, face.b, face.c].forEach((i, k) => rest.addScaledVector(new THREE.Vector3().fromBufferAttribute(position, i), bary.getComponent(k)))
+  return rest.applyMatrix4(mesh.matrixWorld)
+}
+
+export default function Model3DViewer({ src, animation, onAnimations, shapes, view, onPick, markers }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const mixerRef = useRef<THREE.AnimationMixer | null>(null)
   const morphRef = useRef<THREE.Mesh[]>([])
   // 着脱する部品(乳首・乳輪。part_<形>_<L|R>)。選んでいない形は隠す
   const partsRef = useRef<THREE.Object3D[]>([])
   const clipsRef = useRef<THREE.AnimationClip[]>([])
+  // クリックで選ぶ(最新の onPick を、読み込み直さずに使う)
+  const pickRef = useRef(onPick)
+  pickRef.current = onPick
+  const bodiesRef = useRef<THREE.Mesh[]>([])
+  const markerGroupRef = useRef<THREE.Group | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -66,6 +104,27 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
     const clock = new THREE.Clock()
     let frame = 0
     let disposed = false
+    const markerGroup = new THREE.Group()
+    scene.add(markerGroup)
+    markerGroupRef.current = markerGroup
+
+    // ドラッグ(回す)と見分けるため、押した所から 5px 以内で離したときだけ選ぶ
+    let down: { x: number; y: number } | null = null
+    const raycaster = new THREE.Raycaster()
+    const onDown = (e: PointerEvent) => { down = { x: e.clientX, y: e.clientY } }
+    const onUp = (e: PointerEvent) => {
+      const pick = pickRef.current
+      if (!pick || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return
+      const rect = renderer.domElement.getBoundingClientRect()
+      const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1)
+      raycaster.setFromCamera(ndc, camera)
+      // 体だけ(部品・印・床は除く)
+      const hit = raycaster.intersectObjects(bodiesRef.current, false)[0]
+      const rest = hit ? restPoint(hit) : null
+      if (rest) pick(toBlender(rest))
+    }
+    renderer.domElement.addEventListener('pointerdown', onDown)
+    renderer.domElement.addEventListener('pointerup', onUp)
 
     function tick() {
       frame = requestAnimationFrame(tick)
@@ -95,6 +154,15 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
           if (mesh.isMesh && mesh.morphTargetDictionary) morphs.push(mesh)
         })
         morphRef.current = morphs
+        // 選ぶときに当てる体(着脱する部品の中のメッシュは除く)
+        const bodies: THREE.Mesh[] = []
+        model.traverse(obj => {
+          const mesh = obj as THREE.Mesh
+          let inPart = false
+          for (let o: THREE.Object3D | null = obj; o; o = o.parent) if (/^part_.+_[LR]$/.test(o.name)) inPart = true
+          if (mesh.isMesh && !inPart) bodies.push(mesh)
+        })
+        bodiesRef.current = bodies
         const parts: THREE.Object3D[] = []
         model.traverse(obj => {
           if (/^part_.+_[LR]$/.test(obj.name)) parts.push(obj)
@@ -129,6 +197,8 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
     tick()
     return () => {
       disposed = true
+      renderer.domElement.removeEventListener('pointerdown', onDown)
+      renderer.domElement.removeEventListener('pointerup', onUp)
       cancelAnimationFrame(frame)
       controls.dispose()
       renderer.dispose()
@@ -156,8 +226,27 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
     for (const part of partsRef.current) part.visible = (shapes[part.name.slice(5, -2)] ?? 0) > 0
   }, [shapes, loading])
 
+  useEffect(() => {
+    const group = markerGroupRef.current
+    if (!group) return
+    for (const child of [...group.children]) {
+      group.remove(child)
+      const mesh = child as THREE.Mesh
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose()
+    }
+    for (const marker of markers ?? []) {
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(marker.radius / 1000, 20, 14),
+        new THREE.MeshBasicMaterial({ color: 0x2f8cff, transparent: true, opacity: 0.35, depthWrite: false }),
+      )
+      sphere.position.copy(fromBlender(marker.at))
+      group.add(sphere)
+    }
+  }, [markers, loading])
+
   return (
-    <div className="m3d-viewer">
+    <div className={`m3d-viewer${onPick ? ' m3d-viewer--picking' : ''}`}>
       <div ref={hostRef} className="m3d-viewer-canvas" />
       {loading && <p className="lora-hint">読み込んでいます…</p>}
       {error && <p className="lora-error">3D を読み込めませんでした: {error}</p>}

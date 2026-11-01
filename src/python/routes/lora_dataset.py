@@ -106,6 +106,7 @@ from ..models import (
     BodyLayersRequest,
     Model3DPoseRequest,
     Model3DShapesRequest,
+    Model3DSmoothSpot,
     Model3DShapePreviewRequest,
     BodyShapePresetRequest,
     Model3DRequest,
@@ -1877,6 +1878,18 @@ def _check_offsets(offsets: dict[str, tuple[float, float]]) -> dict[str, list[fl
     return {k: [float(v[0]), float(v[1])] for k, v in offsets.items()}
 
 
+# ならす所の数の上限
+_SMOOTH_SPOTS_MAX = 30
+
+
+def _check_smooth(spots: list[Model3DSmoothSpot]) -> list[dict]:
+    if len(spots) > _SMOOTH_SPOTS_MAX:
+        raise HTTPException(status_code=422, detail=f"ならす所は {_SMOOTH_SPOTS_MAX} か所までです")
+    if any(abs(c) > 3.0 or c != c for spot in spots for c in spot.at):
+        raise HTTPException(status_code=422, detail="ならす所の位置が体の上にありません")
+    return [{"at": [round(float(c), 5) for c in spot.at], "radius": float(spot.radius)} for spot in spots]
+
+
 def _nipple_settings(character: dict, base: dict, root_name: str, offsets: dict | None = None) -> dict | None:
     """
     乳首の位置: 素体の正面の絵(乳首あり)から測った位置と、ずらす量(保存したもの、か offsets)。乳首の部品を当てられる
@@ -1916,6 +1929,8 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 "sets": model_3d.read_meta(folder).get("shapes", {}).get("sets", {}),
                 # 乳首の位置をずらす量(L・R → [左右, 上下] mm)と、正面の絵から測れたか
                 "offsets": model_3d.read_meta(folder).get("shapes", {}).get("offsets", {}),
+                # ならす所(休んだ姿勢の位置 m と半径 mm)
+                "smooth": model_3d.read_meta(folder).get("shapes", {}).get("smooth", []),
                 "nipple_source": ((model_3d.read_meta(folder).get("rig") or {}).get("nipples") or {}).get("hint") is not None,
             },
             "meta": model_3d.read_meta(folder) or None,
@@ -2167,6 +2182,8 @@ async def save_model_3d_shapes(character_id: int, req: Model3DShapesRequest) -> 
     shapes = meta.get("shapes", {})
     if req.offsets is not None:
         shapes["offsets"] = _check_offsets(req.offsets)
+    if req.smooth is not None:
+        shapes["smooth"] = _check_smooth(req.smooth)
     if req.set_name and req.set_name.strip():
         shapes.setdefault("sets", {})[req.set_name.strip()] = weights
     else:
@@ -2195,30 +2212,36 @@ async def preview_model_3d_shape(character_id: int, req: Model3DShapePreviewRequ
     if not (out / "model_clean.glb").is_file():
         raise HTTPException(status_code=422, detail="この素体の 3D の形をまだ作っていません。")
     flags = _shape_flags(character, base)
-    if req.part not in body_shapes.PARTS or not body_shapes.allowed(req.part, nude=flags["nude"], modest=flags["modest"]):
-        raise HTTPException(status_code=422, detail=f"このモデルには当てられない部位です: {req.part}")
-    try:
-        params = body_shapes.clean_params(req.part, req.params)
-    except body_shapes.ShapeError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
     weights = _check_shape_weights(character, base, req.weights)
-    allowed = body_shapes.presets_for(**flags)
-    # その部位のいまの形を外し、編集中の形に差し替える(強さは前の形のもの、無ければ 1)
-    previous = [w for k, w in weights.items() if allowed[k].part == req.part and w > 0]
-    weights = {k: w for k, w in weights.items() if allowed[k].part != req.part}
-    key = f"{body_shapes.CUSTOM_PREFIX}{_PREVIEW_ID}"
-    weights[key] = previous[0] if previous else 1.0
-    trial = {"id": _PREVIEW_ID, "part": req.part, "label": "試し", "tags": "", "params": params}
-    shapes = body_shapes.to_json(nude=flags["nude"], modest=flags["modest"], custom=[*flags["custom"], trial])
+    if req.part is None:
+        # 形の値は変えず、ならす所・乳首の位置だけを試す
+        shapes = body_shapes.to_json(nude=flags["nude"], modest=flags["modest"], custom=flags["custom"])
+    else:
+        if req.part not in body_shapes.PARTS or not body_shapes.allowed(req.part, nude=flags["nude"], modest=flags["modest"]):
+            raise HTTPException(status_code=422, detail=f"このモデルには当てられない部位です: {req.part}")
+        try:
+            params = body_shapes.clean_params(req.part, req.params)
+        except body_shapes.ShapeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        allowed = body_shapes.presets_for(**flags)
+        # その部位のいまの形を外し、編集中の形に差し替える(強さは前の形のもの、無ければ 1)
+        previous = [w for k, w in weights.items() if allowed[k].part == req.part and w > 0]
+        weights = {k: w for k, w in weights.items() if allowed[k].part != req.part}
+        key = f"{body_shapes.CUSTOM_PREFIX}{_PREVIEW_ID}"
+        weights[key] = previous[0] if previous else 1.0
+        trial = {"id": _PREVIEW_ID, "part": req.part, "label": "試し", "tags": "", "params": params}
+        shapes = body_shapes.to_json(nude=flags["nude"], modest=flags["modest"], custom=[*flags["custom"], trial])
     blender = _model_3d_blender()
     folder = _body_dir(character, base, req.root_name)
     offsets = _check_offsets(req.offsets) if req.offsets is not None else None
     nipples = _nipple_settings(character, base, req.root_name, offsets)
+    smooth = _check_smooth(req.smooth) if req.smooth is not None else None
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "previewing"
         model_3d.preview_shapes(
             blender, out, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes, shape_weights=weights, nipples=nipples,
+            smooth=smooth,
         )
         job["preview_weights"] = weights
 

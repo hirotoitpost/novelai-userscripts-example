@@ -507,12 +507,13 @@ def hand_ratios(folder: Path, base_id: int) -> dict:
 
 def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None = None, shapes: dict | None = None,
         shape_weights: dict[str, float] | None = None, nipples: dict | None = None, preview_only: bool = False,
-        timeout: float = 900) -> dict:
+        smooth: list[dict] | None = None, timeout: float = 900) -> dict:
     """
     整えた形(model_clean.glb)に人型の骨を入れ、body_motions の動きを全部付ける(model_rigged.glb・model.blend)。
     関節は、正面の静止画(front.png)の骨格推定の点から求める。手は人形の手に付け替え、形の割合は hand(hand_ratios。
     省くと標準)。shapes(body_shapes.to_json)があれば形状パーツのシェイプキーを作り、shape_weights の強さを入れる
-    (meta.json の shapes に残し、ポーズの絵にも使う)。motion の動きで motion.gif を描き出す。結果を meta.json の rig に足す。
+    (meta.json の shapes に残し、ポーズの絵にも使う)。ならす所(smooth。省くと meta.json の shapes.smooth)は、まわりの面に
+    寄せて体の形に焼き込む。motion の動きで motion.gif を描き出す。結果を meta.json の rig に足す。
     """
     from . import body_motions, hand_shape
     from .body_rig import RigError, detect, frames_to_gif
@@ -545,6 +546,9 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
             sent.update(shapes=shapes, shape_weights=shape_weights or {})
         if preview_only:
             sent["preview_only"] = True
+        spots = meta.get("shapes", {}).get("smooth", []) if smooth is None else smooth
+        if spots:
+            sent["smooth"] = spots
         if nipples:
             # 乳首の位置: 正面の絵から測った位置(nipple_hint。身長を 1 とした値)と、ずらす量(mm)
             sent["nipples"] = nipples
@@ -588,11 +592,11 @@ PREVIEW_FILE = "shape_preview.glb"
 
 
 def preview_shapes(blender: str, out_dir: Path, *, hand: dict | None, shapes: dict, shape_weights: dict[str, float],
-                   nipples: dict | None = None, timeout: float = 600) -> Path:
+                   nipples: dict | None = None, smooth: list[dict] | None = None, timeout: float = 600) -> Path:
     """
     形の値の試し: 整えた形を作業用のフォルダに写し、渡した形(形の値を変えたもの)で骨と形状パーツを入れて、GLB だけを
     out_dir/shape_preview.glb に置く。モデル本体(model_rigged.glb・model.blend・meta.json)は書き換えない。動き・確かめの
-    コマ・Blender のファイルは作らないので、骨を入れ直すより速い。
+    コマ・Blender のファイルは作らないので、骨を入れ直すより速い。smooth は、ならす所(省くと保存したもの)。
     """
     # 試しでは、強さの入った形だけを作る(全部の形の部品とシェイプキーを作ると、骨を入れ直すのと変わらない時間がかかった)
     used = {k for k, w in shape_weights.items() if w > 0}
@@ -604,7 +608,7 @@ def preview_shapes(blender: str, out_dir: Path, *, hand: dict | None, shapes: di
                 raise Model3DRigError("整えた形がありません。先に形を作ってください。")
             shutil.copyfile(out_dir / name, work / name)
         rig(blender, work, hand=hand, shapes=shapes, shape_weights=shape_weights, nipples=nipples, preview_only=True,
-            timeout=timeout)
+            smooth=smooth, timeout=timeout)
         target = out_dir / PREVIEW_FILE
         shutil.copyfile(work / "model_rigged.glb", target)
     return target

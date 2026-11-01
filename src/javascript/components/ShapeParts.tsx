@@ -18,6 +18,8 @@ export interface ShapeInfo {
   offsets: Record<string, [number, number]>
   /** 乳首の位置を、素体の正面の絵から測れたか(測れなければ胸の形から決めた位置) */
   nipple_source: boolean
+  /** ならす所(休んだ姿勢の位置 m と半径 mm。SmoothSpots) */
+  smooth?: { at: [number, number, number]; radius: number }[]
 }
 
 interface Catalog {

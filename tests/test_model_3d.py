@@ -552,6 +552,7 @@ def test_rig_sends_shapes_and_keeps_the_made_weights(tmp_path: Path, monkeypatch
     weights = {"repair": 1.0, "navel_normal": 1.0, "belly_flat": 1.0, "nipple_large": 1.0}
     model_3d.rig("blender", tmp_path, shapes=shapes, shape_weights=weights)
     assert sent["shapes"] == shapes and sent["shape_weights"]["belly_flat"] == 1.0
+    assert "smooth" not in sent  # ならす所を保存していなければ送らない
     # 作れなかった形(お腹の点が見つからなかったなど)の強さは残さない。部品(乳首)は、作った部品の形として残す
     assert model_3d.read_meta(tmp_path)["shapes"] == {
         "weights": {"repair": 1.0, "navel_normal": 1.0, "nipple_large": 1.0}, "sets": saved["sets"], "offsets": saved["offsets"],
@@ -589,6 +590,13 @@ def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_pa
     client.post(f"{url}/rig", json={"base_id": nude["id"]})
     _wait(client, adult["id"], nude["id"])
     assert client.rig_nipples[-1]["offsets"] == {"L": [3.0, -5.0]}  # type: ignore[attr-defined]
+    # ならす所(休んだ姿勢の位置 m と半径 mm)を保存する。半径・数・位置の範囲の外は断る
+    spot = {"at": [0.1, -0.15, 1.12], "radius": 15}
+    res = client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {"repair": 1}, "smooth": [spot]})
+    saved = next(b for b in res.json()["bases"] if b["base_id"] == nude["id"])["shapes"]
+    assert saved["smooth"] == [{"at": [0.1, -0.15, 1.12], "radius": 15.0}] and saved["offsets"] == {"L": [3.0, -5.0]}
+    for bad in ([{**spot, "radius": 2}], [{**spot, "at": [9, 0, 0]}], [spot] * 31):
+        assert client.put(f"{url}/shapes", json={"base_id": nude["id"], "weights": {}, "smooth": bad}).status_code == 422
 
     # 全年齢の素体のモデルには、乳首の形は当てられない
     assert client.post(url, json={"base_id": suit["id"]}).status_code == 200
@@ -695,9 +703,12 @@ def test_shape_preview_swaps_the_part_and_keeps_the_model(client: TestClient, tm
     calls: list[tuple[dict, dict]] = []
     previews: list[dict | None] = []
 
-    def fake_preview(blender: str, out: Path, *, hand: dict, shapes: dict, shape_weights: dict, nipples=None) -> Path:  # noqa: ANN001
+    smooths: list[list | None] = []
+
+    def fake_preview(blender: str, out: Path, *, hand: dict, shapes: dict, shape_weights: dict, nipples=None, smooth=None) -> Path:  # noqa: ANN001
         calls.append((shapes, shape_weights))
         previews.append(nipples)
+        smooths.append(smooth)
         (out / model_3d.PREVIEW_FILE).write_bytes(b"glTF")
         return out / model_3d.PREVIEW_FILE
 
@@ -719,6 +730,13 @@ def test_shape_preview_swaps_the_part_and_keeps_the_model(client: TestClient, tm
     assert client.post(f"{model}/shape-preview", json={"base_id": suit["id"], "part": "nipple", "params": inverted}).status_code == 422
     bad = {**inverted, "socket_lip_roll": 0.5}
     assert client.post(f"{model}/shape-preview", json={"base_id": nude["id"], "part": "nipple", "params": bad}).status_code == 422
+
+    # 部位を省くと、形の値は変えず、ならす所だけを試す(全年齢のモデルでもできる)
+    spot = {"at": [0.0, -0.1, 1.0], "radius": 10}
+    res = client.post(f"{model}/shape-preview", json={"base_id": suit["id"], "weights": {"repair": 1}, "smooth": [spot]})
+    assert res.status_code == 200, res.text
+    _wait(client, adult["id"], suit["id"])
+    assert calls[-1][1] == {"repair": 1.0} and smooths[-1] == [{"at": [0.0, -0.1, 1.0], "radius": 10.0}]
 
 
 def body_shapes_presets() -> dict:
@@ -743,7 +761,7 @@ def test_preview_shapes_sends_only_the_used_shapes(tmp_path: Path, monkeypatch: 
     shapes = body_shapes.to_json(nude=True, modest=False)
     out = model_3d.preview_shapes("blender", tmp_path, hand=None, shapes=shapes, shape_weights={"repair": 1.0, "nipple_large": 0.0})
     assert out.read_bytes() == b"preview" and (tmp_path / "model_rigged.glb").read_bytes() == b"x"
-    assert set(seen["shapes"]["presets"]) == {"repair"} and seen["preview_only"] is True
+    assert set(seen["shapes"]["presets"]) == {"repair"} and seen["preview_only"] is True and seen["smooth"] is None
 
 
 def test_underbust_gap_finds_the_first_line_below_the_nipple() -> None:
@@ -808,3 +826,27 @@ def test_featureless_inputs_redraw_only_the_areolas(client: TestClient, tmp_path
     client.post(url, json={"base_id": suit["id"]})
     _wait(client, adult["id"], suit["id"])
     assert client.sent_inputs[-1] is None and len(drawn) == 3  # type: ignore[attr-defined]
+
+
+def test_rig_sends_the_saved_smooth_spots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "model_clean.glb").write_bytes(b"glTF")
+    Image.new("RGBA", (360, 600)).save(tmp_path / "front.png")
+    spots = [{"at": [0.1, -0.15, 1.12], "radius": 12.0}]
+    model_3d.write_meta(tmp_path, {"clean": {"height": 1.6}, "shapes": {"smooth": spots}})
+    points = {n: np.array([180.0, 300.0]) for n in model_3d._RIG_POINTS}
+    monkeypatch.setattr(body_rig, "detect", lambda _image: (None, points))
+    sent: list[dict] = []
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        sent.append(json.loads(Path(command[-3]).read_text(encoding="utf-8")))
+        (tmp_path / "model_rigged.glb").write_bytes(b"glTF")
+        (tmp_path / "rig.json").write_text(json.dumps({"weights": {"smoothed": 1}}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    # 保存したならす所を送る。試しでは、渡したもの(空も)を送る
+    model_3d.rig("blender", tmp_path, preview_only=True)
+    model_3d.rig("blender", tmp_path, preview_only=True, smooth=[])
+    assert sent[0]["smooth"] == spots and "smooth" not in sent[1]
+    # 保存したならす所は、骨を入れ直しても残す
+    assert model_3d.read_meta(tmp_path)["shapes"]["smooth"] == spots

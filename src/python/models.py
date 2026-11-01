@@ -471,6 +471,13 @@ class Model3DPoseRequest(BaseModel):
     shape_set: str | None = Field(None, description="保存した形の組み合わせの名前(shapes より後。どちらも省くと保存した強さ)")
 
 
+class Model3DSmoothSpot(BaseModel):
+    """ならす所: 休んだ姿勢の体の上の点(Blender の座標 m。Z 上・正面 -Y)と、ならす半径(mm)。"""
+
+    at: tuple[float, float, float] = Field(description="選んだ点(m)")
+    radius: float = Field(12.0, ge=4.0, le=40.0, description="ならす半径(mm)")
+
+
 class Model3DShapesRequest(BaseModel):
     """素体の 3D モデルの形状パーツの強さを保存する(body_shapes.py。ポーズの絵・画面の 3D に使う)。"""
 
@@ -481,6 +488,8 @@ class Model3DShapesRequest(BaseModel):
         None, max_length=40, description="あれば、いまの強さは変えず、この名前の組み合わせ(場面ごと)として残す")
     offsets: dict[str, tuple[float, float]] | None = Field(
         None, description="乳首の位置をずらす量(L・R → [左右, 上下] mm。±40)。省くと変えない")
+    smooth: list[Model3DSmoothSpot] | None = Field(
+        None, description="ならす所(画面で選んだ所。まわりの面に寄せて体の形に焼き込む)。省くと変えない")
 
 
 class Model3DShapePreviewRequest(BaseModel):
@@ -488,10 +497,11 @@ class Model3DShapePreviewRequest(BaseModel):
 
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
     base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
-    part: str = Field(description="値を変えている部位(body_shapes.PARTS)")
-    params: dict[str, float | str] = Field(description="編集中の形の値")
+    part: str | None = Field(None, description="値を変えている部位(body_shapes.PARTS)。省くと形の値は変えない(ならす所だけ試す)")
+    params: dict[str, float | str] = Field(default_factory=dict, description="編集中の形の値")
     weights: dict[str, float] = Field(default_factory=dict, description="いまの画面の強さ(保存前も含む)")
     offsets: dict[str, tuple[float, float]] | None = Field(None, description="乳首の位置をずらす量(L・R → [左右, 上下] mm)")
+    smooth: list[Model3DSmoothSpot] | None = Field(None, description="ならす所(編集中。省くと保存したもの)")
 
 
 class BodyShapePresetRequest(BaseModel):
