@@ -69,6 +69,7 @@ PRESETS: dict[str, Preset] = {
         {
             "op": "part", "radius": 0.22, "height": 0.08, "edge": 0.5, "aspect": 2.6,
             "socket_radius": 0.45, "socket_depth": 0.3, "socket_aspect": 3.2, "socket_lip": 0.06,
+            "socket_lip_width": 0.45,
         },
     ),
     "areola_flat": Preset("areola", "平ら", (), {"op": "part", "radius": 1.0, "height": 0.02, "edge": 0.2}),

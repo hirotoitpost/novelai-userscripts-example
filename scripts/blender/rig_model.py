@@ -876,7 +876,7 @@ def frame(normal) -> tuple:
 def socket_delta(co, anchor: dict, params: dict):
     """
     陥没乳首の体のへこみ。乳輪の真ん中に、横に長い切れ目(横:縦 = socket_aspect)のくぼみを、socket_depth の深さで作り、
-    切れ目のふちに唇のような盛り上がり(socket_lip)を付ける(利用者の参考の絵: 丸い穴でなく横長の切れ目で、上下が少し
+    切れ目のふちに唇のような盛り上がり(高さ socket_lip、幅 socket_lip_width)を付ける(利用者の参考の絵: 丸い穴でなく横長の切れ目で、上下が少し
     盛り上がって内へ巻き込む)。
     """
     import numpy as np
@@ -890,7 +890,9 @@ def socket_delta(co, anchor: dict, params: dict):
     t = np.hypot(a / (radius * np.sqrt(aspect)), b * np.sqrt(aspect) / radius)
     near = np.abs(w) < 2 * radius
     dent = -params["socket_depth"] * anchor["size"] * profile(t, 0.5)
-    lip = float(params.get("socket_lip", 0.0)) * anchor["size"] * np.exp(-(((t - 1.05) / 0.45) ** 2))
+    # 唇の幅(socket_lip_width。切れ目の大きさに対する割合)。広いほど、なだらかに盛り上がる
+    width = float(params.get("socket_lip_width", 0.45))
+    lip = float(params.get("socket_lip", 0.0)) * anchor["size"] * np.exp(-(((t - 1.05) / width) ** 2))
     lift = np.where(near & (t < 2.0), dent + lip, 0.0)
     return lift[:, None] * n[None, :]
 
