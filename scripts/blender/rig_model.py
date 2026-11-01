@@ -547,6 +547,52 @@ def repair_delta(co, normals, edges, j: dict[str, Vector], params: dict, keep_ou
     return delta, fixed
 
 
+# 胸の面の細いしわをならす: 半径 CREASE_REACH m のまわりに当てはめた 2 次の面から CREASE_DEPTH m 以上ずれた頂点を、その面へ寄せる
+CREASE_REACH = 0.012
+CREASE_DEPTH = 0.0001
+CREASE_PASSES = 3
+
+
+def crease_delta(co, normals, anchor: dict) -> tuple:
+    """
+    胸(anchor のまわり、胸の幅の半分まで)の面の細いしわ・小さなくぼみをならす動き。AI の形は、胸の先のまわりに
+    浅いすじを作った(矢野栄子の乳首なしの写しから作った形、2026-11)。頂点ごとに、まわりの点に 2 次の面を当てはめて
+    その面へ寄せる(胸の丸みは 2 次の面に入るので、胸の先は平たくならない)。となりの頂点ではなく距離で決めるので、面を
+    細かくした所でも同じに効く。動かした頂点の数も返す。
+    """
+    import numpy as np
+    from mathutils.kdtree import KDTree
+
+    reach = np.linalg.norm(co - anchor["center"], axis=1)
+    inside = np.nonzero(reach < anchor["size"])[0]
+    delta = np.zeros_like(co)
+    if not len(inside):
+        return delta, 0
+    near = np.nonzero(reach < anchor["size"] + CREASE_REACH)[0]
+    tree = KDTree(len(near))
+    for k, i in enumerate(near):
+        tree.insert(co[i], k)
+    tree.balance()
+    for i in inside:
+        found = tree.find_range(co[i], CREASE_REACH)
+        if len(found) < 12:
+            continue
+        n = normals[i] / (np.linalg.norm(normals[i]) + 1e-9)
+        t1 = np.cross(n, [0.0, 0.0, 1.0] if abs(n[2]) < 0.9 else [1.0, 0.0, 0.0])
+        t1 /= np.linalg.norm(t1)
+        t2 = np.cross(n, t1)
+        rel = np.array([co[near[k]] for _, k, _ in found]) - co[i]
+        u, v, h = rel @ t1, rel @ t2, rel @ n
+        w = np.sqrt(np.exp(-((np.linalg.norm(rel, axis=1) / (0.5 * CREASE_REACH)) ** 2)))
+        a = np.stack([np.ones_like(u), u, v, u * u, u * v, v * v], axis=1)
+        fit = np.linalg.lstsq(a * w[:, None], h * w, rcond=None)[0]
+        if abs(fit[0]) > CREASE_DEPTH:
+            # 胸のふちへ向けて弱める(段がつかないように)
+            fade = 1.0 - (reach[i] / anchor["size"]) ** 2
+            delta[i] = fit[0] * fade * n
+    return delta, int((np.linalg.norm(delta, axis=1) > 1e-6).sum())
+
+
 # 胸の先を作り直す範囲(胸の幅の半分に対する割合)と、当てはめに使う外の輪の外側
 CAP_RADIUS = 0.3
 CAP_RING = 1.5
@@ -657,6 +703,21 @@ def bump_delta(co, normals, anchor: dict, params: dict):
 REFINE = {"nipple": 0.035, "navel": 0.025}
 
 
+def phong_point(p: Vector, corners: list[tuple[Vector, Vector]], alpha: float = 0.75) -> Vector:
+    """
+    平らな面の上の点 p を、面の頂点の向き(corners の (位置, 向き))に沿う曲面の上に移す(Phong tessellation)。
+    p を各頂点の接平面に落とした点を、p の重心座標で混ぜる。3 角形でなければ p のまま。
+    """
+    from mathutils.geometry import barycentric_transform
+
+    if len(corners) != 3:
+        return p
+    (a, na), (b, nb), (c, nc) = corners
+    w = barycentric_transform(p, a, b, c, Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1)))
+    projected = sum((w[i] * (p - (p - q).dot(n) * n) for i, (q, n) in enumerate(corners)), Vector())
+    return p.lerp(projected, alpha)
+
+
 def refine_regions(obj: bpy.types.Object, anchors: dict) -> int:
     """形状パーツで細かく形を作る所(anchors のまわり)の面を、辺を 3 つに分けて細かくする。重みを付けたあとに呼ぶ。分けた辺の数を返す。"""
     import numpy as np
@@ -672,8 +733,22 @@ def refine_regions(obj: bpy.types.Object, anchors: dict) -> int:
         if any(np.linalg.norm(a - c) < r and np.linalg.norm(b - c) < r for c, r in points):
             picked.append(e)
     if picked:
+        # 足す頂点は元の面の上(平ら)にできる。そのままだと、細かくした所に元の大きな面の平たさが陰影で出て、肌が荒れて
+        # 見えた(2026-11 矢野栄子。胸の先を作り直さなくなって表に出た)。元の面と頂点の向きを覚えておき、あとで曲面に載せる
+        from mathutils.bvhtree import BVHTree
+
+        bm.normal_update()
+        bm.verts.index_update()
+        old = {v: (v.co.copy(), v.normal.copy()) for v in bm.verts}
+        tris = [[old[v] for v in f.verts] for f in bm.faces]
+        tree = BVHTree.FromPolygons([v.co.copy() for v in bm.verts], [[v.index for v in f.verts] for f in bm.faces])
         bmesh.ops.subdivide_edges(bm, edges=picked, cuts=3, use_grid_fill=True)
         bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 4])
+        for v in bm.verts:
+            if v not in old:
+                _, _, index, _ = tree.find_nearest(v.co)
+                if index is not None:
+                    v.co = phong_point(v.co, tris[index])
         # 面の内側に足された頂点は重みが無いので、辺をたどっていちばん近い、重みのある頂点から写す
         deform = bm.verts.layers.deform.verify()
         for v in [v for v in bm.verts if not v[deform]]:
@@ -711,7 +786,17 @@ def add_shape_keys(obj: bpy.types.Object, j: dict[str, Vector], shapes: dict, we
             # 細かくした所(胸の先・へそ)は、となりに寄せるなめらかさの効き方が違うので除く(胸の先は bake_caps で直してある)
             keep_out = [(a["center"], REFINE[n.split(".")[0]]) for n, a in anchors.items() if n.split(".")[0] in REFINE]
             delta, fixed = repair_delta(co, normals, edges, j, preset, keep_out)
-            made[key] = {"fixed": fixed}
+            # 胸の面の細いしわは、距離で平均して埋める(細かくした胸の先のまわりも同じに効く)
+            creases = 0
+            for side in ("L", "R"):
+                if f"breast.{side}" in anchors:
+                    fill = np.zeros_like(co)
+                    for _ in range(CREASE_PASSES):
+                        fill += crease_delta(co + fill, normals, anchors[f"breast.{side}"])[0]
+                    fill[np.linalg.norm(delta, axis=1) > 0] = 0  # へこみ補正で直した所は重ねない
+                    delta += fill
+                    creases += int((np.linalg.norm(fill, axis=1) > 1e-6).sum())
+            made[key] = {"fixed": fixed, "creases": creases}
         elif preset["op"] == "part":
             if "socket_depth" not in preset or not found:
                 continue
