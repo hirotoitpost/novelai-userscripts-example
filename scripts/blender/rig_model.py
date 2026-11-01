@@ -614,7 +614,7 @@ def cap_delta(co, normals, edges, anchor: dict) -> tuple:
         degree = np.bincount(local.ravel(), minlength=len(co)).astype(float)
         degree[degree == 0] = 1
         plane = np.stack([a, b], axis=1)
-        for _ in range(30):
+        for _ in range(60):
             total = np.zeros_like(plane)
             np.add.at(total, local[:, 0], plane[local[:, 1]])
             np.add.at(total, local[:, 1], plane[local[:, 0]])
@@ -694,68 +694,36 @@ def refine_regions(obj: bpy.types.Object, anchors: dict) -> int:
 
 def add_shape_keys(obj: bpy.types.Object, j: dict[str, Vector], shapes: dict, weights: dict[str, float], anchors: dict) -> dict:
     """
-    形状パーツのシェイプキーを作る(形ごとに 1 つ。左右のある部位は左右とも)。weights の強さを入れる。部位の点は、
-    面を細かくする前に決めたもの(anchors。細かくした所となめらかさの具合が変わり、へその深さを比べ違えた)。胸の先だけは
-    へこみ補正のあとの形で決め直し、ほかの形はその上に足す(シェイプキーの強さは足し合わせ)。
+    体の形状パーツのシェイプキーを作る(形ごとに 1 つ。左右のある部位は左右とも)。weights の強さを入れる。部位の点は
+    anchors(面を細かくする前に決め、胸の先は bake_caps で作り直した面の上に移したもの)。乳首・乳輪は部品(make_parts)
+    なので作らないが、陥没乳首のように体をへこませる形(socket)は、その形の名前の体のシェイプキーにする。
     """
     import numpy as np
 
     co, normals, edges = mesh_arrays(obj)
-    anchors = dict(anchors)
     obj.shape_key_add(name="Basis", from_mix=False)
     made: dict[str, dict] = {}
-    repaired = co
-    craters: dict[str, int] = {}
     for key, preset in shapes["presets"].items():
-        if preset["op"] != "repair":
-            continue
-        # 細かくした所(胸の先・へそ)は、となりに寄せるなめらかさの効き方が違うので除き、胸の先は当てはめで作り直す
-        keep_out = [(a["center"], REFINE[name.split(".")[0]]) for name, a in anchors.items() if name.split(".")[0] in REFINE]
-        delta, fixed = repair_delta(co, normals, edges, j, preset, keep_out)
-        if "nipple" in shapes["parts"]:
-            for side in ("L", "R"):
-                if f"breast.{side}" in anchors:
-                    cap, crater = cap_delta(co, normals, edges, anchors[f"breast.{side}"])
-                    delta += cap
-                    if crater is not None:
-                        craters[side] = crater
-        repaired = co + delta
-        block = obj.shape_key_add(name=key, from_mix=False)
-        block.data.foreach_set("co", repaired.ravel())
-        made[key] = {"fixed": fixed}
-    # 乳首・乳輪は、作り直した面の上の、穴があった所(絵の乳首の所。無ければ胸のいちばん前の点)に置く
-    for side, index in craters.items():
-        for part in ("nipple", "areola"):
-            if f"{part}.{side}" in anchors:
-                anchors[f"{part}.{side}"] = {**anchors[f"{part}.{side}"], "center": repaired[index].copy()}
-    for side in ("L", "R"):
-        for part in ("nipple", "areola"):
-            name = f"{part}.{side}"
-            if name in anchors and side not in craters:
-                # 当てはめで動いた分だけ、点も面の上へ動かす
-                nearest = int(np.argmin(np.linalg.norm(co - anchors[name]["center"], axis=1)))
-                anchors[name] = {**anchors[name], "center": repaired[nearest].copy()}
-    # 作り直した胸の先の面の向きは、元の面の法線ではなく、作り直した形のまわりの点のならびから求める
-    for name in [n for n in anchors if n.split(".")[0] in ("nipple", "areola", "breast")]:
-        near = np.linalg.norm(repaired - anchors[name]["center"], axis=1) < 0.012
-        if near.sum() >= 6:
-            pts = repaired[near] - repaired[near].mean(axis=0)
-            normal = np.linalg.svd(pts, full_matrices=False)[2][-1]
-            if normal @ anchors[name]["normal"] < 0:
-                normal = -normal
-            anchors[name] = {**anchors[name], "normal": normal}
-    for key, preset in shapes["presets"].items():
-        if preset["op"] == "repair":
-            continue
         part = preset["part"]
         names = [f"{part}.{s}" for s in ("L", "R")] if shapes["parts"][part]["sides"] else [part]
         found = [anchors[n] for n in names if n in anchors]
-        if not found:
-            continue
-        delta = sum(bump_delta(repaired, normals, a, preset) for a in found)
+        if preset["op"] == "repair":
+            # 細かくした所(胸の先・へそ)は、となりに寄せるなめらかさの効き方が違うので除く(胸の先は bake_caps で直してある)
+            keep_out = [(a["center"], REFINE[n.split(".")[0]]) for n, a in anchors.items() if n.split(".")[0] in REFINE]
+            delta, fixed = repair_delta(co, normals, edges, j, preset, keep_out)
+            made[key] = {"fixed": fixed}
+        elif preset["op"] == "part":
+            if "socket_depth" not in preset or not found:
+                continue
+            delta = sum(socket_delta(co, a, preset) for a in found)
+            made[key] = {"socket": int((np.linalg.norm(delta, axis=1) > 1e-5).sum())}
+        else:
+            if not found:
+                continue
+            delta = sum(bump_delta(co, normals, a, preset) for a in found)
+            made[key] = {"moved": int((np.linalg.norm(delta, axis=1) > 1e-5).sum())}
         block = obj.shape_key_add(name=key, from_mix=False)
         block.data.foreach_set("co", (co + delta).ravel())
-        made[key] = {"moved": int((np.linalg.norm(delta, axis=1) > 1e-5).sum())}
     for block in obj.data.shape_keys.key_blocks[1:]:
         block.slider_max = 2.0
         block.value = float(weights.get(block.name, 0.0))
@@ -763,6 +731,289 @@ def add_shape_keys(obj: bpy.types.Object, j: dict[str, Vector], shapes: dict, we
         "keys": made,
         "anchors": {k: [round(float(c), 4) for c in a["center"]] for k, a in anchors.items()},
     }
+
+
+def bake_caps(obj: bpy.types.Object, anchors: dict) -> dict:
+    """
+    胸の先を、なめらかな面に作り直して体の形(シェイプキーの前の形)に焼き込む(乳首・乳輪は、この上に部品として付ける)。
+    乳首・乳輪の点は、穴があった所(絵の乳首の所。無ければ胸のいちばん前の点)の、作り直した面の上にする。
+    向きは、作り直した面のまわりの点のならびから求める。直した anchors を返す。
+    """
+    import numpy as np
+
+    co, normals, edges = mesh_arrays(obj)
+    anchors = dict(anchors)
+    delta = np.zeros_like(co)
+    craters: dict[str, int] = {}
+    for side in ("L", "R"):
+        if f"breast.{side}" in anchors:
+            cap, crater = cap_delta(co, normals, edges, anchors[f"breast.{side}"])
+            delta += cap
+            if crater is not None:
+                craters[side] = crater
+    baked = co + delta
+    obj.data.vertices.foreach_set("co", baked.ravel())
+    obj.data.update()
+    for side in ("L", "R"):
+        for part in ("nipple", "areola"):
+            name = f"{part}.{side}"
+            if name not in anchors:
+                continue
+            index = craters.get(side)
+            if index is None:
+                index = int(np.argmin(np.linalg.norm(co - anchors[name]["center"], axis=1)))
+            center = baked[index].copy()
+            near = np.linalg.norm(baked - center, axis=1) < 0.012
+            normal = anchors[name]["normal"]
+            if near.sum() >= 6:
+                pts = baked[near] - baked[near].mean(axis=0)
+                fitted = np.linalg.svd(pts, full_matrices=False)[2][-1]
+                normal = fitted if fitted @ normal > 0 else -fitted
+            anchors[name] = {**anchors[name], "center": center, "normal": normal}
+    return anchors
+
+
+# 部品の円盤の細かさ(部位 → 輪の数・まわりの分け数)。乳輪は陥没の細い切れ目に沿わせるので細かく(粗いと切れ目の縁が
+# 放射状の筋になった)
+PART_GRID = {"nipple": (12, 36), "areola": (24, 72)}
+# 部品の、体の面からの浮き(真ん中)と、ふちの沈み(m)。ふちを体の面の少し内へ入れて、境目を体に溶け込ませる
+PART_LIFT = 0.0003
+
+
+def profile(t, edge: float):
+    """部品の高さの形(0 が真ん中、1 がふち)。edge が大きいほど筒のように切り立つ。ふちで高さも傾きも 0。"""
+    import numpy as np
+
+    f = np.clip((1 - t) / max(1 - 0.9 * edge, 1e-3), 0, 1)
+    return f * f * (3 - 2 * f)
+
+
+def body_surface(obj: bpy.types.Object) -> tuple:
+    """体の面(シェイプキーの前の形)の三角形の木と、三角形ごとの頂点の番号。"""
+    import numpy as np
+    from mathutils.bvhtree import BVHTree
+
+    mesh = obj.data
+    mesh.calc_loop_triangles()
+    co = np.array([v.co for v in mesh.vertices])
+    tris = np.array([t.vertices[:] for t in mesh.loop_triangles])
+    tree = BVHTree.FromPolygons([Vector(p) for p in co], tris.tolist())
+    return tree, tris, co
+
+
+def bind_points(points, tree, tris, co) -> tuple:
+    """部品の点ごとに、いちばん近い体の三角形と、その中の位置(重心座標)。体の面への「つなぎ止め」。"""
+    import numpy as np
+
+    rows, bary = [], []
+    for p in points:
+        loc, _, index, _ = tree.find_nearest(Vector(p))
+        a, b, c = co[tris[index]]
+        v0, v1, v2 = b - a, c - a, np.array(loc) - a
+        d00, d01, d11 = v0 @ v0, v0 @ v1, v1 @ v1
+        d20, d21 = v2 @ v0, v2 @ v1
+        denom = max(d00 * d11 - d01 * d01, 1e-18)
+        w1 = (d11 * d20 - d01 * d21) / denom
+        w2 = (d00 * d21 - d01 * d20) / denom
+        rows.append(tris[index])
+        bary.append(np.clip([1 - w1 - w2, w1, w2], 0, 1))
+    bary = np.array(bary)
+    return np.array(rows), bary / bary.sum(axis=1, keepdims=True)
+
+
+def part_mesh(anchor: dict, params: dict, tree) -> tuple:
+    """
+    部品の円盤(真ん中の点+輪)の頂点・面・ふちからの割合 t。頂点は、体の面へ正面から当てた所から、面の向きへ形の高さだけ
+    浮かせる。ふちは体の面の少し内へ沈める。
+    """
+    import numpy as np
+
+    n = np.array(anchor["normal"])
+    u, v = frame(n)
+    radius = params["radius"] * anchor["size"]
+    height = params["height"] * anchor["size"]
+    # aspect があれば横長の楕円にする(面積は同じ。陥没の切れ目の奥の乳首)
+    stretch = math.sqrt(float(params.get("aspect", 1.0)))
+    rings, segments = PART_GRID.get(params.get("part", ""), (12, 36))
+    local = [(0.0, 0.0)]
+    for i in range(1, rings + 1):
+        r = radius * i / rings
+        for k in range(segments):
+            a = 2 * math.pi * k / segments
+            local.append((r * math.cos(a) * stretch, r * math.sin(a) / stretch))
+    verts, ts = [], []
+    for a, b in local:
+        start = np.array(anchor["center"]) + a * u + b * v + n * 0.03
+        hit = tree.ray_cast(Vector(start), Vector(-n), 0.08)
+        if hit[0] is None:
+            hit = tree.find_nearest(Vector(start - n * 0.03))
+        # 浮かせる向きは部位の点の面の向き(当たった三角形の向きは、穴の名残の裏返った小さな三角形で乱れ、こぶになった)
+        loc, normal = np.array(hit[0]), n
+        t = math.hypot(a / stretch, b * stretch) / max(radius, 1e-9)
+        lift = height * float(profile(np.array([t]), float(params.get("edge", 0.0)))[0])
+        lift += PART_LIFT * (1 - 1.5 * t ** 6)
+        verts.append(loc + normal * lift)
+        ts.append(t)
+    faces = [(0, 1 + k, 1 + (k + 1) % segments) for k in range(segments)]
+    for i in range(1, rings):
+        inner, outer = 1 + (i - 1) * segments, 1 + i * segments
+        for k in range(segments):
+            k2 = (k + 1) % segments
+            faces.append((inner + k, outer + k, outer + k2, inner + k2))
+    return np.array(verts), faces, np.array(ts)
+
+
+def frame(normal) -> tuple:
+    """部位の点の、横(u。体の左右)と縦(v)の向き。normal は面の向き。"""
+    import numpy as np
+
+    n = np.array(normal)
+    u = np.cross(n, [0.0, 0.0, 1.0])
+    u = u / max(np.linalg.norm(u), 1e-9)
+    return u, np.cross(n, u)
+
+
+def socket_delta(co, anchor: dict, params: dict):
+    """
+    陥没乳首の体のへこみ。乳輪の真ん中に、横に長い切れ目(横:縦 = socket_aspect)のくぼみを、socket_depth の深さで作り、
+    切れ目のふちに唇のような盛り上がり(高さ socket_lip、幅 socket_lip_width)を付ける(利用者の参考の絵: 丸い穴でなく横長の切れ目で、上下が少し
+    盛り上がって内へ巻き込む)。
+    """
+    import numpy as np
+
+    n = np.array(anchor["normal"])
+    u, v = frame(n)
+    radius = params["socket_radius"] * anchor["size"]
+    aspect = float(params.get("socket_aspect", 1.0))
+    offset = co - anchor["center"]
+    a, b, w = offset @ u, offset @ v, offset @ n
+    t = np.hypot(a / (radius * np.sqrt(aspect)), b * np.sqrt(aspect) / radius)
+    near = np.abs(w) < 2 * radius
+    dent = -params["socket_depth"] * anchor["size"] * profile(t, 0.5)
+    # 唇の幅(socket_lip_width。切れ目の大きさに対する割合)。広いほど、なだらかに盛り上がる
+    width = float(params.get("socket_lip_width", 0.45))
+    lip = float(params.get("socket_lip", 0.0)) * anchor["size"] * np.exp(-(((t - 1.05) / width) ** 2))
+    lift = np.where(near & (t < 2.0), dent + lip, 0.0)
+    return lift[:, None] * n[None, :]
+
+
+def add_part_bones(arm: bpy.types.Object, anchors: dict) -> list[str]:
+    """乳首の点に、小さな骨(nipple.L / nipple.R。胴の子)を足す。乳首の部品の真ん中はこの骨に付く。"""
+    names = []
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+    for side in ("L", "R"):
+        anchor = anchors.get(f"nipple.{side}")
+        if anchor is None:
+            continue
+        bone = arm.data.edit_bones.new(f"nipple.{side}")
+        center = Vector(anchor["center"])
+        bone.head, bone.tail = center, center + Vector(anchor["normal"]) * 0.01
+        bone.align_roll(Vector((0, 0, 1)))
+        bone.parent = arm.data.edit_bones["torso"]
+        names.append(bone.name)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    return names
+
+
+def make_parts(body: bpy.types.Object, arm: bpy.types.Object, shapes: dict, weights: dict, anchors: dict) -> dict:
+    """
+    乳首・乳輪の部品(形ごと・左右ごとの円盤のオブジェクト part_<形>_<L|R>)を作り、体の面につなぎ止める:
+    - 骨の重み: つなぎ止めた体の三角形の頂点の重みを写す。乳首は真ん中へ向かって乳首の骨の割合を増やす(ふちは体に従い、
+      真ん中は乳首の形を保つ。組織のつながりのイメージ)
+    - 体の形(シェイプキー): 体のシェイプキーの動きを同じ名前で写し、Blender では体のキーの強さに連動させる(ドライバー)
+    - 乳首は乳輪の上に乗るよう、乳輪の形ごとに、その形の高さだけ持ち上げるシェイプキー(乳輪の形と同じ名前)を持つ
+    選んでいない形(weights が 0)の部品は隠す。作った部品の数などを返す。
+    """
+    import numpy as np
+
+    tree, tris, co = body_surface(body)
+    body_normals = np.array([v.normal for v in body.data.vertices])
+    keys = body.data.shape_keys.key_blocks if body.data.shape_keys else []
+    basis = np.array([v.co for v in keys[0].data]) if keys else co
+    deltas = {k.name: np.array([v.co for v in k.data]) - basis for k in list(keys)[1:]}
+    names = {g.index: g.name for g in body.vertex_groups}
+    groups = [{names[g.group]: g.weight for g in v.groups} for v in body.data.vertices]
+    areolas = {k: p for k, p in shapes["presets"].items() if p["part"] == "areola" and p["op"] == "part"}
+    nipple_bones = add_part_bones(arm, anchors)
+    made = {}
+    for key, preset in shapes["presets"].items():
+        if preset["op"] != "part":
+            continue
+        for side in ("L", "R"):
+            anchor = anchors.get(f"{preset['part']}.{side}")
+            if anchor is None:
+                continue
+            verts, faces, ts = part_mesh(anchor, preset, tree)
+            rows, bary = bind_points(verts, tree, tris, co)
+            mesh = bpy.data.meshes.new(f"part_{key}_{side}")
+            mesh.from_pydata([Vector(p) for p in verts], [], faces)
+            for poly in mesh.polygons:
+                poly.use_smooth = True
+            # ふちの近くでは、面の向き(法線)を、つなぎ止めた体の面の向きに寄せる(部品の向きのままだと、ふちが陰影の線に
+            # なって見えた)。ふちの外側 4 割で、なだらかに体の向きへ
+            own = np.array([v.normal for v in mesh.vertices])
+            under = (body_normals[rows] * bary[:, :, None]).sum(axis=1)
+            w = np.clip((ts - 0.6) / 0.4, 0, 1)
+            w = (w * w * (3 - 2 * w))[:, None]
+            blended = (1 - w) * own + w * under
+            blended /= np.maximum(np.linalg.norm(blended, axis=1, keepdims=True), 1e-9)
+            mesh.normals_split_custom_set_from_vertices([Vector(n) for n in blended])
+            obj = bpy.data.objects.new(mesh.name, mesh)
+            bpy.context.scene.collection.objects.link(obj)
+            # 骨の重み: 体の三角形の頂点の重みを、重心座標で混ぜる(4 本まで)。乳首は真ん中ほど乳首の骨
+            bone = f"nipple.{side}" if preset["part"] == "nipple" and f"nipple.{side}" in nipple_bones else None
+            for i in range(len(verts)):
+                mixed: dict[str, float] = {}
+                for vi, b in zip(rows[i], bary[i]):
+                    for g, w in groups[vi].items():
+                        mixed[g] = mixed.get(g, 0.0) + b * w
+                if bone is not None:
+                    s = 0.8 * (1 - ts[i])
+                    mixed = {g: w * (1 - s) for g, w in mixed.items()}
+                    mixed[bone] = mixed.get(bone, 0.0) + s
+                top = sorted(mixed.items(), key=lambda x: -x[1])[:4]
+                total = sum(w for _, w in top) or 1.0
+                for g, w in top:
+                    group = obj.vertex_groups.get(g) or obj.vertex_groups.new(name=g)
+                    group.add([i], w / total, "REPLACE")
+            obj.parent = arm
+            obj.modifiers.new("armature", "ARMATURE").object = arm
+            # 体のシェイプキーの動きを写し、体のキーに連動させる
+            obj.shape_key_add(name="Basis", from_mix=False)
+            for name, delta in deltas.items():
+                moved = (delta[rows] * bary[:, :, None]).sum(axis=1)
+                if np.abs(moved).max() < 1e-6:
+                    continue
+                block = obj.shape_key_add(name=name, from_mix=False)
+                block.data.foreach_set("co", (verts + moved).ravel())
+                block.slider_max = 2.0
+                driver = block.driver_add("value").driver
+                driver.type = "AVERAGE"
+                var = driver.variables.new()
+                var.type = "SINGLE_PROP"
+                var.targets[0].id_type = "KEY"
+                var.targets[0].id = body.data.shape_keys
+                var.targets[0].data_path = f'key_blocks["{name}"].value'
+            # 乳首: 乳輪の形ごとに、その高さだけ持ち上げる(乳輪を選ぶと、乳首がその上に乗る)
+            if preset["part"] == "nipple":
+                areola_anchor = anchors.get(f"areola.{side}")
+                for akey, aparams in areolas.items():
+                    if areola_anchor is None:
+                        break
+                    r = np.linalg.norm(verts - np.array(areola_anchor["center"]), axis=1)
+                    t = r / max(aparams["radius"] * areola_anchor["size"], 1e-9)
+                    lift = aparams["height"] * areola_anchor["size"] * profile(t, float(aparams.get("edge", 0.0)))
+                    if lift.max() < 1e-6:
+                        continue
+                    block = obj.shape_key_add(name=akey, from_mix=False)
+                    block.data.foreach_set("co", (verts + lift[:, None] * np.array(areola_anchor["normal"])[None, :]).ravel())
+                    block.value = float(weights.get(akey, 0.0))
+            visible = float(weights.get(key, 0.0)) > 0
+            obj.hide_render = not visible
+            obj.hide_viewport = not visible
+            made[obj.name] = len(verts)
+    return {"parts": made, "bones": nipple_bones}
 
 
 def main() -> None:
@@ -786,7 +1037,14 @@ def main() -> None:
     weights["hand_cut"] = cut_hands(obj, hands)
     make_hands(arm, hands)
     shapes = joints.get("shapes")
-    shape_report = add_shape_keys(obj, j, shapes, joints.get("shape_weights", {}), anchors) if shapes else None
+    shape_report = None
+    if shapes:
+        shape_weights = joints.get("shape_weights", {})
+        # 乳首・乳輪を部品で付けるモデルでは、胸の先をなめらかな面に作り直して体の形に焼き込む
+        if "nipple" in shapes["parts"]:
+            anchors = bake_caps(obj, anchors)
+        shape_report = add_shape_keys(obj, j, shapes, shape_weights, anchors)
+        shape_report.update(make_parts(obj, arm, shapes, shape_weights, anchors))
     actions = {name: add_motion(arm, name, motion, height) for name, motion in motions.items()}
     for pb in arm.pose.bones:
         pb.rotation_quaternion = Quaternion()

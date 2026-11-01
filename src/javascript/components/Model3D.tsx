@@ -327,8 +327,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
               <div className="m3d-poses">
                 <h5>形状パーツ</h5>
                 <p className="lora-hint">
-                  部位ごとに形を選びます(素体・キャラシートのタグから選んだものが初めの形)。「3D を回して見る」で、保存する前に
-                  確かめられます。保存すると、ポーズの絵に使います。
+                  部位ごとに形を選びます(素体・キャラシートのタグから選んだものが初めの形)。乳首・乳輪は体の面につなぎ止めた部品で、
+                  胸の形やポーズに合わせて一緒に動きます。「3D を回して見る」で、保存する前に確かめられます。保存すると、ポーズの絵に使います。
                 </p>
                 <div className="fsh-actions">
                   {Object.entries(entry.shapes.options).map(([part, spec]) => {

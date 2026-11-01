@@ -501,6 +501,13 @@ def test_shape_presets_follow_tags_and_age_rules() -> None:
     modest = body_shapes.choose("huge breasts", nude=False, modest=True)
     assert set(modest) == {"repair", "navel", "belly"}
     assert set(body_shapes.to_json(nude=False, modest=True)["parts"]) == {"repair", "navel", "belly"}
+    # 乳首・乳輪は着脱する部品。陥没は体をへこませる量(socket)も持つ
+    presets = body_shapes.to_json(nude=True, modest=False)["presets"]
+    assert {p["op"] for k, p in presets.items() if p["part"] in ("nipple", "areola")} == {"part"}
+    assert presets["nipple_inverted"]["socket_depth"] > 0 and presets["nipple_inverted"]["socket_aspect"] > 1
+    # 陥没乳首には、乳輪のタグが無ければ隆起した乳輪を合わせる(タグがあればそちら)
+    assert body_shapes.choose("inverted nipples", nude=True, modest=False)["areola"] == "areola_raised"
+    assert body_shapes.choose("inverted nipples, plump areola", nude=True, modest=False)["areola"] == "areola_plump"
     assert "nipple" in body_shapes.labels(nude=True, modest=False)
 
 
@@ -519,16 +526,17 @@ def test_rig_sends_shapes_and_keeps_the_made_weights(tmp_path: Path, monkeypatch
         (tmp_path / "model_rigged.glb").write_bytes(b"glTF")
         (tmp_path / "frames").mkdir(exist_ok=True)
         Image.new("RGBA", (20, 30)).save(tmp_path / "frames" / "001.png")
-        report = {"shapes": {"keys": {"repair": {}, "navel_normal": {}}, "anchors": {}}}
+        report = {"shapes": {"keys": {"repair": {}, "navel_normal": {}}, "anchors": {}, "parts": {"part_nipple_large_L": 433}}}
         (tmp_path / "rig.json").write_text(json.dumps(report), encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
     shapes = body_shapes.to_json(nude=False, modest=True)
-    model_3d.rig("blender", tmp_path, shapes=shapes, shape_weights={"repair": 1.0, "navel_normal": 1.0, "belly_flat": 1.0})
+    weights = {"repair": 1.0, "navel_normal": 1.0, "belly_flat": 1.0, "nipple_large": 1.0}
+    model_3d.rig("blender", tmp_path, shapes=shapes, shape_weights=weights)
     assert sent["shapes"] == shapes and sent["shape_weights"]["belly_flat"] == 1.0
-    # 作れなかった形(お腹の点が見つからなかったなど)の強さは残さない
-    assert model_3d.read_meta(tmp_path)["shapes"] == {"weights": {"repair": 1.0, "navel_normal": 1.0}}
+    # 作れなかった形(お腹の点が見つからなかったなど)の強さは残さない。部品(乳首)は、作った部品の形として残す
+    assert model_3d.read_meta(tmp_path)["shapes"] == {"weights": {"repair": 1.0, "navel_normal": 1.0, "nipple_large": 1.0}}
 
 
 def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,6 +8,10 @@
 - 形(PRESETS): 部位ごとの形の値と、その形を表すタグ。素体・キャラシートのタグから、部位ごとに既定の形を選ぶ(choose)。
   形の値は、それぞれの部位の大きさ(胸の幅など)に対する割合なので、体格の違うモデルにも同じ形を当てられる。
 - 自動へこみ補正(repair): 部位を決めず、AI の形にできた小さなへこみを、周りのなめらかな面に寄せる。顔・股・へそは除く。
+- 乳首・乳輪は、体の面の変形ではなく着脱する部品(op=part)。胸の先はなめらかな面に作り直して体の形に焼き込み、部品は
+  その上に置いて体の面につなぎ止める(骨の重みと体のシェイプキーを写す)。小さな形を粗い体の面に作るより、細かく作った
+  部品を置くほうが形がきれいで、衣服(ステップ 6b)と同じ付け方になる。陥没乳首のように体に食い込む形は、socket の分だけ
+  体をへこませるシェイプキー(形と同じ名前)を一緒に入れる。
 """
 
 from __future__ import annotations
@@ -46,20 +50,33 @@ class Preset:
     #   edge は形のふち(0 でなだらかな丘、1 に近いほど筒のように切り立つ)
     # - lift: 部位のまわりを上へ height だけ動かす(胸の垂れ・持ち上がり)
     # - repair: 小さなへこみを周りの面に寄せる(depth はへこみとみなす深さ m、size はかたまりの大きさの上限 m)
+    # - part: 着脱する部品(円盤)。radius・height・edge は bump と同じ。socket_radius・socket_depth があれば、付けると
+    #   体をその分へこませる
     params: dict[str, float | str] = field(default_factory=dict)
 
 
 PRESETS: dict[str, Preset] = {
     "repair": Preset("repair", "へこみをならす", (), {"op": "repair", "depth": 0.003, "size": 0.04}),
     # 乳首: 部位の大きさは乳輪の半径の基準(胸の幅の 0.18 倍)
-    "nipple_normal": Preset("nipple", "ふつう", (), {"op": "bump", "radius": 0.28, "height": 0.22, "edge": 0.7}),
-    "nipple_small": Preset("nipple", "小さめ", ("small nipples",), {"op": "bump", "radius": 0.2, "height": 0.14, "edge": 0.7}),
-    "nipple_large": Preset("nipple", "大きめ", ("large nipples", "big nipples"), {"op": "bump", "radius": 0.38, "height": 0.36, "edge": 0.75}),
-    "nipple_puffy": Preset("nipple", "ぷっくり", ("puffy nipples",), {"op": "bump", "radius": 0.5, "height": 0.3, "edge": 0.3}),
-    "nipple_inverted": Preset("nipple", "陥没", ("inverted nipples",), {"op": "bump", "radius": 0.22, "height": -0.15, "edge": 0.6}),
-    "areola_flat": Preset("areola", "平ら", (), {"op": "bump", "radius": 1.0, "height": 0.0, "edge": 0.2}),
-    "areola_plump": Preset("areola", "ふっくら", ("plump areola", "puffy areola", "puffy areolae"), {"op": "bump", "radius": 1.0, "height": 0.18, "edge": 0.35}),
-    "areola_large": Preset("areola", "大きめ・ふっくら", ("large areolae", "big areola", "large areola"), {"op": "bump", "radius": 1.4, "height": 0.12, "edge": 0.3}),
+    "nipple_normal": Preset("nipple", "ふつう", (), {"op": "part", "radius": 0.28, "height": 0.22, "edge": 0.7}),
+    "nipple_small": Preset("nipple", "小さめ", ("small nipples",), {"op": "part", "radius": 0.2, "height": 0.14, "edge": 0.7}),
+    "nipple_large": Preset("nipple", "大きめ", ("large nipples", "big nipples"), {"op": "part", "radius": 0.38, "height": 0.36, "edge": 0.75}),
+    "nipple_puffy": Preset("nipple", "ぷっくり", ("puffy nipples",), {"op": "part", "radius": 0.5, "height": 0.3, "edge": 0.3}),
+    # 陥没: 乳輪の真ん中に横に長い切れ目(横:縦 = 3.2)のくぼみを作り、ふちを唇のように少し盛り上げ、奥に横長の小さな
+    # 乳首を置く(利用者の参考の絵。丸い穴ではない)
+    "nipple_inverted": Preset(
+        "nipple", "陥没", ("inverted nipples",),
+        {
+            "op": "part", "radius": 0.22, "height": 0.08, "edge": 0.5, "aspect": 2.6,
+            "socket_radius": 0.45, "socket_depth": 0.3, "socket_aspect": 3.2, "socket_lip": 0.06,
+            "socket_lip_width": 0.45,
+        },
+    ),
+    "areola_flat": Preset("areola", "平ら", (), {"op": "part", "radius": 1.0, "height": 0.02, "edge": 0.2}),
+    "areola_plump": Preset("areola", "ふっくら", ("plump areola", "puffy areola", "puffy areolae"), {"op": "part", "radius": 1.0, "height": 0.18, "edge": 0.35}),
+    # 隆起: 乳輪全体が広く高い丘になる形。陥没乳首では、乳輪のタグが無ければこれにする(利用者の参考の絵)
+    "areola_raised": Preset("areola", "隆起", ("raised areola", "swollen areola"), {"op": "part", "radius": 1.5, "height": 0.3, "edge": 0.15}),
+    "areola_large": Preset("areola", "大きめ・ふっくら", ("large areolae", "big areola", "large areola"), {"op": "part", "radius": 1.4, "height": 0.12, "edge": 0.3}),
     # 胸: 部位の大きさは胸の幅(左右の胸の先の間の半分)
     "breast_keep": Preset("breast", "そのまま", (), {"op": "bump", "radius": 1.0, "height": 0.0, "edge": 0.0}),
     "breast_larger": Preset("breast", "大きく", ("huge breasts", "gigantic breasts"), {"op": "bump", "radius": 1.0, "height": 0.25, "edge": 0.0}),
@@ -101,11 +118,16 @@ def choose(tags: str, *, nude: bool, modest: bool) -> dict[str, str]:
     """部位 → 既定の形。タグに合う形があればそれ、無ければ部位の最初の形(ふつう・そのまま)。"""
     words = _words(tags)
     result: dict[str, str] = {}
+    tagged: set[str] = set()
     for key, preset in presets_for(nude=nude, modest=modest).items():
         if preset.part not in result:
             result[preset.part] = key
         if any(tag in words for tag in preset.tags):
             result[preset.part] = key
+            tagged.add(preset.part)
+    # 陥没乳首は、乳輪が隆起した形が似合う(乳輪のタグがあればそちら)
+    if result.get("nipple") == "nipple_inverted" and "areola" in result and "areola" not in tagged:
+        result["areola"] = "areola_raised"
     return result
 
 
