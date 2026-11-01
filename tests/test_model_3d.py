@@ -648,3 +648,66 @@ def test_custom_shape_presets_are_shared_checked_and_used(client: TestClient, tm
     assert client.delete(f"{url}/{custom['id']}").status_code == 200
     assert all(p["key"] != key for p in client.get(url).json()["presets"])
     assert client.delete(f"{url}/{custom['id']}").status_code == 404
+
+
+def test_shape_preview_swaps_the_part_and_keeps_the_model(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    adult = _character(client, "rumi", is_adult=1, age=28)
+    nude = _base(client, "裸", kind="nude")
+    suit = _base(client, "スーツ")
+    for base in (nude, suit):
+        folder = "body_base_r18" if base["kind"] == "nude" else "body_base"
+        _draw(tmp_path / f"outputs/training_data/rumi/{folder}", base["id"], ("front",))
+    model = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    for base in (nude, suit):
+        client.post(model, json={"base_id": base["id"]})
+        _wait(client, adult["id"], base["id"])
+    calls: list[tuple[dict, dict]] = []
+
+    def fake_preview(blender: str, out: Path, *, hand: dict, shapes: dict, shape_weights: dict) -> Path:
+        calls.append((shapes, shape_weights))
+        (out / model_3d.PREVIEW_FILE).write_bytes(b"glTF")
+        return out / model_3d.PREVIEW_FILE
+
+    monkeypatch.setattr(model_3d, "preview_shapes", fake_preview)
+    inverted = {**body_shapes_presets()["nipple_inverted"], "socket_lip_roll": 0.08}
+    res = client.post(f"{model}/shape-preview", json={
+        "base_id": nude["id"], "part": "nipple", "params": inverted,
+        "weights": {"repair": 1, "nipple_large": 0.6, "areola_raised": 1},
+    })
+    assert res.status_code == 200, res.text
+    entry = _wait(client, adult["id"], nude["id"])
+    shapes, weights = calls[-1]
+    # 乳首の形だけ、編集中の形(custom_0)に差し替える。強さは前の形のもの
+    assert weights == {"repair": 1.0, "areola_raised": 1.0, "custom_0": 0.6}
+    assert shapes["presets"]["custom_0"]["socket_lip_roll"] == 0.08
+    assert entry["job"]["preview_weights"] == weights and "shape_preview.glb" in entry["files"]
+
+    # 全年齢のモデルでは乳首の試しはできない。値の範囲の外も断る
+    assert client.post(f"{model}/shape-preview", json={"base_id": suit["id"], "part": "nipple", "params": inverted}).status_code == 422
+    bad = {**inverted, "socket_lip_roll": 0.5}
+    assert client.post(f"{model}/shape-preview", json={"base_id": nude["id"], "part": "nipple", "params": bad}).status_code == 422
+
+
+def body_shapes_presets() -> dict:
+    from python import body_shapes
+
+    return {k: dict(p.params) for k, p in body_shapes.PRESETS.items()}
+
+
+def test_preview_shapes_sends_only_the_used_shapes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import body_shapes
+
+    for name in ("model_clean.glb", "front.png", "meta.json", "model_rigged.glb"):
+        (tmp_path / name).write_bytes(b"x")
+    seen: dict = {}
+
+    def fake_rig(blender: str, work: Path, **kw) -> dict:  # noqa: ANN003
+        seen.update(kw)
+        (work / "model_rigged.glb").write_bytes(b"preview")
+        return {}
+
+    monkeypatch.setattr(model_3d, "rig", fake_rig)
+    shapes = body_shapes.to_json(nude=True, modest=False)
+    out = model_3d.preview_shapes("blender", tmp_path, hand=None, shapes=shapes, shape_weights={"repair": 1.0, "nipple_large": 0.0})
+    assert out.read_bytes() == b"preview" and (tmp_path / "model_rigged.glb").read_bytes() == b"x"
+    assert set(seen["shapes"]["presets"]) == {"repair"} and seen["preview_only"] is True

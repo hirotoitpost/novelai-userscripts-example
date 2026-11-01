@@ -1053,19 +1053,22 @@ def main() -> None:
             anchors = bake_caps(obj, anchors)
         shape_report = add_shape_keys(obj, j, shapes, shape_weights, anchors)
         shape_report.update(make_parts(obj, arm, shapes, shape_weights, anchors))
-    actions = {name: add_motion(arm, name, motion, height) for name, motion in motions.items()}
+    # 形の値の試し(joints.json の preview_only): 形だけ見るので、動き・確かめのコマ・Blender のファイルは作らない
+    preview_only = bool(joints.get("preview_only"))
+    actions = {} if preview_only else {name: add_motion(arm, name, motion, height) for name, motion in motions.items()}
     for pb in arm.pose.bones:
         pb.rotation_quaternion = Quaternion()
         pb.location = Vector()
     bpy.context.scene.render.fps = 24
     bpy.ops.export_scene.gltf(
-        filepath=str(folder / "model_rigged.glb"), export_format="GLB", export_animations=True,
+        filepath=str(folder / "model_rigged.glb"), export_format="GLB", export_animations=not preview_only,
         # モーフの法線も入れる(入れないと、ブラウザ(three.js)は元の形の法線で陰影を付け、ならした胸の先の穴がそのまま
         # 見えた。Blender は形を変えたあと法線を計算し直すので、Blender の絵では出なかった)
         export_animation_mode="NLA_TRACKS", export_morph_normal=True,
     )
-    render_motion(arm, actions[preview], motions[preview]["frames"], height, folder / "frames")
-    bpy.ops.wm.save_as_mainfile(filepath=str(folder / "model.blend"))
+    if not preview_only:
+        render_motion(arm, actions[preview], motions[preview]["frames"], height, folder / "frames")
+        bpy.ops.wm.save_as_mainfile(filepath=str(folder / "model.blend"))
     report = {
         "joints": {k: [round(c, 4) for c in v] for k, v in j.items()},
         "weights": weights, "motions": sorted(motions), "preview": preview, "bones": len(arm.data.bones),

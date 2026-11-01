@@ -12,13 +12,15 @@ import './Model3D.css'
 
 const Model3DViewer = lazy(() => import('./Model3DViewer'))
 
-type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing'
+type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing'
 
 interface Job {
   status: 'running' | 'done' | 'error'
   remote: JobState | null
   error: string | null
   seconds: number
+  /** 形の値の試しを作ったときの強さ */
+  preview_weights?: Record<string, number> | null
 }
 
 interface PoseImage { name: string; pose: string; camera: string; style: string; updated: number }
@@ -76,6 +78,7 @@ const JOB_LABELS: Record<JobState, string> = {
   cleaning: 'Blender で整えています',
   rigging: 'Blender で骨と手を入れています',
   posing: 'ポーズの絵を描いています',
+  previewing: '形の値の試しを作っています(15 秒ほど)',
 }
 
 async function detail(res: Response): Promise<string> {
@@ -95,6 +98,11 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [motion, setMotion] = useState('wave')
   const [status, setStatus] = useState<string | null>(null)
   const [viewing, setViewing] = useState(false)
+  // 3D を画面の最前面に浮かせる(値を調整しながら見る)。位置は端末に残す
+  const [floating, setFloating] = useState(false)
+  const [floatPos, setFloatPos] = useLocalStorage('nai_model3d_float_pos', { right: 16, bottom: 16 })
+  // 浮かせた窓で、形の値の試し(shape_preview.glb)を見ているか
+  const [showPreview, setShowPreview] = useState(false)
   const [animations, setAnimations] = useState<string[]>([])
   const [animation, setAnimation] = useState<string | null>(null)
   const [pose, setPose] = useState('stand')
@@ -167,7 +175,30 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const job = entry?.job
   const busy = disabled || job?.status === 'running'
   const meta = entry?.meta
-  const viewerSrc = entry?.files['model_rigged.glb'] ? fileUrl('model_rigged.glb') : entry?.files['model_clean.glb'] ? fileUrl('model_clean.glb') : null
+  const modelSrc = entry?.files['model_rigged.glb'] ? fileUrl('model_rigged.glb') : entry?.files['model_clean.glb'] ? fileUrl('model_clean.glb') : null
+  const previewReady = !!entry?.files['shape_preview.glb'] && !!entry?.job?.preview_weights && entry.job.status === 'done'
+  const usingPreview = showPreview && previewReady
+  const viewerSrc = usingPreview ? fileUrl('shape_preview.glb') : modelSrc
+  const viewerShapes = usingPreview ? (entry?.job?.preview_weights ?? {}) : shapeWeights
+
+  /** 浮かせた窓を、見出しをつかんで動かす(右下からの距離で持つ) */
+  function dragFloat(e: React.PointerEvent<HTMLDivElement>) {
+    const start = { x: e.clientX, y: e.clientY, ...floatPos }
+    const move = (ev: PointerEvent) => setFloatPos({
+      right: Math.max(0, start.right - (ev.clientX - start.x)),
+      bottom: Math.max(0, start.bottom - (ev.clientY - start.y)),
+    })
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  async function startPreview(part: string, params: Record<string, number | string>) {
+    setFloating(true)
+    setViewing(true)
+    setShowPreview(true)
+    await post('/shape-preview', { part, params, weights: shapeWeights }, '形の値の試しを作っています(15 秒ほど)')
+  }
   const stills = (['front.png', 'side.png', 'back.png'] as const).filter(name => entry?.files[name])
   const poses = entry?.poses ?? []
   const zoomed = zoom != null ? poses[zoom] : null
@@ -268,6 +299,12 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                   <button type="button" className="lora-btn lora-btn--secondary" onClick={() => setViewing(v => !v)}>
                     {viewing ? '3D を閉じる' : '3D を回して見る'}
                   </button>
+                  {viewing && (
+                    <button type="button" className="lora-btn lora-btn--secondary" onClick={() => setFloating(f => !f)}
+                      title="3D を画面の最前面に浮かせます。スクロールしても隠れないので、値を調整しながら見られます">
+                      {floating ? 'ここに戻す' : '最前面に浮かせる'}
+                    </button>
+                  )}
                   {viewing && animations.length > 0 && (
                     <select className="lora-select" value={animation ?? ''} aria-label="再生する動き"
                       onChange={e => setAnimation(e.target.value || null)}>
@@ -276,10 +313,31 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                     </select>
                   )}
                 </div>
-                {viewing && (
+                {viewing && !floating && (
                   <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
-                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={shapeWeights} />
+                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} />
                   </Suspense>
+                )}
+                {viewing && floating && (
+                  <div className="m3d-float" style={{ right: floatPos.right, bottom: floatPos.bottom }}>
+                    <div className="m3d-float-head" onPointerDown={dragFloat} title="つかんで動かせます">
+                      <span>{usingPreview ? '形の値の試し' : '3D'}</span>
+                      {previewReady && (
+                        <button type="button" className="lora-btn lora-btn--secondary" onPointerDown={e => e.stopPropagation()}
+                          onClick={() => setShowPreview(p => !p)}>
+                          {usingPreview ? 'モデル本体を見る' : '試しを見る'}
+                        </button>
+                      )}
+                      <button type="button" className="lora-btn lora-btn--secondary" onPointerDown={e => e.stopPropagation()}
+                        onClick={() => setFloating(false)} aria-label="浮かせた窓を閉じる">×</button>
+                    </div>
+                    {job?.status === 'running' && job.remote === 'previewing' && (
+                      <p className="lora-hint">{JOB_LABELS.previewing}…({duration(job.seconds)})</p>
+                    )}
+                    <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
+                      <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} />
+                    </Suspense>
+                  </div>
                 )}
               </div>
             )}
@@ -304,7 +362,9 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
             {entry.files['model.blend'] && Object.keys(entry.shapes.options).length > 0 && (
               <ShapeParts url={url} rootName={rootName} baseId={entry.base_id} shapes={entry.shapes} busy={busy}
                 draft={shapeDraft} onDraft={setShapeDraft} onInfo={next => setInfo(next as Model3DInfo)}
-                onRig={() => post('/rig', { motion }, '骨を入れ直しています(自分の形を入れます)')} />
+                onRig={() => post('/rig', { motion }, '骨を入れ直しています(自分の形を入れます)')}
+                onEditStart={() => { if (modelSrc) { setViewing(true); setFloating(true) } }}
+                onPreview={(part, params) => void startPreview(part, params)} />
             )}
 
             {entry.files['model.blend'] && (

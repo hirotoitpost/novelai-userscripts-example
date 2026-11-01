@@ -479,6 +479,16 @@ class Model3DShapesRequest(BaseModel):
         None, max_length=40, description="あれば、いまの強さは変えず、この名前の組み合わせ(場面ごと)として残す")
 
 
+class Model3DShapePreviewRequest(BaseModel):
+    """形の値の試し: 部位の形を、編集中の値に差し替えた 3D を作る(モデル本体は書き換えない。model_3d.preview_shapes)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
+    part: str = Field(description="値を変えている部位(body_shapes.PARTS)")
+    params: dict[str, float | str] = Field(description="編集中の形の値")
+    weights: dict[str, float] = Field(default_factory=dict, description="いまの画面の強さ(保存前も含む)")
+
+
 class BodyShapePresetRequest(BaseModel):
     """自分で値を変えた形状パーツの形(body_shapes.clean_params で確かめる)。どのモデルにも当てる共有の一覧。"""
 
