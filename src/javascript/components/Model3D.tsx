@@ -48,6 +48,8 @@ interface BaseEntry {
   meta: Meta | null
   job: Job | null
   poses: PoseImage[]
+  /** 形状パーツ: 選べる形(部位 → 名前と形)と、保存した強さ */
+  shapes: { options: Record<string, { label: string; presets: Record<string, string> }>; weights: Record<string, number> }
 }
 
 interface Model3DInfo {
@@ -98,6 +100,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [cameras, setCameras] = useState<string[]>(['front', 'three_quarter', 'side'])
   const [style, setStyle] = useState('shade')
   const [zoom, setZoom] = useState<number | null>(null)
+  // 形状パーツの強さ(保存前の編集中。null なら保存した強さ)
+  const [shapeDraft, setShapeDraft] = useState<Record<string, number> | null>(null)
 
   const url = `/api/lora-dataset/character/${characterId}/model-3d`
 
@@ -117,6 +121,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
     setViewing(false)
     setZoom(null)
   }, [characterId])
+  useEffect(() => setShapeDraft(null), [entry?.base_id, entry?.files['model.blend']?.updated])
 
   const running = !!info?.bases.some(b => b.job?.status === 'running')
   useEffect(() => {
@@ -148,6 +153,33 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  const shapeWeights = shapeDraft ?? entry?.shapes.weights ?? {}
+
+  /** 部位の形を選ぶ(部位の中では 1 つだけ。空なら使わない) */
+  function pickShape(part: string, preset: string) {
+    const presets = Object.keys(entry?.shapes.options[part]?.presets ?? {})
+    const next = Object.fromEntries(Object.entries(shapeWeights).filter(([key]) => !presets.includes(key)))
+    if (preset) next[preset] = 1
+    setShapeDraft(next)
+  }
+
+  async function saveShapes() {
+    if (!entry || !shapeDraft) return
+    setStatus(null)
+    const res = await fetch(`${url}/shapes`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root_name: rootName, base_id: entry.base_id, weights: shapeDraft }),
+    })
+    if (!res.ok) {
+      setStatus(`保存できませんでした: ${await detail(res)}`)
+      return
+    }
+    setInfo(await res.json())
+    setShapeDraft(null)
+    setStatus('形状パーツを保存しました(ポーズの絵に使います)')
   }
 
   function toggleCamera(key: string) {
@@ -268,7 +300,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 </div>
                 {viewing && (
                   <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
-                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} />
+                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={shapeWeights} />
                   </Suspense>
                 )}
               </div>
@@ -288,6 +320,43 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                     <figcaption>動き{meta?.rig ? `(${info.motions[meta.rig.motion] ?? meta.rig.motion})` : ''}</figcaption>
                   </figure>
                 )}
+              </div>
+            )}
+
+            {entry.files['model.blend'] && Object.keys(entry.shapes.options).length > 0 && (
+              <div className="m3d-poses">
+                <h5>形状パーツ</h5>
+                <p className="lora-hint">
+                  部位ごとに形を選びます(素体・キャラシートのタグから選んだものが初めの形)。「3D を回して見る」で、保存する前に
+                  確かめられます。保存すると、ポーズの絵に使います。
+                </p>
+                <div className="fsh-actions">
+                  {Object.entries(entry.shapes.options).map(([part, spec]) => {
+                    const keys = Object.keys(spec.presets)
+                    if (part === 'repair') {
+                      return (
+                        <label key={part} className="fsh-label" title="AI の形にできた小さなへこみ・胸の先の崩れをならします">
+                          <input type="checkbox" checked={(shapeWeights.repair ?? 0) > 0} disabled={busy}
+                            onChange={e => pickShape(part, e.target.checked ? 'repair' : '')} />
+                          {spec.label}
+                        </label>
+                      )
+                    }
+                    const current = keys.find(key => (shapeWeights[key] ?? 0) > 0) ?? ''
+                    return (
+                      <label key={part} className="fsh-label">{spec.label}
+                        <select className="lora-select" value={current} disabled={busy} onChange={e => pickShape(part, e.target.value)}>
+                          <option value="">使わない</option>
+                          {keys.map(key => <option key={key} value={key}>{spec.presets[key]}</option>)}
+                        </select>
+                      </label>
+                    )
+                  })}
+                  <button type="button" className="lora-btn" disabled={busy || !shapeDraft} onClick={() => void saveShapes()}>保存する</button>
+                  {shapeDraft && (
+                    <button type="button" className="lora-btn lora-btn--secondary" onClick={() => setShapeDraft(null)}>元に戻す</button>
+                  )}
+                </div>
               </div>
             )}
 

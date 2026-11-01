@@ -325,11 +325,13 @@ def hand_ratios(folder: Path, base_id: int) -> dict:
     return {"ratios": dict(hand_shape.DEFAULTS), "source": None, "score": None}
 
 
-def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None = None, timeout: float = 900) -> dict:
+def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None = None, shapes: dict | None = None,
+        shape_weights: dict[str, float] | None = None, timeout: float = 900) -> dict:
     """
     整えた形(model_clean.glb)に人型の骨を入れ、body_motions の動きを全部付ける(model_rigged.glb・model.blend)。
     関節は、正面の静止画(front.png)の骨格推定の点から求める。手は人形の手に付け替え、形の割合は hand(hand_ratios。
-    省くと標準)。motion の動きで motion.gif を描き出す。結果を meta.json の rig に足す。
+    省くと標準)。shapes(body_shapes.to_json)があれば形状パーツのシェイプキーを作り、shape_weights の強さを入れる
+    (meta.json の shapes に残し、ポーズの絵にも使う)。motion の動きで motion.gif を描き出す。結果を meta.json の rig に足す。
     """
     from . import body_motions, hand_shape
     from .body_rig import RigError, detect, frames_to_gif
@@ -357,7 +359,10 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     shutil.rmtree(out_dir / POSE_DIR, ignore_errors=True)
     with tempfile.TemporaryDirectory(prefix="model3d_rig_") as tmp:
         joints_path = Path(tmp) / "joints.json"
-        joints_path.write_text(json.dumps({"points": joints, "hand": hand["ratios"]}), encoding="utf-8")
+        sent = {"points": joints, "hand": hand["ratios"]}
+        if shapes:
+            sent.update(shapes=shapes, shape_weights=shape_weights or {})
+        joints_path.write_text(json.dumps(sent), encoding="utf-8")
         motions_path = Path(tmp) / "motions.json"
         motions_path.write_text(json.dumps({k: m.to_json() for k, m in body_motions.MOTIONS.items()}), encoding="utf-8")
         result = subprocess.run(
@@ -377,6 +382,11 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     shutil.rmtree(frames)
     meta = read_meta(out_dir)
     meta["rig"] = {"motion": motion, "hand": hand, **report}
+    if shapes:
+        made = set((report.get("shapes") or {}).get("keys", {}))
+        meta["shapes"] = {"weights": {k: v for k, v in (shape_weights or {}).items() if k in made}}
+    else:
+        meta.pop("shapes", None)
     write_meta(out_dir, meta)
     return meta["rig"]
 
@@ -402,9 +412,10 @@ def pose_images(out_dir: Path) -> list[dict]:
 
 
 def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], style: str = "shade", *,
-                timeout: float = 600) -> list[Path]:
+                shape_weights: dict[str, float] | None = None, timeout: float = 600) -> list[Path]:
     """
     骨を入れた形(model.blend)にポーズを当て、カメラごとに参考の絵を描き出す(poses/<ポーズ>_<カメラ>_<種類>.png)。
+    形状パーツの強さは shape_weights(省くと meta.json の shapes の強さ。場面ごとに選ぶ)。
     描いた絵のパスを返す。
     """
     from . import body_poses
@@ -422,7 +433,10 @@ def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], styl
     folder.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="model3d_pose_") as tmp:
         pose_path = Path(tmp) / "pose.json"
-        pose_path.write_text(json.dumps(body_poses.render_json(pose, cameras)), encoding="utf-8")
+        if shape_weights is None:
+            shape_weights = read_meta(out_dir).get("shapes", {}).get("weights", {})
+        sent = {**body_poses.render_json(pose, cameras), "shapes": shape_weights}
+        pose_path.write_text(json.dumps(sent), encoding="utf-8")
         renders = Path(tmp) / "renders"
         result = subprocess.run(
             [blender, "--background", str(out_dir / "model.blend"), "--python-exit-code", "1", "--python",

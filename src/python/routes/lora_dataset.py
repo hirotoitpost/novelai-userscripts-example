@@ -24,7 +24,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
-from .. import body_motions, body_poses, model3d_remote, model_3d, see_through_remote, wardrobe
+from .. import body_motions, body_poses, body_shapes, model3d_remote, model_3d, see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -102,6 +102,7 @@ from ..models import (
     BodyHairUnderRequest,
     BodyLayersRequest,
     Model3DPoseRequest,
+    Model3DShapesRequest,
     Model3DRequest,
     BodyOutfitRequest,
     BodyRigRequest,
@@ -1828,6 +1829,29 @@ def _model_3d_bases(character: dict, root_name: str) -> list[dict]:
     return result
 
 
+def _shape_flags(character: dict, base: dict) -> dict[str, bool]:
+    """形状パーツを当てられる範囲(nude: 裸の素体のモデル。modest: 未成年の手がかりがあるキャラ)。"""
+    return {"nude": base["kind"] == "nude" and not _age_checks(character)[0], "modest": _age_checks(character)[1]}
+
+
+def _shape_settings(character: dict, base: dict, out: Path) -> tuple[dict, dict[str, float]]:
+    """
+    骨を入れるときに渡す形状パーツ(body_shapes.to_json)と強さ。強さは、保存してあればそれ(当てられない形は外す)、
+    無ければ素体の体のタグとキャラシートの見た目のタグから、部位ごとに選んだ形を 1 にする。
+    """
+    flags = _shape_flags(character, base)
+    allowed = body_shapes.presets_for(**flags)
+    saved = model_3d.read_meta(out).get("shapes", {}).get("weights")
+    if saved:
+        weights = {k: float(v) for k, v in saved.items() if k in allowed}
+    else:
+        tags = ", ".join(t for t in (
+            body_base.body_tags(base, _options(), modest=flags["modest"]), character.get("appearance_tags") or "",
+        ) if t)
+        weights = {key: 1.0 for key in body_shapes.choose(tags, **flags).values()}
+    return body_shapes.to_json(**flags), weights
+
+
 def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
     entries = []
     for base in _model_3d_bases(character, root_name):
@@ -1845,6 +1869,11 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
             },
             # ポーズの参考の絵(新しい順)
             "poses": model_3d.pose_images(folder),
+            # 形状パーツ: 選べる形(部位ごと)と、保存した強さ
+            "shapes": {
+                "options": body_shapes.labels(**_shape_flags(character, base)),
+                "weights": model_3d.read_meta(folder).get("shapes", {}).get("weights", {}),
+            },
             "meta": model_3d.read_meta(folder) or None,
             "job": None if job is None else {
                 "status": job["status"], "remote": job.get("remote"), "error": job.get("error"),
@@ -1907,7 +1936,11 @@ async def make_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any
             attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status,
         )
         job["remote"] = "rigging"
-        model_3d.rig(blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]))
+        shapes, weights = _shape_settings(character, base, out)
+        model_3d.rig(
+            blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
+            shape_weights=weights,
+        )
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1932,7 +1965,11 @@ async def clean_model_3d(character_id: int, req: Model3DRequest) -> dict[str, An
         job["remote"] = "cleaning"
         model_3d.clean_and_check(blender, folder, base["id"], out, model_3d.height_of(base))
         job["remote"] = "rigging"
-        model_3d.rig(blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]))
+        shapes, weights = _shape_settings(character, base, out)
+        model_3d.rig(
+            blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
+            shape_weights=weights,
+        )
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1956,7 +1993,11 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "rigging"
-        model_3d.rig(blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]))
+        shapes, weights = _shape_settings(character, base, out)
+        model_3d.rig(
+            blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
+            shape_weights=weights,
+        )
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -1982,12 +2023,45 @@ async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str,
         raise HTTPException(status_code=422, detail="この素体の 3D の形に、まだ骨を入れていません。")
     blender = _model_3d_blender()
     cameras = list(dict.fromkeys(req.cameras))
+    shapes = _check_shape_weights(character, base, req.shapes) if req.shapes is not None else None
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "posing"
-        model_3d.render_pose(blender, out, req.pose, cameras, req.style)
+        model_3d.render_pose(blender, out, req.pose, cameras, req.style, shape_weights=shapes)
 
     _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
+def _check_shape_weights(character: dict, base: dict, weights: dict[str, float]) -> dict[str, float]:
+    """形状パーツの強さを確かめる(このモデルに当てられる形だけ、0〜2)。"""
+    allowed = body_shapes.presets_for(**_shape_flags(character, base))
+    unknown = sorted(set(weights) - set(allowed))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"このモデルには当てられない形です: {', '.join(unknown)}")
+    if any(not 0 <= v <= 2 for v in weights.values()):
+        raise HTTPException(status_code=422, detail="強さは 0〜2 です")
+    return {k: float(v) for k, v in weights.items()}
+
+
+@router.put("/character/{character_id}/model-3d/shapes")
+async def save_model_3d_shapes(character_id: int, req: Model3DShapesRequest) -> dict[str, Any]:
+    """
+    形状パーツの強さを保存する(ポーズの絵・画面の 3D に使う)。シェイプキーは骨を入れたときに作ってあるので、Blender は
+    動かさない。保存した強さは、骨を入れ直す・整え直すときにも使う。
+    """
+    character = _load_character(character_id)
+    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
+    base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
+    if base is None:
+        raise HTTPException(status_code=404, detail="素体が見つかりません。")
+    out = _model_3d_dir(character, base, req.root_name)
+    if not (out / "model.blend").is_file():
+        raise HTTPException(status_code=422, detail="この素体の 3D の形に、まだ骨を入れていません。")
+    weights = _check_shape_weights(character, base, req.weights)
+    meta = model_3d.read_meta(out)
+    meta["shapes"] = {"weights": weights}
+    model_3d.write_meta(out, meta)
     return _model_3d_entries(character, req.root_name)
 
 
