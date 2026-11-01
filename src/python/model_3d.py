@@ -383,7 +383,9 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     meta = read_meta(out_dir)
     meta["rig"] = {"motion": motion, "hand": hand, **report}
     if shapes:
+        # 作ったシェイプキーと、作った部品(part_<形>_<L|R>)の形の強さだけ残す
         made = set((report.get("shapes") or {}).get("keys", {}))
+        made |= {name[len("part_"):-2] for name in (report.get("shapes") or {}).get("parts", {})}
         meta["shapes"] = {"weights": {k: v for k, v in (shape_weights or {}).items() if k in made}}
     else:
         meta.pop("shapes", None)

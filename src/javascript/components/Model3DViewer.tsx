@@ -23,6 +23,8 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes }: 
   const hostRef = useRef<HTMLDivElement>(null)
   const mixerRef = useRef<THREE.AnimationMixer | null>(null)
   const morphRef = useRef<THREE.Mesh[]>([])
+  // 着脱する部品(乳首・乳輪。part_<形>_<L|R>)。選んでいない形は隠す
+  const partsRef = useRef<THREE.Object3D[]>([])
   const clipsRef = useRef<THREE.AnimationClip[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -80,6 +82,11 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes }: 
           if (mesh.isMesh && mesh.morphTargetDictionary) morphs.push(mesh)
         })
         morphRef.current = morphs
+        const parts: THREE.Object3D[] = []
+        model.traverse(obj => {
+          if (/^part_.+_[LR]$/.test(obj.name)) parts.push(obj)
+        })
+        partsRef.current = parts
         scene.add(model)
         // 足の裏から頭の上までが入るよう、カメラを置く
         const box = new THREE.Box3().setFromObject(model)
@@ -126,6 +133,7 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes }: 
       if (!influences) continue
       for (const [name, index] of Object.entries(names)) influences[index] = shapes[name] ?? 0
     }
+    for (const part of partsRef.current) part.visible = (shapes[part.name.slice(5, -2)] ?? 0) > 0
   }, [shapes, loading])
 
   return (

@@ -66,8 +66,12 @@ def apply_pose(arm: bpy.types.Object, pose: dict) -> None:
                 pb = arm.pose.bones.get(f"{finger}.{i:02d}.{side}")
                 if pb is not None:
                     pb.rotation_quaternion = Quaternion(Vector((1, 0, 0)), math.radians(deg))
-    # 形状パーツ(シェイプキー)の強さ。書いていないキーは 0
+    # 形状パーツ(シェイプキー)の強さ。書いていないキーは 0。部品(part_<形>_<L|R>)は、強さが 0 なら隠す
     weights = pose.get("shapes") or {}
+    for obj in bpy.data.objects:
+        if obj.type == "MESH" and obj.name.startswith("part_"):
+            visible = float(weights.get(obj.name[len("part_"):-2], 0.0)) > 0
+            obj.hide_render = obj.hide_viewport = not visible
     for obj in bpy.data.objects:
         keys = obj.data.shape_keys if obj.type == "MESH" else None
         if keys is not None:
