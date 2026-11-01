@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import FullscreenViewer from './FullscreenViewer'
 import ShapeParts, { type ShapeInfo } from './ShapeParts'
+import SmoothSpots, { DEFAULT_SMOOTH_RADIUS } from './SmoothSpots'
 import './Model3D.css'
 
 /**
@@ -13,6 +14,7 @@ import './Model3D.css'
 const Model3DViewer = lazy(() => import('./Model3DViewer'))
 
 type CameraView = import('./Model3DViewer').CameraView
+type Marker = import('./Model3DViewer').Marker
 
 type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing'
 
@@ -120,6 +122,9 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [shapeDraft, setShapeDraft] = useState<Record<string, number> | null>(null)
   // ポーズの絵に使う形の組み合わせ(空ならいま保存している形)
   const [shapeSet, setShapeSet] = useState('')
+  // ならす所(編集中。null なら保存したもの)と、3D の上のクリックで選んでいるか
+  const [smoothDraft, setSmoothDraft] = useState<Marker[] | null>(null)
+  const [picking, setPicking] = useState(false)
 
   const url = `/api/lora-dataset/character/${characterId}/model-3d`
 
@@ -209,6 +214,21 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
     } finally {
       setDrawingInputs(false)
     }
+  }
+
+  useEffect(() => {
+    setSmoothDraft(null)
+    setPicking(false)
+  }, [entry?.base_id])
+  const smoothSpots = smoothDraft ?? entry?.shapes.smooth ?? []
+  // 選んでいる間は、3D をクリックした所をならす所に足す
+  const pickSpot = picking ? (at: Marker['at']) => setSmoothDraft([...smoothSpots, { at, radius: DEFAULT_SMOOTH_RADIUS }]) : undefined
+
+  async function startSmoothPreview(spots: Marker[]) {
+    setFloating(true)
+    setViewing(true)
+    setShowPreview(true)
+    await post('/shape-preview', { weights: shapeWeights, smooth: spots }, 'ならす所の試しを作っています(15 秒ほど)')
   }
 
   async function startPreview(part: string, params: Record<string, number | string>, offsets?: Record<string, [number, number]>) {
@@ -339,7 +359,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 </div>
                 {viewing && !floating && (
                   <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
-                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView} />
+                    <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView}
+                      onPick={pickSpot} markers={usingPreview ? [] : smoothSpots} />
                   </Suspense>
                 )}
                 {viewing && floating && (
@@ -359,7 +380,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                       <p className="lora-hint">{JOB_LABELS.previewing}…({duration(job.seconds)})</p>
                     )}
                     <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
-                      <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView} />
+                      <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView}
+                        onPick={usingPreview ? undefined : pickSpot} markers={usingPreview ? [] : smoothSpots} />
                     </Suspense>
                   </div>
                 )}
@@ -389,6 +411,20 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 onRig={() => post('/rig', { motion }, '骨を入れ直しています(自分の形を入れます)')}
                 onEditStart={() => { if (modelSrc) { setViewing(true); setFloating(true) } }}
                 onPreview={(part, params, offsets) => void startPreview(part, params, offsets)} />
+            )}
+
+            {entry.files['model.blend'] && (
+              <SmoothSpots url={url} rootName={rootName} baseId={entry.base_id} saved={entry.shapes.smooth ?? []}
+                weights={entry.shapes.weights} busy={busy} draft={smoothDraft} onDraft={setSmoothDraft}
+                picking={picking}
+                onPicking={on => {
+                  setPicking(on)
+                  // 選ぶときは、モデル本体を最前面に浮かせて出す(動きは止める)
+                  if (on && modelSrc) { setViewing(true); setFloating(true); setShowPreview(false); setAnimation(null) }
+                }}
+                onInfo={next => setInfo(next as Model3DInfo)}
+                onRig={() => post('/rig', { motion }, '骨を入れ直しています(ならす所を入れます)')}
+                onPreview={spots => { setPicking(false); void startSmoothPreview(spots) }} />
             )}
 
             {entry.files['model.blend'] && (

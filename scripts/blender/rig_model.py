@@ -940,6 +940,38 @@ def place_nipples(obj: bpy.types.Object, anchors: dict, nipples: dict, height: f
     return anchors
 
 
+def smooth_spots(obj: bpy.types.Object, spots: list) -> int:
+    """
+    画面で選んだ「ならす所」(joints.json の smooth。休んだ姿勢の位置 at と半径 radius mm)を、まわりの面から当てはめた
+    なめらかな面(cap_delta)に置き換え、体の形に焼き込む。選んだ所から半径より離れた頂点しか無ければ(体の外を選んだなど)
+    飛ばす。裏返る面ができたら戻す(unfold)。ならした所の数を返す。
+    """
+    import numpy as np
+
+    if not spots:
+        return 0
+    co, normals, edges = mesh_arrays(obj)
+    delta = np.zeros_like(co)
+    done = 0
+    for spot in spots:
+        radius = float(spot["radius"]) / 1000
+        at = np.array(spot["at"], dtype=float)
+        dist = np.linalg.norm(co + delta - at, axis=1)
+        nearest = int(np.argmin(dist))
+        if dist[nearest] > radius:
+            continue
+        # 向きは、半径の半分の内の頂点の向きの平均(選んだ点 1 つの向きは、荒れた所では大きくずれる)
+        normal = normals[dist < 0.5 * radius].sum(axis=0)
+        normal = normal / max(np.linalg.norm(normal), 1e-9)
+        area = {"center": (co + delta)[nearest], "normal": normal, "size": radius / CAP_RADIUS}
+        delta += cap_delta(co + delta, normals, edges, area)[0]
+        done += 1
+    delta, _ = unfold(obj, co, delta, edges)
+    obj.data.vertices.foreach_set("co", (co + delta).ravel())
+    obj.data.update()
+    return done
+
+
 def bake_caps(obj: bpy.types.Object, anchors: dict) -> dict:
     """
     胸の先を、なめらかな面に作り直して体の形(シェイプキーの前の形)に焼き込む(乳首・乳輪は、この上に部品として付ける)。
@@ -1264,6 +1296,9 @@ def main() -> None:
         # 乳首・乳輪を部品で付けるモデルでは、胸の先をなめらかな面に作り直して体の形に焼き込む
         if "nipple" in shapes["parts"]:
             anchors = bake_caps(obj, anchors)
+    # 画面で選んだ「ならす所」も体の形に焼き込む(シェイプキーは、ならした形から作る)
+    weights["smoothed"] = smooth_spots(obj, joints.get("smooth") or [])
+    if shapes:
         shape_report = add_shape_keys(obj, j, shapes, shape_weights, anchors)
         shape_report.update(make_parts(obj, arm, shapes, shape_weights, anchors))
     # 形の値の試し(joints.json の preview_only): 形だけ見るので、動き・確かめのコマ・Blender のファイルは作らない
