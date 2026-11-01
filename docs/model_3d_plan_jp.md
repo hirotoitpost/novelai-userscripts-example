@@ -110,13 +110,18 @@
   素体からずれていないかを、これと重ねて見る。
 - 結果を `docs/trials/` に記録し、使うモデルを決める。
 
-### ステップ 2: Colab の 3D 生成サーバー
+### ステップ 2: Colab の 3D 生成サーバー(実装済み)
 
-- `scripts/model3d_server.py` と `notebooks/model3d_colab.ipynb` を足す。see-through と同じ形にする。
-  - ジョブ API: `POST /jobs`(絵と設定)→ `GET /jobs/{id}`(状態)→ `GET /jobs/{id}/result`(GLB とテクスチャ)
-  - cloudflared のクイックトンネルで、アドレスをアプリの設定に入れる。
-  - see-through と同じノートブックに入れるかは、VRAM を見て決める(両方を同時に載せられないなら別にする)。
-- アプリ設定に `model3d.url` を足す(see-through の設定と同じ扱い)。
+- `scripts/model3d_server.py` と `notebooks/model3d_colab.ipynb`。see-through と同じ形にした。
+  - Hunyuan3D-2mv の形だけ(テクスチャを塗る部品はビルドしない)。L4 で動く。
+  - ジョブ API: `POST /jobs`(multipart の front・left・back。front は必須。seed・steps・octree_resolution)→
+    `GET /jobs/{id}`(状態)→ `GET /jobs/{id}/result`(形だけの GLB)。
+  - 合言葉(Bearer)を全部の呼び出しで確かめる。1度に1体だけ動かす。起動するとすぐにモデルを読み込み始める。
+  - cloudflared のクイックトンネルで外に出す(see-through の 8190 と別の 8191 番)。see-through とは別のノートブックにした
+    (ライブラリの版が合わないため)。
+- アプリ側は `src/python/model3d_remote.py`(`generate(views, out)`)。接続先は see-through と同じく `.env` の
+  `MODEL3D_BASE_URL` と `MODEL3D_TOKEN`。
+- テスト: `tests/test_model3d_remote.py`(サーバーのモデルを差し替えて、合言葉・仕事の流れ・失敗を確かめる。GPU なしで通る)。
 
 ### ステップ 3: バックエンド(生成・保存・判定)
 
