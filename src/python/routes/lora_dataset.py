@@ -24,7 +24,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
-from .. import body_motions, body_poses, body_shapes, model3d_remote, model_3d, see_through_remote, wardrobe
+from .. import body_motions, body_poses, body_shapes, garments, model3d_remote, model_3d, see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -104,6 +104,7 @@ from ..lora_dataset import (
 from ..models import (
     BodyHairUnderRequest,
     BodyLayersRequest,
+    Model3DDressRequest,
     Model3DPoseRequest,
     Model3DShapesRequest,
     Model3DSmoothSpot,
@@ -1943,7 +1944,7 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
         })
     return {
         "configured": model3d_remote.configured(), "bases": entries, "motions": body_motions.labels(),
-        "pose_options": body_poses.labels(),
+        "pose_options": body_poses.labels(), "garment_options": garments.options(),
     }
 
 
@@ -2117,7 +2118,7 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
     return _model_3d_entries(character, req.root_name)
 
 
-def _model_3d_rigged(character_id: int, req: Model3DRequest) -> tuple[dict, dict, Path]:
+def _model_3d_rigged(character_id: int, req: Model3DRequest | Model3DDressRequest) -> tuple[dict, dict, Path]:
     """骨を入れた 3D の形のあるキャラ・素体・フォルダ(無ければ 404・422)。"""
     character = _load_character(character_id)
     base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
@@ -2194,6 +2195,32 @@ async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str,
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "posing"
         model_3d.render_pose(blender, out, req.pose, cameras, req.style, shape_weights=shapes)
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
+@router.post("/character/{character_id}/model-3d/dress")
+async def dress_model_3d(character_id: int, req: Model3DDressRequest) -> dict[str, Any]:
+    """
+    骨を入れた形に、型紙から作った服(今はスカート)を布として着せ、骨に付ける(model_3d.dress。1 着 1〜2 分。GPU は
+    使わない)。骨と動き入りの model_dressed.glb と、確かめの静止画・動きの GIF を描き出す。骨を入れ直すと消える。
+    """
+    if req.motion not in body_motions.MOTIONS:
+        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
+    try:
+        items = [
+            {"kind": g.kind, "name": g.kind, "preset": g.preset, "config": garments.clean(g.kind, g.config)}
+            for g in req.garments
+        ]
+    except garments.GarmentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    character, base, out = _model_3d_rigged(character_id, req)
+    blender = _model_3d_blender()
+
+    def work(job: dict[str, Any]) -> None:
+        job["remote"] = "dressing"
+        model_3d.dress(blender, out, items, motion=req.motion)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -2385,7 +2412,8 @@ def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN
             job["status"] = "done"
         except (
             model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError,
-            model_3d.Model3DRigError, model_3d.Model3DPoseError, model_3d.Model3DImportError, body_rig.RigError,
+            model_3d.Model3DRigError, model_3d.Model3DPoseError, model_3d.Model3DImportError, model_3d.Model3DDressError,
+            body_rig.RigError,
             subprocess.TimeoutExpired, OSError,
         ) as exc:
             job["status"] = "error"

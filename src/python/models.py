@@ -504,6 +504,23 @@ class Model3DShapePreviewRequest(BaseModel):
     smooth: list[Model3DSmoothSpot] | None = Field(None, description="ならす所(編集中。省くと保存したもの)")
 
 
+class GarmentSpec(BaseModel):
+    """着せる服 1 着: 種類と型紙の数値(garments.py で確かめる。省いた値は garment_<種類>.py の DEFAULTS)。"""
+
+    kind: str = Field("skirt", description="服の種類(garments.KINDS)")
+    preset: str | None = Field(None, description="選んだ型(記録用。数値は config)")
+    config: dict[str, float | bool | None] = Field(default_factory=dict, description="型紙の数値")
+
+
+class Model3DDressRequest(BaseModel):
+    """素体の 3D モデルに、型紙から作った服を布として着せ、骨に付ける(model_3d.dress)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
+    motion: str = Field("walk", description="着せたあと、確かめの GIF に描き出す動き(body_motions.MOTIONS)")
+    garments: list[GarmentSpec] = Field(min_length=1, max_length=1, description="着せる服(今はスカート 1 着)")
+
+
 class BodyShapePresetRequest(BaseModel):
     """自分で値を変えた形状パーツの形(body_shapes.clean_params で確かめる)。どのモデルにも当てる共有の一覧。"""
 

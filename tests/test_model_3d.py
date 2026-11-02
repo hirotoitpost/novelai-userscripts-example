@@ -968,3 +968,59 @@ def test_rig_removes_the_dressed_files(tmp_path: Path, monkeypatch: pytest.Monke
     assert not any((tmp_path / name).exists() for name in model_3d.DRESSED_FILES)
     assert "garments" not in model_3d.read_meta(tmp_path)
 
+
+
+def test_garment_configs_are_checked() -> None:
+    from python import garments
+
+    # 型はどれも、そのまま確かめを通る
+    for preset in garments.SKIRT_PRESETS.values():
+        assert garments.clean("skirt", preset["config"]) == preset["config"]
+    assert garments.clean("skirt", {"pleats": 12.0, "pleat_stitch": None}) == {"pleats": 12, "pleat_stitch": None}
+    for config, message in (
+        ({"length": 1.5}, "丈"), ({"gores": 4}, "知らない"), ({"pleats": 2.5}, "整数"), ({"ease": None}, "ゆとり"),
+        ({"knife": 1}, "車ひだ"), ({"knife": True}, "ひだの数"), ({"flare": "wide"}, "広がり"),
+    ):
+        with pytest.raises(garments.GarmentError, match=message):
+            garments.clean("skirt", config)
+    with pytest.raises(garments.GarmentError, match="作れない服"):
+        garments.clean("coat", {})
+    assert "skirt" in garments.options() and garments.options()["skirt"]["fields"]["length"]["max"] == 1.0
+
+
+def test_dress_route(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    adult = _character(client, "rumi", is_adult=1, age=28)
+    suit = _base(client, "スーツ")
+    _draw(tmp_path / "outputs/training_data/rumi/body_base", suit["id"], ("front",))
+    url = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    info = client.get(url).json()
+    assert "knife_mini" in info["garment_options"]["skirt"]["presets"]
+    skirt = {"kind": "skirt", "preset": "knife_mini", "config": {"length": 0.25, "pleats": 20, "knife": True}}
+    # 骨を入れる前は着せられない
+    assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt]}).status_code == 422
+    out = tmp_path / f"outputs/training_data/rumi/model_3d/{suit['id']}"
+    out.mkdir(parents=True)
+    (out / "model.blend").write_bytes(b"blend")
+    # 範囲の外の値・知らない動きは断る
+    bad = {**skirt, "config": {"length": 3}}
+    assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [bad]}).status_code == 422
+    assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt], "motion": "dance"}).status_code == 422
+    calls: list[tuple] = []
+    monkeypatch.setattr(model_3d, "dress", lambda blender, folder, items, motion: calls.append((folder, items, motion)) or {})
+    res = client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt], "motion": "cheer"})
+    assert res.status_code == 200, res.text
+    entry = _wait(client, adult["id"], suit["id"])
+    assert entry["job"]["status"] == "done"
+    assert calls == [(out, [{"kind": "skirt", "name": "skirt", "preset": "knife_mini", "config": skirt["config"]}], "cheer")]
+
+
+def test_garment_defaults_match_the_blender_script() -> None:
+    import ast
+
+    from python import garments
+
+    source = (Path(__file__).resolve().parent.parent / "scripts/blender/garment_skirt.py").read_text(encoding="utf-8")
+    node = next(n for n in ast.parse(source).body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "DEFAULTS")
+    defaults = ast.literal_eval(node.value)
+    defaults.pop("gores")
+    assert {k: f.default for k, f in garments.SKIRT_FIELDS.items()} == defaults
