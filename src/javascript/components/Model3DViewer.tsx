@@ -140,11 +140,15 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
       gltf => {
         if (disposed) return
         const model = gltf.scene
-        // 形だけの GLB は材質が無いので、灰色にする
+        // 形だけの GLB は材質が無いので、灰色にする。着せた服(garment_*)は色を変え、裏も描く(布は 1 枚の面)
         model.traverse(obj => {
           const mesh = obj as THREE.Mesh
           if (mesh.isMesh) {
-            mesh.material = new THREE.MeshStandardMaterial({ color: 0xcfcfcf, roughness: 0.8 })
+            let garment = false
+            for (let o: THREE.Object3D | null = obj; o; o = o.parent) if (o.name.startsWith('garment_')) garment = true
+            mesh.material = garment
+              ? new THREE.MeshStandardMaterial({ color: 0x4a5a9a, roughness: 0.9, side: THREE.DoubleSide })
+              : new THREE.MeshStandardMaterial({ color: 0xcfcfcf, roughness: 0.8 })
             mesh.frustumCulled = false
           }
         })

@@ -167,6 +167,7 @@ def main() -> None:
         info["bones"] = transfer_weights(obj, body, arm)
         info["name"] = item["name"]
         info["kind"] = item["kind"]
+        info["preset"] = item.get("preset")
         obj.color = colors[n % len(colors)]
         report["garments"].append(info)
     # 動きを戻して書き出す(GLB には全部の動き)

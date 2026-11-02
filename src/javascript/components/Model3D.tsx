@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import FullscreenViewer from './FullscreenViewer'
+import Garments, { type DressedMeta, type GarmentKind } from './Garments'
 import ShapeParts, { type ShapeInfo } from './ShapeParts'
 import SmoothSpots, { DEFAULT_SMOOTH_RADIUS } from './SmoothSpots'
 import './Model3D.css'
@@ -16,7 +17,7 @@ const Model3DViewer = lazy(() => import('./Model3DViewer'))
 type CameraView = import('./Model3DViewer').CameraView
 type Marker = import('./Model3DViewer').Marker
 
-type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing' | 'importing'
+type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing' | 'importing' | 'dressing'
 
 interface Job {
   status: 'running' | 'done' | 'error'
@@ -45,6 +46,8 @@ interface Meta {
   }
   /** Blender で直した所を取り込んだ結果 */
   blender_import?: { sculpt: number; keys: Record<string, number>; added: string[]; imported: number }
+  /** 服を着せた結果(骨を入れ直すと消える) */
+  garments?: DressedMeta
 }
 
 interface BaseEntry {
@@ -66,6 +69,8 @@ interface Model3DInfo {
   bases: BaseEntry[]
   motions: Record<string, string>
   pose_options: { poses: Record<string, string>; cameras: Record<string, string>; styles: Record<string, string> }
+  /** 着せられる服(種類 → 型・数値の範囲) */
+  garment_options: Record<string, GarmentKind>
 }
 
 interface Props {
@@ -86,6 +91,7 @@ const JOB_LABELS: Record<JobState, string> = {
   posing: 'ポーズの絵を描いています',
   previewing: '形の値の試しを作っています(15 秒ほど)',
   importing: 'Blender で直した所を読んでいます',
+  dressing: 'Blender で服を着せています(1〜2 分)',
 }
 
 async function detail(res: Response): Promise<string> {
@@ -128,6 +134,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   // ならす所(編集中。null なら保存したもの)と、3D の上のクリックで選んでいるか
   const [smoothDraft, setSmoothDraft] = useState<Marker[] | null>(null)
   const [picking, setPicking] = useState(false)
+  // 3D で、服を着た姿(model_dressed.glb)を見るか
+  const [dressedView, setDressedView] = useState(false)
 
   const url = `/api/lora-dataset/character/${characterId}/model-3d`
 
@@ -191,7 +199,9 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const job = entry?.job
   const busy = disabled || job?.status === 'running'
   const meta = entry?.meta
-  const modelSrc = entry?.files['model_rigged.glb'] ? fileUrl('model_rigged.glb') : entry?.files['model_clean.glb'] ? fileUrl('model_clean.glb') : null
+  const dressedReady = !!entry?.files['model_dressed.glb']
+  const bodySrc = entry?.files['model_rigged.glb'] ? fileUrl('model_rigged.glb') : entry?.files['model_clean.glb'] ? fileUrl('model_clean.glb') : null
+  const modelSrc = dressedView && dressedReady ? fileUrl('model_dressed.glb') : bodySrc
   const previewReady = !!entry?.files['shape_preview.glb'] && !!entry?.job?.preview_weights && entry.job.status === 'done'
   const usingPreview = showPreview && previewReady
   const viewerSrc = usingPreview ? fileUrl('shape_preview.glb') : modelSrc
@@ -352,6 +362,12 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                       {floating ? 'ここに戻す' : '最前面に浮かせる'}
                     </button>
                   )}
+                  {viewing && dressedReady && (
+                    <label className="fsh-label" title="服を着せた形(model_dressed.glb)を見ます。ならす所を選ぶときは服なしに戻ります">
+                      <input type="checkbox" checked={dressedView} onChange={e => { setDressedView(e.target.checked); setPicking(false) }} />
+                      服を着た姿
+                    </label>
+                  )}
                   {viewing && animations.length > 0 && (
                     <select className="lora-select" value={animation ?? ''} aria-label="再生する動き"
                       onChange={e => setAnimation(e.target.value || null)}>
@@ -423,11 +439,17 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 onPicking={on => {
                   setPicking(on)
                   // 選ぶときは、モデル本体を最前面に浮かせて出す(動きは止める)
-                  if (on && modelSrc) { setViewing(true); setFloating(true); setShowPreview(false); setAnimation(null) }
+                  if (on && modelSrc) { setViewing(true); setFloating(true); setShowPreview(false); setAnimation(null); setDressedView(false) }
                 }}
                 onInfo={next => setInfo(next as Model3DInfo)}
                 onRig={() => post('/rig', { motion }, '骨を入れ直しています(ならす所を入れます)')}
                 onPreview={spots => { setPicking(false); void startSmoothPreview(spots) }} />
+            )}
+
+            {entry.files['model.blend'] && info.garment_options && (
+              <Garments options={info.garment_options} motions={info.motions} dressed={meta?.garments ?? null} busy={busy}
+                files={entry.files} fileUrl={name => fileUrl(name)}
+                onDress={body => { setDressedView(true); void post('/dress', body, '服を着せ始めました(1〜2 分かかります)') }} />
             )}
 
             {entry.files['model.blend'] && (
