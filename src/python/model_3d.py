@@ -44,6 +44,12 @@ FILES = {
     "input_left.png": "3D に送った横(乳首なしの写し)",
     "blender_edits.json": "Blender で直した所(取り込んだもの。骨を入れ直しても入れる)",
     "rig_ref.npz": "骨を入れたときの形(Blender で直した所を比べる元)",
+    "model_dressed.glb": "服を着せた形(GLB・骨と動き入り)",
+    "model_dressed.blend": "服を着せた Blender のファイル",
+    "dressed_front.png": "服を着せた正面",
+    "dressed_side.png": "服を着せた横",
+    "dressed_back.png": "服を着せた後ろ",
+    "dressed_motion.gif": "服を着せた動きの確かめ",
 }
 # 3D に送る乳首なしの写し(裸の素体のモデル)。形を作り直しても消さない(もとの絵が変わるまで使い回す)
 INPUT_FILES = {"input_front.png": "front", "input_left.png": "left"}
@@ -53,6 +59,7 @@ _RIG_SCRIPT = _CLEAN_SCRIPT.with_name("rig_model.py")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _POSE_SCRIPT = _CLEAN_SCRIPT.with_name("pose_render.py")
 _IMPORT_SCRIPT = _CLEAN_SCRIPT.with_name("import_blend.py")
+_DRESS_SCRIPT = _CLEAN_SCRIPT.with_name("dress_model.py")
 # 取り込んだ結果を書くファイル(読んだら消す)と、比べる元
 _IMPORT_REPORT = "import.json"
 EDITS_FILE = "blender_edits.json"
@@ -578,7 +585,11 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     frames = out_dir / "frames"
     frames_to_gif(sorted(frames.glob("*.png")), out_dir / "motion.gif")
     shutil.rmtree(frames)
+    # 着せた服は、入れ直す前の骨に付けてあるので消す(着せ直す)
+    for name in DRESSED_FILES:
+        (out_dir / name).unlink(missing_ok=True)
     meta = read_meta(out_dir)
+    meta.pop("garments", None)
     meta["rig"] = {"motion": motion, "hand": hand, **report, "nipples": nipples}
     if shapes:
         # 作ったシェイプキーと、作った部品(part_<形>_<L|R>)の形の強さだけ残す
@@ -666,6 +677,64 @@ def import_blend(blender: str, out_dir: Path, *, timeout: float = 300) -> dict:
     meta["blender_import"] = {**report, "imported": time.time()}
     write_meta(out_dir, meta)
     return report
+
+
+class Model3DDressError(RuntimeError):
+    """服を着せられなかった。"""
+
+
+# 服を着せたときのファイル(骨を入れ直すと消す)
+DRESSED_FILES = ("model_dressed.glb", "model_dressed.blend", "dressed_front.png", "dressed_side.png", "dressed_back.png",
+                 "dressed_motion.gif")
+# 作れる服の種類(scripts/blender/garment_*.py)
+GARMENT_KINDS = ("skirt",)
+
+
+def dress(blender: str, out_dir: Path, garments: list[dict], *, motion: str = "walk", timeout: float = 1800) -> dict:
+    """
+    骨を入れた形(model.blend)の休んだ姿勢の体に、型紙から作った服を布として着せ、骨に付ける
+    (scripts/blender/dress_model.py。今はスカートだけ: garment_skirt.py)。garments は [{"kind", "name", "config"}]。
+    骨と動き入りの model_dressed.glb・model_dressed.blend と、確かめの静止画・motion の動きの GIF を描き出す。
+    model.blend は書き換えない(骨を入れ直したら、着せ直す)。結果(服ごとの寸法・体への食い込み・付けた骨)を
+    meta.json の garments に残して返す。
+    """
+    from . import body_motions
+    from .body_rig import frames_to_gif
+
+    if motion not in body_motions.MOTIONS:
+        raise Model3DDressError(f"動きの種類が違います: {motion}")
+    unknown = [g.get("kind") for g in garments if g.get("kind") not in GARMENT_KINDS]
+    if not garments or unknown:
+        raise Model3DDressError(f"作れない服です: {', '.join(map(str, unknown)) or '(服がありません)'}")
+    meta = read_meta(out_dir)
+    joints = (meta.get("rig") or {}).get("joints")
+    if not (out_dir / "model.blend").is_file() or not joints:
+        raise Model3DDressError("この素体の 3D の形に、まだ骨を入れていません。")
+    shutil.rmtree(out_dir / "frames_dressed", ignore_errors=True)
+    report_path = out_dir / "dress.json"
+    report_path.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="model3d_dress_") as tmp:
+        spec = Path(tmp) / "garments.json"
+        spec.write_text(json.dumps({"joints": joints, "garments": garments,
+                                    "frames": body_motions.MOTIONS[motion].frames}), encoding="utf-8")
+        result = subprocess.run(
+            [blender, "--background", "--factory-startup", str(out_dir / "model.blend"), "--python", str(_DRESS_SCRIPT),
+             "--python-exit-code", "1", "--", str(out_dir), str(spec), motion],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW,
+        )
+    if result.returncode != 0 or not report_path.is_file() or not (out_dir / "model_dressed.glb").is_file():
+        tail = "\n".join((result.stdout + result.stderr).splitlines()[-15:])
+        raise Model3DDressError(f"Blender で服を着せられませんでした(終了コード {result.returncode}):\n{tail}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report_path.unlink()
+    frames = out_dir / "frames_dressed"
+    if frames.is_dir():
+        frames_to_gif(sorted(frames.glob("*.png")), out_dir / "dressed_motion.gif")
+        shutil.rmtree(frames)
+    meta = read_meta(out_dir)
+    meta["garments"] = {"motion": motion, "items": report["garments"], "dressed": time.time()}
+    write_meta(out_dir, meta)
+    return meta["garments"]
 
 
 class Model3DPoseError(RuntimeError):
