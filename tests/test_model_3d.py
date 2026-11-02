@@ -910,3 +910,61 @@ def test_blender_round_trip_routes(client: TestClient, tmp_path: Path, monkeypat
     client.post(f"{url}/import-blend", json={"base_id": nude["id"]})
     entry = _wait(client, adult["id"], nude["id"])
     assert entry["job"]["status"] == "error" and "頂点の数" in entry["job"]["error"]
+
+
+def test_dress_runs_blender_and_records_the_garments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    skirt = {"kind": "skirt", "name": "pleats", "config": {"length": 0.25, "pleats": 20, "knife": True}}
+    # 骨を入れる前は着せられない。作れない服・動きも断る
+    with pytest.raises(model_3d.Model3DDressError, match="骨"):
+        model_3d.dress("blender", tmp_path, [skirt])
+    with pytest.raises(model_3d.Model3DDressError, match="作れない服"):
+        model_3d.dress("blender", tmp_path, [{"kind": "coat", "name": "x"}])
+    with pytest.raises(model_3d.Model3DDressError, match="動き"):
+        model_3d.dress("blender", tmp_path, [skirt], motion="dance")
+    (tmp_path / "model.blend").write_bytes(b"blend")
+    joints = {"left_hip": [0.1, 0.0, 0.86]}
+    model_3d.write_meta(tmp_path, {"rig": {"joints": joints}})
+    sent: dict = {}
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        sent["command"] = command
+        sent["spec"] = json.loads(Path(command[-2]).read_text(encoding="utf-8"))
+        (tmp_path / "model_dressed.glb").write_bytes(b"glTF")
+        (tmp_path / "frames_dressed").mkdir()
+        Image.new("RGBA", (20, 30)).save(tmp_path / "frames_dressed" / "001.png")
+        report = {"garments": [{"name": "pleats", "kind": "skirt", "inside_body": 0, "bones": {"torso": 0.4}}]}
+        (tmp_path / "dress.json").write_text(json.dumps(report), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    result = model_3d.dress("blender", tmp_path, [skirt], motion="walk")
+    # model.blend を開いて着せるスクリプトを動かし、骨を入れたときの関節と、動きのコマ数を渡す
+    assert sent["command"][3] == str(tmp_path / "model.blend") and sent["command"][-1] == "walk"
+    assert sent["spec"]["joints"] == joints and sent["spec"]["garments"] == [skirt] and sent["spec"]["frames"] > 0
+    assert result["items"][0]["name"] == "pleats" and model_3d.read_meta(tmp_path)["garments"]["motion"] == "walk"
+    assert (tmp_path / "dressed_motion.gif").is_file() and not (tmp_path / "frames_dressed").exists()
+    assert not (tmp_path / "dress.json").exists()
+
+
+def test_rig_removes_the_dressed_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "model_clean.glb").write_bytes(b"glTF")
+    Image.new("RGBA", (360, 600)).save(tmp_path / "front.png")
+    model_3d.write_meta(tmp_path, {"clean": {"height": 1.6}, "garments": {"items": []}})
+    for name in model_3d.DRESSED_FILES:
+        (tmp_path / name).write_bytes(b"x")
+    points = {n: np.array([180.0, 300.0]) for n in model_3d._RIG_POINTS}
+    monkeypatch.setattr(body_rig, "detect", lambda _image: (None, points))
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        (tmp_path / "model_rigged.glb").write_bytes(b"glTF")
+        (tmp_path / "frames").mkdir(exist_ok=True)
+        Image.new("RGBA", (20, 30)).save(tmp_path / "frames" / "001.png")
+        (tmp_path / "rig.json").write_text(json.dumps({}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    model_3d.rig("blender", tmp_path)
+    # 骨を入れ直したら、前の骨に付けた服は消す
+    assert not any((tmp_path / name).exists() for name in model_3d.DRESSED_FILES)
+    assert "garments" not in model_3d.read_meta(tmp_path)
+
