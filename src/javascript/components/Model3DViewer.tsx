@@ -145,9 +145,14 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
           const mesh = obj as THREE.Mesh
           if (mesh.isMesh) {
             let garment = false
-            for (let o: THREE.Object3D | null = obj; o; o = o.parent) if (o.name.startsWith('garment_')) garment = true
+            let collar = false
+            for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
+              if (o.name.startsWith('garment_')) garment = true
+              if (o.name.startsWith('garment_') && o.name.endsWith('_collar')) collar = true
+            }
+            // えり(garment_*_collar)は白くして、服と見分ける
             mesh.material = garment
-              ? new THREE.MeshStandardMaterial({ color: 0x4a5a9a, roughness: 0.9, side: THREE.DoubleSide })
+              ? new THREE.MeshStandardMaterial({ color: collar ? 0xeeeee6 : 0x4a5a9a, roughness: 0.9, side: THREE.DoubleSide })
               : new THREE.MeshStandardMaterial({ color: 0xcfcfcf, roughness: 0.8 })
             mesh.frustumCulled = false
           }

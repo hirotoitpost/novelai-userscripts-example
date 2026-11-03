@@ -32,6 +32,8 @@ SMOOTH_ROUNDS = 30
 MAX_BONES = 4
 # スカートを付ける骨。腕・手に付けると、腕を振ったときにスカートが引っ張られる
 SKIRT_BONES = ("torso", "thigh.L", "thigh.R", "shin.L", "shin.R")
+# えりの色(服と見分ける。絵の白いえり)
+COLLAR_COLOR = (0.97, 0.95, 0.82, 1)
 # 重ねる順(小さいほど内)
 LAYERS = {"skirt": 0, "top": 1}
 
@@ -137,7 +139,9 @@ def unpose(garment: bpy.types.Object, arm: bpy.types.Object) -> None:
     骨を休んだ姿勢に戻すと、骨の変形(Armature)で、着せたときの形に戻る。
     """
     bpy.context.view_layer.update()
-    names = [g.name for g in garment.vertex_groups]
+    # 骨の名前の頂点グループだけ(えりの硬さ "_stiff" のような、骨でないグループは除く)
+    bones = {g.index: j for j, g in enumerate(g for g in garment.vertex_groups if g.name in arm.pose.bones)}
+    names = [g.name for g in garment.vertex_groups if g.name in arm.pose.bones]
     mats = np.array([
         np.array(arm.matrix_world @ arm.pose.bones[n].matrix @ arm.pose.bones[n].bone.matrix_local.inverted()
                  @ arm.matrix_world.inverted())
@@ -148,7 +152,8 @@ def unpose(garment: bpy.types.Object, arm: bpy.types.Object) -> None:
     for v in garment.data.vertices:
         w = np.zeros(len(names))
         for g in v.groups:
-            w[g.group] = g.weight
+            if g.group in bones:
+                w[bones[g.group]] = g.weight
         if w.sum() <= 0:
             continue
         blend = np.einsum("b,bij->ij", w / w.sum(), mats)
@@ -161,6 +166,8 @@ def render(arm: bpy.types.Object, folder: Path, motion: str, frames: int, height
     scene.render.engine = "BLENDER_WORKBENCH"
     scene.display.shading.light = "STUDIO"
     scene.display.shading.color_type = "OBJECT"
+    # 服・えりと体の境に線を引く(えりの白と体の灰色が近い)
+    scene.display.shading.show_object_outline = True
     scene.render.resolution_x, scene.render.resolution_y = SIZE
     scene.render.film_transparent = True
     cam = bpy.data.objects.new("dress_camera", bpy.data.cameras.new("dress_camera"))
@@ -222,6 +229,10 @@ def main() -> None:
             bpy.context.view_layer.update()
             # 腕を下ろすと、腕と胴の間に布が挟まる: 休んだ姿勢でもう一度なじませる
             info["inside_body"] = garment_top.settle(obj, body, joints, dressed, item.get("config", {}), under=tuple(worn))
+            collar = garment_top.add_collar(obj, item.get("config", {}), arm)
+            if collar is not None:
+                collar.color = COLLAR_COLOR
+                info["collar_vertices"] = len(collar.data.vertices)
         else:
             raise SystemExit(f"まだ作れない服です: {item['kind']}")
         # 面が内を向いていると、GLB で裏から見え、上に重ねる服が当たり判定で内へ押される
