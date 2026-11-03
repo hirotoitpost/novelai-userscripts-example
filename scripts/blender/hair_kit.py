@@ -8,6 +8,7 @@
   集まる筋を付ける。
 - お団子(0・1 個(後ろ)・2 個(左右の後ろ)): 巻いた筋のある球と、はねた毛。
 - 前髪・顔の横の房・後れ毛(耳の前・うなじ)・下ろした後ろ髪: 道すじに沿った、平たい・先のとがった房。
+- ポニーテール・ツインテール(結んで垂らす束): 結び目から重力で垂らした道すじのまわりに、房を束ねる。
 下ろした髪(後ろ髪と、あごより長い顔の横の房)は、根もとを頭に留めて重力で垂らし、頭・肩・背中に当てて落ち着いた
 形にする(drape)。道すじを体の面に当てて決めると、房が肩で板のように広がった(2026-11 試作)。
 部品は 1 つのオブジェクト hair にまとめ、殻は head の骨、房とお団子は、それぞれの鎖の骨(根もとは head の子)に付ける。
@@ -47,13 +48,17 @@ DEFAULTS = {
     "bun_wisps": 5,  # お団子からはねた毛
     "back_length": 0.0,  # 下ろした後ろ髪の長さ(0 でまとめ髪・1 で肩・2 で肩甲骨・3 で背中の真ん中)
     "back_locks": 24,  # 下ろした後ろ髪の房の数
+    "tails": 0,  # 結んで垂らす束の数(0・1 でポニーテール・2 でツインテール)
+    "tail_length": 1.5,  # 束の長さ(1 で 22cm。結び目から垂らす長さ)
+    "tail_height": 25.0,  # 結び目の高さ(頭の真ん中からの仰角 °)
+    "tail_volume": 1.0,  # 束の太さ(1 で標準)
 }
 HAIR_COLOR = (0.55, 0.45, 0.33, 1)
 FRONT = -math.pi / 2  # 正面(-Y)の向き
 # 揺れ: 1 コマを分ける回数・遅れ(速さを残す割合)・休んだ形へ戻る強さ(1 回ごと。部品ごと)。重力は休んだ形に入って
 # いるので足さない(足すと、横へ出たお団子が 1cm ほど垂れた)
 SUBSTEPS, KEEP, FPS = 4, 0.88, 24
-SPRING = {"bang": 0.3, "side": 0.1, "wisp": 0.06, "nape": 0.08, "bun": 0.25, "back": 0.08}
+SPRING = {"bang": 0.3, "side": 0.1, "wisp": 0.06, "nape": 0.08, "bun": 0.25, "back": 0.08, "tail": 0.03}
 # 鎖の関節が体に近づける距離の下限(休んだ形での離れがこれより近ければ、その離れ)
 CLEAR = 0.004
 # 垂らす: 繰り返す回数・1 回に落ちる距離(m)・速さを残す割合・曲がりをならす強さ・体から離す距離
@@ -227,10 +232,20 @@ def bun_places(cfg: dict) -> list[tuple[float, float]]:
     return []
 
 
+def tail_places(cfg: dict) -> list[tuple[float, float]]:
+    """結び目の向き: 1 本は後ろ、2 本は左右の耳の後ろ。"""
+    el = math.radians(cfg["tail_height"])
+    if cfg["tails"] == 1:
+        return [(math.pi / 2, el)]
+    if cfg["tails"] == 2:
+        return [(math.pi / 2 - math.radians(75), el), (math.pi / 2 + math.radians(75), el)]
+    return []
+
+
 def cap(head: Head, cfg: dict) -> Part:
-    """頭を覆う髪(厚みのある殻)。お団子があれば、お団子へ集まる筋を付ける。"""
+    """頭を覆う髪(厚みのある殻)。お団子・結び目があれば、そこへ集まる筋を付ける。"""
     cols, rows = 96, 28
-    buns = [direction(*p) for p in bun_places(cfg)]
+    buns = [direction(*p) for p in bun_places(cfg) + tail_places(cfg)]
     outer, inner = [], []
     for r in range(rows + 1):
         for c in range(cols):
@@ -339,12 +354,50 @@ def bun(head: Head, cfg: dict, index: int, az: float, el: float, rng) -> list[Pa
     return parts
 
 
+def tail_bundle(head: Head, cfg: dict, index: int, az: float, el: float) -> list[Part]:
+    """
+    結んで垂らす束: 結び目(殻の上)から少し外へ出し、下へ足して重力で垂らした真ん中の道すじのまわりに、房を 7 本束ねる
+    (根もとは細く、なかほどで広がり、先でまとまる)。房は全部、真ん中の道すじの鎖に付ける(束で一緒に揺れる)。
+    細い房 7 本では、房が離れて糸のように見えたので、太く 9 本にした。
+    """
+    root, n = head.surface(az, el)
+    tie = root + n * (cap_offset(cfg, az, el) + 0.004)
+    length = 0.22 * cfg["tail_length"]
+    lift = [tie + n * 0.025 * k / 3 for k in range(4)]
+    more = max(6, int(length / 0.012))
+    pts = lift + [lift[-1] - np.array([0, 0, length * k / more]) for k in range(1, more + 1)]
+    center = np.array(head.drape(pts, 2, clear=DRAPE_CLEAR + 0.006))
+    core = lock(f"tail{index}", "tail", center, [head.outward(q) for q in center], 0.04, 0.03, segments=4)
+    parts = [core]
+    spread = 0.02 * cfg["tail_volume"]
+    count = len(center)
+    for k in range(9):
+        a = 2 * math.pi * k / 9
+        path = []
+        for i, q in enumerate(center):
+            t = i / (count - 1)
+            tan = center[min(i + 1, count - 1)] - center[max(i - 1, 0)]
+            tan /= np.linalg.norm(tan)
+            u = np.cross(tan, [0, 0, 1.0]) if abs(tan[2]) < 0.9 else np.cross(tan, [1.0, 0, 0])
+            u /= np.linalg.norm(u)
+            v = np.cross(tan, u)
+            r = spread * (0.3 + 1.2 * math.sin(math.pi * min(1.0, t * 1.2)) ** 0.8)
+            path.append(q + (u * math.cos(a) + v * math.sin(a)) * r)
+        strand = lock(f"tail{index}", "tail", path, [head.outward(q) for q in path], 0.036 * cfg["tail_volume"], 0.012)
+        # 束の房は、真ん中の道すじの鎖で一緒に動かす
+        strand.chain, strand.along = core.chain, strand.along
+        parts.append(strand)
+    return parts
+
+
 def build(head: Head, cfg: dict) -> list[Part]:
     """設定から、髪の部品を全部作る。"""
     parts = [cap(head, cfg)]
     rng = np.random.default_rng(3)
     for i, (az, el) in enumerate(bun_places(cfg)):
         parts += bun(head, cfg, i, az, el, rng)
+    for i, (az, el) in enumerate(tail_places(cfg)):
+        parts += tail_bundle(head, cfg, i, az, el)
     # 前髪: 正面のまわりに並べ(少し重ねる)、てっぺんの前から額に沿って下ろす。分け目は真ん中を短く
     count = cfg["bangs"]
     spread = cfg["bangs_spread"]
@@ -656,7 +709,7 @@ def attach(arm: bpy.types.Object, body: bpy.types.Object, cfg: dict, clothes: tu
     clothes(着せた服)があれば、下ろした髪はその上に垂らし、揺れでも服の外に保つ。頭の目安と結果を返す。
     """
     cfg = {**DEFAULTS, **cfg}
-    for key in ("bangs", "side_locks", "wisps", "nape_wisps", "buns", "bun_wisps", "back_locks"):
+    for key in ("bangs", "side_locks", "wisps", "nape_wisps", "buns", "bun_wisps", "back_locks", "tails"):
         cfg[key] = int(cfg[key])
     ad = arm.animation_data
     ad.action = None

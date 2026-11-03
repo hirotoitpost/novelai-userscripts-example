@@ -1960,6 +1960,8 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
         "configured": model3d_remote.configured(), "bases": entries, "motions": body_motions.labels(),
         "pose_options": body_poses.labels(), "garment_options": garments.options(),
         "hair_options": hairs.options(),
+        # キャラの見た目のタグから選んだ髪の型(髪を付ける欄の最初の選び)
+        "hair_suggestion": hairs.suggest(character.get("appearance_tags") or ""),
     }
 
 
@@ -2166,11 +2168,13 @@ async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDe
             blender, target, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
             shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
         )
-        # スキンヘッドのモデルには、前に付けた型(無ければ最初の型)の髪を付け直す
+        # スキンヘッドのモデルには、前に付けた髪(無ければキャラのタグから選んだ型、それも無ければ最初の型)を付け直す
         if req.bald:
             job["remote"] = "hair"
-            preset = last_hair.get("preset") or next(iter(hairs.PRESETS))
-            config = last_hair.get("config") or hairs.PRESETS[preset]["config"]
+            first = hairs.suggest(character.get("appearance_tags") or "") or {
+                "preset": next(iter(hairs.PRESETS)), "config": hairs.PRESETS[next(iter(hairs.PRESETS))]["config"]}
+            preset = last_hair.get("preset") if last_hair else first["preset"]
+            config = last_hair.get("config") if last_hair else first["config"]
             model_3d.make_hair(blender, out, config, preset=preset)
 
     _start_model_3d_job(character, base, work)
