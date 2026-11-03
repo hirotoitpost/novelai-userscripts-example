@@ -4,7 +4,7 @@ Blender の中で動かすスクリプト(model_3d.dress から、画面なし�
     blender --background <model_dir>/model.blend --python scripts/blender/dress_model.py -- <model_dir> <garments.json> <動きの名前>
 
 rig_model.py が保存した model.blend(体 body・骨 rig)の体に、garments.json の服(スカート garment_skirt.py・
-上の服 garment_top.py)を布として着せる。スカートは休んだ姿勢の体に、上の服は腕を上げた体に着せる(脇の下で布が
+上の服 garment_top.py。両方なら、スカートの上に上の服を重ねる)を布として着せる。スカートは休んだ姿勢の体に、上の服は腕を上げた体に着せる(脇の下で布が
 余らない)。服は骨に付ける: 服の頂点ごとに、いちばん近い体の面の骨の重みを写し、服の上でなめらかにする(脚の間で
 布が裂けないように)。腕を上げて着せた服は、その重みで骨の変形を逆にかけて休んだ姿勢に戻し、休んだ姿勢の体の上で
 もう一度布として動かしてなじませる(腕と胴の間に挟まった布を押し出す)。骨と動き入りの model_dressed.glb・model_dressed.blend を書き、確かめの
@@ -32,6 +32,8 @@ SMOOTH_ROUNDS = 30
 MAX_BONES = 4
 # スカートを付ける骨。腕・手に付けると、腕を振ったときにスカートが引っ張られる
 SKIRT_BONES = ("torso", "thigh.L", "thigh.R", "shin.L", "shin.R")
+# 重ねる順(小さいほど内)
+LAYERS = {"skirt": 0, "top": 1}
 
 
 def rest_pose(arm: bpy.types.Object) -> None:
@@ -114,6 +116,21 @@ def transfer_weights(garment: bpy.types.Object, body: bpy.types.Object, arm: bpy
     return {names[k]: round(float(used[k] / len(gco)), 3) for k in np.argsort(-used)[:6] if used[k] > 0}
 
 
+def face_outward(garment: bpy.types.Object) -> bool:
+    """服の面の向きを外向き(体の中心の縦の軸から離れる向き)にそろえる。裏返したら True。"""
+    me = garment.data
+    center = np.mean([v.co[:] for v in me.vertices], axis=0)
+    out = 0.0
+    for poly in me.polygons:
+        radial = np.array(poly.center[:2]) - center[:2]
+        out += float(np.dot(np.array(poly.normal[:2]), radial)) * poly.area
+    if out >= 0:
+        return False
+    me.flip_normals()
+    me.update()
+    return True
+
+
 def unpose(garment: bpy.types.Object, arm: bpy.types.Object) -> None:
     """
     いまの姿勢の骨で着せた服を、休んだ姿勢の形に戻す: 頂点ごとに、付けた骨の変形(重みで混ぜた行列)の逆をかける。
@@ -188,27 +205,32 @@ def main() -> None:
     body.color = (0.82, 0.82, 0.82, 1)
     report = {"garments": []}
     colors = [(0.25, 0.32, 0.6, 1), (0.6, 0.3, 0.3, 1), (0.3, 0.55, 0.35, 1)]
-    for n, item in enumerate(spec["garments"]):
+    worn = []
+    # 内に着る服から順に着せる(上の服は、先に着せたスカートの外に置き、当たり判定も付ける)
+    for n, item in enumerate(sorted(spec["garments"], key=lambda g: LAYERS.get(g["kind"], 0))):
         name = f"garment_{item['name']}"
         if item["kind"] == "skirt":
             obj, info = garment_skirt.build_skirt(body, joints, item.get("config", {}), name=name)
             info["bones"] = transfer_weights(obj, body, arm, SKIRT_BONES)
         elif item["kind"] == "top":
             posed = garment_top.raise_arms(arm, joints)
-            obj, info = garment_top.build_top(body, posed, item.get("config", {}), name=name)
+            obj, info = garment_top.build_top(body, posed, item.get("config", {}), name=name, under=tuple(worn))
             dressed = np.array([v.co[:] for v in obj.data.vertices])
             info["bones"] = transfer_weights(obj, body, arm, garment_top.BONES)
             unpose(obj, arm)
             rest_pose(arm)
             bpy.context.view_layer.update()
             # 腕を下ろすと、腕と胴の間に布が挟まる: 休んだ姿勢でもう一度なじませる
-            info["inside_body"] = garment_top.settle(obj, body, joints, dressed, item.get("config", {}))
+            info["inside_body"] = garment_top.settle(obj, body, joints, dressed, item.get("config", {}), under=tuple(worn))
         else:
             raise SystemExit(f"まだ作れない服です: {item['kind']}")
+        # 面が内を向いていると、GLB で裏から見え、上に重ねる服が当たり判定で内へ押される
+        face_outward(obj)
         info["name"] = item["name"]
         info["kind"] = item["kind"]
         info["preset"] = item.get("preset")
         obj.color = colors[n % len(colors)]
+        worn.append(obj)
         report["garments"].append(info)
     # 動きを戻して書き出す(GLB には全部の動き)
     for track in arm.animation_data.nla_tracks:

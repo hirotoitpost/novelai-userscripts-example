@@ -518,7 +518,7 @@ class Model3DDressRequest(BaseModel):
     root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
     base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
     motion: str = Field("walk", description="着せたあと、確かめの GIF に描き出す動き(body_motions.MOTIONS)")
-    garments: list[GarmentSpec] = Field(min_length=1, max_length=1, description="着せる服(今はスカート 1 着)")
+    garments: list[GarmentSpec] = Field(min_length=1, max_length=2, description="着せる服(種類ごとに 1 着。スカートと上の服は重ねる)")
 
 
 class BodyShapePresetRequest(BaseModel):

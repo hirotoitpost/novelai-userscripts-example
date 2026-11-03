@@ -2203,11 +2203,14 @@ async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str,
 @router.post("/character/{character_id}/model-3d/dress")
 async def dress_model_3d(character_id: int, req: Model3DDressRequest) -> dict[str, Any]:
     """
-    骨を入れた形に、型紙から作った服(今はスカート)を布として着せ、骨に付ける(model_3d.dress。1 着 1〜2 分。GPU は
-    使わない)。骨と動き入りの model_dressed.glb と、確かめの静止画・動きの GIF を描き出す。骨を入れ直すと消える。
+    骨を入れた形に、型紙から作った服(スカート・上の服。両方なら重ねる)を布として着せ、骨に付ける(model_3d.dress。
+    1 着 1〜2 分。GPU は使わない)。骨と動き入りの model_dressed.glb と、確かめの静止画・動きの GIF を描き出す。
+    骨を入れ直すと消える。
     """
     if req.motion not in body_motions.MOTIONS:
         raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
+    if len({g.kind for g in req.garments}) != len(req.garments):
+        raise HTTPException(status_code=422, detail="同じ種類の服は 1 着だけ着せられます")
     try:
         items = [
             {"kind": g.kind, "name": g.kind, "preset": g.preset, "config": garments.clean(g.kind, g.config)}

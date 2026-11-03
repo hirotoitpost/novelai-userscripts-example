@@ -70,22 +70,35 @@ def raise_arms(arm: bpy.types.Object, joints: dict, degrees: float = RAISE) -> d
     return joints
 
 
-class _Body:
-    """着せる姿勢の体の面(光線を当てる)と、頂点ごとの腕の重み・頭の面かどうか。"""
+def _mesh_arrays(obj: bpy.types.Object) -> tuple:
+    """オブジェクトの、モディファイアを当てた形の頂点(世界の座標)と三角形。"""
+    dg = bpy.context.evaluated_depsgraph_get()
+    ev = obj.evaluated_get(dg)
+    mesh = ev.to_mesh()
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bm.transform(obj.matrix_world)
+    bmesh.ops.triangulate(bm, faces=bm.faces)
+    co = np.array([v.co[:] for v in bm.verts])
+    tris = np.array([[v.index for v in f.verts] for f in bm.faces])
+    bm.free()
+    ev.to_mesh_clear()
+    return co, tris
 
-    def __init__(self, body_obj: bpy.types.Object):
-        dg = bpy.context.evaluated_depsgraph_get()
-        ev = body_obj.evaluated_get(dg)
-        mesh = ev.to_mesh()
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
-        bm.transform(body_obj.matrix_world)
-        bmesh.ops.triangulate(bm, faces=bm.faces)
-        self.co = np.array([v.co[:] for v in bm.verts])
-        self.tris = np.array([[v.index for v in f.verts] for f in bm.faces])
-        bm.free()
-        ev.to_mesh_clear()
+
+class _Body:
+    """
+    着せる姿勢の体の面(光線を当てる)と、頂点ごとの腕の重み・頭の面かどうか。under(先に着せた服)を渡すと、その面は
+    別に持ち、光線がそれより外に出るまでの距離を測れる(上の服をスカートの外に置く)。
+    """
+
+    def __init__(self, body_obj: bpy.types.Object, under: tuple = ()):
+        self.co, self.tris = _mesh_arrays(body_obj)
         self.bvh = BVHTree.FromPolygons([tuple(map(float, p)) for p in self.co], [tuple(map(int, t)) for t in self.tris])
+        self.under = []
+        for obj in under:
+            co, tris = _mesh_arrays(obj)
+            self.under.append(BVHTree.FromPolygons([tuple(map(float, p)) for p in co], [tuple(map(int, t)) for t in tris]))
         names = {g.index: g.name for g in body_obj.vertex_groups}
         dom = [names.get(max(v.groups, key=lambda g: g.weight).group, "") if v.groups else "" for v in body_obj.data.vertices]
         self.hole_v = np.array([d.startswith(_HOLE_BONES) for d in dom])
@@ -94,6 +107,20 @@ class _Body:
         for v in body_obj.data.vertices:
             total = sum(g.weight for g in v.groups) or 1.0
             self.arm_w[v.index] = sum(g.weight for g in v.groups if names.get(g.group, "").startswith(_ARM_BONES)) / total
+
+    def beyond_under(self, origin: Vector, direction: Vector, reach: float) -> float:
+        """光線が、先に着せた服を最後に出る距離(当たらなければ 0)。"""
+        far = 0.0
+        for bvh in self.under:
+            o, travelled = origin, 0.0
+            while True:
+                loc, _, _, dist = bvh.ray_cast(o, direction, reach - travelled)
+                if loc is None:
+                    break
+                travelled += dist + 0.001
+                far = max(far, travelled)
+                o = loc + direction * 0.001
+        return far
 
     def arm_weight(self, face: int, p: np.ndarray) -> float:
         """面の上の点 p の腕の重み(三角形の頂点の重みを重心座標で混ぜる)。"""
@@ -285,7 +312,8 @@ def _torso(body: _Body, joints: dict, cfg: dict, pieces: _Pieces) -> dict:
                 miss[i, k] = True
                 field[i, k] = otherf[i, k] = 1.0
                 continue
-            hit[i, k] = dist
+            # 先に着せた服(スカート)があれば、その外まで
+            hit[i, k] = max(dist, body.beyond_under(o, d, 0.6)) if body.under else dist
             p = np.array(loc)
             arm_f = armhole(p, body.arm_weight(f, p))
             neckf[i, k] = neck_field(p)
@@ -684,9 +712,10 @@ def _inside(body: _Body, obj: bpy.types.Object) -> int:
 
 
 def _simulate(obj: bpy.types.Object, body_obj: bpy.types.Object, bending: float, frames: int, pin_w: np.ndarray,
-              rest: np.ndarray | None = None) -> None:
+              rest: np.ndarray | None = None, under: tuple = ()) -> None:
     """
-    服を布として、体に当たり判定を付けて frames コマ動かし、落ち着いた形を服の頂点に書く(ほかのモディファイアは残す)。
+    服を布として、体(と先に着せた服 under)に当たり判定を付けて frames コマ動かし、落ち着いた形を服の頂点に書く
+    (ほかのモディファイアは残す)。
     pin_w は頂点ごとの留める強さ(0〜1)。rest(頂点ごとの位置)を渡すと、その形の長さを布の休む長さにする。
     """
     pin = obj.vertex_groups.new(name="_pin")
@@ -714,9 +743,13 @@ def _simulate(obj: bpy.types.Object, body_obj: bpy.types.Object, bending: float,
     cs.self_distance_min = 0.002
     cl.point_cache.frame_start = 1
     cl.point_cache.frame_end = frames
-    col = body_obj.modifiers.new("_garment_collision", "COLLISION")
-    body_obj.collision.thickness_outer = COLLISION
-    body_obj.collision.cloth_friction = 5
+    colliders = []
+    for other in (body_obj, *under):
+        colliders.append((other, other.modifiers.new("_garment_collision", "COLLISION")))
+        other.collision.thickness_outer = COLLISION
+        other.collision.cloth_friction = 5
+        # 先に着せた服は薄い 1 枚なので、両面で当てる(片面だと、面の向きの側へ押し出される)
+        other.collision.use_culling = other is body_obj
     scene = bpy.context.scene
     keep = (scene.frame_start, scene.frame_end, scene.frame_current)
     scene.frame_start, scene.frame_end = 1, frames
@@ -727,7 +760,8 @@ def _simulate(obj: bpy.types.Object, body_obj: bpy.types.Object, bending: float,
     co = np.zeros(len(ev.data.vertices) * 3)
     ev.data.vertices.foreach_get("co", co)
     scene.frame_start, scene.frame_end = keep[0], keep[1]
-    body_obj.modifiers.remove(col)
+    for other, col in colliders:
+        other.modifiers.remove(col)
     obj.modifiers.remove(cl)
     obj.vertex_groups.remove(pin)
     if rest is not None:
@@ -738,7 +772,7 @@ def _simulate(obj: bpy.types.Object, body_obj: bpy.types.Object, bending: float,
 
 
 def settle(obj: bpy.types.Object, body_obj: bpy.types.Object, joints: dict, dressed: np.ndarray, cfg: dict,
-           frames: int = 20) -> int:
+           frames: int = 20, under: tuple = ()) -> int:
     """
     腕を下ろした姿勢に戻した服(dress_model.py の unpose のあと)を、休んだ姿勢の体の上でもう一度布として動かし、
     腕と胴の間に挟まった布を押し出してなじませる(布の長さは、着せたときの形 dressed のまま)。体に食い込んだ点の数を返す。
@@ -756,17 +790,19 @@ def settle(obj: bpy.types.Object, body_obj: bpy.types.Object, joints: dict, dres
     sh_z = (joints["left_shoulder"][2] + joints["right_shoulder"][2]) / 2
     free = (1 - np.clip((near - SETTLE_FREE[0]) / (SETTLE_FREE[1] - SETTLE_FREE[0]), 0, 1)) * np.clip((sh_z - 0.04 - co[:, 2]) / 0.04, 0, 1)
     pin_w = 1 - free
-    _simulate(obj, body_obj, cfg["bending"], frames, pin_w, rest=dressed)
-    return _inside(_Body(body_obj), obj)
+    _simulate(obj, body_obj, cfg["bending"], frames, pin_w, rest=dressed, under=under)
+    return _inside(_Body(body_obj, under), obj)
 
 
-def build_top(body_obj: bpy.types.Object, joints: dict, cfg: dict, name: str = "top", frames: int = 40) -> tuple:
+def build_top(body_obj: bpy.types.Object, joints: dict, cfg: dict, name: str = "top", frames: int = 40,
+              under: tuple = ()) -> tuple:
     """
     体(着せる姿勢。raise_arms で腕を上げ、関節も取り直したもの)に、上の服を布として着せ、落ち着いた形のメッシュの
-    オブジェクトと、寸法・確かめの記録を返す。体には当たり判定を付けて、終わったら外す。
+    オブジェクトと、寸法・確かめの記録を返す。体(と先に着せた服 under。上の服はその外に置く)には当たり判定を付けて、
+    終わったら外す。
     """
     cfg = {**DEFAULTS, **cfg}
-    body = _Body(body_obj)
+    body = _Body(body_obj, under)
     pieces = _Pieces()
     measure = _torso(body, joints, cfg, pieces)
     if cfg["sleeve"] > 0:
@@ -791,7 +827,7 @@ def build_top(body_obj: bpy.types.Object, joints: dict, cfg: dict, name: str = "
     for poly in me.polygons:
         poly.use_smooth = True
     _simulate(obj, body_obj, cfg["bending"], frames,
-              np.array([1.0 if v.co.z > measure["sh_z"] - 0.03 else 0.0 for v in me.vertices]))
+              np.array([1.0 if v.co.z > measure["sh_z"] - 0.03 else 0.0 for v in me.vertices]), under=under)
     inside = _inside(body, obj)
     info = {"config": cfg, "hem_z": measure["hem_z"], "armpit_z": measure["armpit_z"], "vertices": len(me.vertices), "inside_body": inside, "seam_joined": joined}
     return obj, info
