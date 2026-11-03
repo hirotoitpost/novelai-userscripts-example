@@ -15,6 +15,13 @@ export interface HairOptions {
   fields: Record<string, GarmentField>
 }
 
+/** キャラの見た目のタグから選んだ型(決め手にしたタグ) */
+export interface HairSuggestion {
+  preset: string
+  config: Record<string, Value>
+  tags: string[]
+}
+
 export interface HairMeta {
   preset: string | null
   config: Record<string, Value>
@@ -27,6 +34,7 @@ interface Props {
   options: HairOptions
   motions: Record<string, string>
   hair: HairMeta | null
+  suggestion: HairSuggestion | null
   busy: boolean
   files: Record<string, { label: string; updated: number }>
   fileUrl: (name: string) => string
@@ -40,11 +48,13 @@ const GROUPS: { label: string; keys: string[] }[] = [
   { label: '顔の横・後れ毛', keys: ['side_locks', 'side_length', 'wisps', 'nape_wisps'] },
   { label: 'お団子', keys: ['buns', 'bun_size', 'bun_height', 'bun_wisps'] },
   { label: '下ろした後ろ髪', keys: ['back_length', 'back_locks'] },
+  { label: '結んで垂らす束', keys: ['tails', 'tail_length', 'tail_height', 'tail_volume'] },
 ]
 
 // 揺れの大きさを出す部品の名前
 const KIND_LABELS: Record<string, string> = {
   bang: '前髪', side: '顔の横の房', wisp: '耳の前の後れ毛', nape: 'うなじの後れ毛', bun: 'お団子', back: '後ろ髪',
+  tail: '結んだ束',
 }
 
 const STILLS = ['bald/hair_front.png', 'bald/hair_side.png', 'bald/hair_back.png', 'bald/hair_motion.gif']
@@ -58,10 +68,12 @@ function format(value: Value, field: GarmentField): string {
   return `${field.kind === 'float' && field.step < 1 ? value.toFixed(2) : value}${field.unit}`
 }
 
-export default function Hair({ options, motions, hair, busy, files, fileUrl, onMake }: Props) {
-  const first = Object.keys(options.presets)[0] ?? ''
+export default function Hair({ options, motions, hair, suggestion, busy, files, fileUrl, onMake }: Props) {
+  // 初めの型: 付けた髪が無ければ、キャラのタグから選んだ型(それも無ければ最初の型)
+  const first = suggestion?.preset ?? Object.keys(options.presets)[0] ?? ''
   const [preset, setPreset] = useState(first)
-  const [config, setConfig] = useState<Record<string, Value>>(() => fromPreset(options, first))
+  const [config, setConfig] = useState<Record<string, Value>>(
+    () => ({ ...fromPreset(options, first), ...(suggestion?.preset === first ? suggestion.config : {}) }))
   const [motion, setMotion] = useState('jump')
 
   // 初めは、最後に付けた髪の型と数値
@@ -94,6 +106,11 @@ export default function Hair({ options, motions, hair, busy, files, fileUrl, onM
         </select>
         {edited && <span className="lora-hint">(数値を変えています)</span>}
       </div>
+      {!hair && suggestion && (
+        <p className="lora-hint">
+          キャラのタグ({suggestion.tags.join('・')})から「{options.presets[suggestion.preset]?.label ?? suggestion.preset}」を選びました。
+        </p>
+      )}
       <details className="m3d-dress-fields">
         <summary>髪の数値を変える</summary>
         {GROUPS.map(group => (

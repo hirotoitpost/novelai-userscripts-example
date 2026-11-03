@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import FullscreenViewer from './FullscreenViewer'
 import Garments, { type DressedMeta, type GarmentKind } from './Garments'
-import Hair, { type HairMeta, type HairOptions } from './Hair'
+import Hair, { type HairMeta, type HairOptions, type HairSuggestion } from './Hair'
 import ShapeParts, { type ShapeInfo } from './ShapeParts'
 import SmoothSpots, { DEFAULT_SMOOTH_RADIUS } from './SmoothSpots'
 import './Model3D.css'
@@ -77,6 +77,8 @@ interface Model3DInfo {
   garment_options: Record<string, GarmentKind>
   /** 髪の型・数値の範囲 */
   hair_options: HairOptions
+  /** キャラの見た目のタグから選んだ髪の型 */
+  hair_suggestion: HairSuggestion | null
 }
 
 interface Props {
@@ -492,7 +494,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
             )}
 
             {baldReady && info.hair_options && (
-              <Hair options={info.hair_options} motions={info.motions} hair={entry.hair} busy={busy} files={entry.files}
+              <Hair options={info.hair_options} motions={info.motions} hair={entry.hair} suggestion={info.hair_suggestion}
+                busy={busy} files={entry.files}
                 fileUrl={name => fileUrl(name)}
                 onMake={body => { setModel('bald'); void post('/hair', body, entry.bald_garments ? '髪を付け始めました(服も着せ直します。2〜3 分)' : '髪を付け始めました(15〜30 秒)') }} />
             )}

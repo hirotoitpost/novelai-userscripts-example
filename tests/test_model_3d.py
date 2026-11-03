@@ -1305,3 +1305,35 @@ def test_render_pose_needs_the_dressed_model_when_asked(tmp_path: Path) -> None:
     (tmp_path / "model.blend").write_bytes(b"blend")
     with pytest.raises(model_3d.Model3DPoseError, match="服を着せた"):
         model_3d.render_pose("blender", tmp_path, "stand", ["front"], dressed=True)
+
+
+def test_hair_is_suggested_from_the_appearance_tags() -> None:
+    from python import hairs
+
+    yano = hairs.suggest("1girl, light brown hair, hair bun, side-swept bangs, grey-green eyes")
+    assert yano == {"preset": "bun_wisps", "config": {"bangs_part": 0.6}, "tags": ["hair bun", "side-swept bangs"]}
+    assert hairs.suggest("black hair, short hair, bob cut")["preset"] == "bob"
+    assert hairs.suggest("blonde hair, twintails, long hair")["preset"] == "twintails"
+    assert hairs.suggest("low ponytail")["preset"] == "low_ponytail"
+    long = hairs.suggest("long hair, blunt bangs")
+    assert long["preset"] == "long" and long["config"]["bangs_part"] == 0.0 and long["config"]["back_length"] == 3.0
+    # まとめ方・長さが分からない・禿げ頭・髪でないタグでは選ばない(bunny は bun ではない)
+    for tags in ("black hair", "1boy, balding, short hair", "pubic hair", "bunny ears", ""):
+        assert hairs.suggest(tags) is None, tags
+    for preset in hairs.PRESETS.values():
+        assert hairs.clean(preset["config"]) == preset["config"]
+
+
+def test_bald_model_starts_with_the_suggested_hair(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    character = client.post(
+        "/api/story/characters/new", json={"name": "mio", "appearance_tags": "1girl, black hair, long hair, blunt bangs", "trigger_word": "mio"}
+    ).json()
+    base = _base(client, "水着")
+    _draw(tmp_path / "outputs/training_data/mio/body_base", base["id"], ("front", "side", "back"))
+    made: list[tuple] = []
+    monkeypatch.setattr(model_3d, "make_hair", lambda blender, out, config, *, preset=None, motion="jump": made.append((preset, config)) or {})
+    url = f"/api/lora-dataset/character/{character['id']}/model-3d"
+    assert client.get(url).json()["hair_suggestion"]["preset"] == "long"
+    client.post(url, json={"base_id": base["id"], "bald": True})
+    assert _wait(client, character["id"], base["id"])["job"]["status"] == "done"
+    assert made[0][0] == "long" and made[0][1]["bangs_part"] == 0.0
