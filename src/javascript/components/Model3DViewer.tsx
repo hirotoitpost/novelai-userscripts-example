@@ -146,14 +146,18 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
           if (mesh.isMesh) {
             let garment = false
             let collar = false
+            let hair = false
             for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
               if (o.name.startsWith('garment_')) garment = true
               if (o.name.startsWith('garment_') && o.name.endsWith('_collar')) collar = true
+              if (o.name === 'hair') hair = true
             }
-            // えり(garment_*_collar)は白くして、服と見分ける
+            // えり(garment_*_collar)は白くして、服と見分ける。髪の部品(hair)は茶色で、裏も描く(切り出した縁から中が見える)
             mesh.material = garment
               ? new THREE.MeshStandardMaterial({ color: collar ? 0xeeeee6 : 0x4a5a9a, roughness: 0.9, side: THREE.DoubleSide })
-              : new THREE.MeshStandardMaterial({ color: 0xcfcfcf, roughness: 0.8 })
+              : hair
+                ? new THREE.MeshStandardMaterial({ color: 0x8c6640, roughness: 0.85, side: THREE.DoubleSide })
+                : new THREE.MeshStandardMaterial({ color: 0xcfcfcf, roughness: 0.8 })
             mesh.frustumCulled = false
           }
         })

@@ -17,7 +17,7 @@ const Model3DViewer = lazy(() => import('./Model3DViewer'))
 type CameraView = import('./Model3DViewer').CameraView
 type Marker = import('./Model3DViewer').Marker
 
-type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing' | 'importing' | 'dressing'
+type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing' | 'importing' | 'dressing' | 'hair'
 
 interface Job {
   status: 'running' | 'done' | 'error'
@@ -92,6 +92,7 @@ const JOB_LABELS: Record<JobState, string> = {
   previewing: '形の値の試しを作っています(15 秒ほど)',
   importing: 'Blender で直した所を読んでいます',
   dressing: 'Blender で服を着せています(1〜2 分)',
+  hair: 'Blender で髪の部品を切り出して付けています(1 分ほど)',
 }
 
 async function detail(res: Response): Promise<string> {
@@ -100,7 +101,8 @@ async function detail(res: Response): Promise<string> {
 }
 
 // スキンヘッドの写しと、スキンヘッドのモデルの静止画(髪を別の部品にする用)
-const BALD_STILLS = ['bald_front.png', 'bald_left.png', 'bald_back.png', 'bald/front.png', 'bald/side.png', 'bald/back.png', 'bald/motion.gif']
+const BALD_STILLS = ['bald_front.png', 'bald_left.png', 'bald_back.png', 'bald/front.png', 'bald/side.png', 'bald/back.png', 'bald/motion.gif',
+  'bald/hair_front.png', 'bald/hair_side.png', 'bald/hair_back.png']
 
 function duration(seconds: number): string {
   return seconds >= 60 ? `${Math.floor(seconds / 60)}分${seconds % 60}秒` : `${seconds}秒`
@@ -141,6 +143,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [picking, setPicking] = useState(false)
   // 3D で、服を着た姿(model_dressed.glb)を見るか
   const [dressedView, setDressedView] = useState(false)
+  // スキンヘッドに髪の部品を付けたモデル(bald/model_rigged.glb)を見る
+  const [baldView, setBaldView] = useState(false)
 
   const url = `/api/lora-dataset/character/${characterId}/model-3d`
 
@@ -206,7 +210,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const meta = entry?.meta
   const dressedReady = !!entry?.files['model_dressed.glb']
   const bodySrc = entry?.files['model_rigged.glb'] ? fileUrl('model_rigged.glb') : entry?.files['model_clean.glb'] ? fileUrl('model_clean.glb') : null
-  const modelSrc = dressedView && dressedReady ? fileUrl('model_dressed.glb') : bodySrc
+  const baldReady = !!entry?.files['bald/model_rigged.glb']
+  const modelSrc = baldView && baldReady ? fileUrl('bald/model_rigged.glb') : dressedView && dressedReady ? fileUrl('model_dressed.glb') : bodySrc
   const previewReady = !!entry?.files['shape_preview.glb'] && !!entry?.job?.preview_weights && entry.job.status === 'done'
   const usingPreview = showPreview && previewReady
   const viewerSrc = usingPreview ? fileUrl('shape_preview.glb') : modelSrc
@@ -333,6 +338,13 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 onClick={() => void drawBald()}>
                 スキンヘッドの写しを描く
               </button>
+              {entry.files['bald/model_clean.glb'] && (
+                <button type="button" className="lora-btn lora-btn--secondary" disabled={busy || !entry.files['model_clean.glb']}
+                  title="髪ありの形から髪の部品を切り出し直して、スキンヘッドのモデルの頭に付けます(GPU は使いません)"
+                  onClick={() => void post('/hair', {}, '髪の部品を付け直しています')}>
+                  髪の部品を付け直す
+                </button>
+              )}
               <button type="button" className="lora-btn lora-btn--secondary" disabled={busy || !entry.files['model.glb']}
                 title="作った形を Blender で整え直し、素体の絵と比べ直して、骨を入れ直します(GPU は使いません)"
                 onClick={() => void post('/clean', { motion }, '整え直しています')}>
@@ -393,6 +405,12 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                       服を着た姿
                     </label>
                   )}
+                  {viewing && baldReady && (
+                    <label className="fsh-label" title="スキンヘッドのモデルに、髪の部品を付けた姿(bald/model_rigged.glb)を見ます">
+                      <input type="checkbox" checked={baldView} onChange={e => { setBaldView(e.target.checked); setPicking(false) }} />
+                      スキンヘッド+髪の部品
+                    </label>
+                  )}
                   {viewing && animations.length > 0 && (
                     <select className="lora-select" value={animation ?? ''} aria-label="再生する動き"
                       onChange={e => setAnimation(e.target.value || null)}>
@@ -425,7 +443,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                     )}
                     <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
                       <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView}
-                        onPick={usingPreview ? undefined : pickSpot} markers={usingPreview ? [] : smoothSpots} />
+                        onPick={usingPreview || baldView ? undefined : pickSpot} markers={usingPreview ? [] : smoothSpots} />
                     </Suspense>
                   </div>
                 )}

@@ -1144,3 +1144,79 @@ def test_clear_strands_removes_a_line_the_first_cut_out_kept(monkeypatch: pytest
     mask[0:55, 25:55] = True
     out = np.asarray(model_3d.clear_strands(Image.fromarray(a), mask))
     assert (out[5:50, 45] == 220).all() and (out[30, 15] == (250, 230, 220)).all()
+
+
+def test_attach_hair_sends_the_front_hair_mask_and_records_the_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import anime_seg, body_parsing
+
+    out = tmp_path / "out"
+    bald = out / model_3d.BALD_DIR
+    with pytest.raises(model_3d.Model3DHairError, match="髪ありの形"):
+        model_3d.attach_hair("blender", out, tmp_path / "front.png")
+    bald.mkdir(parents=True)
+    (out / "model_clean.glb").write_bytes(b"clean")
+    with pytest.raises(model_3d.Model3DHairError, match="スキンヘッド"):
+        model_3d.attach_hair("blender", out, tmp_path / "front.png")
+    (bald / "model.blend").write_bytes(b"blend")
+    model_3d.write_meta(bald, {"seed": 1})
+    Image.new("RGB", (10, 20)).save(tmp_path / "front.png")
+    person = np.zeros((20, 10), np.float32)
+    person[2:18, 3:7] = 1
+    hair = np.zeros((20, 10), dtype=bool)
+    hair[2:5, 2:8] = True
+    monkeypatch.setattr(anime_seg, "person_mask", lambda _image: person)
+    monkeypatch.setattr(body_parsing, "parse", lambda _image: {"hair": hair})
+    sent: dict = {}
+
+    def fake_run(command, **_kw):  # noqa: ANN001
+        args = command[command.index("--") + 1:]
+        data = np.load(args[2])
+        sent.update(args=args[:2], box=data["front_box"].tolist(), hair=data["front_hair"])
+        (bald / "hair.json").write_text(json.dumps({"faces": 120}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    assert model_3d.attach_hair("blender", out, tmp_path / "front.png") == {"faces": 120}
+    assert sent["args"] == [str(bald.resolve()), str((out / "model_clean.glb").resolve())]
+    # 髪の所は人物の中だけ。人物の左右・上下の範囲
+    assert sent["box"] == [3, 6, 2, 17] and sent["hair"].sum() == 12
+    assert model_3d.read_meta(bald) == {"seed": 1, "hair": {"faces": 120}} and not (bald / "hair.json").exists()
+
+    monkeypatch.setattr(model_3d.subprocess, "run", lambda command, **_kw: subprocess.CompletedProcess(command, 1, "", "boom"))
+    with pytest.raises(model_3d.Model3DHairError, match="boom"):
+        model_3d.attach_hair("blender", out, tmp_path / "front.png")
+
+
+def test_front_used_prefers_the_featureless_copy(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    model_3d.write_meta(out, {"featureless": []})
+    assert model_3d.front_used(out, tmp_path, 3) == tmp_path / "3_front.png"
+    (out / "input_front.png").write_bytes(b"x")
+    model_3d.write_meta(out, {"featureless": ["front", "left"]})
+    assert model_3d.front_used(out, tmp_path, 3) == out / "input_front.png"
+
+
+def test_bald_model_gets_the_hair_part(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    character = _character(client, "eiko")
+    base = _base(client, "水着")
+    folder = tmp_path / "outputs/training_data/eiko/body_base"
+    _draw(folder, base["id"], ("front", "side", "back"))
+    attached: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(model_3d, "attach_hair", lambda blender, out, front: attached.append((out, front)) or {"faces": 1})
+    url = f"/api/lora-dataset/character/{character['id']}/model-3d"
+    out = tmp_path / f"outputs/training_data/eiko/model_3d/{base['id']}"
+    # 髪の部品は、髪ありの形とスキンヘッドのモデルができてから
+    assert client.post(f"{url}/hair", json={"base_id": base["id"]}).status_code == 422
+    # 髪ありの形がまだ無ければ、スキンヘッドのモデルだけ作る
+    client.post(url, json={"base_id": base["id"], "bald": True})
+    assert _wait(client, character["id"], base["id"])["job"]["status"] == "done" and attached == []
+    client.post(url, json={"base_id": base["id"]})
+    _wait(client, character["id"], base["id"])
+    client.post(url, json={"base_id": base["id"], "bald": True})
+    assert _wait(client, character["id"], base["id"])["job"]["status"] == "done"
+    assert attached == [(out, folder / f"{base['id']}_front.png")]
+    (out / model_3d.BALD_DIR / "model.blend").write_bytes(b"blend")  # 骨を入れると置かれる(テストの rig は置かない)
+    res = client.post(f"{url}/hair", json={"base_id": base["id"]})
+    assert res.status_code == 200 and _wait(client, character["id"], base["id"])["job"]["status"] == "done"
+    assert len(attached) == 2
