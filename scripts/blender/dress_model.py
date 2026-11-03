@@ -6,7 +6,8 @@ Blender の中で動かすスクリプト(model_3d.dress から、画面なし�
 rig_model.py が保存した model.blend(体 body・骨 rig)の体に、garments.json の服(スカート garment_skirt.py・
 上の服 garment_top.py)を布として着せる。スカートは休んだ姿勢の体に、上の服は腕を上げた体に着せる(脇の下で布が
 余らない)。服は骨に付ける: 服の頂点ごとに、いちばん近い体の面の骨の重みを写し、服の上でなめらかにする(脚の間で
-布が裂けないように)。腕を上げて着せた服は、その重みで骨の変形を逆にかけて、休んだ姿勢に戻す。骨と動き入りの model_dressed.glb・model_dressed.blend を書き、確かめの
+布が裂けないように)。腕を上げて着せた服は、その重みで骨の変形を逆にかけて休んだ姿勢に戻し、休んだ姿勢の体の上で
+もう一度布として動かしてなじませる(腕と胴の間に挟まった布を押し出す)。骨と動き入りの model_dressed.glb・model_dressed.blend を書き、確かめの
 静止画(dressed_front/side/back.png)と、動きのコマ(frames_dressed/*.png)を描き出し、結果を dress.json に書く。
 model.blend は書き換えない。
 """
@@ -195,10 +196,13 @@ def main() -> None:
         elif item["kind"] == "top":
             posed = garment_top.raise_arms(arm, joints)
             obj, info = garment_top.build_top(body, posed, item.get("config", {}), name=name)
+            dressed = np.array([v.co[:] for v in obj.data.vertices])
             info["bones"] = transfer_weights(obj, body, arm, garment_top.BONES)
             unpose(obj, arm)
             rest_pose(arm)
             bpy.context.view_layer.update()
+            # 腕を下ろすと、腕と胴の間に布が挟まる: 休んだ姿勢でもう一度なじませる
+            info["inside_body"] = garment_top.settle(obj, body, joints, dressed, item.get("config", {}))
         else:
             raise SystemExit(f"まだ作れない服です: {item['kind']}")
         info["name"] = item["name"]

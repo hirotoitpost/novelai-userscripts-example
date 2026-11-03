@@ -39,8 +39,14 @@ BONES = ("torso", "upper_arm.L", "upper_arm.R", "forearm.L", "forearm.R", "head"
 COLS, SLEEVE_COLS = 160, 48
 # 袖ぐりの肩の線(肩の関節から内へ m)・袖の下の端(いちばん低い袖ぐりから上へ m)
 SHOULDER_IN, ARMPIT_UP = 0.02, 0.04
-# 縫う前に、切り口をたがいに寄せる割合
+# 縫う前に、切り口をたがいに寄せる割合と、寄せる動きをまわりへ広げる距離 m(切り口だけ動かすと、縫い目に折れが残り、
+# 布がその折れを休む形にして、縫い目がフリルのように波打った)
 CLOSE = 0.85
+SPREAD = 0.04
+# 腕を下ろしてなじませるとき、上腕の軸からこの距離(m)までは自由に動かし、その外へ向かって留める
+SETTLE_FREE = (0.08, 0.14)
+# つないだ線のまわりをならす回数
+SEAM_SMOOTH = 4
 # 体との当たりの距離
 COLLISION = 0.003
 _HOLE_BONES = ("upper_arm", "forearm", "hand", "head")
@@ -516,10 +522,27 @@ def _seam_run(pieces: _Pieces, edge_count: dict, vs: list[int]) -> list[int]:
     return max(runs, key=len)
 
 
+def _spread(ov: np.ndarray, part: np.ndarray, moves: dict) -> None:
+    """切り口の頂点の動き moves を、同じ部品のまわりの頂点へ、離れるほど小さく(SPREAD で 0)広げて動かす。"""
+    for pid in sorted({int(part[v]) for v in moves}):
+        seam = [v for v in moves if part[v] == pid]
+        src, disp = ov[seam].copy(), np.array([moves[v] for v in seam])
+        idx = np.nonzero(part == pid)[0]
+        d = np.linalg.norm(ov[idx][:, None] - src[None], axis=2)
+        near = d.min(axis=1)
+        keep = near < SPREAD
+        idx, d, near = idx[keep], d[keep], near[keep]
+        g = np.exp(-((d - near[:, None]) / 0.01) ** 2)
+        fall = (1 - near / SPREAD) ** 2
+        ov[idx] += (g @ disp) / g.sum(axis=1, keepdims=True) * fall[:, None]
+        ov[seam] = src + disp
+
+
 def _zip_plans(pieces: _Pieces, joints: dict) -> list[tuple]:
     """左右の袖ぐりごとに、身頃と袖の切り口を同じ向き・始まりに並べ、たがいに寄せて、ファスナーのように交互に進む順
     (どちらの頂点が、相手のどの辺の上に来るか)を決める。"""
     ov = np.array(pieces.verts)
+    part = np.array(pieces.part)
     edge_count: dict = {}
     for f in pieces.faces:
         for j in range(len(f)):
@@ -544,7 +567,7 @@ def _zip_plans(pieces: _Pieces, joints: dict) -> list[tuple]:
         if np.linalg.norm(ov[S[kk]] - tp[k]) > np.linalg.norm(ov[S[-kk]] - tp[k]):
             S = [S[0]] + S[1:][::-1]
 
-        # 切り口どうしを、たがいの線(折れ線)の近い点へ CLOSE だけ寄せる
+        # 切り口どうしを、たがいの線(折れ線)の近い点へ CLOSE だけ寄せる(まわりもなめらかに一緒に動かす)
         def nearest_on(poly, q):
             a, b = poly[:-1], poly[1:]
             ab = b - a
@@ -553,10 +576,9 @@ def _zip_plans(pieces: _Pieces, joints: dict) -> list[tuple]:
             return c[np.argmin(np.linalg.norm(c - q, axis=1))]
 
         tpl, spl = ov[T + T[:1]].copy(), ov[S + S[:1]].copy()
-        for v in T:
-            ov[v] = ov[v] + CLOSE / 2 * (nearest_on(spl, ov[v]) - ov[v])
-        for v in S:
-            ov[v] = ov[v] + CLOSE / 2 * (nearest_on(tpl, ov[v]) - ov[v])
+        moves = {v: CLOSE / 2 * (nearest_on(spl, ov[v]) - ov[v]) for v in T}
+        moves.update({v: CLOSE / 2 * (nearest_on(tpl, ov[v]) - ov[v]) for v in S})
+        _spread(ov, part, moves)
         nT, nS = len(T), len(S)
         i = j = 0
         events = []
@@ -614,7 +636,14 @@ def _join(bm: bmesh.types.BMesh, plans: list[tuple]) -> int:
                     weld[v] = nv
     for a, b in weld.items():
         a.co = b.co = (a.co + b.co) / 2
+    seam = set(weld.values())
     bmesh.ops.weld_verts(bm, targetmap=weld)
+    # つないだ線のまわり(2 つ隣まで)をならす(切り口のぎざぎざを消す)
+    ring = {v for v in seam if v.is_valid}
+    for _ in range(2):
+        ring |= {e.other_vert(v) for v in ring for e in v.link_edges}
+    for _ in range(SEAM_SMOOTH):
+        bmesh.ops.smooth_vert(bm, verts=list(ring), factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
     return len(weld)
 
 
@@ -642,6 +671,93 @@ def _tidy(bm: bmesh.types.BMesh) -> None:
     for island in islands:
         if len(island) < 50:
             bmesh.ops.delete(bm, geom=island, context="VERTS")
+
+
+def _inside(body: _Body, obj: bpy.types.Object) -> int:
+    """体の面より内に入った服の頂点の数。"""
+    inside = 0
+    for v in obj.data.vertices:
+        loc, n, _, _ = body.bvh.find_nearest(obj.matrix_world @ v.co)
+        if loc is not None and (obj.matrix_world @ v.co - loc).dot(n) < 0:
+            inside += 1
+    return inside
+
+
+def _simulate(obj: bpy.types.Object, body_obj: bpy.types.Object, bending: float, frames: int, pin_w: np.ndarray,
+              rest: np.ndarray | None = None) -> None:
+    """
+    服を布として、体に当たり判定を付けて frames コマ動かし、落ち着いた形を服の頂点に書く(ほかのモディファイアは残す)。
+    pin_w は頂点ごとの留める強さ(0〜1)。rest(頂点ごとの位置)を渡すと、その形の長さを布の休む長さにする。
+    """
+    pin = obj.vertex_groups.new(name="_pin")
+    for i in np.nonzero(pin_w > 0)[0]:
+        pin.add([int(i)], float(pin_w[i]), "REPLACE")
+    if rest is not None:
+        obj.shape_key_add(name="Basis")
+        key = obj.shape_key_add(name="_rest")
+        key.data.foreach_set("co", rest.reshape(-1).astype(np.float32))
+    cl = obj.modifiers.new("_cloth", "CLOTH")
+    s = cl.settings
+    s.quality = 8
+    s.mass = 0.15
+    s.air_damping = 1.0
+    s.tension_stiffness = s.compression_stiffness = 80
+    s.shear_stiffness = 10
+    s.bending_stiffness = bending
+    s.vertex_group_mass = "_pin"
+    s.pin_stiffness = 0.5
+    if rest is not None:
+        s.rest_shape_key = key
+    cs = cl.collision_settings
+    cs.distance_min = COLLISION
+    cs.use_self_collision = True
+    cs.self_distance_min = 0.002
+    cl.point_cache.frame_start = 1
+    cl.point_cache.frame_end = frames
+    col = body_obj.modifiers.new("_garment_collision", "COLLISION")
+    body_obj.collision.thickness_outer = COLLISION
+    body_obj.collision.cloth_friction = 5
+    scene = bpy.context.scene
+    keep = (scene.frame_start, scene.frame_end, scene.frame_current)
+    scene.frame_start, scene.frame_end = 1, frames
+    for f in range(1, frames + 1):
+        scene.frame_set(f)
+    dg = bpy.context.evaluated_depsgraph_get()
+    ev = obj.evaluated_get(dg)
+    co = np.zeros(len(ev.data.vertices) * 3)
+    ev.data.vertices.foreach_get("co", co)
+    scene.frame_start, scene.frame_end = keep[0], keep[1]
+    body_obj.modifiers.remove(col)
+    obj.modifiers.remove(cl)
+    obj.vertex_groups.remove(pin)
+    if rest is not None:
+        obj.shape_key_clear()
+    obj.data.vertices.foreach_set("co", co)
+    obj.data.update()
+    scene.frame_set(keep[2])
+
+
+def settle(obj: bpy.types.Object, body_obj: bpy.types.Object, joints: dict, dressed: np.ndarray, cfg: dict,
+           frames: int = 20) -> int:
+    """
+    腕を下ろした姿勢に戻した服(dress_model.py の unpose のあと)を、休んだ姿勢の体の上でもう一度布として動かし、
+    腕と胴の間に挟まった布を押し出してなじませる(布の長さは、着せたときの形 dressed のまま)。体に食い込んだ点の数を返す。
+    """
+    cfg = {**DEFAULTS, **cfg}
+    # 動かすのは、腕のまわり(肩 → 肘 → 手首の軸から SETTLE_FREE m の内で、肩の関節より 4cm 以上下)だけ。わきの下に
+    # 挟まった布と、腿に当たった袖口を押し出す。ほかは戻した位置に留める(全体を動かすと胴の脇・背中に縦じわが、
+    # 肩まで動かすと肩の縫い目にさざ波が出た)
+    co = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
+    near = np.full(len(co), np.inf)
+    for side in ("left", "right"):
+        pts = [np.array(joints[f"{side}_{j}"]) for j in ("shoulder", "elbow", "wrist")]
+        for a, b in zip(pts[:-1], pts[1:]):
+            near = np.minimum(near, _seg_dist(co, a, b))
+    sh_z = (joints["left_shoulder"][2] + joints["right_shoulder"][2]) / 2
+    free = (1 - np.clip((near - SETTLE_FREE[0]) / (SETTLE_FREE[1] - SETTLE_FREE[0]), 0, 1)) * np.clip((sh_z - 0.04 - co[:, 2]) / 0.04, 0, 1)
+    pin_w = 1 - free
+    _simulate(obj, body_obj, cfg["bending"], frames, pin_w, rest=dressed)
+    return _inside(_Body(body_obj), obj)
 
 
 def build_top(body_obj: bpy.types.Object, joints: dict, cfg: dict, name: str = "top", frames: int = 40) -> tuple:
@@ -672,49 +788,10 @@ def build_top(body_obj: bpy.types.Object, joints: dict, cfg: dict, name: str = "
     bpy.context.scene.collection.objects.link(obj)
 
     # 布: 置いた形を休む形にする。肩の上を軽く留める
-    pin = obj.vertex_groups.new(name="_pin")
-    pin.add([v.index for v in me.vertices if v.co.z > measure["sh_z"] - 0.03], 1.0, "REPLACE")
-    cl = obj.modifiers.new("cloth", "CLOTH")
-    s = cl.settings
-    s.quality = 8
-    s.mass = 0.15
-    s.air_damping = 1.0
-    s.tension_stiffness = s.compression_stiffness = 80
-    s.shear_stiffness = 10
-    s.bending_stiffness = cfg["bending"]
-    s.vertex_group_mass = "_pin"
-    s.pin_stiffness = 0.5
-    cs = cl.collision_settings
-    cs.distance_min = COLLISION
-    cs.use_self_collision = True
-    cs.self_distance_min = 0.002
-    cl.point_cache.frame_start = 1
-    cl.point_cache.frame_end = frames
-    col = body_obj.modifiers.new("_garment_collision", "COLLISION")
-    body_obj.collision.thickness_outer = COLLISION
-    body_obj.collision.cloth_friction = 5
-    scene = bpy.context.scene
-    keep = (scene.frame_start, scene.frame_end, scene.frame_current)
-    scene.frame_start, scene.frame_end = 1, frames
-    for f in range(1, frames + 1):
-        scene.frame_set(f)
-    dg = bpy.context.evaluated_depsgraph_get()
-    done = bpy.data.meshes.new_from_object(obj.evaluated_get(dg))
-    scene.frame_start, scene.frame_end = keep[0], keep[1]
-    scene.frame_set(keep[2])
-    body_obj.modifiers.remove(col)
-    obj.modifiers.clear()
-    old = obj.data
-    obj.data = done
-    bpy.data.meshes.remove(old)
-    for p in done.polygons:
-        p.use_smooth = True
-    for g in list(obj.vertex_groups):
-        obj.vertex_groups.remove(g)
-    inside = 0
-    for v in done.vertices:
-        loc, n, _, _ = body.bvh.find_nearest(v.co)
-        if loc is not None and (v.co - loc).dot(n) < 0:
-            inside += 1
-    info = {"config": cfg, "hem_z": measure["hem_z"], "armpit_z": measure["armpit_z"], "vertices": len(done.vertices), "inside_body": inside, "seam_joined": joined}
+    for poly in me.polygons:
+        poly.use_smooth = True
+    _simulate(obj, body_obj, cfg["bending"], frames,
+              np.array([1.0 if v.co.z > measure["sh_z"] - 0.03 else 0.0 for v in me.vertices]))
+    inside = _inside(body, obj)
+    info = {"config": cfg, "hem_z": measure["hem_z"], "armpit_z": measure["armpit_z"], "vertices": len(me.vertices), "inside_body": inside, "seam_joined": joined}
     return obj, info
