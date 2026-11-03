@@ -524,6 +524,16 @@ class Model3DDressRequest(BaseModel):
     garments: list[GarmentSpec] = Field(min_length=1, max_length=2, description="着せる服(種類ごとに 1 着。スカートと上の服は重ねる)")
 
 
+class Model3DHairRequest(BaseModel):
+    """スキンヘッドのモデルに、型から作った髪を付けて揺らす(model_3d.make_hair)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
+    motion: str = Field("jump", description="髪を付けたあと、揺れの確かめの GIF に描き出す動き(body_motions.MOTIONS)")
+    preset: str | None = Field(None, description="選んだ型(hairs.PRESETS。記録用)")
+    config: dict[str, Any] = Field(default_factory=dict, description="髪の数値(hairs.FIELDS。省いた値は型の値)")
+
+
 class BodyShapePresetRequest(BaseModel):
     """自分で値を変えた形状パーツの形(body_shapes.clean_params で確かめる)。どのモデルにも当てる共有の一覧。"""
 

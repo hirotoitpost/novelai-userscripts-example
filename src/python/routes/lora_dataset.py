@@ -24,7 +24,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
-from .. import body_motions, body_poses, body_shapes, garments, model3d_remote, model_3d, see_through_remote, wardrobe
+from .. import body_motions, body_poses, body_shapes, garments, hairs, model3d_remote, model_3d, see_through_remote, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -105,6 +105,7 @@ from ..models import (
     BodyHairUnderRequest,
     BodyLayersRequest,
     Model3DDressRequest,
+    Model3DHairRequest,
     Model3DPoseRequest,
     Model3DShapesRequest,
     Model3DSmoothSpot,
@@ -1935,6 +1936,8 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 "nipple_source": ((model_3d.read_meta(folder).get("rig") or {}).get("nipples") or {}).get("hint") is not None,
             },
             "meta": model_3d.read_meta(folder) or None,
+            # スキンヘッドのモデルに付けた髪(型・数値・揺れの大きさ)
+            "hair": model_3d.read_meta(folder / model_3d.BALD_DIR).get("hair"),
             "job": None if job is None else {
                 "status": job["status"], "remote": job.get("remote"), "error": job.get("error"),
                 # 形の値の試しを作ったときの強さ(試しの 3D の表示に使う)
@@ -1945,6 +1948,7 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
     return {
         "configured": model3d_remote.configured(), "bases": entries, "motions": body_motions.labels(),
         "pose_options": body_poses.labels(), "garment_options": garments.options(),
+        "hair_options": hairs.options(),
     }
 
 
@@ -2064,7 +2068,7 @@ async def _bald_inputs(character: dict, base: dict, folder: Path, out: Path, cli
     return result
 
 
-def _model_3d_base_for(character: dict, req: Model3DRequest) -> dict:
+def _model_3d_base_for(character: dict, req: Model3DRequest | Model3DHairRequest) -> dict:
     """3D を作る素体(省けばキャラに当てた素体)。裸の素体は、裸の素体を当てられるキャラだけ。"""
     base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
     if base_id is None:
@@ -2138,6 +2142,8 @@ async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDe
         def status(remote: str, _seconds: int) -> None:
             job["remote"] = remote
 
+        # 前に付けた髪(作り直すと meta.json が新しくなるので、先に読む)
+        last_hair = model_3d.read_meta(target).get("hair") or {}
         model_3d.make(
             folder, base["id"], target, blender=blender, height=model_3d.height_of(base), seed=req.seed,
             attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status, inputs=inputs, bald=req.bald,
@@ -2149,32 +2155,41 @@ async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDe
             blender, target, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
             shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
         )
-        # スキンヘッドのモデルには、髪ありの形から切り出した髪の部品を付ける(髪ありの形があるときだけ)
-        if req.bald and (out / "model_clean.glb").is_file():
+        # スキンヘッドのモデルには、前に付けた型(無ければ最初の型)の髪を付け直す
+        if req.bald:
             job["remote"] = "hair"
-            model_3d.attach_hair(blender, out, model_3d.front_used(out, folder, base["id"]))
+            preset = last_hair.get("preset") or next(iter(hairs.PRESETS))
+            config = last_hair.get("config") or hairs.PRESETS[preset]["config"]
+            model_3d.make_hair(blender, out, config, preset=preset)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
 
 
 @router.post("/character/{character_id}/model-3d/hair")
-async def attach_model_3d_hair(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+async def make_model_3d_hair(character_id: int, req: Model3DHairRequest) -> dict[str, Any]:
     """
-    髪ありの形から髪の部品を切り出し直して、スキンヘッドのモデルの頭に付ける(model_3d.attach_hair。GPU は使わない)。
-    仕事を切り離してすぐ返す。
+    スキンヘッドのモデルに、型から作った髪(お団子・前髪・顔の横の房・後れ毛)を付けて、房とお団子を動きに合わせて
+    揺らす(model_3d.make_hair。手元の Blender で 15 秒ほど。GPU は使わない)。仕事を切り離してすぐ返す。
     """
+    if req.motion not in body_motions.MOTIONS:
+        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
+    if req.preset is not None and req.preset not in hairs.PRESETS:
+        raise HTTPException(status_code=422, detail=f"髪の型が違います: {req.preset}")
+    try:
+        config = hairs.clean(req.config)
+    except garments.GarmentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     character = _load_character(character_id)
     base = _model_3d_base_for(character, req)
     out = _model_3d_dir(character, base, req.root_name)
-    if not (out / "model_clean.glb").is_file() or not (out / model_3d.BALD_DIR / "model.blend").is_file():
-        raise HTTPException(status_code=422, detail="髪ありの形と、スキンヘッドの骨入りのモデルを先に作ってください。")
+    if not (out / model_3d.BALD_DIR / "model.blend").is_file():
+        raise HTTPException(status_code=422, detail="スキンヘッドの骨入りのモデルを先に作ってください。")
     blender = _model_3d_blender()
-    folder = _body_dir(character, base, req.root_name)
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "hair"
-        model_3d.attach_hair(blender, out, model_3d.front_used(out, folder, base["id"]))
+        model_3d.make_hair(blender, out, config, preset=req.preset, motion=req.motion)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)

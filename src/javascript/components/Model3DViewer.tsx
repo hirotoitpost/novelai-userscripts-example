@@ -152,7 +152,7 @@ export default function Model3DViewer({ src, animation, onAnimations, shapes, vi
               if (o.name.startsWith('garment_') && o.name.endsWith('_collar')) collar = true
               if (o.name === 'hair') hair = true
             }
-            // えり(garment_*_collar)は白くして、服と見分ける。髪の部品(hair)は茶色で、裏も描く(切り出した縁から中が見える)
+            // えり(garment_*_collar)は白くして、服と見分ける。髪(hair)は茶色
             mesh.material = garment
               ? new THREE.MeshStandardMaterial({ color: collar ? 0xeeeee6 : 0x4a5a9a, roughness: 0.9, side: THREE.DoubleSide })
               : hair
