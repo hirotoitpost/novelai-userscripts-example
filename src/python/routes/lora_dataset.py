@@ -2149,6 +2149,32 @@ async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDe
             blender, target, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
             shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
         )
+        # スキンヘッドのモデルには、髪ありの形から切り出した髪の部品を付ける(髪ありの形があるときだけ)
+        if req.bald and (out / "model_clean.glb").is_file():
+            job["remote"] = "hair"
+            model_3d.attach_hair(blender, out, model_3d.front_used(out, folder, base["id"]))
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
+@router.post("/character/{character_id}/model-3d/hair")
+async def attach_model_3d_hair(character_id: int, req: Model3DRequest) -> dict[str, Any]:
+    """
+    髪ありの形から髪の部品を切り出し直して、スキンヘッドのモデルの頭に付ける(model_3d.attach_hair。GPU は使わない)。
+    仕事を切り離してすぐ返す。
+    """
+    character = _load_character(character_id)
+    base = _model_3d_base_for(character, req)
+    out = _model_3d_dir(character, base, req.root_name)
+    if not (out / "model_clean.glb").is_file() or not (out / model_3d.BALD_DIR / "model.blend").is_file():
+        raise HTTPException(status_code=422, detail="髪ありの形と、スキンヘッドの骨入りのモデルを先に作ってください。")
+    blender = _model_3d_blender()
+    folder = _body_dir(character, base, req.root_name)
+
+    def work(job: dict[str, Any]) -> None:
+        job["remote"] = "hair"
+        model_3d.attach_hair(blender, out, model_3d.front_used(out, folder, base["id"]))
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -2509,6 +2535,7 @@ def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN
         except (
             model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError,
             model_3d.Model3DRigError, model_3d.Model3DPoseError, model_3d.Model3DImportError, model_3d.Model3DDressError,
+            model_3d.Model3DHairError,
             body_rig.RigError,
             subprocess.TimeoutExpired, OSError,
         ) as exc:

@@ -66,6 +66,7 @@ BALD_FILES = {
     for name, label in (
         ("model_clean.glb", "整えた形(GLB)"), ("model_rigged.glb", "骨と動きの入った形(GLB)"),
         ("front.png", "正面"), ("side.png", "横(左向き)"), ("back.png", "後ろ"), ("motion.gif", "動きの確かめ"),
+        ("hair_front.png", "髪の部品(正面)"), ("hair_side.png", "髪の部品(横)"), ("hair_back.png", "髪の部品(後ろ)"),
     )
 }
 FILES.update(BALD_FILES)
@@ -78,6 +79,7 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _POSE_SCRIPT = _CLEAN_SCRIPT.with_name("pose_render.py")
 _IMPORT_SCRIPT = _CLEAN_SCRIPT.with_name("import_blend.py")
 _DRESS_SCRIPT = _CLEAN_SCRIPT.with_name("dress_model.py")
+_HAIR_SCRIPT = _CLEAN_SCRIPT.with_name("hair_part.py")
 # 取り込んだ結果を書くファイル(読んだら消す)と、比べる元
 _IMPORT_REPORT = "import.json"
 EDITS_FILE = "blender_edits.json"
@@ -901,3 +903,55 @@ def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], styl
             shutil.move(renders / f"{camera}.png", target)
             paths.append(target)
     return paths
+
+
+class Model3DHairError(RuntimeError):
+    """髪の部品を付けられなかった。"""
+
+
+def front_used(out_dir: Path, folder: Path, base_id: int) -> Path:
+    """髪ありの形を作ったときに送った正面の絵(乳首なしの写しを送っていればそれ)。"""
+    if "front" in read_meta(out_dir).get("featureless", []) and (out_dir / "input_front.png").is_file():
+        return out_dir / "input_front.png"
+    return source_paths(folder, base_id)["front"]
+
+
+def attach_hair(blender: str, out_dir: Path, front: Path, *, timeout: float = 900) -> dict:
+    """
+    髪を別の部品にする(scripts/blender/hair_part.py)。髪ありの整えた形(out_dir/model_clean.glb)を、スキンヘッドの骨入り
+    モデル(out_dir/bald/model.blend)に胸〜首の体で合わせ、スキンヘッドの頭から外に出た所を髪の部品として head の骨に
+    付けて、bald/model_rigged.glb を書き出し直す。前を向いた面は、髪ありの形を作った正面の絵(front)の髪の所かで決める
+    (前髪と顔は形の差では見分けられない)。結果を bald/meta.json の hair に残して返す。
+    """
+    from . import body_parsing
+    from .anime_seg import person_mask
+
+    bald = out_dir / BALD_DIR
+    if not (out_dir / "model_clean.glb").is_file():
+        raise Model3DHairError("髪ありの形がありません。先に髪ありの形を作ってください。")
+    if not (bald / "model.blend").is_file():
+        raise Model3DHairError("スキンヘッドの骨入りのモデルがありません。先にスキンヘッドの形を作ってください。")
+    image = Image.open(front).convert("RGB")
+    person = person_mask(image) > 0.5
+    if not person.any():
+        raise Model3DHairError("正面の絵から人物を切り出せませんでした。")
+    hair = body_parsing.parse(image)["hair"] & person
+    ys, xs = np.nonzero(person)
+    with tempfile.TemporaryDirectory(prefix="model3d_hair_") as tmp:
+        mask = Path(tmp) / "mask.npz"
+        np.savez_compressed(mask, front_hair=hair, front_box=np.array([xs.min(), xs.max(), ys.min(), ys.max()], float))
+        result = subprocess.run(
+            [blender, "--background", "--factory-startup", "--python", str(_HAIR_SCRIPT), "--python-exit-code", "1",
+             "--", str(bald.resolve()), str((out_dir / "model_clean.glb").resolve()), str(mask)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW,
+        )
+    report_path = bald / "hair.json"
+    if result.returncode != 0 or not report_path.is_file():
+        tail = "\n".join((result.stdout + result.stderr).splitlines()[-15:])
+        raise Model3DHairError(f"Blender で髪の部品を付けられませんでした(終了コード {result.returncode}):\n{tail}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report_path.unlink()
+    meta = read_meta(bald)
+    meta["hair"] = report
+    write_meta(bald, meta)
+    return report
