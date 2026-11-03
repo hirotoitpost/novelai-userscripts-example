@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import garment_skirt  # noqa: E402
 import garment_sway  # noqa: E402
 import garment_top  # noqa: E402
+import hair_kit  # noqa: E402
 
 SIZE = (360, 600)
 # 服の重みをなめらかにする回数と、1 頂点に残す骨の数
@@ -252,6 +253,11 @@ def main() -> None:
     actions = [strip.action for track in arm.animation_data.nla_tracks for strip in track.strips if strip.action]
     for chains in swaying:
         garment_sway.bake(arm, body, chains, actions)
+    # スキンヘッドのモデルでは、服を着せてから髪を付け直す(下ろした髪を服の上に垂らし、揺れでも服に当てる)
+    if spec.get("hair") is not None:
+        collars = [o for o in bpy.data.objects if o.name.startswith("garment_") and o.name.endswith("_collar")]
+        _, report["hair"] = hair_kit.attach(arm, body, spec["hair"], tuple(worn) + tuple(collars))
+        rest_pose(arm)
     # 動きを戻して書き出す(GLB には全部の動き)
     for track in arm.animation_data.nla_tracks:
         track.mute = False

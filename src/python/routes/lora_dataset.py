@@ -1906,6 +1906,16 @@ def _nipple_settings(character: dict, base: dict, root_name: str, offsets: dict 
     return {"hint": hint, "offsets": offsets}
 
 
+def _all_pose_images(folder: Path) -> list[dict]:
+    """髪ありの形と、スキンヘッド+髪のモデルのポーズの絵(新しい順。model でどちらか分かる)。"""
+    images = [{**item, "model": "main"} for item in model_3d.pose_images(folder)]
+    images += [
+        {**item, "name": f"{model_3d.BALD_DIR}/{item['name']}", "model": "bald"}
+        for item in model_3d.pose_images(folder / model_3d.BALD_DIR)
+    ]
+    return sorted(images, key=lambda item: -item["updated"])
+
+
 def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
     entries = []
     for base in _model_3d_bases(character, root_name):
@@ -1921,8 +1931,8 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 name: {"label": label, "updated": (folder / name).stat().st_mtime}
                 for name, label in model_3d.FILES.items() if (folder / name).is_file()
             },
-            # ポーズの参考の絵(新しい順)
-            "poses": model_3d.pose_images(folder),
+            # ポーズの参考の絵(新しい順。スキンヘッド+髪のモデルの絵は bald/ の下)
+            "poses": _all_pose_images(folder),
             # 形状パーツ: 選べる形(部位ごと)と、保存した強さ
             "shapes": {
                 "options": body_shapes.labels(**_shape_flags(character, base)),
@@ -1936,8 +1946,9 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
                 "nipple_source": ((model_3d.read_meta(folder).get("rig") or {}).get("nipples") or {}).get("hint") is not None,
             },
             "meta": model_3d.read_meta(folder) or None,
-            # スキンヘッドのモデルに付けた髪(型・数値・揺れの大きさ)
+            # スキンヘッドのモデルに付けた髪(型・数値・揺れの大きさ)と、着せた服
             "hair": model_3d.read_meta(folder / model_3d.BALD_DIR).get("hair"),
+            "bald_garments": model_3d.read_meta(folder / model_3d.BALD_DIR).get("garments"),
             "job": None if job is None else {
                 "status": job["status"], "remote": job.get("remote"), "error": job.get("error"),
                 # 形の値の試しを作ったときの強さ(試しの 3D の表示に使う)
@@ -2190,6 +2201,11 @@ async def make_model_3d_hair(character_id: int, req: Model3DHairRequest) -> dict
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "hair"
         model_3d.make_hair(blender, out, config, preset=req.preset, motion=req.motion)
+        # 服を着せてあれば、新しい髪で着せ直す(着せた形の髪は、服の上に垂らし直す)
+        last = _last_garments(out / model_3d.BALD_DIR)
+        if last is not None:
+            job["remote"] = "dressing"
+            model_3d.dress(blender, out / model_3d.BALD_DIR, last[0], motion=last[1], hair=config)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -2252,17 +2268,33 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
     return _model_3d_entries(character, req.root_name)
 
 
-def _model_3d_rigged(character_id: int, req: Model3DRequest | Model3DDressRequest) -> tuple[dict, dict, Path]:
-    """骨を入れた 3D の形のあるキャラ・素体・フォルダ(無ければ 404・422)。"""
+def _model_3d_rigged(character_id: int, req: Model3DRequest | Model3DDressRequest | Model3DPoseRequest) -> tuple[dict, dict, Path]:
+    """
+    骨を入れた 3D の形のあるキャラ・素体・フォルダ(無ければ 404・422)。req.model が bald なら、スキンヘッド+髪の
+    モデルのフォルダ(形のフォルダの bald/)。
+    """
     character = _load_character(character_id)
     base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
     base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
     if base is None:
         raise HTTPException(status_code=404, detail="素体が見つかりません。")
     out = _model_3d_dir(character, base, req.root_name)
+    if getattr(req, "model", "main") == "bald":
+        out = out / model_3d.BALD_DIR
+        if not (out / "model.blend").is_file():
+            raise HTTPException(status_code=422, detail="スキンヘッドの骨入りのモデルを先に作ってください。")
     if not (out / "model.blend").is_file():
         raise HTTPException(status_code=422, detail="この素体の 3D の形に、まだ骨を入れていません。")
     return character, base, out
+
+
+def _last_garments(folder: Path) -> tuple[list[dict], str] | None:
+    """前に着せた服(着せ直す用: 種類・名前・型・数値)と確かめの動き。着せていなければ None。"""
+    dressed = model_3d.read_meta(folder).get("garments")
+    if not dressed or not dressed.get("items"):
+        return None
+    items = [{k: item.get(k) for k in ("kind", "name", "preset", "config")} for item in dressed["items"]]
+    return items, dressed.get("motion", "walk")
 
 
 @router.post("/character/{character_id}/model-3d/open-blender")
@@ -2309,14 +2341,9 @@ async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str,
         raise HTTPException(status_code=422, detail=f"カメラの向きが違います: {', '.join(unknown)}")
     if req.style not in body_poses.STYLES:
         raise HTTPException(status_code=422, detail=f"絵の種類が違います: {req.style}")
-    character = _load_character(character_id)
-    base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
-    base = next((b for b in _model_3d_bases(character, req.root_name) if b["id"] == base_id), None)
-    if base is None:
-        raise HTTPException(status_code=404, detail="素体が見つかりません。")
-    out = _model_3d_dir(character, base, req.root_name)
-    if not (out / "model.blend").is_file():
-        raise HTTPException(status_code=422, detail="この素体の 3D の形に、まだ骨を入れていません。")
+    character, base, out = _model_3d_rigged(character_id, req)
+    if req.dressed and not (out / "model_dressed.blend").is_file():
+        raise HTTPException(status_code=422, detail="服を着せた形がありません。先に服を着せてください。")
     blender = _model_3d_blender()
     cameras = list(dict.fromkeys(req.cameras))
     shapes = _check_shape_weights(character, base, req.shapes) if req.shapes is not None else None
@@ -2328,7 +2355,7 @@ async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str,
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "posing"
-        model_3d.render_pose(blender, out, req.pose, cameras, req.style, shape_weights=shapes)
+        model_3d.render_pose(blender, out, req.pose, cameras, req.style, shape_weights=shapes, dressed=req.dressed)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -2354,10 +2381,12 @@ async def dress_model_3d(character_id: int, req: Model3DDressRequest) -> dict[st
         raise HTTPException(status_code=422, detail=str(exc))
     character, base, out = _model_3d_rigged(character_id, req)
     blender = _model_3d_blender()
+    # スキンヘッド+髪のモデルでは、服を着せてから、付けてある髪を付け直す
+    hair = model_3d.read_meta(out).get("hair") if req.model == "bald" else None
 
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "dressing"
-        model_3d.dress(blender, out, items, motion=req.motion)
+        model_3d.dress(blender, out, items, motion=req.motion, hair=None if hair is None else hair["config"])
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -2570,7 +2599,7 @@ async def get_model_3d_file(character_id: int, base_id: int, name: str, root_nam
     if base is None:
         raise HTTPException(status_code=404, detail="not found")
     folder = _model_3d_dir(character, base, root_name)
-    if name not in model_3d.FILES and name not in {item["name"] for item in model_3d.pose_images(folder)}:
+    if name not in model_3d.FILES and name not in {item["name"] for item in _all_pose_images(folder)}:
         raise HTTPException(status_code=404, detail="not found")
     path = folder / name
     if not path.is_file():
