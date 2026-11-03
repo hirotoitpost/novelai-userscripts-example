@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import FullscreenViewer from './FullscreenViewer'
 import Garments, { type DressedMeta, type GarmentKind } from './Garments'
+import Hair, { type HairMeta, type HairOptions } from './Hair'
 import ShapeParts, { type ShapeInfo } from './ShapeParts'
 import SmoothSpots, { DEFAULT_SMOOTH_RADIUS } from './SmoothSpots'
 import './Model3D.css'
@@ -62,6 +63,8 @@ interface BaseEntry {
   poses: PoseImage[]
   /** 形状パーツ: 選べる形・保存した強さ・場面ごとの組み合わせ */
   shapes: ShapeInfo
+  /** スキンヘッドのモデルに付けた髪 */
+  hair: HairMeta | null
 }
 
 interface Model3DInfo {
@@ -71,6 +74,8 @@ interface Model3DInfo {
   pose_options: { poses: Record<string, string>; cameras: Record<string, string>; styles: Record<string, string> }
   /** 着せられる服(種類 → 型・数値の範囲) */
   garment_options: Record<string, GarmentKind>
+  /** 髪の型・数値の範囲 */
+  hair_options: HairOptions
 }
 
 interface Props {
@@ -92,7 +97,7 @@ const JOB_LABELS: Record<JobState, string> = {
   previewing: '形の値の試しを作っています(15 秒ほど)',
   importing: 'Blender で直した所を読んでいます',
   dressing: 'Blender で服を着せています(1〜2 分)',
-  hair: 'Blender で髪の部品を切り出して付けています(1 分ほど)',
+  hair: 'Blender で髪を作って揺らしています(15 秒ほど)',
 }
 
 async function detail(res: Response): Promise<string> {
@@ -101,8 +106,7 @@ async function detail(res: Response): Promise<string> {
 }
 
 // スキンヘッドの写しと、スキンヘッドのモデルの静止画(髪を別の部品にする用)
-const BALD_STILLS = ['bald_front.png', 'bald_left.png', 'bald_back.png', 'bald/front.png', 'bald/side.png', 'bald/back.png', 'bald/motion.gif',
-  'bald/hair_front.png', 'bald/hair_side.png', 'bald/hair_back.png']
+const BALD_STILLS = ['bald_front.png', 'bald_left.png', 'bald_back.png', 'bald/front.png', 'bald/side.png', 'bald/back.png', 'bald/motion.gif']
 
 function duration(seconds: number): string {
   return seconds >= 60 ? `${Math.floor(seconds / 60)}分${seconds % 60}秒` : `${seconds}秒`
@@ -338,13 +342,6 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 onClick={() => void drawBald()}>
                 スキンヘッドの写しを描く
               </button>
-              {entry.files['bald/model_clean.glb'] && (
-                <button type="button" className="lora-btn lora-btn--secondary" disabled={busy || !entry.files['model_clean.glb']}
-                  title="髪ありの形から髪の部品を切り出し直して、スキンヘッドのモデルの頭に付けます(GPU は使いません)"
-                  onClick={() => void post('/hair', {}, '髪の部品を付け直しています')}>
-                  髪の部品を付け直す
-                </button>
-              )}
               <button type="button" className="lora-btn lora-btn--secondary" disabled={busy || !entry.files['model.glb']}
                 title="作った形を Blender で整え直し、素体の絵と比べ直して、骨を入れ直します(GPU は使いません)"
                 onClick={() => void post('/clean', { motion }, '整え直しています')}>
@@ -406,9 +403,9 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                     </label>
                   )}
                   {viewing && baldReady && (
-                    <label className="fsh-label" title="スキンヘッドのモデルに、髪の部品を付けた姿(bald/model_rigged.glb)を見ます">
+                    <label className="fsh-label" title="スキンヘッドのモデルに、型から作った髪を付けた姿(bald/model_rigged.glb)を見ます">
                       <input type="checkbox" checked={baldView} onChange={e => { setBaldView(e.target.checked); setPicking(false) }} />
-                      スキンヘッド+髪の部品
+                      スキンヘッド+髪
                     </label>
                   )}
                   {viewing && animations.length > 0 && (
@@ -473,6 +470,12 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                   <figure key={name}><img src={fileUrl(name)} alt={entry.files[name].label} /><figcaption>{entry.files[name].label}</figcaption></figure>
                 ))}
               </div>
+            )}
+
+            {entry.files['bald/model.blend'] && info.hair_options && (
+              <Hair options={info.hair_options} motions={info.motions} hair={entry.hair} busy={busy} files={entry.files}
+                fileUrl={name => fileUrl(name)}
+                onMake={body => { setBaldView(true); void post('/hair', body, '髪を付け始めました(15 秒ほど)') }} />
             )}
 
             {entry.files['model.blend'] && Object.keys(entry.shapes.options).length > 0 && (
