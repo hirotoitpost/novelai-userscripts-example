@@ -3,9 +3,10 @@ Blender の中で動かすスクリプト(model_3d.dress から、画面なし�
 
     blender --background <model_dir>/model.blend --python scripts/blender/dress_model.py -- <model_dir> <garments.json> <動きの名前>
 
-rig_model.py が保存した model.blend(体 body・骨 rig)の、休んだ姿勢の体に、garments.json の服(今はスカートだけ。
-garment_skirt.py)を布として着せる。服は骨に付ける: 服の頂点ごとに、いちばん近い体の面の骨の重みを写し、服の上で
-なめらかにする(脚の間で布が裂けないように)。骨と動き入りの model_dressed.glb・model_dressed.blend を書き、確かめの
+rig_model.py が保存した model.blend(体 body・骨 rig)の体に、garments.json の服(スカート garment_skirt.py・
+上の服 garment_top.py)を布として着せる。スカートは休んだ姿勢の体に、上の服は腕を上げた体に着せる(脇の下で布が
+余らない)。服は骨に付ける: 服の頂点ごとに、いちばん近い体の面の骨の重みを写し、服の上でなめらかにする(脚の間で
+布が裂けないように)。腕を上げて着せた服は、その重みで骨の変形を逆にかけて、休んだ姿勢に戻す。骨と動き入りの model_dressed.glb・model_dressed.blend を書き、確かめの
 静止画(dressed_front/side/back.png)と、動きのコマ(frames_dressed/*.png)を描き出し、結果を dress.json に書く。
 model.blend は書き換えない。
 """
@@ -22,13 +23,14 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import garment_skirt  # noqa: E402
+import garment_top  # noqa: E402
 
 SIZE = (360, 600)
 # 服の重みをなめらかにする回数と、1 頂点に残す骨の数
 SMOOTH_ROUNDS = 30
 MAX_BONES = 4
-# 服(スカート)を付ける骨。腕・手に付けると、腕を振ったときにスカートが引っ張られる
-GARMENT_BONES = ("torso", "thigh.L", "thigh.R", "shin.L", "shin.R")
+# スカートを付ける骨。腕・手に付けると、腕を振ったときにスカートが引っ張られる
+SKIRT_BONES = ("torso", "thigh.L", "thigh.R", "shin.L", "shin.R")
 
 
 def rest_pose(arm: bpy.types.Object) -> None:
@@ -43,8 +45,8 @@ def rest_pose(arm: bpy.types.Object) -> None:
         pb.location = (0, 0, 0)
 
 
-def transfer_weights(garment: bpy.types.Object, body: bpy.types.Object, arm: bpy.types.Object) -> dict:
-    """服の頂点ごとに、いちばん近い体の面(三角形)の頂点の骨の重みを混ぜて写し、服の上でなめらかにする。"""
+def transfer_weights(garment: bpy.types.Object, body: bpy.types.Object, arm: bpy.types.Object, garment_bones: tuple) -> dict:
+    """服の頂点ごとに、いちばん近い体の面(三角形)の頂点の骨(garment_bones だけ)の重みを混ぜて写し、服の上でなめらかにする。"""
     dg = bpy.context.evaluated_depsgraph_get()
     ev = body.evaluated_get(dg)
     mesh = ev.to_mesh()
@@ -52,7 +54,7 @@ def transfer_weights(garment: bpy.types.Object, body: bpy.types.Object, arm: bpy
     co = np.array([body.matrix_world @ v.co for v in mesh.vertices])
     tris = np.array([t.vertices[:] for t in mesh.loop_triangles])
     ev.to_mesh_clear()
-    bones = [b.name for b in arm.data.bones if b.use_deform and b.name in GARMENT_BONES]
+    bones = [b.name for b in arm.data.bones if b.use_deform and b.name in garment_bones]
     groups = {g.index: g.name for g in body.vertex_groups if g.name in bones}
     names = sorted(set(groups.values()))
     col = {n: i for i, n in enumerate(names)}
@@ -67,7 +69,7 @@ def transfer_weights(garment: bpy.types.Object, body: bpy.types.Object, arm: bpy
     for v in body.data.vertices:
         if v.groups:
             top = max(v.groups, key=lambda g: g.weight)
-            main[v.index] = all_groups.get(top.group) in GARMENT_BONES
+            main[v.index] = all_groups.get(top.group) in garment_bones
     tris = tris[main[tris].all(axis=1)]
     bvh = BVHTree.FromPolygons([tuple(p) for p in co], [tuple(map(int, t)) for t in tris])
     gco = np.array([garment.matrix_world @ v.co for v in garment.data.vertices])
@@ -109,6 +111,31 @@ def transfer_weights(garment: bpy.types.Object, body: bpy.types.Object, arm: bpy
     garment.matrix_parent_inverse = arm.matrix_world.inverted()
     used = w.sum(axis=0)
     return {names[k]: round(float(used[k] / len(gco)), 3) for k in np.argsort(-used)[:6] if used[k] > 0}
+
+
+def unpose(garment: bpy.types.Object, arm: bpy.types.Object) -> None:
+    """
+    いまの姿勢の骨で着せた服を、休んだ姿勢の形に戻す: 頂点ごとに、付けた骨の変形(重みで混ぜた行列)の逆をかける。
+    骨を休んだ姿勢に戻すと、骨の変形(Armature)で、着せたときの形に戻る。
+    """
+    bpy.context.view_layer.update()
+    names = [g.name for g in garment.vertex_groups]
+    mats = np.array([
+        np.array(arm.matrix_world @ arm.pose.bones[n].matrix @ arm.pose.bones[n].bone.matrix_local.inverted()
+                 @ arm.matrix_world.inverted())
+        for n in names
+    ])
+    to_world = np.array(garment.matrix_world)
+    to_local = np.linalg.inv(to_world)
+    for v in garment.data.vertices:
+        w = np.zeros(len(names))
+        for g in v.groups:
+            w[g.group] = g.weight
+        if w.sum() <= 0:
+            continue
+        blend = np.einsum("b,bij->ij", w / w.sum(), mats)
+        p = to_world @ np.append(np.array(v.co), 1.0)
+        v.co = (to_local @ np.linalg.solve(blend, p))[:3]
 
 
 def render(arm: bpy.types.Object, folder: Path, motion: str, frames: int, height: float) -> None:
@@ -161,10 +188,19 @@ def main() -> None:
     report = {"garments": []}
     colors = [(0.25, 0.32, 0.6, 1), (0.6, 0.3, 0.3, 1), (0.3, 0.55, 0.35, 1)]
     for n, item in enumerate(spec["garments"]):
-        if item["kind"] != "skirt":
+        name = f"garment_{item['name']}"
+        if item["kind"] == "skirt":
+            obj, info = garment_skirt.build_skirt(body, joints, item.get("config", {}), name=name)
+            info["bones"] = transfer_weights(obj, body, arm, SKIRT_BONES)
+        elif item["kind"] == "top":
+            posed = garment_top.raise_arms(arm, joints)
+            obj, info = garment_top.build_top(body, posed, item.get("config", {}), name=name)
+            info["bones"] = transfer_weights(obj, body, arm, garment_top.BONES)
+            unpose(obj, arm)
+            rest_pose(arm)
+            bpy.context.view_layer.update()
+        else:
             raise SystemExit(f"まだ作れない服です: {item['kind']}")
-        obj, info = garment_skirt.build_skirt(body, joints, item.get("config", {}), name=f"garment_{item['name']}")
-        info["bones"] = transfer_weights(obj, body, arm)
         info["name"] = item["name"]
         info["kind"] = item["kind"]
         info["preset"] = item.get("preset")

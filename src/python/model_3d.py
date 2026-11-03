@@ -687,13 +687,13 @@ class Model3DDressError(RuntimeError):
 DRESSED_FILES = ("model_dressed.glb", "model_dressed.blend", "dressed_front.png", "dressed_side.png", "dressed_back.png",
                  "dressed_motion.gif")
 # 作れる服の種類(scripts/blender/garment_*.py)
-GARMENT_KINDS = ("skirt",)
+GARMENT_KINDS = ("skirt", "top")
 
 
 def dress(blender: str, out_dir: Path, garments: list[dict], *, motion: str = "walk", timeout: float = 1800) -> dict:
     """
     骨を入れた形(model.blend)の休んだ姿勢の体に、型紙から作った服を布として着せ、骨に付ける
-    (scripts/blender/dress_model.py。今はスカートだけ: garment_skirt.py)。garments は [{"kind", "name", "config"}]。
+    (scripts/blender/dress_model.py。スカート garment_skirt.py・上の服 garment_top.py)。garments は [{"kind", "name", "config"}]。
     骨と動き入りの model_dressed.glb・model_dressed.blend と、確かめの静止画・motion の動きの GIF を描き出す。
     model.blend は書き換えない(骨を入れ直したら、着せ直す)。結果(服ごとの寸法・体への食い込み・付けた骨)を
     meta.json の garments に残して返す。
