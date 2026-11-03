@@ -99,6 +99,9 @@ async function detail(res: Response): Promise<string> {
   return typeof data?.detail === 'string' ? data.detail : `HTTP ${res.status}`
 }
 
+// スキンヘッドの写しと、スキンヘッドのモデルの静止画(髪を別の部品にする用)
+const BALD_STILLS = ['bald_front.png', 'bald_left.png', 'bald_back.png', 'bald/front.png', 'bald/side.png', 'bald/back.png', 'bald/motion.gif']
+
 function duration(seconds: number): string {
   return seconds >= 60 ? `${Math.floor(seconds / 60)}分${seconds % 60}秒` : `${seconds}秒`
 }
@@ -119,6 +122,8 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   // 裸の素体のモデルで、乳首なしの写しを 3D に送るか(写しを描いている間は、作るボタンを止める)
   const [featureless, setFeatureless] = useState(true)
   const [drawingInputs, setDrawingInputs] = useState(false)
+  // 髪を別の部品にするための、スキンヘッドのモデル(形のフォルダの bald/)を作るか
+  const [bald, setBald] = useState(false)
   // 3D のカメラの位置(読み込み直しても保つ。素体を替えたら初めから)
   const cameraView = useRef<CameraView | null>(null)
   const [animations, setAnimations] = useState<string[]>([])
@@ -220,10 +225,10 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   }
 
   async function makeModel() {
-    const drawing = featureless && entry?.kind === 'nude'
+    const drawing = bald || (featureless && entry?.kind === 'nude')
     setDrawingInputs(drawing)
     try {
-      await post('', { seed, motion, featureless }, '作り始めました(数分かかります)')
+      await post('', { seed, motion, featureless, bald }, bald ? 'スキンヘッドのモデルを作り始めました(数分かかります)' : '作り始めました(数分かかります)')
     } finally {
       setDrawingInputs(false)
     }
@@ -251,6 +256,16 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
     await post('/shape-preview', { part, params, weights: shapeWeights, ...(offsets ? { offsets } : {}) }, '形の値の試しを作っています(15 秒ほど)')
   }
   const stills = (['front.png', 'side.png', 'back.png'] as const).filter(name => entry?.files[name])
+  const baldFiles = BALD_STILLS.filter(name => entry?.files[name])
+
+  async function drawBald() {
+    setDrawingInputs(true)
+    try {
+      await post('/bald-inputs', { featureless }, 'スキンヘッドの写しを描きました')
+    } finally {
+      setDrawingInputs(false)
+    }
+  }
   const poses = entry?.poses ?? []
   const zoomed = zoom != null ? poses[zoom] : null
   const poseLabel = (p: PoseImage) =>
@@ -304,9 +319,19 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                   乳首なしの写しで作る(Anlas 2 枚ぶん)
                 </label>
               )}
+              <label className="fsh-label" title="髪を別の部品にするため、正面・横・後ろの絵の髪だけをスキンヘッドに描き直した写しから、別のモデル(形のフォルダの bald/)を作ります。写しは元の絵が変わるまで使い回します">
+                <input type="checkbox" checked={bald} disabled={busy || drawingInputs} onChange={e => setBald(e.target.checked)} />
+                スキンヘッドで作る(Anlas 3 枚ぶん〜)
+              </label>
               <button type="button" className="lora-btn" disabled={busy || drawingInputs || !info.configured || !entry.views.front}
                 onClick={() => void makeModel()}>
-                {drawingInputs ? '乳首なしの写しを描いています…' : entry.files['model.glb'] ? '3D の形を作り直す' : '3D の形を作る'}
+                {drawingInputs ? '写しを描いています…' : bald ? (entry.files['bald/model_clean.glb'] ? 'スキンヘッドの形を作り直す' : 'スキンヘッドの形を作る')
+                  : entry.files['model.glb'] ? '3D の形を作り直す' : '3D の形を作る'}
+              </button>
+              <button type="button" className="lora-btn lora-btn--secondary" disabled={busy || drawingInputs || !entry.views.front}
+                title="スキンヘッドの写しだけを描きます(3D のサーバーは使いません)。髪が残っていれば、シードを変えて 4 回まで描き直します"
+                onClick={() => void drawBald()}>
+                スキンヘッドの写しを描く
               </button>
               <button type="button" className="lora-btn lora-btn--secondary" disabled={busy || !entry.files['model.glb']}
                 title="作った形を Blender で整え直し、素体の絵と比べ直して、骨を入れ直します(GPU は使いません)"
@@ -421,6 +446,14 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                     <figcaption>動き{meta?.rig ? `(${info.motions[meta.rig.motion] ?? meta.rig.motion})` : ''}</figcaption>
                   </figure>
                 )}
+              </div>
+            )}
+
+            {baldFiles.length > 0 && (
+              <div className="bdb-rig-views m3d-stills">
+                {baldFiles.map(name => (
+                  <figure key={name}><img src={fileUrl(name)} alt={entry.files[name].label} /><figcaption>{entry.files[name].label}</figcaption></figure>
+                ))}
               </div>
             )}
 
