@@ -59,8 +59,9 @@ const GROUPS: { label: string; keys: string[] }[] = [
   { label: 'ひだ', keys: ['pleats', 'pleat_depth', 'pleat_stitch', 'knife'] },
   { label: 'タック', keys: ['tucks', 'tuck_depth', 'tuck_stitch'] },
   { label: 'マチ', keys: ['gussets', 'gusset_width', 'gusset_height'] },
-  { label: '袖', keys: ['sleeve', 'sleeve_ease', 'sleeve_flare'] },
+  { label: '袖', keys: ['sleeve', 'sleeve_ease', 'sleeve_flare', 'puff'] },
   { label: '襟ぐり', keys: ['neck_width', 'neck_front', 'neck_back'] },
+  { label: 'えり', keys: ['collar', 'collar_gap'] },
 ]
 
 function format(value: Value, field: GarmentField): string {

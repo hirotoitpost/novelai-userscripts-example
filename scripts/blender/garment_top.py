@@ -6,6 +6,8 @@
   60 ほどで体に沿い、25 ほどでぴったり)、bending 布の曲がりにくさ
 - sleeve 袖の長さ(0 袖なし・1 肘・2 手首)、sleeve_ease 袖のゆとり mm、sleeve_flare 袖口の広がり(袖口の周り ÷ 付け根)
 - neck_width 襟ぐりの、首からの幅 cm・neck_front 前の深さ cm・neck_back 後ろの深さ cm
+- puff 袖のふくらみ(0 なし。0.5 で付け根と袖口のあいだが 1.5 倍の太さ。袖口は腕に沿ってすぼまる)
+- collar 丸えりの幅 cm(0 なし)・collar_gap えりの前の開き(度)
 
 作り方(docs/model_3d_plan_jp.md のステップ 6b):
 1. 着せる姿勢: 上腕を RAISE 度だけ外へ上げる(raise_arms)。腕が胴から離れ、脇の下・背中で布が余らない。
@@ -16,6 +18,9 @@
 4. 縫い合わせ: 身頃と袖の切り口を、たがいに寄せてから、相手の点の所で自分の辺を分けて 1 対 1 で溶かし合わせる
    (縫い代・折り返しを作らない。アニメ・絵のように縫い目の厚みが無い 1 枚の布になる)。
 5. 置いた形を休む形にして、肩の上を軽く留め、体に当たり判定を付けて重力でなじませる。
+6. えり(add_collar。腕を下ろしてなじませたあと): 襟ぐりの縁から外へ、服の面の上を歩いて平らな帯を置く(縁は身頃と
+   同じ頂点。前は開け、端は丸く)。布としては動かさない(身頃の布の下へ潜ったり、当たりで崩れたりした。絵のえりの
+   ように、くっきり平らなままにする)。骨の重みは、付け根の襟ぐりの頂点から写す。
 骨に付けて腕を下ろした姿勢に戻すのは dress_model.py(着せた姿勢の骨の重みで、変形を逆にかける)。
 """
 
@@ -31,7 +36,14 @@ DEFAULTS = {
     "length": 1.0, "ease": 8, "bridge": None, "bending": 2.0,
     "sleeve": 0.5, "sleeve_ease": 12, "sleeve_flare": 1.15,
     "neck_width": 1.5, "neck_front": 6, "neck_back": 2,
+    "puff": 0.0, "collar": 0, "collar_gap": 30,
 }
+# ふくらんだ袖のギャザー(周りの波)の数と深さ
+PUFF_GATHERS, PUFF_WAVE = 12, 0.12
+# えりを服の面から浮かせる距離 m・前の端を丸める角度
+COLLAR_LIFT, COLLAR_ROUND = 0.003, 15
+# えりの歩く向きをならす、前後の列の数
+COLLAR_SMOOTH = 3
 # 着せるときに上腕を外へ上げる角度
 RAISE = 40
 # 服を付ける骨(袖は腕に、襟は頭に付く)
@@ -437,7 +449,7 @@ def _torso(body: _Body, joints: dict, cfg: dict, pieces: _Pieces) -> dict:
     fc = _smooth_field(np.maximum(otherf, nfp))
     fc[~hole & (fc > 0) & (otherf <= 0) & (nfp <= 0)] = -0.05
     pieces.cut(0, verts, fc, otherf >= nfp)
-    return {"sh_z": sh_z, "hem_z": round(float(hem_z), 4), "armpit_z": round(float(armpit_z), 4)}
+    return {"sh_z": sh_z, "hem_z": round(float(hem_z), 4), "armpit_z": round(float(armpit_z), 4), "neck_c": neck_c}
 
 
 def _sleeve(body: _Body, joints: dict, cfg: dict, pieces: _Pieces, gid: int, side: str, armpit_z: float) -> None:
@@ -493,6 +505,10 @@ def _sleeve(body: _Body, joints: dict, cfg: dict, pieces: _Pieces, gid: int, sid
             rr = np.interp(np.arange(SLEEVE_COLS), np.concatenate([idx - SLEEVE_COLS, idx, idx + SLEEVE_COLS]), np.tile(rr[idx], 3))
         grow = 1 + (cfg["sleeve_flare"] - 1) * sv / max(s_end, 0.01)
         rr = (_ring_hull(rr, sang) + cfg["sleeve_ease"] / 1000 + 0.004) * grow
+        if cfg["puff"] > 0 and i >= len(cap):
+            # 付け根(0)と、袖の 9 割の所(そこから袖口まではすぼまったまま)のあいだを丸くふくらませ、ギャザーの波を付ける
+            bump = math.sin(math.pi * min(sv / max(0.9 * s_end, 0.01), 1.0)) ** 2
+            rr = rr * (1 + cfg["puff"] * bump * (1 + PUFF_WAVE * np.cos(PUFF_GATHERS * sang)))
         c, u, v, t, b = frames[i]
         for k, a in enumerate(sang):
             sverts[i, k] = c + rr[k] * (math.cos(b) * (math.cos(a) * u + math.sin(a) * v) - math.sin(b) * t)
@@ -675,6 +691,156 @@ def _join(bm: bmesh.types.BMesh, plans: list[tuple]) -> int:
     return len(weld)
 
 
+def _collar(bm: bmesh.types.BMesh, cfg: dict, neck_c: np.ndarray, sh_z: float) -> list:
+    """
+    襟ぐりの縁(いちばん高い切り口の輪)から外へ、服の面の上を歩いて丸えりの帯を作る。縁の頂点は身頃と同じ。
+    前の collar_gap 度は開け、その両端は COLLAR_ROUND 度かけて丸く細くする。作ったえりの頂点を返す。
+    """
+    adj: dict = {}
+    for e in bm.edges:
+        if e.is_boundary:
+            a, b = e.verts
+            adj.setdefault(a, []).append(b)
+            adj.setdefault(b, []).append(a)
+    seen, loops = set(), []
+    for v0 in adj:
+        if v0 in seen:
+            continue
+        loop, prev, cur = [v0], None, v0
+        seen.add(v0)
+        while True:
+            nxt = [w for w in adj[cur] if w != prev and w not in seen]
+            if not nxt:
+                break
+            prev, cur = cur, nxt[0]
+            loop.append(cur)
+            seen.add(cur)
+        loops.append(loop)
+    # 襟ぐり: 肩の 15cm 下より高い、20 頂点以上の輪のうち、真ん中が首の中心にいちばん近いもの(肩の上に小さな穴が
+    # 残ることがあり、いちばん高い輪では見誤った)
+    loops = [lp for lp in loops if len(lp) >= 20 and np.mean([v.co.z for v in lp]) > sh_z - 0.15]
+    if not loops:
+        return []
+    neck = min(loops, key=lambda lp: float(np.linalg.norm(np.mean([v.co[:2] for v in lp], axis=0) - neck_c)))
+    ang = np.array([math.atan2(v.co.y - neck_c[1], v.co.x - neck_c[0]) for v in neck])
+    # 前(-Y)からの角度。前の開きの所で輪を切って、左右へ続く 1 本の鎖にする(角度が増える向き)
+    front = np.abs((ang + math.pi / 2 + math.pi) % (2 * math.pi) - math.pi)
+    if np.sum(np.diff(np.unwrap(ang))) < 0:
+        neck, ang, front = neck[::-1], ang[::-1], front[::-1]
+    gap = math.radians(cfg["collar_gap"]) / 2
+    start = int(np.argmin(front))
+    order = [(start + j) % len(neck) for j in range(len(neck))]
+    chain = [j for j in order if front[j] >= gap]
+    if len(chain) < 4:
+        return []
+    # 面の向きをそろえ、服全体で外向きにする(点ごとに体の中の点から決めると、所々で内向きになり、えりが身頃の下に
+    # 入った)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    mid = np.mean([v.co[:2] for v in bm.verts], axis=0)
+    if sum(f.calc_area() * float(np.dot(f.normal[:2], np.array(f.calc_center_median()[:2]) - mid)) for f in bm.faces) < 0:
+        bmesh.ops.reverse_faces(bm, faces=bm.faces)
+    bvh = BVHTree.FromBMesh(bm)
+    deform = bm.verts.layers.deform.active
+    width = cfg["collar"] / 100
+    rows = max(3, int(round(width / 0.008)))
+    cols = []
+    def surface(q):
+        """q にいちばん近い服の面の点と、外向きの法線。"""
+        loc, n, _, _ = bvh.find_nearest(q)
+        if loc is None:
+            return q, Vector((0.0, 0.0, 1.0))
+        return loc, n
+
+    # 歩く向き: 服の面に沿って、襟ぐりの線に直角に、首の穴から離れる向き(前・後ろは下へ、肩の上は外へ)。
+    # 襟ぐりの角で向きが急に変わると、えりが折れて崩れたので、となりの列(前後 COLLAR_SMOOTH 列)とならす
+    dirs, widths = [], []
+    for idx, j in enumerate(chain):
+        v = neck[j]
+        f = min(max((front[j] - gap) / math.radians(COLLAR_ROUND), 0.0), 1.0)
+        widths.append(width * max(math.sqrt(1 - (1 - f) ** 2), 0.25))
+        prev, nxt = neck[chain[max(idx - 1, 0)]], neck[chain[min(idx + 1, len(chain) - 1)]]
+        _, n = surface(v.co)
+        d = n.cross(nxt.co - prev.co).normalized()
+        away = Vector((v.co.x - neck_c[0], v.co.y - neck_c[1], 0.0)).normalized() + Vector((0.0, 0.0, -0.7))
+        dirs.append(-d if d.dot(away) < 0 else d)
+    dirs = [
+        sum((dirs[k] for k in range(max(i - COLLAR_SMOOTH, 0), min(i + COLLAR_SMOOTH + 1, len(dirs)))), Vector()).normalized()
+        for i in range(len(dirs))
+    ]
+    grid = []
+    for idx, j in enumerate(chain):
+        p, d = neck[j].co.copy(), dirs[idx]
+        row = [p]
+        for r in range(1, rows + 1):
+            loc, n = surface(p + d * (widths[idx] / rows))
+            q = loc + n * COLLAR_LIFT
+            d = d - n * d.dot(n)
+            d = d.normalized() if d.length > 1e-9 else (q - p).normalized()
+            p = q
+            row.append(q)
+        grid.append(row)
+    # 行ごとに横へならして(外の縁のぎざぎざを消す)、服の面の上に置き直す
+    for r in range(1, rows + 1):
+        for _ in range(3):
+            line = [grid[i][r] for i in range(len(grid))]
+            for i in range(1, len(grid) - 1):
+                loc, n = surface((line[i - 1] + 2 * line[i] + line[i + 1]) / 4)
+                grid[i][r] = loc + n * COLLAR_LIFT
+    cols = []
+    for idx, j in enumerate(chain):
+        v = neck[j]
+        col = [v]
+        for q in grid[idx][1:]:
+            nv = bm.verts.new(q)
+            if deform is not None:
+                for g, wt in v[deform].items():
+                    nv[deform][g] = wt
+            col.append(nv)
+        cols.append(col)
+    for a, b in zip(cols[:-1], cols[1:]):
+        for r in range(rows):
+            bm.faces.new((a[r], b[r], b[r + 1], a[r + 1]))
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    return [v for col in cols for v in col[1:]]
+
+
+def add_collar(obj: bpy.types.Object, cfg: dict, arm: bpy.types.Object) -> bpy.types.Object | None:
+    """
+    なじませ終わった上の服(休んだ姿勢。骨に付けたもの)の襟ぐりに、丸えりを平らな帯として置く(cfg の collar が 0 なら
+    何もしない)。えりは別のオブジェクト(<服の名前>_collar。色を変えられる)にし、骨の重みは付け根の襟ぐりの頂点から
+    写して、服と同じ骨に付ける。
+    """
+    cfg = {**DEFAULTS, **cfg}
+    if cfg["collar"] <= 0 or "neck_c" not in obj:
+        return None
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    f0 = len(bm.faces)
+    if not _collar(bm, cfg, np.array(obj["neck_c"]), float(obj["sh_z"])):
+        bm.free()
+        return None
+    bm.faces.index_update()
+    # えりの面だけを新しいメッシュに、服のメッシュは元のまま
+    collar_bm = bm.copy()
+    collar_bm.faces.index_update()
+    bmesh.ops.delete(collar_bm, geom=[f for f in collar_bm.faces if f.index < f0], context="FACES")
+    me = bpy.data.meshes.new(f"{obj.name}_collar")
+    collar_bm.to_mesh(me)
+    collar_bm.free()
+    bm.free()
+    for poly in me.polygons:
+        poly.use_smooth = True
+    collar = bpy.data.objects.new(f"{obj.name}_collar", me)
+    bpy.context.scene.collection.objects.link(collar)
+    for g in obj.vertex_groups:
+        collar.vertex_groups.new(name=g.name)
+    mod = collar.modifiers.new("rig", "ARMATURE")
+    mod.object = arm
+    collar.parent = arm
+    collar.matrix_parent_inverse = arm.matrix_world.inverted()
+    return collar
+
+
 def _tidy(bm: bmesh.types.BMesh) -> None:
     """縫い目に残った小さなすき間(辺 12 本まで)をふさぎ、面の無い頂点・小さな島(袖ぐりの近くの切れ端)を消す。"""
     bmesh.ops.dissolve_degenerate(bm, edges=bm.edges, dist=1e-5)
@@ -822,6 +988,9 @@ def build_top(body_obj: bpy.types.Object, joints: dict, cfg: dict, name: str = "
     bm.free()
     obj = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(obj)
+    # えりを置くときの、首の中心と肩の高さ(腕を上げても変わらない)
+    obj["neck_c"] = [float(x) for x in measure["neck_c"]]
+    obj["sh_z"] = float(measure["sh_z"])
 
     # 布: 置いた形を休む形にする。肩の上を軽く留める
     for poly in me.polygons:

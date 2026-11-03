@@ -77,6 +77,9 @@ TOP_FIELDS: dict[str, Field] = {
     "neck_width": Field("襟ぐりの幅", "float", 1.5, 0, 6, 0.5, "cm", hint="首からの離れ"),
     "neck_front": Field("襟ぐりの前の深さ", "float", 6, 0, 15, 0.5, "cm"),
     "neck_back": Field("襟ぐりの後ろの深さ", "float", 2, 0, 10, 0.5, "cm"),
+    "puff": Field("袖のふくらみ", "float", 0.0, 0, 1, 0.05, hint="0 でふくらまない。袖口は腕に沿ってすぼまる"),
+    "collar": Field("丸えりの幅", "float", 0, 0, 12, 0.5, "cm", hint="0 でえりなし"),
+    "collar_gap": Field("えりの前の開き", "float", 30, 0, 90, 5, "°"),
 }
 
 # 上の服の型: 形(試作で確かめた 3 つ)× 袖
@@ -85,11 +88,23 @@ _TOP_FITS = {
     "fitted": ("すっきり", {"bridge": 60, "ease": 5}),
     "tight": ("タイト", {"bridge": 25, "ease": 3, "sleeve_ease": 6, "sleeve_flare": 1.0, "bending": 4.0}),
 }
-_TOP_SLEEVES = {"short": ("半袖", 0.5), "none": ("袖なし", 0.0), "long": ("長袖", 2.0)}
+_TOP_SLEEVES = {
+    "short": ("半袖", {"sleeve": 0.5}), "puff": ("パフ袖", {"sleeve": 0.5, "puff": 0.5}),
+    "none": ("袖なし", {"sleeve": 0.0}), "long": ("長袖", {"sleeve": 2.0}),
+}
 TOP_PRESETS: dict[str, dict[str, Any]] = {
-    f"{fit}_{sleeve}": {"label": f"{fit_label}・{sleeve_label}", "config": {**fit_config, "sleeve": length}}
+    f"{fit}_{sleeve}": {"label": f"{fit_label}・{sleeve_label}", "config": {**fit_config, **sleeve_config}}
     for fit, (fit_label, fit_config) in _TOP_FITS.items()
-    for sleeve, (sleeve_label, length) in _TOP_SLEEVES.items()
+    for sleeve, (sleeve_label, sleeve_config) in _TOP_SLEEVES.items()
+}
+# えりの付いたブラウス(襟ぐりを浅く丸くして、丸えりを置く)
+TOP_PRESETS["blouse_puff"] = {
+    "label": "ブラウス(すっきり・パフ袖・丸えり)",
+    "config": {"bridge": 60, "ease": 5, "sleeve": 0.5, "puff": 0.5, "collar": 6, "neck_front": 4},
+}
+TOP_PRESETS["blouse_long"] = {
+    "label": "ブラウス(ゆったり・長袖・丸えり)",
+    "config": {"ease": 8, "sleeve": 2.0, "puff": 0.6, "collar": 7, "collar_gap": 20, "neck_front": 2, "neck_width": 1.0},
 }
 
 KINDS: dict[str, tuple[str, dict[str, Field], dict[str, dict[str, Any]]]] = {

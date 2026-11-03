@@ -978,8 +978,9 @@ def test_garment_configs_are_checked() -> None:
         assert garments.clean("skirt", preset["config"]) == preset["config"]
     for preset in garments.TOP_PRESETS.values():
         assert garments.clean("top", preset["config"]) == preset["config"]
-    # 上の服の型は、形 3 つ × 袖 3 つ
-    assert len(garments.TOP_PRESETS) == 9 and garments.TOP_PRESETS["tight_none"]["config"]["sleeve"] == 0
+    # 上の服の型は、形 3 つ × 袖 4 つと、えりの付いたブラウス 2 つ
+    assert len(garments.TOP_PRESETS) == 14 and garments.TOP_PRESETS["tight_none"]["config"]["sleeve"] == 0
+    assert garments.TOP_PRESETS["loose_puff"]["config"]["puff"] == 0.5 and garments.TOP_PRESETS["blouse_puff"]["config"]["collar"] == 6
     assert garments.clean("top", {"bridge": None, "sleeve": 2}) == {"bridge": None, "sleeve": 2.0}
     for config, message in (({"sleeve": 2.5}, "袖の長さ"), ({"bridge": 30.5}, "整数"), ({"pleats": 4}, "知らない")):
         with pytest.raises(garments.GarmentError, match=message):
