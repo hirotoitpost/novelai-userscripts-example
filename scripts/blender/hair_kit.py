@@ -7,9 +7,9 @@
 - 頭を覆う髪(殻): 頭皮から浮かせ、生え際の高さは向きで変える(額・こめかみ・耳の上・うなじ)。まとめ髪では、お団子へ
   集まる筋を付ける。
 - お団子(0・1 個(後ろ)・2 個(左右の後ろ)): 巻いた筋のある球と、はねた毛。
-- 前髪・顔の横の房・後れ毛(耳の前・うなじ): 道すじに沿った、平たい・先のとがった房。
-まとめ髪(お団子・まとめた髪型)だけ。下ろした髪(ボブ・ロング)は、肩・背中に沿わせる所がまだで、房が肩で
-板のように広がった(2026-11 試作)。
+- 前髪・顔の横の房・後れ毛(耳の前・うなじ)・下ろした後ろ髪: 道すじに沿った、平たい・先のとがった房。
+下ろした髪(後ろ髪と、あごより長い顔の横の房)は、根もとを頭に留めて重力で垂らし、頭・肩・背中に当てて落ち着いた
+形にする(drape)。道すじを体の面に当てて決めると、房が肩で板のように広がった(2026-11 試作)。
 部品は 1 つのオブジェクト hair にまとめ、殻は head の骨、房とお団子は、それぞれの鎖の骨(根もとは head の子)に付ける。
 動きごとに、鎖の関節を点として揺らし(遅れ・休んだ形へ戻るばね・頭と顔に当たると押し出す)、鎖の骨の回転のキーを
 その動きのアクションに焼き込む。骨入りの GLB(model_rigged.glb)を書き出し直し、休んだ姿勢の正面・横・後ろの絵
@@ -45,15 +45,19 @@ DEFAULTS = {
     "bun_size": 0.5,  # お団子の大きさ(頭の半径に対する割合)
     "bun_height": 16.0,  # お団子の高さ(頭の真ん中からの仰角 °)
     "bun_wisps": 5,  # お団子からはねた毛
+    "back_length": 0.0,  # 下ろした後ろ髪の長さ(0 でまとめ髪・1 で肩・2 で肩甲骨・3 で背中の真ん中)
+    "back_locks": 24,  # 下ろした後ろ髪の房の数
 }
 HAIR_COLOR = (0.55, 0.45, 0.33, 1)
 FRONT = -math.pi / 2  # 正面(-Y)の向き
 # 揺れ: 1 コマを分ける回数・遅れ(速さを残す割合)・休んだ形へ戻る強さ(1 回ごと。部品ごと)。重力は休んだ形に入って
 # いるので足さない(足すと、横へ出たお団子が 1cm ほど垂れた)
 SUBSTEPS, KEEP, FPS = 4, 0.88, 24
-SPRING = {"bang": 0.3, "side": 0.1, "wisp": 0.06, "nape": 0.08, "bun": 0.25}
-# 鎖の関節が頭・顔に近づける距離の下限(休んだ形での離れがこれより近ければ、その離れ)
+SPRING = {"bang": 0.3, "side": 0.1, "wisp": 0.06, "nape": 0.08, "bun": 0.25, "back": 0.08}
+# 鎖の関節が体に近づける距離の下限(休んだ形での離れがこれより近ければ、その離れ)
 CLEAR = 0.004
+# 垂らす: 繰り返す回数・1 回に落ちる距離(m)・速さを残す割合・曲がりをならす強さ・体から離す距離
+DRAPE_STEPS, DRAPE_FALL, DRAPE_KEEP, DRAPE_BEND, DRAPE_CLEAR = 300, 0.0006, 0.9, 0.12, 0.006
 
 
 class Head:
@@ -128,6 +132,40 @@ class Head:
         return pts, outs
 
 
+    def drape(self, path: list, fixed: int, clear: float = DRAPE_CLEAR) -> list:
+        """
+        道すじ(点の並び)の先 fixed 個を留めて、残りを重力で垂らし、体(頭・肩・背中・胸)に当てて落ち着かせる。
+        長さは保ち、曲がりは少しならす(房が折れないように)。
+        """
+        p = np.array(path, dtype=float)
+        rest = np.linalg.norm(np.diff(p, axis=0), axis=1)
+        prev = p.copy()
+        for _ in range(DRAPE_STEPS):
+            vel = (p - prev) * DRAPE_KEEP
+            prev = p.copy()
+            p[fixed:] += vel[fixed:]
+            p[fixed:, 2] -= DRAPE_FALL
+            for _ in range(3):
+                for i in range(max(fixed, 1), len(p)):
+                    d = p[i] - p[i - 1]
+                    p[i] = p[i - 1] + d / max(np.linalg.norm(d), 1e-9) * rest[i - 1]
+            p[fixed:-1] += DRAPE_BEND * ((p[fixed - 1:-2] + p[fixed + 1:]) / 2 - p[fixed:-1])
+            for i in range(fixed, len(p)):
+                hit = self.bvh.find_nearest(Vector(p[i]))
+                if hit[0] is None:
+                    continue
+                n = np.array(hit[1])
+                gap = (p[i] - np.array(hit[0])) @ n
+                if gap < clear:
+                    p[i] += n * (clear - gap)
+        return list(p)
+
+    def outward(self, p: np.ndarray) -> np.ndarray:
+        """点のいちばん近くの体の面の、外向きの法線。"""
+        hit = self.bvh.find_nearest(Vector(p))
+        return np.array(hit[1]) if hit[0] is not None else np.array([0, 1.0, 0])
+
+
 def direction(az: float, el: float) -> np.ndarray:
     return np.array([math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el)])
 
@@ -196,8 +234,14 @@ def cap(head: Head, cfg: dict) -> Part:
     return Part("cap", "cap", outer + inner, faces)
 
 
+def cap_offset(cfg: dict, az: float, el: float) -> float:
+    """頭を覆う髪の、その所の外側の頭皮からの高さ(筋は除く)。上に重ねる房を、殻の上から生やすのに使う。"""
+    r = min(1.0, max(0.0, (math.pi / 2 - el) / max(math.pi / 2 - hairline(cfg, az), 1e-6)))
+    return 0.006 + cfg["volume"] / 1000 * (1 - r) ** 0.6
+
+
 def lock(name: str, kind: str, path: list, outs, width: float, thick: float, ring: int = 8, segments: int = 3) -> Part:
-    """道すじに沿った、平たい・先のとがった房。鎖は道すじを segments 個に分けた点。"""
+    """道すじに沿った、平たい・先のとがった房(根もとは細く始めて、殻との境に段を作らない)。鎖は道すじを segments 個に分けた点。"""
     path = np.array(path)
     n = len(path)
     verts, faces, along = [], [], []
@@ -209,8 +253,9 @@ def lock(name: str, kind: str, path: list, outs, width: float, thick: float, rin
         out = out - tan * (out @ tan)
         out /= np.linalg.norm(out)
         side = np.cross(tan, out)
-        w = width * (1 - t ** 1.6) + 0.0005
-        h = thick * (1 - t ** 1.6) + 0.0005
+        root = 0.4 + 0.6 * min(1.0, t / 0.1)
+        w = width * root * (1 - t ** 1.6) + 0.0005
+        h = thick * root * (1 - t ** 1.6) + 0.0005
         for k in range(ring):
             a = 2 * math.pi * k / ring
             verts.append(path[i] + side * math.cos(a) * w / 2 + out * math.sin(a) * h / 2)
@@ -289,12 +334,22 @@ def build(head: Head, cfg: dict) -> list[Part]:
     for s, side in ((1, "L"), (-1, "R")):
         # 顔の横の房: こめかみから。平たい面を前へ向ける(横の面に沿わせると、正面から細い線にしか見えない)
         length = cfg["side_length"]
-        z1 = ear + (head.chin - 0.01 - ear) * min(length, 1.0) + (head.neck - 0.12 - (head.chin - 0.01)) * max(length - 1, 0.0)
+        z1 = ear + (head.chin - 0.01 - ear) * min(length, 1.0)
         for m in range(cfg["side_locks"]):
             az = FRONT + s * math.radians(58 + 8 * m)
             pts, outs = head.hang(az, math.radians(30), az - s * math.radians(10), z1, 18, 0.012, 0.020)
             outs = [(o + fwd * 1.5) / np.linalg.norm(o + fwd * 1.5) for o in outs]
-            parts.append(lock(f"side{side}{m}", "side", pts, outs, 0.028, 0.007))
+            if length > 1:
+                # あごより長い房は、あごから先を足して垂らす(肩・胸に沿う)
+                extra = 0.10 * (length - 1)
+                tail = pts[-1] - pts[-2]
+                tail /= np.linalg.norm(tail)
+                more = max(4, int(extra / 0.012))
+                pts = pts + [pts[-1] + tail * extra * k / more for k in range(1, more + 1)]
+                pts = head.drape(pts, len(pts) - more)
+                ends = [head.outward(q) + fwd * 1.5 for q in pts[-more:]]
+                outs = outs + [o / np.linalg.norm(o) for o in ends]
+            parts.append(lock(f"side{side}{m}", "side", pts, outs, 0.028, 0.007, segments=3 if length <= 1 else 4))
         # 耳の前の後れ毛: 細く、あごのあたりまで
         for m in range(cfg["wisps"]):
             az = FRONT + s * math.radians(70 + 8 * m)
@@ -307,6 +362,36 @@ def build(head: Head, cfg: dict) -> list[Part]:
             az = math.pi / 2 - s * math.radians(35 + 12 * m)
             pts, outs = head.hang(az, math.radians(-25), az, head.neck - 0.01 - 0.01 * m, 10, 0.004, 0.008)
             parts.append(lock(f"nape{side}{m}", "nape", pts, outs, 0.008, 0.003, segments=2))
+    if cfg["back_length"] > 0:
+        parts += back_hair(head, cfg)
+    return parts
+
+
+def back_hair(head: Head, cfg: dict) -> list[Part]:
+    """
+    下ろした後ろ髪: 耳の後ろから後ろを回って房を並べ、頭の高い所(殻の上)から生やして生え際まで頭に沿わせ、そこから
+    まっすぐ下へ足して、重力で垂らす(頭の真ん中より上は留める)。房は少し重ね、となりと体からの離れを変えて重なりの
+    ちらつきを防ぐ。
+    """
+    parts = []
+    count = cfg["back_locks"]
+    z_end = head.neck - 0.10 * cfg["back_length"]
+    for i, da in enumerate(np.linspace(-100, 100, count)):
+        az = math.pi / 2 + math.radians(da)
+        layer = 0.002 * (i % 2)
+        top_el, low_el = math.radians(60), hairline(cfg, az) + math.radians(3)
+        pts = []
+        for k in range(10):
+            el = top_el + (low_el - top_el) * k / 9
+            p, n = head.surface(az, el)
+            pts.append(p + n * (cap_offset(cfg, az, el) + 0.002 + layer))
+        drop = max(0.0, pts[-1][2] - z_end)
+        more = max(4, int(drop / 0.012))
+        pts += [pts[-1] - np.array([0, 0, drop * k / more]) for k in range(1, more + 1)]
+        fixed = sum(1 for q in pts if q[2] > head.center[2])
+        pts = head.drape(pts, max(fixed, 2), clear=DRAPE_CLEAR + layer)
+        outs = [head.outward(q) for q in pts]
+        parts.append(lock(f"back{i}", "back", pts, outs, 0.056, 0.009, segments=4))
     return parts
 
 
@@ -388,8 +473,11 @@ def bake(arm: bpy.types.Object, head: Head, chains: list[dict], actions: list) -
     to_arm = arm.matrix_world.inverted()
     head_rest = arm.matrix_world @ arm.data.bones["head"].matrix_local
     head_rest_inv = head_rest.inverted()
+    torso_rest = arm.matrix_world @ arm.data.bones["torso"].matrix_local
     for c in chains:
         c["in_head"] = np.array([(head_rest_inv @ Vector(p))[:] for p in c["rest"]])
+        # 首より下の関節は、胴に付いた体の面(肩・背中・胸)に当てる
+        c["on_torso"] = [p[2] < head.neck for p in c["rest"]]
         c["len"] = np.linalg.norm(np.diff(c["rest"], axis=0), axis=1)
         clear = []
         for p in c["rest"]:
@@ -409,7 +497,9 @@ def bake(arm: bpy.types.Object, head: Head, chains: list[dict], actions: list) -
             for frame in range(start, end + 1):
                 scene.frame_set(frame)
                 hm = arm.matrix_world @ arm.pose.bones["head"].matrix
-                back = head_rest @ hm.inverted()
+                tm = arm.matrix_world @ arm.pose.bones["torso"].matrix
+                frames = {False: (head_rest @ hm.inverted(), hm @ head_rest_inv),
+                          True: (torso_rest @ tm.inverted(), tm @ torso_rest.inverted())}
                 for c in chains:
                     target = np.array([(hm @ Vector(q))[:] for q in c["in_head"]])
                     p, pr = pos[c["name"]], prev[c["name"]]
@@ -422,11 +512,12 @@ def bake(arm: bpy.types.Object, head: Head, chains: list[dict], actions: list) -
                         for j in range(1, len(p)):
                             d = p[j] - p[j - 1]
                             p[j] = p[j - 1] + d / max(np.linalg.norm(d), 1e-9) * c["len"][j - 1]
-                            # 頭・顔に当たったら押し出す(休んだ姿勢の頭の面で)
-                            q = back @ Vector(p[j])
+                            # 体に当たったら押し出す(休んだ姿勢の体の面で。首より上は頭、下は胴に付けて見る)
+                            to_rest, from_rest = frames[c["on_torso"][j]]
+                            q = to_rest @ Vector(p[j])
                             hit = head.bvh.find_nearest(q)
                             if hit[0] is not None and (q - hit[0]).dot(hit[1]) < c["clear"][j]:
-                                p[j] = np.array(hm @ head_rest_inv @ (hit[0] + hit[1] * c["clear"][j]))
+                                p[j] = np.array(from_rest @ (hit[0] + hit[1] * c["clear"][j]))
                     pos[c["name"]], prev[c["name"]] = p, pr
                 if loop == 1:
                     record[frame] = ({k: v.copy() for k, v in pos.items()}, hm.copy())
@@ -457,12 +548,12 @@ def bake(arm: bpy.types.Object, head: Head, chains: list[dict], actions: list) -
     return {k: round(v, 1) for k, v in sway.items()}
 
 
-def render_views(folder: Path, height: float) -> None:
-    """休んだ姿勢の、頭のまわりの正面・横・後ろ(hair_<向き>.png)。"""
+def render_views(folder: Path, height: float, length: float = 0.0) -> None:
+    """休んだ姿勢の、頭のまわりの正面・横・後ろ(hair_<向き>.png)。下ろした髪が長いほど、下まで写す。"""
     scene = bpy.context.scene
-    cam = _camera(height, 0.34)
+    cam = _camera(height, 0.34 + 0.06 * length)
     for name, deg in (("front", 0), ("side", 90), ("back", 180)):
-        _aim(cam, deg, height, 0.86)
+        _aim(cam, deg, height, 0.86 - 0.03 * length)
         scene.render.filepath = str(folder / f"hair_{name}.png")
         bpy.ops.render.render(write_still=True)
     bpy.data.objects.remove(cam)
@@ -532,7 +623,7 @@ def main() -> None:
     argv = sys.argv[sys.argv.index("--") + 1:]
     folder, cfg, motion = Path(argv[0]), json.loads(Path(argv[1]).read_text(encoding="utf-8")), argv[2]
     cfg = {**DEFAULTS, **cfg}
-    for key in ("bangs", "side_locks", "wisps", "nape_wisps", "buns", "bun_wisps"):
+    for key in ("bangs", "side_locks", "wisps", "nape_wisps", "buns", "bun_wisps", "back_locks"):
         cfg[key] = int(cfg[key])
     bpy.ops.wm.open_mainfile(filepath=str(folder / "model.blend"))
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
@@ -555,7 +646,7 @@ def main() -> None:
         o.hide_render = True
     body.color = (0.82, 0.8, 0.78, 1)
     bpy.context.view_layer.update()
-    render_views(folder, head.height)
+    render_views(folder, head.height, cfg["back_length"])
     preview = bpy.data.actions.get(motion)
     if preview is not None:
         render_motion(folder, arm, preview, head.height)

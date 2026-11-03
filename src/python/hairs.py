@@ -1,7 +1,7 @@
 """
 素体の 3D(スキンヘッドのモデル)に付ける髪の型(scripts/blender/hair_kit.py の設定)。画面で選ぶ型と、数値ごとの範囲。
-画面から来た値は clean で確かめてから Blender に渡す(省いた値は hair_kit.DEFAULTS)。まとめ髪だけ(下ろした髪は、肩・
-背中に沿わせる所がまだ)。
+画面から来た値は clean で確かめてから Blender に渡す(省いた値は hair_kit.DEFAULTS)。下ろした髪(後ろ髪・あごより長い
+顔の横の房)は、Blender で重力で垂らして、肩・背中・胸に沿わせる。
 """
 
 from __future__ import annotations
@@ -19,13 +19,16 @@ FIELDS: dict[str, Field] = {
     "bangs_spread": Field("前髪の広がり", "float", 44.0, 15, 70, 1, "°", hint="正面から左右へ"),
     "bangs_part": Field("分け目", "float", 0.3, 0, 1, 0.05, hint="真ん中の房を短くする割合"),
     "side_locks": Field("顔の横の房", "int", 1, 0, 2, 1, hint="左右の組の数"),
-    "side_length": Field("顔の横の房の長さ", "float", 1.0, 0, 1.5, 0.05, hint="0 で耳の下・1 であご"),
+    "side_length": Field("顔の横の房の長さ", "float", 1.0, 0, 3, 0.05, hint="0 で耳の下・1 であご・2 で胸の上"),
     "wisps": Field("耳の前の後れ毛", "int", 2, 0, 3, 1, hint="左右それぞれ"),
     "nape_wisps": Field("うなじの後れ毛", "int", 1, 0, 3, 1, hint="左右それぞれ"),
     "buns": Field("お団子の数", "int", 1, 0, 2, 1, hint="0 でなし・1 で後ろ・2 で左右の後ろ"),
     "bun_size": Field("お団子の大きさ", "float", 0.5, 0.25, 0.8, 0.05, hint="頭の半径に対する割合"),
     "bun_height": Field("お団子の高さ", "float", 16.0, -20, 60, 1, "°", hint="頭の真ん中からの仰角"),
     "bun_wisps": Field("お団子からはねた毛", "int", 5, 0, 10, 1),
+    "back_length": Field("下ろした後ろ髪の長さ", "float", 0.0, 0, 3, 0.05,
+                         hint="0 でまとめ髪・1 で肩・2 で肩甲骨・3 で背中の真ん中"),
+    "back_locks": Field("下ろした後ろ髪の房の数", "int", 24, 10, 40, 1),
 }
 
 # 画面で選ぶ型(試作で確かめた組み合わせ。docs/model_3d_plan_jp.md の 6b-1 の 6)
@@ -38,6 +41,19 @@ PRESETS: dict[str, dict[str, Any]] = {
     "bun_high": {"label": "高いお団子", "config": {"bun_height": 45.0, "bun_size": 0.45, "nape_wisps": 0}},
     "twin_buns": {"label": "お団子 2 つ", "config": {"buns": 2, "bun_size": 0.4, "bun_height": 25.0, "bun_wisps": 3}},
     "short": {"label": "ショート(まとめ髪なし)", "config": {"buns": 0, "bun_wisps": 0, "wisps": 1, "side_length": 0.6}},
+    "bob": {
+        "label": "ボブ",
+        "config": {"buns": 0, "bun_wisps": 0, "wisps": 0, "nape_wisps": 0, "bangs_part": 0.0, "back_length": 0.3},
+    },
+    "semi_long": {
+        "label": "セミロング",
+        "config": {"buns": 0, "bun_wisps": 0, "wisps": 0, "nape_wisps": 0, "side_length": 1.6, "back_length": 1.5},
+    },
+    "long": {
+        "label": "ロング",
+        "config": {"buns": 0, "bun_wisps": 0, "wisps": 0, "nape_wisps": 0, "bangs_part": 0.1, "side_length": 2.5,
+                   "back_length": 3.0},
+    },
 }
 
 

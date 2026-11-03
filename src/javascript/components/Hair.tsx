@@ -5,7 +5,7 @@ import type { GarmentField } from './Garments'
  * スキンヘッドのモデルに、型から作った髪を付ける欄(Model3D.tsx の中)。型を選び、数値を変えて「髪を付ける」と、手元の
  * Blender で頭に沿って髪(頭を覆う髪・お団子・前髪・顔の横の房・後れ毛)を作り、房とお団子に鎖の骨を入れて動きごとに
  * 揺れを焼き込む(scripts/blender/hair_kit.py。15 秒ほど)。結果は頭のまわりの絵・揺れの GIF と bald/model_rigged.glb
- * (3D の欄で「スキンヘッド+髪」を選ぶと回して見られる)。まとめ髪だけ(下ろした髪は、まだ)。
+ * (3D の欄で「スキンヘッド+髪」を選ぶと回して見られる)。下ろした髪は、重力で垂らして肩・背中に沿わせる。
  */
 
 type Value = number
@@ -39,10 +39,13 @@ const GROUPS: { label: string; keys: string[] }[] = [
   { label: '前髪', keys: ['bangs', 'bangs_length', 'bangs_spread', 'bangs_part'] },
   { label: '顔の横・後れ毛', keys: ['side_locks', 'side_length', 'wisps', 'nape_wisps'] },
   { label: 'お団子', keys: ['buns', 'bun_size', 'bun_height', 'bun_wisps'] },
+  { label: '下ろした後ろ髪', keys: ['back_length', 'back_locks'] },
 ]
 
 // 揺れの大きさを出す部品の名前
-const KIND_LABELS: Record<string, string> = { bang: '前髪', side: '顔の横の房', wisp: '耳の前の後れ毛', nape: 'うなじの後れ毛', bun: 'お団子' }
+const KIND_LABELS: Record<string, string> = {
+  bang: '前髪', side: '顔の横の房', wisp: '耳の前の後れ毛', nape: 'うなじの後れ毛', bun: 'お団子', back: '後ろ髪',
+}
 
 const STILLS = ['bald/hair_front.png', 'bald/hair_side.png', 'bald/hair_back.png', 'bald/hair_motion.gif']
 
@@ -80,7 +83,8 @@ export default function Hair({ options, motions, hair, busy, files, fileUrl, onM
       <h5>髪を付ける(型から)</h5>
       <p className="lora-hint">
         型を選び(数値は変えられます)、「髪を付ける」を押すと、手元の Blender でスキンヘッドの頭に沿って髪を作り、房と
-        お団子に骨を入れて、動きに合わせて揺らします(15 秒ほど。GPU・Anlas は使いません)。まとめ髪だけ作れます。
+        お団子に骨を入れて、動きに合わせて揺らします(15〜30 秒。GPU・Anlas は使いません)。下ろした髪は、重力で垂らして
+        肩・背中に沿わせます。
       </p>
       <div className="fsh-actions">
         <select className="lora-select" value={preset || '*'} disabled={busy} aria-label="髪の型"
