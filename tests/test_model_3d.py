@@ -1125,3 +1125,22 @@ def test_bald_inputs_redraw_the_hair_until_it_is_gone(client: TestClient, tmp_pa
     assert not (out / "model.glb").exists() and "bald/model_clean.glb" in entry["files"]
     res = client.get(f"{url}/file", params={"base_id": nude["id"], "name": "bald/model_clean.glb"})
     assert res.status_code == 200 and res.content == b"clean"
+
+
+def test_clear_strands_removes_a_line_the_first_cut_out_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import anime_seg
+
+    a = np.full((60, 60, 3), 220, np.uint8)
+    a[20:60, 10:30] = (250, 230, 220)  # 体
+    a[5:50, 45] = (30, 30, 30)  # 髪の房の線
+    body = np.zeros((60, 60), np.float32)
+    body[20:60, 10:30] = 1
+    # 描き直したままの絵では、線と体のあいだも人物に含める
+    first = body.copy()
+    first[5:50, 30:47] = 1
+    cuts = iter([first, body])
+    monkeypatch.setattr(anime_seg, "person_mask", lambda _image: next(cuts))
+    mask = np.zeros((60, 60), dtype=bool)
+    mask[0:55, 25:55] = True
+    out = np.asarray(model_3d.clear_strands(Image.fromarray(a), mask))
+    assert (out[5:50, 45] == 220).all() and (out[30, 15] == (250, 230, 220)).all()

@@ -570,6 +570,9 @@ def clear_strands(image: Image.Image, mask: np.ndarray) -> Image.Image:
     スキンヘッドに描き直した絵の、描き直した所(mask)に残った髪の房の細い線を、背景の色で消す。人物の切り出しを
     開いて(絵の高さの 0.6% の円)細いはみ出しを外し、人物の外・細いはみ出しは背景に、人物から離れた所の背景と違う
     色(濃い線は差 40、まわりの薄い線は差 6)も背景にする。横の房があった所に、細い線が残った(2026-11 矢野栄子)。
+    描き直したままの絵では、人物の切り出しが線と首のあいだを人物に含めて、線が残ることがある(正面の首の横の線が、3D で
+    耳から肩への針金になった): 消したあとの絵で人物を切り出し直し、濃い線だけをもう一度消す(ほかの消し方を繰り返すと、
+    顔の横・首まで消えた。背景との色の差で細い所を消すと、白い顔の輪郭まで消えた)。
     """
     import cv2
 
@@ -591,6 +594,12 @@ def clear_strands(image: Image.Image, mask: np.ndarray) -> Image.Image:
     grown = cv2.dilate(mask.astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
     clear |= grown & (diff > 6) & ~cv2.dilate(thick, np.ones((7, 7), np.uint8)).astype(bool)
     a[clear] = bg
+    person = person_mask(Image.fromarray(a)) > 0.5
+    thick = cv2.morphologyEx(person.astype(np.uint8), cv2.MORPH_OPEN, disc)
+    diff = np.linalg.norm(a.astype(np.float32) - bg, axis=2)
+    line = mask & (diff > 40) & ~cv2.dilate(thick, np.ones((5, 5), np.uint8)).astype(bool)
+    # 線の縁のにじみも一緒に
+    a[cv2.dilate(line.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool) & mask & (diff > 6)] = bg
     return Image.fromarray(a)
 
 
