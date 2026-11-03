@@ -1,6 +1,6 @@
 """
-素体の 3D に着せる服の型紙(scripts/blender/garment_skirt.py の設定)。画面で選ぶ型(よく使う組み合わせ)と、
-数値ごとの範囲。画面から来た値は clean で確かめてから Blender に渡す(省いた値は garment_skirt.DEFAULTS)。
+素体の 3D に着せる服の型紙(scripts/blender/garment_skirt.py・garment_top.py の設定)。画面で選ぶ型(よく使う
+組み合わせ)と、数値ごとの範囲。画面から来た値は clean で確かめてから Blender に渡す(省いた値は garment_*.DEFAULTS)。
 """
 
 from __future__ import annotations
@@ -64,8 +64,37 @@ SKIRT_PRESETS: dict[str, dict[str, Any]] = {
     "long": {"label": "ロング", "config": {"length": 0.92, "flare": 1.35, "ease": 8}},
 }
 
+# 上の服の数値(garment_top.DEFAULTS の名前)
+TOP_FIELDS: dict[str, Field] = {
+    "length": Field("丈", "float", 1.0, 0.3, 1.3, 0.05, hint="0 でウエスト・1 で腰"),
+    "ease": Field("ゆとり", "float", 8, 0, 30, 1, "mm"),
+    "bridge": Field("胸の下を渡す広さ", "int", None, 10, 100, 5, optional=True,
+                    hint="空にすると胸から真っすぐ落ちる。小さいほど体に沿う"),
+    "bending": Field("布の硬さ", "float", 2.0, 0.5, 10, 0.5, hint="曲がりにくさ"),
+    "sleeve": Field("袖の長さ", "float", 0.5, 0, 2, 0.05, hint="0 で袖なし・1 で肘・2 で手首"),
+    "sleeve_ease": Field("袖のゆとり", "float", 12, 0, 30, 1, "mm"),
+    "sleeve_flare": Field("袖口の広がり", "float", 1.15, 1.0, 2.0, 0.05, hint="袖口の周り ÷ 付け根の周り"),
+    "neck_width": Field("襟ぐりの幅", "float", 1.5, 0, 6, 0.5, "cm", hint="首からの離れ"),
+    "neck_front": Field("襟ぐりの前の深さ", "float", 6, 0, 15, 0.5, "cm"),
+    "neck_back": Field("襟ぐりの後ろの深さ", "float", 2, 0, 10, 0.5, "cm"),
+}
+
+# 上の服の型: 形(試作で確かめた 3 つ)× 袖
+_TOP_FITS = {
+    "loose": ("ゆったり", {"ease": 8}),
+    "fitted": ("すっきり", {"bridge": 60, "ease": 5}),
+    "tight": ("タイト", {"bridge": 25, "ease": 3, "sleeve_ease": 6, "sleeve_flare": 1.0, "bending": 4.0}),
+}
+_TOP_SLEEVES = {"short": ("半袖", 0.5), "none": ("袖なし", 0.0), "long": ("長袖", 2.0)}
+TOP_PRESETS: dict[str, dict[str, Any]] = {
+    f"{fit}_{sleeve}": {"label": f"{fit_label}・{sleeve_label}", "config": {**fit_config, "sleeve": length}}
+    for fit, (fit_label, fit_config) in _TOP_FITS.items()
+    for sleeve, (sleeve_label, length) in _TOP_SLEEVES.items()
+}
+
 KINDS: dict[str, tuple[str, dict[str, Field], dict[str, dict[str, Any]]]] = {
     "skirt": ("スカート", SKIRT_FIELDS, SKIRT_PRESETS),
+    "top": ("上の服", TOP_FIELDS, TOP_PRESETS),
 }
 
 

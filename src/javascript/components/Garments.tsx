@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 
 /**
- * 素体の 3D に服を着せる欄(Model3D.tsx の中)。型紙の型を選び、数値を変えて「着せる」と、手元の Blender で布として着せて
- * 骨に付ける(scripts/blender/garment_skirt.py・dress_model.py。1 着 1〜2 分)。結果は着せた姿の静止画・動きの GIF と
- * model_dressed.glb(3D の欄で「服を着た姿」を選ぶと回して見られる)。今はスカートだけ。
+ * 素体の 3D に服を着せる欄(Model3D.tsx の中)。服の種類(スカート・上の服)と型を選び、数値を変えて「着せる」と、手元の
+ * Blender で布として着せて骨に付ける(scripts/blender/garment_skirt.py・garment_top.py・dress_model.py。1 着 1〜2 分)。
+ * 結果は着せた姿の静止画・動きの GIF と model_dressed.glb(3D の欄で「服を着た姿」を選ぶと回して見られる)。1 度に 1 着。
  */
 
 type Value = number | boolean | null
@@ -36,6 +36,7 @@ export interface DressedItem {
   pattern_hem_cm?: number
   inside_body?: number
   seam_gap_mm?: number
+  seam_joined?: number
   bones?: Record<string, number>
 }
 
@@ -51,15 +52,15 @@ interface Props {
   onDress: (body: Record<string, unknown>) => void
 }
 
-// 数値をまとめて出す(どの値がどこに効くか分かるように)
+// 数値をまとめて出す(どの値がどこに効くか分かるように。その服に無い値の組は出さない)
 const GROUPS: { label: string; keys: string[] }[] = [
-  { label: '形', keys: ['length', 'flare', 'ease'] },
+  { label: '形', keys: ['length', 'flare', 'ease', 'bridge', 'bending'] },
   { label: 'ひだ', keys: ['pleats', 'pleat_depth', 'pleat_stitch', 'knife'] },
   { label: 'タック', keys: ['tucks', 'tuck_depth', 'tuck_stitch'] },
   { label: 'マチ', keys: ['gussets', 'gusset_width', 'gusset_height'] },
+  { label: '袖', keys: ['sleeve', 'sleeve_ease', 'sleeve_flare'] },
+  { label: '襟ぐり', keys: ['neck_width', 'neck_front', 'neck_back'] },
 ]
-
-const KIND = 'skirt'
 
 function format(value: Value, field: GarmentField): string {
   if (value === null) return field.hint || '—'
@@ -68,28 +69,33 @@ function format(value: Value, field: GarmentField): string {
 }
 
 export default function Garments({ options, motions, dressed, busy, files, fileUrl, onDress }: Props) {
-  const kind = options[KIND]
-  const presetKeys = Object.keys(kind?.presets ?? {})
-  const [preset, setPreset] = useState(presetKeys[0] ?? '')
+  const kindKeys = Object.keys(options)
+  const [kindKey, setKindKey] = useState(kindKeys[0] ?? '')
+  const kind = options[kindKey]
+  const [preset, setPreset] = useState('')
   const [config, setConfig] = useState<Record<string, Value>>({})
   const [motion, setMotion] = useState('walk')
 
-  function choose(key: string) {
+  function choose(nextKind: string, key: string) {
+    const target = options[nextKind]
+    if (!target) return
+    setKindKey(nextKind)
     setPreset(key)
-    if (!kind) return
-    const defaults = Object.fromEntries(Object.entries(kind.fields).map(([k, f]) => [k, f.default]))
-    setConfig({ ...defaults, ...kind.presets[key]?.config })
+    const defaults = Object.fromEntries(Object.entries(target.fields).map(([k, f]) => [k, f.default]))
+    setConfig({ ...defaults, ...target.presets[key]?.config })
   }
-  // 初めは、最後に着せた型と数値(無ければ最初の型)
+  // 初めは、最後に着せた服の型と数値(無ければ最初の服の最初の型)
   useEffect(() => {
-    const last = dressed?.items.find(item => item.kind === KIND)
-    if (last && kind) {
+    const last = dressed?.items[0]
+    const target = last && options[last.kind]
+    if (last && target) {
+      setKindKey(last.kind)
       setPreset(last.preset ?? '')
-      setConfig(Object.fromEntries(Object.keys(kind.fields).map(k => [k, last.config[k] ?? kind.fields[k].default])))
-    } else if (presetKeys[0]) {
-      choose(presetKeys[0])
+      setConfig(Object.fromEntries(Object.keys(target.fields).map(k => [k, last.config[k] ?? target.fields[k].default])))
+    } else if (kindKeys[0]) {
+      choose(kindKeys[0], Object.keys(options[kindKeys[0]].presets)[0] ?? '')
     }
-  }, [!!kind, dressed?.dressed])
+  }, [kindKeys.length, dressed?.dressed])
 
   if (!kind) return null
   const edited = !!preset && Object.entries(kind.presets[preset]?.config ?? {}).some(([k, v]) => config[k] !== v)
@@ -106,26 +112,35 @@ export default function Garments({ options, motions, dressed, busy, files, fileU
     <div className="m3d-dress">
       <h5>服を着せる(型紙から)</h5>
       <p className="lora-hint">
-        型紙の型を選び(数値は変えられます)、「着せる」を押すと、手元の Blender で体の寸法を測って型紙を作り、布として着せて
-        骨に付けます(1 着 1〜2 分。GPU・Anlas は使いません)。今はスカートだけです。骨を入れ直すと、着せた結果は消えます。
+        服の型を選び(数値は変えられます)、「着せる」を押すと、手元の Blender で体の寸法を測って型紙を作り、布として着せて
+        骨に付けます(1 着 1〜2 分。GPU・Anlas は使いません)。上の服は、腕を上げて着せてから下ろします。1 度に 1 着です
+        (着せ直すと、前の服は脱ぎます)。骨を入れ直すと、着せた結果は消えます。
       </p>
       <div className="fsh-actions">
-        <select className="lora-select" value={preset} disabled={busy} aria-label="服の型" onChange={e => choose(e.target.value)}>
-          {presetKeys.map(key => <option key={key} value={key}>{kind.label}: {kind.presets[key].label}</option>)}
+        <select className="lora-select" value={`${kindKey}/${preset}`} disabled={busy} aria-label="服の型"
+          onChange={e => choose(...(e.target.value.split('/') as [string, string]))}>
+          {!preset && <option value={`${kindKey}/`}>{kind.label}: (数値を決めて着せたもの)</option>}
+          {kindKeys.map(k => (
+            <optgroup key={k} label={options[k].label}>
+              {Object.entries(options[k].presets).map(([key, p]) => (
+                <option key={key} value={`${k}/${key}`}>{options[k].label}: {p.label}</option>
+              ))}
+            </optgroup>
+          ))}
         </select>
         <select className="lora-select" value={motion} disabled={busy} aria-label="着せたあとの確かめの動き"
           onChange={e => setMotion(e.target.value)}>
           {Object.entries(motions).map(([key, label]) => <option key={key} value={key}>確かめ: {label}</option>)}
         </select>
         <button type="button" className="lora-btn" disabled={busy || knifeWithoutPleats}
-          onClick={() => onDress({ motion, garments: [{ kind: KIND, preset: preset || null, config }] })}>
+          onClick={() => onDress({ motion, garments: [{ kind: kindKey, preset: preset || null, config }] })}>
           {files['model_dressed.glb'] ? '着せ直す' : '着せる'}
         </button>
         {edited && <span className="lora-hint">(数値を変えています)</span>}
       </div>
       <details className="m3d-dress-fields">
         <summary>数値を変える</summary>
-        {GROUPS.map(group => (
+        {GROUPS.filter(group => group.keys.some(key => kind.fields[key])).map(group => (
           <fieldset key={group.label} className="m3d-dress-group">
             <legend>{group.label}</legend>
             {group.keys.filter(key => kind.fields[key]).map(key => {
@@ -158,7 +173,8 @@ export default function Garments({ options, motions, dressed, busy, files, fileU
       {item && (
         <ul className="bdb-quality">
           <li className={item.inside_body ? 'bdb-auto--ng' : 'bdb-auto--ok'}>
-            着せたもの: {item.preset && kind.presets[item.preset] ? kind.presets[item.preset].label : kind.label}
+            着せたもの: {options[item.kind]?.label ?? item.kind}
+            {item.preset && options[item.kind]?.presets[item.preset] ? `・${options[item.kind].presets[item.preset].label}` : ''}
             (確かめ: {motions[dressed!.motion] ?? dressed!.motion})
             {item.inside_body ? ` ⚠ 体に食い込んだ点 ${item.inside_body}` : ' ✓ 体への食い込みなし'}
           </li>
@@ -167,6 +183,9 @@ export default function Garments({ options, motions, dressed, busy, files, fileU
               腰回り {item.hip_cm}cm・型紙のウエスト {item.pattern_waist_cm}cm・裾 {item.pattern_hem_cm}cm
               {item.seam_gap_mm != null && `・縫い目のすき間 ${item.seam_gap_mm}mm`}
             </li>
+          )}
+          {item.seam_joined != null && item.seam_joined > 0 && (
+            <li className="lora-hint">袖ぐりで身頃と袖をつないだ点 {item.seam_joined}</li>
           )}
         </ul>
       )}

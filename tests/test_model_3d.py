@@ -976,6 +976,14 @@ def test_garment_configs_are_checked() -> None:
     # 型はどれも、そのまま確かめを通る
     for preset in garments.SKIRT_PRESETS.values():
         assert garments.clean("skirt", preset["config"]) == preset["config"]
+    for preset in garments.TOP_PRESETS.values():
+        assert garments.clean("top", preset["config"]) == preset["config"]
+    # 上の服の型は、形 3 つ × 袖 3 つ
+    assert len(garments.TOP_PRESETS) == 9 and garments.TOP_PRESETS["tight_none"]["config"]["sleeve"] == 0
+    assert garments.clean("top", {"bridge": None, "sleeve": 2}) == {"bridge": None, "sleeve": 2.0}
+    for config, message in (({"sleeve": 2.5}, "袖の長さ"), ({"bridge": 30.5}, "整数"), ({"pleats": 4}, "知らない")):
+        with pytest.raises(garments.GarmentError, match=message):
+            garments.clean("top", config)
     assert garments.clean("skirt", {"pleats": 12.0, "pleat_stitch": None}) == {"pleats": 12, "pleat_stitch": None}
     for config, message in (
         ({"length": 1.5}, "丈"), ({"gores": 4}, "知らない"), ({"pleats": 2.5}, "整数"), ({"ease": None}, "ゆとり"),
@@ -986,6 +994,7 @@ def test_garment_configs_are_checked() -> None:
     with pytest.raises(garments.GarmentError, match="作れない服"):
         garments.clean("coat", {})
     assert "skirt" in garments.options() and garments.options()["skirt"]["fields"]["length"]["max"] == 1.0
+    assert garments.options()["top"]["label"] == "上の服"
 
 
 def test_dress_route(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1017,10 +1026,15 @@ def test_dress_route(client: TestClient, tmp_path: Path, monkeypatch: pytest.Mon
 def test_garment_defaults_match_the_blender_script() -> None:
     import ast
 
-    from python import garments
+    from python import garments, model_3d
 
-    source = (Path(__file__).resolve().parent.parent / "scripts/blender/garment_skirt.py").read_text(encoding="utf-8")
-    node = next(n for n in ast.parse(source).body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "DEFAULTS")
-    defaults = ast.literal_eval(node.value)
-    defaults.pop("gores")
-    assert {k: f.default for k, f in garments.SKIRT_FIELDS.items()} == defaults
+    def defaults(script: str) -> dict:
+        source = (Path(__file__).resolve().parent.parent / "scripts/blender" / script).read_text(encoding="utf-8")
+        node = next(n for n in ast.parse(source).body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "DEFAULTS")
+        return ast.literal_eval(node.value)
+
+    skirt = defaults("garment_skirt.py")
+    skirt.pop("gores")
+    assert {k: f.default for k, f in garments.SKIRT_FIELDS.items()} == skirt
+    assert {k: f.default for k, f in garments.TOP_FIELDS.items()} == defaults("garment_top.py")
+    assert set(garments.KINDS) == set(model_3d.GARMENT_KINDS)
