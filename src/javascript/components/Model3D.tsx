@@ -29,7 +29,7 @@ interface Job {
   preview_weights?: Record<string, number> | null
 }
 
-interface PoseImage { name: string; pose: string; camera: string; style: string; updated: number }
+interface PoseImage { name: string; pose: string; camera: string; style: string; updated: number; model?: 'main' | 'bald' }
 
 interface Check { views: Record<string, number>; score: number; passed: boolean; reasons: string[]; attempts?: number }
 
@@ -63,8 +63,9 @@ interface BaseEntry {
   poses: PoseImage[]
   /** 形状パーツ: 選べる形・保存した強さ・場面ごとの組み合わせ */
   shapes: ShapeInfo
-  /** スキンヘッドのモデルに付けた髪 */
+  /** スキンヘッドのモデルに付けた髪と、着せた服 */
   hair: HairMeta | null
+  bald_garments: DressedMeta | null
 }
 
 interface Model3DInfo {
@@ -147,8 +148,10 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [picking, setPicking] = useState(false)
   // 3D で、服を着た姿(model_dressed.glb)を見るか
   const [dressedView, setDressedView] = useState(false)
-  // スキンヘッドに髪の部品を付けたモデル(bald/model_rigged.glb)を見る
-  const [baldView, setBaldView] = useState(false)
+  // 使うモデル: 髪ありの形(main)か、スキンヘッド+髪(bald。形のフォルダの bald/)。見る・服を着せる・ポーズの絵に使う
+  const [model, setModel] = useState<'main' | 'bald'>('main')
+  // ポーズの絵を、服を着せた形で描くか
+  const [poseDressed, setPoseDressed] = useState(false)
 
   const url = `/api/lora-dataset/character/${characterId}/model-3d`
 
@@ -212,10 +215,18 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const job = entry?.job
   const busy = disabled || job?.status === 'running'
   const meta = entry?.meta
-  const dressedReady = !!entry?.files['model_dressed.glb']
-  const bodySrc = entry?.files['model_rigged.glb'] ? fileUrl('model_rigged.glb') : entry?.files['model_clean.glb'] ? fileUrl('model_clean.glb') : null
-  const baldReady = !!entry?.files['bald/model_rigged.glb']
-  const modelSrc = baldView && baldReady ? fileUrl('bald/model_rigged.glb') : dressedView && dressedReady ? fileUrl('model_dressed.glb') : bodySrc
+  const baldReady = !!entry?.files['bald/model.blend']
+  const using = baldReady ? model : 'main'
+  // 使うモデルのファイルの名前の頭(スキンヘッド+髪は bald/)
+  const prefix = using === 'bald' ? 'bald/' : ''
+  const dressedReady = !!entry?.files[`${prefix}model_dressed.glb`]
+  const bodySrc = entry?.files[`${prefix}model_rigged.glb`] ? fileUrl(`${prefix}model_rigged.glb`)
+    : entry?.files['model_clean.glb'] && using === 'main' ? fileUrl('model_clean.glb') : null
+  const modelSrc = dressedView && dressedReady ? fileUrl(`${prefix}model_dressed.glb`) : bodySrc
+  // 使うモデルのファイル(名前の頭を外したもの。服の欄に渡す)
+  const modelFiles = Object.fromEntries(Object.entries(entry?.files ?? {})
+    .filter(([name]) => (using === 'bald' ? name.startsWith('bald/') : !name.includes('/')))
+    .map(([name, f]) => [name.slice(prefix.length), f]))
   const previewReady = !!entry?.files['shape_preview.glb'] && !!entry?.job?.preview_weights && entry.job.status === 'done'
   const usingPreview = showPreview && previewReady
   const viewerSrc = usingPreview ? fileUrl('shape_preview.glb') : modelSrc
@@ -279,6 +290,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const zoomed = zoom != null ? poses[zoom] : null
   const poseLabel = (p: PoseImage) =>
     `${info?.pose_options.poses[p.pose] ?? p.pose}・${info?.pose_options.cameras[p.camera] ?? p.camera}・${info?.pose_options.styles[p.style] ?? p.style}`
+    + (p.model === 'bald' ? '(スキンヘッド+髪)' : '')
 
   return (
     <details className="bdb-fold" open={open} onToggle={e => { if (e.currentTarget.open !== open) setOpen(e.currentTarget.open) }}>
@@ -402,12 +414,6 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                       服を着た姿
                     </label>
                   )}
-                  {viewing && baldReady && (
-                    <label className="fsh-label" title="スキンヘッドのモデルに、型から作った髪を付けた姿(bald/model_rigged.glb)を見ます">
-                      <input type="checkbox" checked={baldView} onChange={e => { setBaldView(e.target.checked); setPicking(false) }} />
-                      スキンヘッド+髪
-                    </label>
-                  )}
                   {viewing && animations.length > 0 && (
                     <select className="lora-select" value={animation ?? ''} aria-label="再生する動き"
                       onChange={e => setAnimation(e.target.value || null)}>
@@ -440,7 +446,7 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                     )}
                     <Suspense fallback={<p className="lora-hint">読み込んでいます…</p>}>
                       <Model3DViewer key={viewerSrc} src={viewerSrc} animation={animation} onAnimations={setAnimations} shapes={viewerShapes} view={cameraView}
-                        onPick={usingPreview || baldView ? undefined : pickSpot} markers={usingPreview ? [] : smoothSpots} />
+                        onPick={usingPreview || using === 'bald' ? undefined : pickSpot} markers={usingPreview ? [] : smoothSpots} />
                     </Suspense>
                   </div>
                 )}
@@ -472,10 +478,23 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
               </div>
             )}
 
-            {entry.files['bald/model.blend'] && info.hair_options && (
+            {baldReady && (
+              <div className="fsh-actions">
+                <label className="fsh-label" title="見る・服を着せる・ポーズの絵に使うモデル。スキンヘッド+髪では、服を着せてから髪を付け直します(下ろした髪は服の上に垂れます)">
+                  使うモデル
+                  <select className="lora-select" value={using} disabled={busy}
+                    onChange={e => { setModel(e.target.value as 'main' | 'bald'); setPicking(false); setDressedView(false); setPoseDressed(false) }}>
+                    <option value="main">髪ありの形</option>
+                    <option value="bald">スキンヘッド+髪</option>
+                  </select>
+                </label>
+              </div>
+            )}
+
+            {baldReady && info.hair_options && (
               <Hair options={info.hair_options} motions={info.motions} hair={entry.hair} busy={busy} files={entry.files}
                 fileUrl={name => fileUrl(name)}
-                onMake={body => { setBaldView(true); void post('/hair', body, '髪を付け始めました(15 秒ほど)') }} />
+                onMake={body => { setModel('bald'); void post('/hair', body, entry.bald_garments ? '髪を付け始めました(服も着せ直します。2〜3 分)' : '髪を付け始めました(15〜30 秒)') }} />
             )}
 
             {entry.files['model.blend'] && Object.keys(entry.shapes.options).length > 0 && (
@@ -500,10 +519,14 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                 onPreview={spots => { setPicking(false); void startSmoothPreview(spots) }} />
             )}
 
-            {entry.files['model.blend'] && info.garment_options && (
-              <Garments options={info.garment_options} motions={info.motions} dressed={meta?.garments ?? null} busy={busy}
-                files={entry.files} fileUrl={name => fileUrl(name)}
-                onDress={body => { setDressedView(true); void post('/dress', body, '服を着せ始めました(1〜2 分かかります)') }} />
+            {modelFiles['model.blend'] && info.garment_options && (
+              <Garments options={info.garment_options} motions={info.motions}
+                dressed={(using === 'bald' ? entry.bald_garments : meta?.garments) ?? null} busy={busy}
+                files={modelFiles} fileUrl={name => fileUrl(`${prefix}${name}`)}
+                onDress={body => {
+                  setDressedView(true)
+                  void post('/dress', { ...body, model: using }, using === 'bald' ? '服を着せ始めました(着せてから髪を付け直します。2〜3 分)' : '服を着せ始めました(1〜2 分かかります)')
+                }} />
             )}
 
             {entry.files['model.blend'] && (
@@ -559,8 +582,14 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                       {label}
                     </label>
                   ))}
+                  {dressedReady && (
+                    <label className="fsh-label" title="服を着せた形(使うモデルの model_dressed)で描きます">
+                      <input type="checkbox" checked={poseDressed} disabled={busy} onChange={e => setPoseDressed(e.target.checked)} />
+                      服を着た姿で
+                    </label>
+                  )}
                   <button type="button" className="lora-btn" disabled={busy || !cameras.length}
-                    onClick={() => void post('/pose', { pose, cameras, style, ...(shapeSet ? { shape_set: shapeSet } : {}) }, 'ポーズの絵を描いています')}>
+                    onClick={() => void post('/pose', { pose, cameras, style, model: using, dressed: poseDressed && dressedReady, ...(shapeSet ? { shape_set: shapeSet } : {}) }, 'ポーズの絵を描いています')}>
                     ポーズの絵を描く
                   </button>
                 </div>

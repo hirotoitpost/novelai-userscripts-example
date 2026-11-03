@@ -457,7 +457,7 @@ def test_model_3d_job_for_the_assigned_suit_base(client: TestClient, tmp_path: P
     assert client.post(f"{url}/pose", json={"pose": "stand"}).status_code == 422
     (out / "model.blend").write_bytes(b"blend")
 
-    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None) -> list[Path]:  # noqa: ANN001
+    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None, dressed=False) -> list[Path]:  # noqa: ANN001
         client.calls.append(("pose", pose, cameras, style))  # type: ignore[attr-defined]
         (folder_ / "poses").mkdir(exist_ok=True)
         for camera in cameras:
@@ -638,7 +638,7 @@ def test_model_3d_shapes_are_saved_and_used_for_poses(client: TestClient, tmp_pa
     # ポーズの絵: 場面ごとの強さを渡す(省くと保存した強さ)
     rendered: list[dict | None] = []
 
-    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None) -> list[Path]:  # noqa: ANN001
+    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None, dressed=False) -> list[Path]:  # noqa: ANN001
         rendered.append(shape_weights)
         return []
 
@@ -697,7 +697,7 @@ def test_custom_shape_presets_are_shared_checked_and_used(client: TestClient, tm
     assert entry["shapes"]["weights"] == {"repair": 1.0, key: 1.0} and entry["shapes"]["sets"]["陥没"]["nipple_inverted"] == 1.0
     rendered: list[dict | None] = []
 
-    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None) -> list[Path]:  # noqa: ANN001
+    def fake_render(blender: str, folder_: Path, pose: str, cameras: list[str], style: str, shape_weights=None, dressed=False) -> list[Path]:  # noqa: ANN001
         rendered.append(shape_weights)
         return []
 
@@ -1044,7 +1044,7 @@ def test_dress_route(client: TestClient, tmp_path: Path, monkeypatch: pytest.Mon
     # 同じ種類は 1 着まで
     assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt, skirt]}).status_code == 422
     calls: list[tuple] = []
-    monkeypatch.setattr(model_3d, "dress", lambda blender, folder, items, motion: calls.append((folder, items, motion)) or {})
+    monkeypatch.setattr(model_3d, "dress", lambda blender, folder, items, motion, hair=None: calls.append((folder, items, motion)) or {})
     res = client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt], "motion": "cheer"})
     assert res.status_code == 200, res.text
     entry = _wait(client, adult["id"], suit["id"])
@@ -1239,3 +1239,69 @@ def test_bald_model_gets_the_hair(client: TestClient, tmp_path: Path, monkeypatc
     client.post(url, json={"base_id": base["id"], "bald": True})
     _wait(client, character["id"], base["id"])
     assert made[-1] == (out, {"buns": 2}, "twin_buns", "jump")
+
+
+def test_bald_model_is_dressed_and_posed_with_its_hair(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    adult = _character(client, "rumi", is_adult=1, age=28)
+    suit = _base(client, "スーツ")
+    _draw(tmp_path / "outputs/training_data/rumi/body_base", suit["id"], ("front",))
+    url = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    out = tmp_path / f"outputs/training_data/rumi/model_3d/{suit['id']}"
+    bald = out / model_3d.BALD_DIR
+    bald.mkdir(parents=True)
+    (out / "model.blend").write_bytes(b"blend")
+    skirt = {"kind": "skirt", "preset": "pencil_mini", "config": {"length": 0.25}}
+    # スキンヘッドのモデルが無ければ、着せられない・描けない
+    assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt], "model": "bald"}).status_code == 422
+    assert client.post(f"{url}/pose", json={"base_id": suit["id"], "pose": "stand", "model": "bald"}).status_code == 422
+    (bald / "model.blend").write_bytes(b"blend")
+    model_3d.write_meta(bald, {"hair": {"preset": "long", "config": {"buns": 0, "back_length": 3.0}}})
+    dressed: list[tuple] = []
+
+    def fake_dress(blender, folder, items, motion, hair=None):  # noqa: ANN001
+        dressed.append((folder, [i["kind"] for i in items], motion, hair))
+        meta = model_3d.read_meta(folder)
+        meta["garments"] = {"motion": motion, "items": [{**i, "inside_body": 0} for i in items], "dressed": 1.0}
+        model_3d.write_meta(folder, meta)
+        (folder / "model_dressed.blend").write_bytes(b"dressed")
+        return meta["garments"]
+
+    monkeypatch.setattr(model_3d, "dress", fake_dress)
+    # スキンヘッド+髪に着せると、付けてある髪を付け直す
+    res = client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt], "model": "bald", "motion": "cheer"})
+    assert res.status_code == 200, res.text
+    entry = _wait(client, adult["id"], suit["id"])
+    assert entry["job"]["status"] == "done", entry["job"]
+    assert dressed == [(bald, ["skirt"], "cheer", {"buns": 0, "back_length": 3.0})]
+    assert entry["bald_garments"]["items"][0]["kind"] == "skirt" and "bald/model.blend" in entry["files"]
+    # 髪を付け直すと、前に着せた服で着せ直す
+    monkeypatch.setattr(model_3d, "make_hair", lambda *_a, **_k: {})
+    client.post(f"{url}/hair", json={"base_id": suit["id"], "preset": "bob", "config": {"buns": 0, "back_length": 0.3}})
+    assert _wait(client, adult["id"], suit["id"])["job"]["status"] == "done"
+    assert dressed[-1] == (bald, ["skirt"], "cheer", {"buns": 0, "back_length": 0.3})
+
+    posed: list[tuple] = []
+
+    def fake_render(blender, folder, pose, cameras, style, shape_weights=None, dressed=False):  # noqa: ANN001
+        posed.append((folder, dressed))
+        (folder / model_3d.POSE_DIR).mkdir(exist_ok=True)
+        path = folder / model_3d.POSE_DIR / f"{pose}_{cameras[0]}_{style}.png"
+        Image.new("RGB", (4, 4)).save(path)
+        return [path]
+
+    monkeypatch.setattr(model_3d, "render_pose", fake_render)
+    # 服を着せた形が無いモデルでは、服を着た姿で描けない
+    assert client.post(f"{url}/pose", json={"base_id": suit["id"], "pose": "stand", "dressed": True}).status_code == 422
+    res = client.post(f"{url}/pose", json={"base_id": suit["id"], "pose": "stand", "cameras": ["front"], "model": "bald", "dressed": True})
+    assert res.status_code == 200, res.text
+    entry = _wait(client, adult["id"], suit["id"])
+    assert posed == [(bald, True)]
+    assert [(p["name"], p["model"]) for p in entry["poses"]] == [(f"bald/{model_3d.POSE_DIR}/stand_front_shade.png", "bald")]
+    got = client.get(f"{url}/file", params={"base_id": suit["id"], "name": f"bald/{model_3d.POSE_DIR}/stand_front_shade.png"})
+    assert got.status_code == 200
+
+
+def test_render_pose_needs_the_dressed_model_when_asked(tmp_path: Path) -> None:
+    (tmp_path / "model.blend").write_bytes(b"blend")
+    with pytest.raises(model_3d.Model3DPoseError, match="服を着せた"):
+        model_3d.render_pose("blender", tmp_path, "stand", ["front"], dressed=True)

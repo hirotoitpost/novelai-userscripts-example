@@ -60,18 +60,37 @@ CLEAR = 0.004
 DRAPE_STEPS, DRAPE_FALL, DRAPE_KEEP, DRAPE_BEND, DRAPE_CLEAR = 300, 0.0006, 0.9, 0.12, 0.006
 
 
-class Head:
-    """スキンヘッドの頭の目安と、頭の面に当てる道具。"""
+def _world_mesh(obj: bpy.types.Object) -> tuple[np.ndarray, list]:
+    """評価した形(休んだ姿勢)の頂点(世界の座標)と面。"""
+    dg = bpy.context.evaluated_depsgraph_get()
+    ev = obj.evaluated_get(dg)
+    me = ev.to_mesh()
+    mw = np.array(obj.matrix_world)
+    co = np.array([v.co for v in me.vertices]).reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    polys = [tuple(p.vertices) for p in me.polygons]
+    ev.to_mesh_clear()
+    return co, polys
 
-    def __init__(self, body: bpy.types.Object):
-        dg = bpy.context.evaluated_depsgraph_get()
-        ev = body.evaluated_get(dg)
-        me = ev.to_mesh()
-        mw = np.array(body.matrix_world)
-        co = np.array([v.co for v in me.vertices]) @ mw[:3, :3].T + mw[:3, 3]
-        polys = [tuple(p.vertices) for p in me.polygons]
-        ev.to_mesh_clear()
+
+class Head:
+    """
+    スキンヘッドの頭の目安と、頭・体の面に当てる道具。当てるのはいつも体の面で、clothes(着せた服)があれば、その所の
+    服の外までの距離だけ体から離す(need)。服は 1 枚の面で、表裏がそろわない所があり、服の面に直に当てると、近くの
+    面の向きで内へ押し込まれて、房が飛び散った(2026-11 ロング+ブラウス)。
+    """
+
+    def __init__(self, body: bpy.types.Object, clothes: tuple = ()):
+        co, polys = _world_mesh(body)
         self.bvh = BVHTree.FromPolygons([tuple(v) for v in co], polys)
+        self.cloth = None
+        if clothes:
+            verts, faces = [], []
+            for obj in clothes:
+                c, f = _world_mesh(obj)
+                base = len(verts)
+                verts += [tuple(v) for v in c]
+                faces += [tuple(base + i for i in face) for face in f]
+            self.cloth = BVHTree.FromPolygons(verts, faces)
         self.height = float(np.ptp(co[:, 2]))
         zs = np.linspace(0.75 * self.height, 0.95 * self.height, 41)
         widths = []
@@ -132,6 +151,13 @@ class Head:
         return pts, outs
 
 
+    def need(self, at, normal, clear: float) -> float:
+        """体の面の点 at から、体の外へ離す距離: clear か、服があれば服の外までの距離 + clear。"""
+        if self.cloth is None:
+            return clear
+        hit = self.cloth.ray_cast(Vector(at) + Vector(normal) * 0.0005, Vector(normal), 0.08)
+        return clear if hit[0] is None else hit[3] + 0.0005 + clear
+
     def drape(self, path: list, fixed: int, clear: float = DRAPE_CLEAR) -> list:
         """
         道すじ(点の並び)の先 fixed 個を留めて、残りを重力で垂らし、体(頭・肩・背中・胸)に当てて落ち着かせる。
@@ -156,8 +182,9 @@ class Head:
                     continue
                 n = np.array(hit[1])
                 gap = (p[i] - np.array(hit[0])) @ n
-                if gap < clear:
-                    p[i] += n * (clear - gap)
+                need = self.need(hit[0], hit[1], clear)
+                if gap < need:
+                    p[i] += n * (need - gap)
         return list(p)
 
     def outward(self, p: np.ndarray) -> np.ndarray:
@@ -482,7 +509,11 @@ def bake(arm: bpy.types.Object, head: Head, chains: list[dict], actions: list) -
         clear = []
         for p in c["rest"]:
             hit = head.bvh.find_nearest(Vector(p))
-            clear.append(min(CLEAR, max(0.0, (Vector(p) - hit[0]).dot(hit[1]) - 0.001)) if hit[0] else 0.0)
+            if hit[0] is None:
+                clear.append(0.0)
+                continue
+            gap = (Vector(p) - hit[0]).dot(hit[1])
+            clear.append(min(head.need(hit[0], hit[1], CLEAR), max(0.0, gap - 0.001)))
         c["clear"] = clear
         c["rel"] = [arm.data.bones[b].parent.matrix_local.inverted() @ arm.data.bones[b].matrix_local for b in c["bones"]]
     dt_keep = KEEP
@@ -619,37 +650,62 @@ def remove_old(arm: bpy.types.Object) -> None:
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
-def main() -> None:
-    argv = sys.argv[sys.argv.index("--") + 1:]
-    folder, cfg, motion = Path(argv[0]), json.loads(Path(argv[1]).read_text(encoding="utf-8")), argv[2]
+def attach(arm: bpy.types.Object, body: bpy.types.Object, cfg: dict, clothes: tuple = ()) -> tuple[Head, dict]:
+    """
+    前に付けた髪を消し、cfg の髪を作って骨に付け、全部の動きに揺れを焼き込む(main と dress_model.py から使う)。
+    clothes(着せた服)があれば、下ろした髪はその上に垂らし、揺れでも服の外に保つ。頭の目安と結果を返す。
+    """
     cfg = {**DEFAULTS, **cfg}
     for key in ("bangs", "side_locks", "wisps", "nape_wisps", "buns", "bun_wisps", "back_locks"):
         cfg[key] = int(cfg[key])
-    bpy.ops.wm.open_mainfile(filepath=str(folder / "model.blend"))
-    arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
-    body = bpy.data.objects["body"]
     ad = arm.animation_data
     ad.action = None
     remove_old(arm)
     arm.data.pose_position = "REST"
     bpy.context.view_layer.update()
-    head = Head(body)
+    head = Head(body, clothes)
     parts = build(head, cfg)
     hair, chains = assemble(parts, arm)
     arm.data.pose_position = "POSE"
     for pb in arm.pose.bones:
         pb.matrix_basis.identity()
     actions = [s.action for t in ad.nla_tracks for s in t.strips if s.action]
+    # 動きの帯(NLA)を止めて、1 つずつの動きで揺らす(止めないと、全部の帯の動きが重なって頭が大きく動いた)
+    muted = [t.mute for t in ad.nla_tracks]
+    for t in ad.nla_tracks:
+        t.mute = True
     sway = bake(arm, head, chains, actions)
+    for t, m in zip(ad.nla_tracks, muted):
+        t.mute = m
+    return head, {
+        "parts": len(parts), "chains": len(chains), "bones": sum(len(c["bones"]) for c in chains),
+        "faces": len(hair.data.polygons), "motions": len(actions), "sway_mm": sway,
+        "head": {"neck_z": round(head.neck, 3), "eye_z": round(head.eye, 3), "radius": round(head.radius, 3)},
+    }
+
+
+def main() -> None:
+    argv = sys.argv[sys.argv.index("--") + 1:]
+    folder, cfg, motion = Path(argv[0]), json.loads(Path(argv[1]).read_text(encoding="utf-8")), argv[2]
+    bpy.ops.wm.open_mainfile(filepath=str(folder / "model.blend"))
+    arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+    body = bpy.data.objects["body"]
+    head, report = attach(arm, body, cfg)
     hidden = [o for o in bpy.data.objects if o.name.startswith("part_") and not o.hide_render]
     for o in hidden:
         o.hide_render = True
     body.color = (0.82, 0.8, 0.78, 1)
     bpy.context.view_layer.update()
-    render_views(folder, head.height, cfg["back_length"])
+    render_views(folder, head.height, float(cfg.get("back_length", DEFAULTS["back_length"])))
     preview = bpy.data.actions.get(motion)
     if preview is not None:
+        tracks = arm.animation_data.nla_tracks
+        muted = [t.mute for t in tracks]
+        for t in tracks:
+            t.mute = True
         render_motion(folder, arm, preview, head.height)
+        for t, m in zip(tracks, muted):
+            t.mute = m
     for o in hidden:
         o.hide_render = False
     bpy.context.scene.frame_set(1)
@@ -658,11 +714,6 @@ def main() -> None:
         export_animation_mode="NLA_TRACKS", export_morph_normal=True,
     )
     bpy.ops.wm.save_as_mainfile(filepath=str(folder / "model.blend"))
-    report = {
-        "parts": len(parts), "chains": len(chains), "bones": sum(len(c["bones"]) for c in chains),
-        "faces": len(hair.data.polygons), "motions": len(actions), "sway_mm": sway,
-        "head": {"neck_z": round(head.neck, 3), "eye_z": round(head.eye, 3), "radius": round(head.radius, 3)},
-    }
     (folder / "hair.json").write_text(json.dumps(report), encoding="utf-8")
     print("hair", report)
 

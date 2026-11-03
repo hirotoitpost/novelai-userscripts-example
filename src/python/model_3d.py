@@ -65,9 +65,13 @@ BALD_FILES = {
     f"{BALD_DIR}/{name}": f"スキンヘッドの{label}"
     for name, label in (
         ("model_clean.glb", "整えた形(GLB)"), ("model_rigged.glb", "骨と動きの入った形(GLB)"),
+        ("model.blend", "骨の入った Blender のファイル"),
         ("front.png", "正面"), ("side.png", "横(左向き)"), ("back.png", "後ろ"), ("motion.gif", "動きの確かめ"),
         ("hair_front.png", "髪(正面)"), ("hair_side.png", "髪(横)"), ("hair_back.png", "髪(後ろ)"),
         ("hair_motion.gif", "髪の揺れの確かめ"),
+        ("model_dressed.glb", "服と髪を付けた形(GLB・骨と動き入り)"), ("model_dressed.blend", "服と髪を付けた Blender のファイル"),
+        ("dressed_front.png", "服と髪を付けた正面"), ("dressed_side.png", "服と髪を付けた横"),
+        ("dressed_back.png", "服と髪を付けた後ろ"), ("dressed_motion.gif", "服と髪を付けた動きの確かめ"),
     )
 }
 FILES.update(BALD_FILES)
@@ -794,12 +798,14 @@ DRESSED_FILES = ("model_dressed.glb", "model_dressed.blend", "dressed_front.png"
 GARMENT_KINDS = ("skirt", "top")
 
 
-def dress(blender: str, out_dir: Path, garments: list[dict], *, motion: str = "walk", timeout: float = 1800) -> dict:
+def dress(blender: str, out_dir: Path, garments: list[dict], *, motion: str = "walk", hair: dict | None = None,
+          timeout: float = 1800) -> dict:
     """
     骨を入れた形(model.blend)の休んだ姿勢の体に、型紙から作った服を布として着せ、骨に付ける
     (scripts/blender/dress_model.py。スカート garment_skirt.py・上の服 garment_top.py)。garments は [{"kind", "name", "config"}]。
     骨と動き入りの model_dressed.glb・model_dressed.blend と、確かめの静止画・motion の動きの GIF を描き出す。
-    model.blend は書き換えない(骨を入れ直したら、着せ直す)。結果(服ごとの寸法・体への食い込み・付けた骨)を
+    model.blend は書き換えない(骨を入れ直したら、着せ直す)。hair(髪の数値。スキンヘッドのモデル)があれば、服を着せて
+    から髪を付け直す(下ろした髪を服の上に垂らす。hair_kit.attach)。結果(服ごとの寸法・体への食い込み・付けた骨)を
     meta.json の garments に残して返す。
     """
     from . import body_motions
@@ -819,7 +825,7 @@ def dress(blender: str, out_dir: Path, garments: list[dict], *, motion: str = "w
     report_path.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="model3d_dress_") as tmp:
         spec = Path(tmp) / "garments.json"
-        spec.write_text(json.dumps({"joints": joints, "garments": garments,
+        spec.write_text(json.dumps({"joints": joints, "garments": garments, "hair": hair,
                                     "frames": body_motions.MOTIONS[motion].frames}), encoding="utf-8")
         result = subprocess.run(
             [blender, "--background", "--factory-startup", str(out_dir / "model.blend"), "--python", str(_DRESS_SCRIPT),
@@ -837,6 +843,9 @@ def dress(blender: str, out_dir: Path, garments: list[dict], *, motion: str = "w
         shutil.rmtree(frames)
     meta = read_meta(out_dir)
     meta["garments"] = {"motion": motion, "items": report["garments"], "dressed": time.time()}
+    if report.get("hair"):
+        # 服の上に付け直した髪(揺れの大きさなど)
+        meta["garments"]["hair"] = report["hair"]
     write_meta(out_dir, meta)
     return meta["garments"]
 
@@ -862,9 +871,10 @@ def pose_images(out_dir: Path) -> list[dict]:
 
 
 def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], style: str = "shade", *,
-                shape_weights: dict[str, float] | None = None, timeout: float = 600) -> list[Path]:
+                shape_weights: dict[str, float] | None = None, dressed: bool = False, timeout: float = 600) -> list[Path]:
     """
-    骨を入れた形(model.blend)にポーズを当て、カメラごとに参考の絵を描き出す(poses/<ポーズ>_<カメラ>_<種類>.png)。
+    骨を入れた形(model.blend。dressed なら服を着せた model_dressed.blend)にポーズを当て、カメラごとに参考の絵を描き出す
+    (poses/<ポーズ>_<カメラ>_<種類>.png)。
     形状パーツの強さは shape_weights(省くと meta.json の shapes の強さ。場面ごとに選ぶ)。
     描いた絵のパスを返す。
     """
@@ -877,8 +887,10 @@ def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], styl
         raise Model3DPoseError(f"カメラの向きが違います: {', '.join(unknown) or '(なし)'}")
     if style not in body_poses.STYLES:
         raise Model3DPoseError(f"絵の種類が違います: {style}")
-    if not (out_dir / "model.blend").is_file():
-        raise Model3DPoseError("骨を入れた形がありません。先に形を作ってください。")
+    blend = out_dir / ("model_dressed.blend" if dressed else "model.blend")
+    if not blend.is_file():
+        raise Model3DPoseError("服を着せた形がありません。先に服を着せてください。" if dressed
+                               else "骨を入れた形がありません。先に形を作ってください。")
     folder = out_dir / POSE_DIR
     folder.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="model3d_pose_") as tmp:
@@ -889,7 +901,7 @@ def render_pose(blender: str, out_dir: Path, pose: str, cameras: list[str], styl
         pose_path.write_text(json.dumps(sent), encoding="utf-8")
         renders = Path(tmp) / "renders"
         result = subprocess.run(
-            [blender, "--background", str(out_dir / "model.blend"), "--python-exit-code", "1", "--python",
+            [blender, "--background", str(blend), "--python-exit-code", "1", "--python",
              str(_POSE_SCRIPT), "--", str(pose_path), str(renders), style],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
             creationflags=NO_WINDOW,
