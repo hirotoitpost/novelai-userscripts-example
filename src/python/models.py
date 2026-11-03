@@ -456,6 +456,9 @@ class Model3DRequest(BaseModel):
     motion: str = Field("wave", description="骨を入れたあと、確かめの GIF に描き出す動き(body_motions.MOTIONS)")
     featureless: bool = Field(
         True, description="裸の素体のモデルで、正面・横の絵の乳首・乳輪だけを描き直した乳首なしの写しを 3D に送る(Anlas を使う)")
+    bald: bool = Field(
+        False, description="髪を別の部品にするための、スキンヘッドのモデルを作る(正面・横・後ろの髪だけを描き直した写しを送り、"
+                           "形のフォルダの bald/ に置く。Anlas を使う)")
 
 
 class Model3DPoseRequest(BaseModel):

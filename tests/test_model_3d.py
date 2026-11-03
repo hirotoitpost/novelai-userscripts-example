@@ -90,6 +90,25 @@ def test_silhouette_iou_finds_the_best_shift() -> None:
     assert model_3d.silhouette_iou(a, np.zeros((10, 10), bool)) == 0.0
 
 
+def test_check_compares_with_the_given_references(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import anime_seg
+
+    _draw(tmp_path, 3, ("front",))
+    reference = tmp_path / "bald_front.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(reference)
+    seen: list[tuple] = []
+    monkeypatch.setattr(anime_seg, "person_mask", lambda image: seen.append(image.getpixel((0, 0))) or np.ones((8, 8), np.float32))
+    still = np.full((8, 8, 4), 255, np.uint8)
+    Image.fromarray(still).save(tmp_path / "front.png")
+    model_3d.check(tmp_path, 3, tmp_path, references={"front": reference})
+    assert seen == [(1, 2, 3)]
+
+
+def test_bald_prompt_drops_the_hair_tags() -> None:
+    prompt = model_3d.bald_prompt("1girl, brown hair, hair bun, long hair, bangs, sidelocks, green eyes, solo")
+    assert prompt == f"{model_3d.BALD_TAG}, 1girl, green eyes, solo"
+
+
 def test_check_compares_each_view(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from python import anime_seg
 
@@ -119,7 +138,7 @@ def test_make_retries_with_another_seed_and_keeps_the_best(tmp_path: Path, monke
         (out / "meta.json").write_text(json.dumps({"seed": seed}), encoding="utf-8")
         return {}
 
-    def fake_clean_and_check(blender: str, folder: Path, base_id: int, out: Path, height: float) -> dict:
+    def fake_clean_and_check(blender: str, folder: Path, base_id: int, out: Path, height: float, references=None) -> dict:  # noqa: ANN001
         score = next(scores)
         result = {"views": {"left": score}, "score": score, "passed": False, "reasons": ["横"]}
         model_3d._record_check(out, result)
@@ -130,6 +149,10 @@ def test_make_retries_with_another_seed_and_keeps_the_best(tmp_path: Path, monke
     out = tmp_path / "out"
     (out).mkdir()
     (out / "model_clean.glb").write_bytes(b"old")  # 前に作った形の残り
+    # スキンヘッドの写しとモデルは、作り直しても残す
+    (out / "bald_front.png").write_bytes(b"bald")
+    (out / "bald").mkdir()
+    (out / "bald" / "model_clean.glb").write_bytes(b"bald")
     # 前の形で選んでいた形状パーツ(強さ・組み合わせ・乳首の位置のずらし)
     shapes = {"weights": {"nipple_puffy": 1.0}, "sets": {"水着": {"nipple_small": 1.0}}, "offsets": {"L": [3, -2]}}
     model_3d.write_meta(out, {"seed": 1, "shapes": shapes})
@@ -140,6 +163,7 @@ def test_make_retries_with_another_seed_and_keeps_the_best(tmp_path: Path, monke
     assert meta["check"]["score"] == 0.6 and not (out / "model_clean.glb").exists() and not (out / "_tries").exists()
     # 作り直しても、形状パーツの選択は引き継ぐ
     assert meta["shapes"] == shapes and model_3d.read_meta(out)["shapes"] == shapes
+    assert (out / "bald_front.png").is_file() and (out / "bald" / "model_clean.glb").is_file()
 
 
 def test_still_to_world_inverts_the_front_camera() -> None:
@@ -316,6 +340,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     rig_nipples: list[dict | None] = []
     # 乳首なしの写し: 乳首・乳輪が見つからないことにする(元の絵を写す。NovelAI は呼ばない)
     monkeypatch.setattr(model_3d, "areola_mask", lambda image, outline=False: None)
+    # スキンヘッドの写し: 髪が見つからないことにする(元の絵を写す)
+    monkeypatch.setattr(model_3d, "hair_mask", lambda image: None)
     # 乳首の位置は、絵を読まずに決まった値を返す(人物の切り出し・骨格推定のモデルを使わない)
     monkeypatch.setattr(model_3d, "nipple_hint", lambda folder, base_id: {"L": [0.06, 0.7], "R": [-0.06, 0.7], "score": 2.0, "source": "x"})
 
@@ -1047,3 +1073,55 @@ def test_garment_defaults_match_the_blender_script() -> None:
     assert {k: f.default for k, f in garments.SKIRT_FIELDS.items()} == skirt
     assert {k: f.default for k, f in garments.TOP_FIELDS.items()} == defaults("garment_top.py")
     assert set(garments.KINDS) == set(model_3d.GARMENT_KINDS)
+
+
+def test_bald_inputs_redraw_the_hair_until_it_is_gone(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    adult = _character(client, "rumi", is_adult=1, age=28)
+    nude = _base(client, "裸", kind="nude")
+    folder = tmp_path / "outputs/training_data/rumi/body_base_r18"
+    _draw(folder, nude["id"], ("front", "side", "back"))
+    mask = np.zeros((8, 8), dtype=bool)
+    mask[0:2, 2:6] = True
+    monkeypatch.setattr(model_3d, "hair_mask", lambda image: mask)
+    # 正面の 1 回目は髪が残り、シードを変えて描き直す
+    left = iter([0.05, 0.0, 0.0, 0.0])
+    monkeypatch.setattr(model_3d, "hair_left", lambda image, m: next(left))
+    monkeypatch.setattr(model_3d, "clear_strands", lambda image, m: image)
+    checked: list[dict | None] = []
+    monkeypatch.setattr(model_3d, "check", lambda *_a, references=None, **_k: checked.append(references) or {
+        "views": {}, "score": 1.0, "passed": True, "reasons": []})
+    drawn: list[tuple[str, str, int]] = []
+
+    async def fake_draw(client_, prompt, size, cfg, seed=None, inpaint=None):  # noqa: ANN001
+        drawn.append((prompt, cfg.negative_prompt, seed))
+        return Image.new("RGB", size, (0, 0, 255))
+
+    monkeypatch.setattr(lora_routes, "generate_one", fake_draw)
+    url = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    # 写しだけを描く(3D のサーバーは使わない)
+    monkeypatch.setattr(model3d_remote, "configured", lambda: False)
+    res = client.post(f"{url}/bald-inputs", json={"base_id": nude["id"]})
+    assert res.status_code == 200, res.text
+    out = tmp_path / f"outputs/training_data/rumi/model_3d_r18/{nude['id']}"
+    assert len(drawn) == 4 and drawn[0][2] + 1 == drawn[1][2]
+    prompt, negative, _ = drawn[0]
+    assert prompt.startswith(model_3d.BALD_TAG)
+    tags = [t.strip() for t in prompt.split(",")]
+    assert "brown hair" not in tags and "featureless breasts" in tags
+    assert "bob cut" in negative and "areolae" in negative
+    front = Image.open(out / "bald_front.png")
+    assert front.getpixel((3, 0)) == (0, 0, 255) and front.getpixel((3, 5)) == (200, 200, 200)
+    entry = next(b for b in res.json()["bases"] if b["base_id"] == nude["id"])
+    assert {"bald_front.png", "bald_left.png", "bald_back.png"} <= set(entry["files"])
+
+    # スキンヘッドのモデルは、写しを使い回して(Anlas を使わない)bald/ に作り、写しと影絵を比べる
+    monkeypatch.setattr(model3d_remote, "configured", lambda: True)
+    assert client.post(url, json={"base_id": nude["id"], "bald": True}).status_code == 200
+    entry = _wait(client, adult["id"], nude["id"])
+    assert entry["job"]["status"] == "done", entry["job"]
+    sent = {view: out / f"bald_{view}.png" for view in ("front", "left", "back")}
+    assert client.sent_inputs[-1] == sent and checked[-1] == sent and len(drawn) == 4  # type: ignore[attr-defined]
+    assert (out / "bald" / "model_clean.glb").is_file() and (out / "bald" / "model_rigged.glb").is_file()
+    assert not (out / "model.glb").exists() and "bald/model_clean.glb" in entry["files"]
+    res = client.get(f"{url}/file", params={"base_id": nude["id"], "name": "bald/model_clean.glb"})
+    assert res.status_code == 200 and res.content == b"clean"

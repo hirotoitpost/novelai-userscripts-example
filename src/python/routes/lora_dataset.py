@@ -2002,17 +2002,70 @@ async def _featureless_inputs(character: dict, base: dict, folder: Path, out: Pa
     return result
 
 
-@router.post("/character/{character_id}/model-3d")
-async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDep) -> dict[str, Any]:
+# スキンヘッドの写しを描き直す回数(まだ髪が残っていれば、シードを変えて描き直す)
+_BALD_TRIES = 4
+
+
+async def _bald_inputs(character: dict, base: dict, folder: Path, out: Path, client: AsyncNovelAI,
+                       featureless: dict[str, Path] | None = None) -> dict[str, Path]:
     """
-    素体の正面・横・後ろの絵から、リモートの GPU の Hunyuan3D-2mv で 3D の形を作る(model_3d.py)。1体に数分かかるので、
-    仕事を切り離してすぐ返す。状態は GET .../model-3d で見る。裸の素体は、裸の素体を当てられるキャラだけ。
-    裸の素体のモデルでは(featureless)、乳首は部品で付けるので、正面・横の絵の乳首・乳輪だけを描き直した乳首なしの写しを
-    送る(乳首を描いた絵を送ると、陰影が胸の先の穴・平たさになった)。写しは仕事を始める前に描く(Anlas を使う)。
+    3D に送るスキンヘッドの写し(正面・横・後ろ)。髪を別の部品にするため、素体の絵(featureless に乳首なしの写しが
+    あればそれ)の髪の所(model_3d.hair_mask)だけを、髪のタグを除いてスキンヘッドのタグを付けたプロンプトで、NovelAI の
+    インペイントで描き直し、その所だけ元の絵に重ねて、残った房の線を消す。まだ髪が残っていれば(model_3d.hair_left)
+    シードを変えて _BALD_TRIES 回まで描き直す。写しは out/bald_<向き>.png に残し、元の絵が新しくなるまで使い回す。
+    髪が見つからなければ元の絵を写す。1 枚ぶんの Anlas を、描き直した回ごとに使う。
     """
-    if req.motion not in body_motions.MOTIONS:
-        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
-    character = _load_character(character_id)
+    result: dict[str, Path] = {}
+    options = _options()
+    for name, view in model_3d.BALD_INPUTS.items():
+        part = model_3d.VIEW_PARTS[view]
+        source = (featureless or {}).get(view) or folder / f"{base['id']}_{part}.png"
+        if not source.is_file():
+            continue
+        target = out / name
+        if target.is_file() and target.stat().st_mtime >= source.stat().st_mtime:
+            result[view] = target
+            continue
+        out.mkdir(parents=True, exist_ok=True)
+        image = Image.open(source).convert("RGB")
+        mask = await asyncio.to_thread(model_3d.hair_mask, image)
+        if mask is None:
+            shutil.copyfile(source, target)
+            result[view] = target
+            continue
+        item = body_base.ITEMS[part]
+        prompt = body_base.prompt(character, base, item, options, modest=False)
+        negative = join_tags(body_base.negative(base, item), model_3d.BALD_NEGATIVE)
+        if featureless:
+            prompt = model_3d.featureless_prompt(prompt)
+            negative = join_tags(negative, model_3d.FEATURELESS_NEGATIVE)
+        prompt = model_3d.bald_prompt(prompt)
+        _check_tags(character, prompt, _load_guard(None), True)
+        redraw = _png(Image.fromarray((mask * 255).astype(np.uint8)).convert("RGB"))
+        seed = character.get("seed") if character.get("seed") is not None else 12345
+        best: tuple[float, Image.Image] | None = None
+        for attempt in range(_BALD_TRIES):
+            cfg = GenConfig(
+                output_root=out, model="nai-diffusion-4-5-full", steps=23, scale=5.0,
+                negative_prompt=sheet_negative(character, r18=True, extra=negative), seed=seed + attempt,
+            )
+            params = InpaintParams(image=_png(image), mask=redraw, strength=1.0, seed=seed + attempt)
+            drawn = await generate_one(client, prompt, image.size, cfg, seed=seed + attempt, inpaint=params)
+            drawn = drawn.convert("RGB").resize(image.size) if drawn.size != image.size else drawn.convert("RGB")
+            merged = Image.fromarray(np.where(mask[..., None], np.asarray(drawn), np.asarray(image)).astype(np.uint8))
+            left = await asyncio.to_thread(model_3d.hair_left, merged, mask)
+            if best is None or left < best[0]:
+                best = (left, merged)
+            if left <= model_3d.BALD_HAIR_LEFT:
+                break
+        cleared = await asyncio.to_thread(model_3d.clear_strands, best[1], mask)
+        cleared.save(target, "PNG")
+        result[view] = target
+    return result
+
+
+def _model_3d_base_for(character: dict, req: Model3DRequest) -> dict:
+    """3D を作る素体(省けばキャラに当てた素体)。裸の素体は、裸の素体を当てられるキャラだけ。"""
     base_id = req.base_id if req.base_id is not None else character.get("body_base_id")
     if base_id is None:
         raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
@@ -2027,6 +2080,40 @@ async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDe
         reason, _ = _age_checks(character)
         if reason:
             raise HTTPException(status_code=403, detail=reason)
+    return base
+
+
+@router.post("/character/{character_id}/model-3d/bald-inputs")
+async def draw_model_3d_bald_inputs(character_id: int, req: Model3DRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    スキンヘッドの写し(_bald_inputs)だけを描く(3D のサーバーは使わない。Anlas を使う)。作る前に、髪が消えたかを見る用。
+    裸の素体で featureless なら、乳首なしの写しから描く。
+    """
+    character = _load_character(character_id)
+    base = _model_3d_base_for(character, req)
+    folder = _body_dir(character, base, req.root_name)
+    if not model_3d.source_paths(folder, base["id"])["front"].is_file():
+        raise HTTPException(status_code=422, detail="素体の「正面」の絵をまだ描いていません。先に描いてください。")
+    out = _model_3d_dir(character, base, req.root_name)
+    featureless = None
+    if req.featureless and _shape_flags(character, base)["nude"]:
+        featureless = await _featureless_inputs(character, base, folder, out, client)
+    await _bald_inputs(character, base, folder, out, client, featureless)
+    return _model_3d_entries(character, req.root_name)
+
+
+@router.post("/character/{character_id}/model-3d")
+async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    素体の正面・横・後ろの絵から、リモートの GPU の Hunyuan3D-2mv で 3D の形を作る(model_3d.py)。1体に数分かかるので、
+    仕事を切り離してすぐ返す。状態は GET .../model-3d で見る。裸の素体は、裸の素体を当てられるキャラだけ。
+    裸の素体のモデルでは(featureless)、乳首は部品で付けるので、正面・横の絵の乳首・乳輪だけを描き直した乳首なしの写しを
+    送る(乳首を描いた絵を送ると、陰影が胸の先の穴・平たさになった)。写しは仕事を始める前に描く(Anlas を使う)。
+    """
+    if req.motion not in body_motions.MOTIONS:
+        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
+    character = _load_character(character_id)
+    base = _model_3d_base_for(character, req)
     if not model3d_remote.configured():
         raise HTTPException(
             status_code=422,
@@ -2041,19 +2128,25 @@ async def make_model_3d(character_id: int, req: Model3DRequest, client: ClientDe
     inputs = None
     if req.featureless and _shape_flags(character, base)["nude"]:
         inputs = await _featureless_inputs(character, base, folder, out, client)
+    # スキンヘッドのモデル(髪を別の部品にする)は、髪だけを描き直した写しを送り、形のフォルダの bald/ に作る
+    target = out
+    if req.bald:
+        inputs = await _bald_inputs(character, base, folder, out, client, inputs)
+        target = out / model_3d.BALD_DIR
 
     def work(job: dict[str, Any]) -> None:
         def status(remote: str, _seconds: int) -> None:
             job["remote"] = remote
 
         model_3d.make(
-            folder, base["id"], out, blender=blender, height=model_3d.height_of(base), seed=req.seed,
-            attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status, inputs=inputs,
+            folder, base["id"], target, blender=blender, height=model_3d.height_of(base), seed=req.seed,
+            attempts=int(app_settings.get("model_3d.check_attempts")), on_status=status, inputs=inputs, bald=req.bald,
         )
         job["remote"] = "rigging"
+        # 形状パーツは髪ありのモデルで選んだものを当てる
         shapes, weights = _shape_settings(character, base, out)
         model_3d.rig(
-            blender, out, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
+            blender, target, motion=req.motion, hand=model_3d.hand_ratios(folder, base["id"]), shapes=shapes,
             shape_weights=weights, nipples=_nipple_settings(character, base, req.root_name),
         )
 

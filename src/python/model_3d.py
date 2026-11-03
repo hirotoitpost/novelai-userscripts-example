@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -50,9 +51,26 @@ FILES = {
     "dressed_side.png": "服を着せた横",
     "dressed_back.png": "服を着せた後ろ",
     "dressed_motion.gif": "服を着せた動きの確かめ",
+    "bald_front.png": "3D に送った正面(スキンヘッドの写し)",
+    "bald_left.png": "3D に送った横(スキンヘッドの写し)",
+    "bald_back.png": "3D に送った後ろ(スキンヘッドの写し)",
 }
 # 3D に送る乳首なしの写し(裸の素体のモデル)。形を作り直しても消さない(もとの絵が変わるまで使い回す)
 INPUT_FILES = {"input_front.png": "front", "input_left.png": "left"}
+# 3D に送るスキンヘッドの写し(髪を別の部品にするモデル)。乳首なしの写しと同じく使い回す
+BALD_INPUTS = {"bald_front.png": "front", "bald_left.png": "left", "bald_back.png": "back"}
+# スキンヘッドのモデルを置くフォルダ(形のフォルダの中。中身は FILES と同じ名前)
+BALD_DIR = "bald"
+BALD_FILES = {
+    f"{BALD_DIR}/{name}": f"スキンヘッドの{label}"
+    for name, label in (
+        ("model_clean.glb", "整えた形(GLB)"), ("model_rigged.glb", "骨と動きの入った形(GLB)"),
+        ("front.png", "正面"), ("side.png", "横(左向き)"), ("back.png", "後ろ"), ("motion.gif", "動きの確かめ"),
+    )
+}
+FILES.update(BALD_FILES)
+# 形を作り直しても消さないもの
+_KEPT = {*INPUT_FILES, *BALD_INPUTS, *BALD_FILES}
 _CLEAN_SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "blender" / "clean_model.py"
 _RIG_SCRIPT = _CLEAN_SCRIPT.with_name("rig_model.py")
 # Windows で Blender を呼ぶとき窓を開かせない(body_rig.NO_WINDOW と同じ。窓なしのバックエンドから呼ぶと、Blender が窓を開いた)
@@ -158,9 +176,9 @@ def generate(folder: Path, base_id: int, out_dir: Path, *, seed: int = 12345, on
                 side.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(views["left"], "PNG")
                 flipped = True
         out_dir.mkdir(parents=True, exist_ok=True)
-        # 前に作った形から整えたもの・静止画は、新しい形と合わなくなるので消す(乳首なしの写しは残す)
+        # 前に作った形から整えたもの・静止画は、新しい形と合わなくなるので消す(写し・スキンヘッドのモデルは残す)
         for name in FILES:
-            if name not in INPUT_FILES:
+            if name not in _KEPT:
                 (out_dir / name).unlink(missing_ok=True)
         model3d_remote.generate(views, out_dir / "model.glb", seed=seed, on_status=on_status)
     meta = {
@@ -244,14 +262,16 @@ def silhouette_iou(a: np.ndarray, b: np.ndarray) -> float:
     return best
 
 
-def check(folder: Path, base_id: int, out_dir: Path, *, side_flipped: bool = False) -> dict:
+def check(folder: Path, base_id: int, out_dir: Path, *, side_flipped: bool = False,
+          references: dict[str, Path] | None = None) -> dict:
     """
     整えた形の静止画(clean が描いた front・side・back。背景は透明)の影絵を、素体の同じ向きの絵の影絵(anime_seg で
     人を切り出す)と比べる。向きごとの重なり(IoU)と、その平均(score)を返す。描いていない向きは比べない。
+    references(向き → 絵)があれば、その向きはその絵と比べる(スキンヘッドの写し。元の絵とは頭の影絵が違う)。
     """
     from .anime_seg import person_mask
 
-    sources = source_paths(folder, base_id)
+    sources = {**source_paths(folder, base_id), **(references or {})}
     views: dict[str, float] = {}
     for still, view in _STILLS.items():
         render = out_dir / still
@@ -276,19 +296,20 @@ def _record_check(out_dir: Path, result: dict) -> None:
     write_meta(out_dir, meta)
 
 
-def clean_and_check(blender: str, folder: Path, base_id: int, out_dir: Path, height: float) -> dict:
+def clean_and_check(blender: str, folder: Path, base_id: int, out_dir: Path, height: float,
+                    references: dict[str, Path] | None = None) -> dict:
     """整えて(clean)、影絵を比べ(check)、結果を meta.json に残す。チェックの結果を返す。"""
     clean(blender, out_dir, height)
     meta = read_meta(out_dir)
-    result = check(folder, base_id, out_dir, side_flipped=bool(meta.get("side_flipped")))
+    result = check(folder, base_id, out_dir, side_flipped=bool(meta.get("side_flipped")), references=references)
     _record_check(out_dir, result)
     return result
 
 
 def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: float, seed: int = 12345,
-         attempts: int = 1, on_status=None, inputs: dict[str, Path] | None = None) -> dict:
+         attempts: int = 1, on_status=None, inputs: dict[str, Path] | None = None, bald: bool = False) -> dict:
     """
-    形を作り(generate)、整え、影絵を比べる。合わなければシードを変えて作り直す(最初の1回も含めて attempts 回まで)。
+    形を作り(generate)、整え、影絵を比べる。bald(inputs がスキンヘッドの写し)なら、影絵も写しと比べる。合わなければシードを変えて作り直す(最初の1回も含めて attempts 回まで)。
     いちばん重なりのよい回の形を out_dir に残し、meta.json の check に結果(作った回数も)を書く。前の形で選んでいた
     形状パーツ(meta.json の shapes: 強さ・場面ごとの組み合わせ・乳首の位置のずらし)は、新しい形にも引き継ぐ。
     """
@@ -304,7 +325,7 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
             generate(folder, base_id, work, seed=seed + attempt * _SEED_STEP, on_status=on_status, inputs=inputs)
             if on_status is not None:
                 on_status("cleaning", 0)
-            result = clean_and_check(blender, folder, base_id, work, height)
+            result = clean_and_check(blender, folder, base_id, work, height, references=inputs if bald else None)
             if best is None or result["score"] > best[0]:
                 best = (result["score"], work)
             if result["passed"]:
@@ -316,7 +337,7 @@ def make(folder: Path, base_id: int, out_dir: Path, *, blender: str, height: flo
             meta["shapes"] = kept
         write_meta(chosen, meta)
         for name in FILES:
-            if name in INPUT_FILES:
+            if name in _KEPT:
                 continue
             (out_dir / name).unlink(missing_ok=True)
             if (chosen / name).is_file():
@@ -500,6 +521,77 @@ def featureless_prompt(prompt: str) -> str:
 
 
 FEATURELESS_NEGATIVE = "nipples, areolae, areola, puffy nipples, inverted nipples"
+
+# スキンヘッドの写しのタグ。「bald」だけでは、正面で顔を囲む形の描き直す所に、髪(白・黒のおかっぱ)を描くことが多かった
+# ので、強めて打ち消す(2026-11 矢野栄子。横・後ろは bald だけでも描けた)
+BALD_TAG = "2::bald, shaved head, bald head::"
+BALD_NEGATIVE = "1.5::hair, bangs, bob cut, white hair, black hair::, hair bun, sidelocks, hat, headwear"
+_HAIR_TAG = re.compile(r"hair|bangs|\bbun\b|ponytail|twintail|braid|sidelock|ahoge|hairband|hairclip", re.I)
+# 描き直した所に、まだ髪が残っているとみなす割合(髪と見分けた画素 / 描き直した所)。描けた絵は 0〜1%、
+# 髪を描いた絵は 4.8%、肩に房の先を灰色で描いた絵は 1.6% だった(2026-11 矢野栄子)
+BALD_HAIR_LEFT = 0.01
+
+
+def bald_prompt(prompt: str) -> str:
+    """素体の絵のタグから髪のタグを除き、スキンヘッドのタグを頭に付ける(スキンヘッドの写しを描くとき)。"""
+    tags = [t.strip() for t in prompt.split(",") if t.strip() and not _HAIR_TAG.search(t)]
+    return ", ".join([BALD_TAG, *tags])
+
+
+def hair_mask(image: Image.Image) -> np.ndarray | None:
+    """
+    素体の絵の髪の所(描き直してスキンヘッドの写しにする範囲)。体の部位分け(body_parsing)の髪を人物の中に限り、
+    絵の高さの 1.2% だけ広げる(髪の縁の色を残さない)。髪が見つからなければ None。
+    """
+    import cv2
+
+    from . import body_parsing
+    from .anime_seg import person_mask
+
+    rgb = image.convert("RGB")
+    hair = body_parsing.parse(rgb)["hair"] & (person_mask(rgb) > 0.5)
+    if hair.sum() < 50:
+        return None
+    radius = max(3, int(0.012 * rgb.height))
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    return cv2.dilate(hair.astype(np.uint8), disc).astype(bool)
+
+
+def hair_left(image: Image.Image, mask: np.ndarray) -> float:
+    """描き直した絵の、描き直した所(mask)のうち、まだ髪と見分けられる割合。"""
+    from . import body_parsing
+
+    hair = body_parsing.parse(image.convert("RGB"))["hair"]
+    return float((hair & mask).sum() / max(1, int(mask.sum())))
+
+
+def clear_strands(image: Image.Image, mask: np.ndarray) -> Image.Image:
+    """
+    スキンヘッドに描き直した絵の、描き直した所(mask)に残った髪の房の細い線を、背景の色で消す。人物の切り出しを
+    開いて(絵の高さの 0.6% の円)細いはみ出しを外し、人物の外・細いはみ出しは背景に、人物から離れた所の背景と違う
+    色(濃い線は差 40、まわりの薄い線は差 6)も背景にする。横の房があった所に、細い線が残った(2026-11 矢野栄子)。
+    """
+    import cv2
+
+    from .anime_seg import person_mask
+
+    rgb = image.convert("RGB")
+    a = np.asarray(rgb).copy()
+    edge = np.zeros(mask.shape, dtype=bool)
+    edge[:5] = edge[-5:] = True
+    edge[:, :5] = edge[:, -5:] = True
+    bg = np.median(a[edge], axis=0)
+    person = person_mask(rgb) > 0.5
+    radius = max(3, int(0.006 * rgb.height))
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    thick = cv2.morphologyEx(person.astype(np.uint8), cv2.MORPH_OPEN, disc)
+    diff = np.linalg.norm(a.astype(np.float32) - bg, axis=2)
+    clear = mask & (~person | ~thick.astype(bool))
+    clear |= mask & (diff > 40) & ~cv2.dilate(thick, np.ones((5, 5), np.uint8)).astype(bool)
+    grown = cv2.dilate(mask.astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+    clear |= grown & (diff > 6) & ~cv2.dilate(thick, np.ones((7, 7), np.uint8)).astype(bool)
+    a[clear] = bg
+    return Image.fromarray(a)
 
 
 def hand_ratios(folder: Path, base_id: int) -> dict:
