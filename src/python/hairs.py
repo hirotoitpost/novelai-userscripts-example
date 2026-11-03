@@ -75,17 +75,19 @@ PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-# キャラの見た目のタグ → 型(上のものほど先に見る。まとめ方 → 長さの順)。タグは小文字にして、語の区切りで探す
+# キャラの見た目のタグ → 型(上のものほど先に見る。まとめ方 → 長さの順)。タグは小文字にして、語の区切りで探す。
+# 長さは色が間に入ったタグ(short black hair)も拾う。ハーフアップは後ろを下ろしているので、お団子でなくセミロング
 _TAG_PRESETS: list[tuple[str, str]] = [
     (r"twin ?tails?|pigtails?", "twintails"),
     (r"low ponytail|side ponytail", "low_ponytail"),
     (r"ponytail", "ponytail"),
     (r"double bun|twin buns?|cone hair bun", "twin_buns"),
+    (r"half[- ]?up", "semi_long"),
     (r"\bbuns?\b|updo|chignon", "bun_wisps"),
     (r"bob cut|\bbob\b", "bob"),
-    (r"very long hair|absurdly long hair|long hair", "long"),
-    (r"medium hair|shoulder[- ]length|medium long hair", "semi_long"),
-    (r"short hair|very short hair|pixie cut", "short"),
+    (r"\blong( [a-z]+)? hair", "long"),
+    (r"\bmedium( [a-z]+)? hair|shoulders?[- ]length", "semi_long"),
+    (r"\bshort( [a-z]+)? hair|pixie cut", "short"),
 ]
 # 前髪のタグ → 数値
 _TAG_BANGS: list[tuple[str, dict[str, Any]]] = [
