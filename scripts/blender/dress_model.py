@@ -24,6 +24,7 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import garment_skirt  # noqa: E402
+import garment_sway  # noqa: E402
 import garment_top  # noqa: E402
 
 SIZE = (360, 600)
@@ -213,12 +214,16 @@ def main() -> None:
     report = {"garments": []}
     colors = [(0.25, 0.32, 0.6, 1), (0.6, 0.3, 0.3, 1), (0.3, 0.55, 0.35, 1)]
     worn = []
+    swaying = []
     # 内に着る服から順に着せる(上の服は、先に着せたスカートの外に置き、当たり判定も付ける)
     for n, item in enumerate(sorted(spec["garments"], key=lambda g: LAYERS.get(g["kind"], 0))):
         name = f"garment_{item['name']}"
         if item["kind"] == "skirt":
             obj, info = garment_skirt.build_skirt(body, joints, item.get("config", {}), name=name)
             info["bones"] = transfer_weights(obj, body, arm, SKIRT_BONES)
+            # 裾を揺らす鎖の骨に付け直す(揺れは、全部の服を着せたあとで動きごとに焼き込む)
+            swaying.append(garment_sway.add_chains(arm, obj))
+            info["sway_chains"] = garment_sway.CHAINS
         elif item["kind"] == "top":
             posed = garment_top.raise_arms(arm, joints)
             obj, info = garment_top.build_top(body, posed, item.get("config", {}), name=name, under=tuple(worn))
@@ -243,6 +248,10 @@ def main() -> None:
         obj.color = colors[n % len(colors)]
         worn.append(obj)
         report["garments"].append(info)
+    # スカートの裾の揺れを、動きごとに鎖の骨のキーとして焼き込む
+    actions = [strip.action for track in arm.animation_data.nla_tracks for strip in track.strips if strip.action]
+    for chains in swaying:
+        garment_sway.bake(arm, body, chains, actions)
     # 動きを戻して書き出す(GLB には全部の動き)
     for track in arm.animation_data.nla_tracks:
         track.mute = False
