@@ -1014,6 +1014,8 @@ def test_dress_route(client: TestClient, tmp_path: Path, monkeypatch: pytest.Mon
     bad = {**skirt, "config": {"length": 3}}
     assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [bad]}).status_code == 422
     assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt], "motion": "dance"}).status_code == 422
+    # 同じ種類は 1 着まで
+    assert client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt, skirt]}).status_code == 422
     calls: list[tuple] = []
     monkeypatch.setattr(model_3d, "dress", lambda blender, folder, items, motion: calls.append((folder, items, motion)) or {})
     res = client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt], "motion": "cheer"})
@@ -1021,6 +1023,12 @@ def test_dress_route(client: TestClient, tmp_path: Path, monkeypatch: pytest.Mon
     entry = _wait(client, adult["id"], suit["id"])
     assert entry["job"]["status"] == "done"
     assert calls == [(out, [{"kind": "skirt", "name": "skirt", "preset": "knife_mini", "config": skirt["config"]}], "cheer")]
+    # スカートと上の服は重ねて着せる
+    top = {"kind": "top", "preset": "tight_short", "config": {"bridge": 25, "sleeve": 0.5}}
+    res = client.post(f"{url}/dress", json={"base_id": suit["id"], "garments": [skirt, top]})
+    assert res.status_code == 200, res.text
+    assert _wait(client, adult["id"], suit["id"])["job"]["status"] == "done"
+    assert [item["kind"] for item in calls[-1][1]] == ["skirt", "top"] and calls[-1][1][1]["config"]["sleeve"] == 0.5
 
 
 def test_garment_defaults_match_the_blender_script() -> None:
