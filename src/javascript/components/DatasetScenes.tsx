@@ -72,11 +72,13 @@ interface Props {
   onStateMethod: (value: 'prompt' | 'inpaint') => void
   inpaintStrength: number
   onInpaintStrength: (value: number) => void
+  /** バリエーションで選んでいる候補(「選んだ候補から作る」で、新しいシチュエーションに入れる) */
+  selectedAxes?: Record<Axis, string[]>
   /** 一覧を読んだとき(ページで、選んだものの名前や数を出すため) */
   onLoaded?: (situations: Situation[], states: DatasetState[]) => void
 }
 
-type Editing = { kind: 'situation'; item: Situation | null } | { kind: 'state'; item: DatasetState | null }
+type Editing = { kind: 'situation'; item: Situation | null; draft?: Record<Axis, string[]> } | { kind: 'state'; item: DatasetState | null }
 
 async function send<T>(token: string, method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -148,6 +150,7 @@ export default function DatasetScenes(props: Props) {
   }
 
   const selectedStates = states.filter(s => stateIds.includes(s.id))
+  const draftCount = AXES.reduce((n, a) => n + (props.selectedAxes?.[a.key].length ?? 0), 0)
 
   return (
     <section className="lora-section ds-root">
@@ -163,6 +166,13 @@ export default function DatasetScenes(props: Props) {
           AXES.filter(a => s[a.key].length > 0).map(a => `${a.label}: ${s[a.key].join(' / ')}`).join('\n'),
         ))}
         <button type="button" className="ds-add" onClick={() => setEditing({ kind: 'situation', item: null })} disabled={disabled}>＋ 追加</button>
+        {draftCount > 0 && (
+          <button type="button" className="ds-add" disabled={disabled}
+            onClick={() => setEditing({ kind: 'situation', item: null, draft: props.selectedAxes })}
+            title="下のバリエーションで選んでいる候補(構図・ポーズ・服装・表情・場所)を入れた、新しいシチュエーションを作ります">
+            ＋ 選んだ候補から作る({draftCount})
+          </button>
+        )}
       </div>
 
       <span className="lora-section-label">状態</span>
@@ -260,12 +270,14 @@ function SceneEditor({ token, editing, parts, onClose, onSaved }: {
   const situation = editing.kind === 'situation' ? editing.item : null
   const state = editing.kind === 'state' ? editing.item : null
   const [name, setName] = useState(editing.item?.name ?? '')
+  // 新しく作るときは、バリエーションで選んでいる候補(draft)から始められる
+  const draft = editing.kind === 'situation' ? editing.draft : undefined
   const [axes, setAxes] = useState<Record<Axis, string>>(() => ({
-    framings: lines(situation?.framings ?? []),
-    poses: lines(situation?.poses ?? []),
-    outfits: lines(situation?.outfits ?? []),
-    expressions: lines(situation?.expressions ?? []),
-    locations: lines(situation?.locations ?? []),
+    framings: lines(situation?.framings ?? draft?.framings ?? []),
+    poses: lines(situation?.poses ?? draft?.poses ?? []),
+    outfits: lines(situation?.outfits ?? draft?.outfits ?? []),
+    expressions: lines(situation?.expressions ?? draft?.expressions ?? []),
+    locations: lines(situation?.locations ?? draft?.locations ?? []),
   }))
   const [extra, setExtra] = useState(situation?.extra_tags ?? '')
   const [addTags, setAddTags] = useState(state?.add_tags ?? '')

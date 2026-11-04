@@ -108,6 +108,10 @@ export default function CharacterDataset() {
   const [saveFaces, setSaveFaces] = useLocalStorage('nai_chards_face_crops', false)
   const [sceneLists, setSceneLists] = useState<{ situations: Situation[]; states: DatasetState[] }>({ situations: [], states: [] })
   const [tidying, setTidying] = useState(false)
+  // 整理のとき、書き換えている候補
+  const [renaming, setRenaming] = useState<{ axis: Axis; value: string; text: string } | null>(null)
+  const renamingRef = useRef(renaming)
+  renamingRef.current = renaming
   const [variationNote, setVariationNote] = useState<string | null>(null)
 
   const [rootName, setRootName] = useLocalStorage('nai_chards_root', 'training_data')
@@ -296,6 +300,34 @@ export default function CharacterDataset() {
       applyVariations(await res.json())
     } catch (e) {
       setVariationNote(`消せませんでした: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /** 候補を書き換える(整理のとき)。選んでいた候補なら、書き換えたものを選んだままにする。 */
+  async function renameVariation() {
+    // 確定(Enter)のあとに入力欄が消えて onBlur でもう一度呼ばれるので、ref で 1 回だけにする
+    const editing = renamingRef.current
+    renamingRef.current = null
+    if (!editing) return
+    const { axis, value } = editing
+    const text = editing.text.trim()
+    if (!text || text === value) {
+      setRenaming(null)
+      return
+    }
+    setVariationNote(null)
+    try {
+      const res = await fetch('/api/lora-dataset/variations', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ axis, value, new_value: text }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? `HTTP ${res.status}`)
+      const next = await res.json() as Variations
+      const saved = next[axis].find(v => !defaults[axis].includes(v))
+      applyVariations(next, selected[axis].includes(value) && saved ? { axis, value: saved } : undefined)
+      setRenaming(null)
+    } catch (e) {
+      setVariationNote(`書き換えられませんでした: ${e instanceof Error ? e.message : String(e)}`)
+      setRenaming({ ...editing })
     }
   }
 
@@ -769,6 +801,7 @@ export default function CharacterDataset() {
               onStateIds={setStateIds}
               includePlain={includePlain}
               onIncludePlain={setIncludePlain}
+              selectedAxes={selected}
               onLoaded={(situations, states) => setSceneLists({ situations, states })}
               stateMethod={stateMethod}
               onStateMethod={setStateMethod}
@@ -785,12 +818,12 @@ export default function CharacterDataset() {
                 キーワードを読み込む(プロンプト・チャンク)
               </button>
               <button type="button" className={`lora-btn${tidying ? ' lora-btn--primary' : ''}`} aria-pressed={tidying}
-                onClick={() => setTidying(!tidying)} disabled={isRunning}
-                title="要らない候補を消します(押すと消すモードになり、候補を押すと消えます)">
-                {tidying ? '整理を終える' : '候補を整理(消す)'}
+                onClick={() => { setTidying(!tidying); setRenaming(null) }} disabled={isRunning}
+                title="候補を書き換えたり、要らない候補を消したりします(押すと整理のモードになります)">
+                {tidying ? '整理を終える' : '候補を整理(直す・消す)'}
               </button>
             </div>
-            {tidying && <p className="lora-hint">消したい候補を押してください(確認のあと消えます)。</p>}
+            {tidying && <p className="lora-hint">✎ を押すと書き換えられます(Enter で確定)。✕ を押すと消えます(確認のあと)。</p>}
             {variationNote && <p className="lora-hint" role="status">{variationNote}</p>}
             {AXES.map(axis => (
               <div key={axis.key} className="chards-axis">
@@ -799,26 +832,55 @@ export default function CharacterDataset() {
                   {axis.key === 'outfits' && selected.outfits.length === 0 && <small>(未選択ならキャラシートの普段の服装)</small>}
                 </span>
                 <div className="chards-chips">
-                  {defaults[axis.key].map(value => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`chards-chip${selected[axis.key].includes(value) ? ' chards-chip--on' : ''}${tidying ? ' chards-chip--tidy' : ''}`}
-                      onClick={() => (tidying ? void removeVariation(axis.key, value) : toggle(axis.key, value))}
+                  {defaults[axis.key].map(value => {
+                    const on = selected[axis.key].includes(value) ? ' chards-chip--on' : ''
+                    if (renaming && renaming.axis === axis.key && renaming.value === value) {
+                      return (
+                        <form key={value} className="chards-custom-form" onSubmit={e => { e.preventDefault(); void renameVariation() }}>
+                          <input
+                            className="chards-custom chards-custom--edit"
+                            autoFocus
+                            enterKeyHint="done"
+                            aria-label={`${axis.label}の候補「${value}」を書き換える`}
+                            value={renaming.text}
+                            onChange={e => setRenaming({ ...renaming, text: e.target.value })}
+                            onKeyDown={e => { if (e.key === 'Escape') { renamingRef.current = null; setRenaming(null) } }}
+                            onBlur={() => void renameVariation()}
+                          />
+                        </form>
+                      )
+                    }
+                    if (tidying) {
+                      return (
+                        <span key={value} className={`chards-chip chards-chip--tidy${on}`}>
+                          {value}
+                          <button type="button" className="chards-chip-act" disabled={isRunning}
+                            onClick={() => setRenaming({ axis: axis.key, value, text: value })}
+                            aria-label={`${axis.label}の候補「${value}」を書き換える`}>✎</button>
+                          <button type="button" className="chards-chip-act" disabled={isRunning}
+                            onClick={() => void removeVariation(axis.key, value)}
+                            aria-label={`${axis.label}の候補「${value}」を消す`}>✕</button>
+                        </span>
+                      )
+                    }
+                    return (
+                      <button key={value} type="button" className={`chards-chip${on}`}
+                        onClick={() => toggle(axis.key, value)} disabled={isRunning}>
+                        {value}
+                      </button>
+                    )
+                  })}
+                  {/* スマホの日本語入力では Enter の keydown が key="Unidentified" で来るので、form の送信で足す */}
+                  <form className="chards-custom-form" onSubmit={e => { e.preventDefault(); void addCustom(axis.key) }}>
+                    <input
+                      className="chards-custom"
+                      placeholder="追加…"
+                      enterKeyHint="done"
+                      value={custom[axis.key]}
+                      onChange={e => setCustom({ ...custom, [axis.key]: e.target.value })}
                       disabled={isRunning}
-                      aria-label={tidying ? `${axis.label}の候補「${value}」を消す` : undefined}
-                    >
-                      {value}{tidying && ' ✕'}
-                    </button>
-                  ))}
-                  <input
-                    className="chards-custom"
-                    placeholder="追加…"
-                    value={custom[axis.key]}
-                    onChange={e => setCustom({ ...custom, [axis.key]: e.target.value })}
-                    onKeyDown={e => { if (e.key === 'Enter') void addCustom(axis.key) }}
-                    disabled={isRunning}
-                  />
+                    />
+                  </form>
                 </div>
               </div>
             ))}

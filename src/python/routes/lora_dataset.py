@@ -89,6 +89,7 @@ from ..db import (
     get_guard_profile,
     list_dataset_variations,
     list_guard_profiles,
+    rename_dataset_variation,
     save_guard_profile,
 )
 from ..lora_dataset import (
@@ -123,6 +124,7 @@ from ..models import (
     CharacterDatasetRequest,
     DatasetSituationRequest,
     DatasetStateRequest,
+    DatasetVariationRenameRequest,
     DatasetVariationsAddRequest,
     DatasetVariationsExtractRequest,
     CharacterSheetPromptResponse,
@@ -368,6 +370,24 @@ async def post_variations(req: DatasetVariationsAddRequest) -> dict[str, list[st
         add_dataset_variations(conn, req.axis, values)
     finally:
         conn.close()
+    return _variations()
+
+
+@router.put("/variations")
+async def rename_variation(req: DatasetVariationRenameRequest) -> dict[str, list[str]]:
+    """候補を書き換えて(並びの位置はそのまま)、候補の一覧を返す。"""
+    new_value = clean_value(req.new_value)
+    if not new_value:
+        raise HTTPException(status_code=422, detail="書き換えるキーワードを入れてください。")
+    conn = get_connection()
+    try:
+        result = rename_dataset_variation(conn, req.axis, req.value, new_value)
+    finally:
+        conn.close()
+    if result == "missing":
+        raise HTTPException(status_code=404, detail="variation not found")
+    if result == "exists":
+        raise HTTPException(status_code=409, detail=f"「{new_value}」はもう候補にあります。")
     return _variations()
 
 

@@ -237,6 +237,14 @@ class DatasetVariationsAddRequest(BaseModel):
     values: list[str] = Field(min_length=1, max_length=100)
 
 
+class DatasetVariationRenameRequest(BaseModel):
+    """キャラ別データセットのバリエーションの候補を書き換える(value を new_value に)。"""
+
+    axis: Literal["framings", "poses", "outfits", "expressions", "locations"]
+    value: str
+    new_value: str
+
+
 class DatasetVariationsExtractRequest(BaseModel):
     """プロンプト(画像生成で使ったもの・リバースプロンプトの結果など)から、バリエーションの候補を取り出す。"""
 

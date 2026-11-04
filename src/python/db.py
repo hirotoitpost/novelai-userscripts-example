@@ -3237,6 +3237,19 @@ def delete_dataset_variation(conn: sqlite3.Connection, axis: str, value: str) ->
     return cur.rowcount > 0
 
 
+
+def rename_dataset_variation(conn: sqlite3.Connection, axis: str, value: str, new_value: str) -> str:
+    """候補を書き換える(並びの位置はそのまま)。"ok" / "missing"(元が無い)/ "exists"(書き換え先がもうある)を返す。"""
+    if conn.execute("SELECT 1 FROM dataset_variations WHERE axis = ? AND value = ?", (axis, value)).fetchone() is None:
+        return "missing"
+    if new_value == value:
+        return "ok"
+    if conn.execute("SELECT 1 FROM dataset_variations WHERE axis = ? AND value = ?", (axis, new_value)).fetchone():
+        return "exists"
+    conn.execute("UPDATE dataset_variations SET value = ? WHERE axis = ? AND value = ?", (new_value, axis, value))
+    conn.commit()
+    return "ok"
+
 # ---- キャラ別データセットのシチュエーション・状態 ----
 
 # 初めて表を作るときに入れる例(そのあとは、画面や API で足したり直したり消したりする)
