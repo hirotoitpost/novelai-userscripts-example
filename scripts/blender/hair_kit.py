@@ -132,8 +132,13 @@ class Head:
         origin = np.array([self.center[0], self.center[1], z]) + d * 0.5
         return self._cast(origin, d, np.array([self.center[0], self.center[1], z]) + d * 0.05)
 
-    def hang(self, az0: float, el0: float, az1: float, z1: float, n: int, off0: float, off1: float) -> tuple[list, list]:
-        """頭の上(az0, el0)から、頭に沿って下り、高さ z1 まで垂れる道すじ(点・外向き)。"""
+    def hang(self, az0: float, el0: float, az1: float, z1: float, n: int, off0: float, off1: float,
+             free: float | None = None) -> tuple[list, list]:
+        """
+        頭の上(az0, el0)から、頭に沿って下り、高さ z1 まで垂れる道すじ(点・外向き)。free(高さ)より下では顔に沿わせず、
+        ひとつ上の点からまっすぐ下へ垂らす(顔の面がそれより外へ出ている所だけ、面の外に置く)。顔の横の房は、ほお骨に
+        掛かってから下は顔から離れる(顔の輪郭をなぞると、押さえ付けたように見えた)。
+        """
         p0, _ = self.surface(az0, el0)
         pts, outs = [], []
         reach = 0.0
@@ -147,6 +152,10 @@ class Head:
             else:
                 p, nrm = self.side(az, z)
             q = p + nrm * off
+            if free is not None and z < free and pts:
+                straight = np.array([pts[-1][0], pts[-1][1], q[2]])
+                if np.linalg.norm(straight[:2] - self.center[:2]) >= np.linalg.norm(q[:2] - self.center[:2]):
+                    q = straight
             # あごより下では、頭の縦の軸へ寄らずにまっすぐ垂らす(細い首に沿って内へ回り込んだ)
             radial = q[:2] - self.center[:2]
             dist = float(np.linalg.norm(radial))
@@ -435,7 +444,8 @@ def build(head: Head, cfg: dict) -> list[Part]:
         z1 = ear + (head.chin - 0.01 - ear) * min(length, 1.0)
         for m in range(cfg["side_locks"]):
             az = FRONT + s * math.radians(58 + 8 * m)
-            pts, outs = head.hang(az, math.radians(30), az - s * math.radians(10), z1, 18, 0.012, 0.020)
+            pts, outs = head.hang(az, math.radians(30), az - s * math.radians(10), z1, 18, 0.012, 0.020,
+                                  free=head.eye)
             outs = [(o + fwd * 1.5) / np.linalg.norm(o + fwd * 1.5) for o in outs]
             if length > 1:
                 # あごより長い房は、あごから先を足して垂らす(肩・胸に沿う)
@@ -457,7 +467,7 @@ def build(head: Head, cfg: dict) -> list[Part]:
         for m in range(cfg["wisps"]):
             az = FRONT + s * math.radians(70 + 8 * m)
             z1 = head.chin + 0.01 - 0.04 * m
-            pts, outs = head.hang(az, math.radians(18), az + s * math.radians(4), z1, 14, 0.008, 0.016)
+            pts, outs = head.hang(az, math.radians(18), az + s * math.radians(4), z1, 14, 0.008, 0.016, free=head.eye)
             outs = [(o + fwd) / np.linalg.norm(o + fwd) for o in outs]
             parts.append(lock(f"wisp{side}{m}", "wisp", pts, outs, 0.012, 0.004))
         # うなじの後れ毛
