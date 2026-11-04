@@ -19,6 +19,7 @@ type CameraView = import('./Model3DViewer').CameraView
 type Marker = import('./Model3DViewer').Marker
 
 type JobState = 'queued' | 'running' | 'cleaning' | 'rigging' | 'posing' | 'previewing' | 'importing' | 'dressing' | 'hair'
+  | 'colors' | 'anime'
 
 interface Job {
   status: 'running' | 'done' | 'error'
@@ -30,6 +31,13 @@ interface Job {
 }
 
 interface PoseImage { name: string; pose: string; camera: string; style: string; updated: number; model?: 'main' | 'bald' }
+interface AnimeImage { name: string; motion: string; camera: string; dressed: boolean; updated: number; model: 'main' | 'bald' }
+/** キャラの絵から取った色(明るい所・ふつう・影。sRGB 0〜255) */
+type Tones = number[][]
+interface ToonColors {
+  palette: { skin: Tones; hair: Tones; lines: number[]; garments: Record<string, Tones>; sources: string[] }
+  made: number
+}
 
 interface Check { views: Record<string, number>; score: number; passed: boolean; reasons: string[]; attempts?: number }
 
@@ -66,6 +74,9 @@ interface BaseEntry {
   /** スキンヘッドのモデルに付けた髪と、着せた服 */
   hair: HairMeta | null
   bald_garments: DressedMeta | null
+  /** アニメ塗りの動き(新しい順)と、キャラの絵から取った色 */
+  anime: AnimeImage[]
+  toon: ToonColors | null
 }
 
 interface Model3DInfo {
@@ -79,6 +90,8 @@ interface Model3DInfo {
   hair_options: HairOptions
   /** キャラの見た目のタグから選んだ髪の型 */
   hair_suggestion: HairSuggestion | null
+  /** アニメ塗りのカメラの向き */
+  anime_cameras: Record<string, string>
 }
 
 interface Props {
@@ -101,6 +114,18 @@ const JOB_LABELS: Record<JobState, string> = {
   importing: 'Blender で直した所を読んでいます',
   dressing: 'Blender で服を着せています(1〜2 分)',
   hair: 'Blender で髪を作って揺らしています(15 秒ほど)',
+  colors: 'キャラの絵から色を取っています(1 枚 20 秒ほど)',
+  anime: 'アニメ塗りで動きを描いています(1〜2 分)',
+}
+
+/** 色の段の見本(明るい所・ふつう・影) */
+function Swatch({ label, tones }: { label: string; tones: Tones }) {
+  return (
+    <span className="m3d-swatch" title={label}>
+      {label}
+      {tones.map((c, i) => <i key={i} style={{ background: `rgb(${c.map(Math.round).join(',')})` }} />)}
+    </span>
+  )
 }
 
 async function detail(res: Response): Promise<string> {
@@ -154,6 +179,11 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
   const [model, setModel] = useState<'main' | 'bald'>('main')
   // ポーズの絵を、服を着せた形で描くか
   const [poseDressed, setPoseDressed] = useState(false)
+  // アニメ塗りで動かす: 動き・カメラ・服を着た姿で・色を取り直すか
+  const [animeMotion, setAnimeMotion] = useState('walk')
+  const [animeCamera, setAnimeCamera] = useState('three_quarter')
+  const [animeDressed, setAnimeDressed] = useState(false)
+  const [repickColors, setRepickColors] = useState(false)
 
   const url = `/api/lora-dataset/character/${characterId}/model-3d`
 
@@ -606,6 +636,69 @@ export default function Model3D({ characterId, rootName, baseId, disabled }: Pro
                         <figcaption>{poseLabel(p)} <a href={fileUrl(p.name, p.updated)} download>保存</a></figcaption>
                       </figure>
                     ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {modelFiles['model.blend'] && info.anime_cameras && (
+              <div className="m3d-poses">
+                <h5>アニメ塗りで動かす</h5>
+                <p className="lora-hint">
+                  色はキャラの絵(キャラシートの参照画像と、データセットの顔と表情のシート)から取り、顔には 3D に送った正面の写しを映します。
+                  1 秒 12 コマで描きます。
+                  {using === 'main' && ' 髪ありの形では髪が体と 1 つの面なので、髪も肌の色になります(髪の色は、スキンヘッド+髪のモデルで付きます)。'}
+                </p>
+                <div className="fsh-actions">
+                  <select className="lora-select" value={animeMotion} disabled={busy} aria-label="動き" onChange={e => setAnimeMotion(e.target.value)}>
+                    {Object.entries(info.motions).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                  <select className="lora-select" value={animeCamera} disabled={busy} aria-label="カメラの向き" onChange={e => setAnimeCamera(e.target.value)}>
+                    {Object.entries(info.anime_cameras).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                  {dressedReady && (
+                    <label className="fsh-label" title="服を着せた形(使うモデルの model_dressed)で描きます">
+                      <input type="checkbox" checked={animeDressed} disabled={busy} onChange={e => setAnimeDressed(e.target.checked)} />
+                      服を着た姿で
+                    </label>
+                  )}
+                  {entry.toon && (
+                    <label className="fsh-label" title="キャラの絵が増えた・変わったときに、色を取り直します(1 枚 20 秒ほど)">
+                      <input type="checkbox" checked={repickColors} disabled={busy} onChange={e => setRepickColors(e.target.checked)} />
+                      色を取り直す
+                    </label>
+                  )}
+                  <button type="button" className="lora-btn" disabled={busy}
+                    onClick={() => {
+                      void post('/anime', { motion: animeMotion, camera: animeCamera, model: using, dressed: animeDressed && dressedReady, repick_colors: repickColors },
+                        !entry.toon || repickColors ? 'キャラの絵から色を取ってから描きます(3〜5 分)' : 'アニメ塗りで描いています(1〜2 分)')
+                      setRepickColors(false)
+                    }}>
+                    アニメ塗りで描く
+                  </button>
+                </div>
+                {entry.toon && (
+                  <div className="fsh-actions" title={`色を取った絵: ${entry.toon.palette.sources.join('・')}`}>
+                    <Swatch label="肌" tones={entry.toon.palette.skin} />
+                    <Swatch label="髪" tones={entry.toon.palette.hair} />
+                    {Object.entries(entry.toon.palette.garments).map(([kind, tones]) => (
+                      <Swatch key={kind} label={info.garment_options[kind]?.label ?? kind} tones={tones} />
+                    ))}
+                    <span className="lora-hint">({entry.toon.palette.sources.length} 枚の絵から)</span>
+                  </div>
+                )}
+                {entry.anime.length > 0 && (
+                  <div className="m3d-pose-grid">
+                    {entry.anime.map(a => {
+                      const label = `${info.motions[a.motion] ?? a.motion}・${info.anime_cameras[a.camera] ?? a.camera}`
+                        + `${a.dressed ? '・服' : ''}${a.model === 'bald' ? '(スキンヘッド+髪)' : ''}`
+                      return (
+                        <figure key={a.name}>
+                          <img className="m3d-anime" src={fileUrl(a.name, a.updated)} alt={label} loading="lazy" />
+                          <figcaption>{label} <a href={fileUrl(a.name, a.updated)} download>保存</a></figcaption>
+                        </figure>
+                      )
+                    })}
                   </div>
                 )}
               </div>

@@ -85,11 +85,16 @@ _POSE_SCRIPT = _CLEAN_SCRIPT.with_name("pose_render.py")
 _IMPORT_SCRIPT = _CLEAN_SCRIPT.with_name("import_blend.py")
 _DRESS_SCRIPT = _CLEAN_SCRIPT.with_name("dress_model.py")
 _HAIR_SCRIPT = _CLEAN_SCRIPT.with_name("hair_kit.py")
+_ANIME_SCRIPT = _CLEAN_SCRIPT.with_name("anime_render.py")
 # 取り込んだ結果を書くファイル(読んだら消す)と、比べる元
 _IMPORT_REPORT = "import.json"
 EDITS_FILE = "blender_edits.json"
 # ポーズの絵を置くフォルダ(形のフォルダの中)。名前は <ポーズ>_<カメラ>_<絵の種類>.png
 POSE_DIR = "poses"
+# アニメ塗りの動きを置くフォルダ(形のフォルダの中)。名前は <動き>_<カメラ>_<dressed|body>.gif
+ANIME_DIR = "anime"
+# アニメ塗りのカメラの向き(名前 → 表示名・正面から右回りの角度 °)
+ANIME_CAMERAS = {"front": ("正面", 0), "three_quarter": ("斜め前", 30), "side": ("横", 90), "back": ("後ろ", 180)}
 # clean_model.py の静止画の大きさと、正投影のカメラの写す高さ(身長に対する割合)。画素から m に戻すのに使う
 _STILL_SIZE = (360, 600)
 _STILL_SPAN = 1.1
@@ -207,6 +212,7 @@ def clean(blender: str, out_dir: Path, height: float, *, max_faces: int = MAX_FA
     for name in ("model_rigged.glb", "model.blend", "motion.gif"):
         (out_dir / name).unlink(missing_ok=True)
     shutil.rmtree(out_dir / POSE_DIR, ignore_errors=True)
+    shutil.rmtree(out_dir / ANIME_DIR, ignore_errors=True)
     result = subprocess.run(
         [blender, "--background", "--factory-startup", "--python", str(_CLEAN_SCRIPT), "--",
          str(out_dir), str(height), str(max_faces)],
@@ -660,6 +666,7 @@ def rig(blender: str, out_dir: Path, *, motion: str = "wave", hand: dict | None 
     joints = {n: still_to_world(float(points[n][0]), float(points[n][1]), height) for n in _RIG_POINTS}
     # 前のポーズの絵は、入れ直した骨と合わなくなるので消す
     shutil.rmtree(out_dir / POSE_DIR, ignore_errors=True)
+    shutil.rmtree(out_dir / ANIME_DIR, ignore_errors=True)
     with tempfile.TemporaryDirectory(prefix="model3d_rig_") as tmp:
         joints_path = Path(tmp) / "joints.json"
         sent = {"points": joints, "hand": hand["ratios"]}
@@ -957,3 +964,66 @@ def make_hair(blender: str, out_dir: Path, config: dict, *, preset: str | None =
     meta["hair"] = {"preset": preset, "config": config, "motion": motion, **report}
     write_meta(bald, meta)
     return meta["hair"]
+
+
+class Model3DAnimeError(RuntimeError):
+    """アニメ塗りで描けなかった。"""
+
+
+def anime_images(out_dir: Path) -> list[dict]:
+    """描いたアニメ塗りの動き(新しい順)。"""
+    from . import body_motions
+
+    folder = out_dir / ANIME_DIR
+    result = []
+    for path in folder.glob("*.gif") if folder.is_dir() else []:
+        motion, camera, look = (path.stem.rsplit("_", 2) + ["", ""])[:3]
+        if motion in body_motions.MOTIONS and camera in ANIME_CAMERAS and look in ("dressed", "body"):
+            result.append({
+                "name": f"{ANIME_DIR}/{path.name}", "motion": motion, "camera": camera, "dressed": look == "dressed",
+                "updated": path.stat().st_mtime,
+            })
+    return sorted(result, key=lambda item: -item["updated"])
+
+
+def render_anime(blender: str, out_dir: Path, motion: str, camera: str, palette: dict, *, face: dict | None = None,
+                 dressed: bool = False, shape_weights: dict[str, float] | None = None, timeout: float = 1200) -> Path:
+    """
+    骨を入れた形(dressed なら服を着せた model_dressed.blend)を、アニメ塗りで動かして描く(scripts/blender/anime_render.py)。
+    palette はキャラの絵から取った色(toon.extract)、face は顔に映す正面の絵(toon.face_decal)。motion の動きを 1 コマおき
+    (1 秒 12 コマ)に描き、anime/<動き>_<カメラ>_<dressed|body>.gif にする。そのパスを返す。
+    """
+    from . import body_motions
+    from .body_rig import frames_to_gif
+
+    if motion not in body_motions.MOTIONS:
+        raise Model3DAnimeError(f"動きの種類が違います: {motion}")
+    if camera not in ANIME_CAMERAS:
+        raise Model3DAnimeError(f"カメラの向きが違います: {camera}")
+    blend = out_dir / ("model_dressed.blend" if dressed else "model.blend")
+    if not blend.is_file():
+        raise Model3DAnimeError("服を着せた形がありません。先に服を着せてください。" if dressed
+                                else "骨を入れた形がありません。先に形を作ってください。")
+    if shape_weights is None:
+        shape_weights = read_meta(out_dir).get("shapes", {}).get("weights", {})
+    folder = out_dir / ANIME_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{motion}_{camera}_{'dressed' if dressed else 'body'}.gif"
+    with tempfile.TemporaryDirectory(prefix="model3d_anime_") as tmp:
+        spec = Path(tmp) / "anime.json"
+        spec.write_text(json.dumps({
+            "palette": palette, "face": face, "motion": motion, "camera": ANIME_CAMERAS[camera][1], "step": 2,
+            "size": [512, 768], "shapes": shape_weights,
+        }), encoding="utf-8")
+        frames = Path(tmp) / "frames"
+        result = subprocess.run(
+            [blender, "--background", "--factory-startup", str(blend.resolve()), "--python", str(_ANIME_SCRIPT),
+             "--python-exit-code", "1", "--", str(spec), str(frames)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW,
+        )
+        pngs = sorted(frames.glob("*.png")) if frames.is_dir() else []
+        if result.returncode != 0 or not pngs:
+            tail = "\n".join((result.stdout + result.stderr).splitlines()[-15:])
+            raise Model3DAnimeError(f"Blender でアニメ塗りの動きを描けませんでした(終了コード {result.returncode}):\n{tail}")
+        frames_to_gif(pngs, target, fps=12, width=512)
+    return target

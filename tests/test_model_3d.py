@@ -1342,3 +1342,174 @@ def test_bald_model_starts_with_the_suggested_hair(client: TestClient, tmp_path:
     client.post(url, json={"base_id": base["id"], "bald": True})
     assert _wait(client, character["id"], base["id"])["job"]["status"] == "done"
     assert made[0][0] == "long" and made[0][1]["bangs_part"] == 0.0
+
+
+def _parts_image(path: Path, skin=(250, 225, 205), hair=(190, 155, 135), top=(60, 60, 70), blush=False) -> None:
+    """部位分けの試し用の絵: 上が髪・なかほどが顔(右下にほおの赤み)・下が上の服(左に肌の胸元)。"""
+    image = np.zeros((180, 120, 3), np.uint8)
+    image[:60] = hair
+    image[60:120] = skin
+    if blush:
+        image[96:120, 90:] = (240, 140, 140)
+    image[120:] = top
+    image[120:, :18] = skin
+    Image.fromarray(image).save(path)
+
+
+def _fake_parse(image: Image.Image) -> dict:
+    from python import body_parsing
+
+    h, w = image.height, image.width
+    parts = {name: np.zeros((h, w), bool) for name in body_parsing.LABELS}
+    parts["hair"][:60] = True
+    parts["face"][60:120] = True
+    parts["topwear"][120:] = True
+    return parts
+
+
+def test_toon_colors_come_from_the_character_images(tmp_path: Path) -> None:
+    from python import toon
+
+    sheet = tmp_path / "data/face_sheet"
+    sheet.mkdir(parents=True)
+    _parts_image(sheet / "front.png", blush=True)
+    _parts_image(sheet / "smile.png", skin=(246, 220, 200))
+    _parts_image(sheet / "crying.png")
+    ref = tmp_path / "ref.png"
+    _parts_image(ref, hair=(180, 150, 130))
+    # 参照画像と、顔と表情のシートの落ち着いた表情だけ(泣き顔は使わない)
+    paths = toon.sources(ref, [tmp_path / "data"])
+    assert [q.name for q in paths] == ["ref.png", "front.png", "smile.png"]
+    palette = toon.extract(paths, parse=_fake_parse)
+    # ほおの赤みは肌の色に入れない
+    assert all(c[0] - c[1] < 40 for c in palette["skin"])
+    assert palette["hair"][1][0] in (180.0, 190.0) and palette["sources"] == ["ref.png", "front.png", "smile.png"]
+    # 上の服の色: 胸元の肌は除き、明るい所は作らず、影はふつうとの間
+    top = palette["garments"]["top"]
+    assert top[0] == top[1] == [60.0, 60.0, 70.0] and top[2] == [60.0, 60.0, 70.0]
+    with pytest.raises(toon.ToonError, match="色を取れる絵"):
+        toon.extract([ref], parse=lambda image: {**_fake_parse(image), "face": np.zeros((180, 120), bool)})
+
+
+def test_face_decal_finds_the_person_and_the_face_skin(tmp_path: Path) -> None:
+    from python import toon
+
+    image = np.full((100, 60, 3), 230, np.uint8)
+    image[10:90, 20:40] = (250, 220, 200)
+    Image.fromarray(image).save(tmp_path / "front.png")
+    face = toon.face_decal(tmp_path / "front.png")
+    assert face["bbox"] == [20, 10, 39, 89] and face["size"] == [60, 100] and face["skin"] == [250.0, 220.0, 200.0]
+    Image.new("RGB", (30, 30), (230, 230, 230)).save(tmp_path / "empty.png")
+    with pytest.raises(toon.ToonError):
+        toon.face_decal(tmp_path / "empty.png")
+
+    # 顔の内側だけを残す: 顔の外(首の影)と顔の縁(あごの線)は肌の色で埋める
+    image[40:44, 28:32] = (20, 20, 20)  # 目(顔の内側)
+    image[58:62, 20:40] = (30, 30, 30)  # あごの線(顔の縁)
+    image[66:70, 24:36] = (40, 40, 40)  # 首の影(顔の外)
+    Image.fromarray(image).save(tmp_path / "front.png")
+
+    def parse(img: Image.Image) -> dict:
+        from python import body_parsing
+
+        parts = {name: np.zeros((100, 60), bool) for name in body_parsing.LABELS}
+        parts["face"][10:62, 20:40] = True
+        return parts
+
+    face = toon.face_decal(tmp_path / "front.png", tmp_path / "anime/face_decal.png", parse=parse)
+    assert face["image"] == str((tmp_path / "anime/face_decal.png").resolve())
+    cleaned = np.asarray(Image.open(face["image"]))
+    assert tuple(cleaned[42, 30]) == (20, 20, 20)
+    assert tuple(cleaned[60, 30]) == tuple(cleaned[68, 30]) == (250, 220, 200)
+
+
+def test_render_anime_runs_blender_and_makes_the_gif(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "model.blend").write_bytes(b"blend")
+    sent: list[dict] = []
+
+    def fake_run(command: list[str], **_kw) -> subprocess.CompletedProcess:  # noqa: ANN003
+        sent.append(json.loads(Path(command[-2]).read_text(encoding="utf-8")))
+        frames = Path(command[-1])
+        frames.mkdir()
+        for i in range(3):
+            Image.new("RGBA", (8, 12)).save(frames / f"{i:03d}.png")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(model_3d.subprocess, "run", fake_run)
+    palette = {"skin": [[1, 1, 1]] * 3}
+    gif = model_3d.render_anime("blender", tmp_path, "walk", "side", palette)
+    assert gif == tmp_path / model_3d.ANIME_DIR / "walk_side_body.gif" and gif.is_file()
+    assert sent[0]["camera"] == 90 and sent[0]["palette"] == palette and sent[0]["step"] == 2
+    assert [(a["motion"], a["camera"], a["dressed"]) for a in model_3d.anime_images(tmp_path)] == [("walk", "side", False)]
+    with pytest.raises(model_3d.Model3DAnimeError, match="服を着せた形"):
+        model_3d.render_anime("blender", tmp_path, "walk", "side", palette, dressed=True)
+    with pytest.raises(model_3d.Model3DAnimeError, match="カメラ"):
+        model_3d.render_anime("blender", tmp_path, "walk", "top", palette)
+    monkeypatch.setattr(model_3d.subprocess, "run", lambda command, **_kw: subprocess.CompletedProcess(command, 1, "", "boom"))
+    with pytest.raises(model_3d.Model3DAnimeError, match="boom"):
+        model_3d.render_anime("blender", tmp_path, "jump", "front", palette)
+
+
+def test_anime_route_picks_the_colors_once_and_draws(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import toon
+
+    adult = _character(client, "rumi", is_adult=1, age=28)
+    suit = _base(client, "スーツ")
+    _draw(tmp_path / "outputs/training_data/rumi/body_base", suit["id"], ("front",))
+    url = f"/api/lora-dataset/character/{adult['id']}/model-3d"
+    out = tmp_path / f"outputs/training_data/rumi/model_3d/{suit['id']}"
+    (out / model_3d.BALD_DIR).mkdir(parents=True)
+    (out / "model.blend").write_bytes(b"blend")
+    (out / model_3d.BALD_DIR / "model.blend").write_bytes(b"blend")
+    _parts_image(out / "bald_front.png")
+    body = {"base_id": suit["id"], "motion": "walk", "camera": "front"}
+    sheet = tmp_path / "outputs/training_data/rumi/face_sheet"
+    sheet.mkdir(parents=True)
+    _parts_image(sheet / "front.png")
+    picked: list[list[str]] = []
+
+    def fake_extract(paths):  # noqa: ANN001
+        picked.append([q.name for q in paths])
+        return {"skin": [[250, 225, 205]] * 3, "sources": [q.name for q in paths]}
+
+    drawn: list[tuple] = []
+
+    def fake_render(blender, folder, motion, camera, palette, face=None, dressed=False):  # noqa: ANN001
+        drawn.append((folder, motion, camera, palette["skin"][0], face and Path(face["image"]).name, dressed))
+        (folder / model_3d.ANIME_DIR).mkdir(exist_ok=True)
+        path = folder / model_3d.ANIME_DIR / f"{motion}_{camera}_{'dressed' if dressed else 'body'}.gif"
+        Image.new("RGB", (4, 4)).save(path)
+        return path
+
+    monkeypatch.setattr(toon, "extract", fake_extract)
+    monkeypatch.setattr(model_3d, "render_anime", fake_render)
+    # 顔の写しは、顔の内側だけを残して anime/face_decal.png に書く(部位分けのモデルは使わない)
+    decals: list[Path] = []
+
+    def fake_decal(path, out_path=None, parse=None):  # noqa: ANN001
+        decals.append(out_path)
+        return {"image": str(path), "bbox": [0, 0, 1, 1], "size": [2, 2], "skin": [250, 225, 205]}
+
+    monkeypatch.setattr(toon, "face_decal", fake_decal)
+    assert client.post(f"{url}/anime", json={**body, "camera": "top"}).status_code == 422
+    assert client.post(f"{url}/anime", json={**body, "dressed": True}).status_code == 422
+    res = client.post(f"{url}/anime", json={**body, "model": "bald"})
+    assert res.status_code == 200, res.text
+    entry = _wait(client, adult["id"], suit["id"])
+    assert entry["job"]["status"] == "done", entry["job"]
+    # 顔には、スキンヘッドのモデルならスキンヘッドの写しを映す。取った色は形のフォルダに残す
+    # 顔のシートが 3 枚より少なければ、素体の正面の絵も使う
+    assert picked == [["front.png", f"{suit['id']}_front.png"]] and drawn == [(out / model_3d.BALD_DIR, "walk", "front", [250, 225, 205], "bald_front.png", False)]
+    assert entry["toon"]["palette"]["sources"] == picked[0]
+    assert decals == [out / model_3d.BALD_DIR / model_3d.ANIME_DIR / "face_decal.png"]
+    assert [(a["name"], a["model"]) for a in entry["anime"]] == [(f"bald/{model_3d.ANIME_DIR}/walk_front_body.gif", "bald")]
+    got = client.get(f"{url}/file", params={"base_id": suit["id"], "name": f"bald/{model_3d.ANIME_DIR}/walk_front_body.gif"})
+    assert got.status_code == 200
+    # 2 回目は前に取った色を使い回し、取り直すと言われたら取り直す
+    client.post(f"{url}/anime", json={**body, "camera": "back"})
+    assert _wait(client, adult["id"], suit["id"])["job"]["status"] == "done"
+    assert len(picked) == 1 and drawn[-1][0] == out and drawn[-1][4] is None
+    client.post(f"{url}/anime", json={**body, "repick_colors": True})
+    assert _wait(client, adult["id"], suit["id"])["job"]["status"] == "done"
+    assert len(picked) == 2
+
