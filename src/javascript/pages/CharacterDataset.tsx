@@ -811,14 +811,17 @@ export default function CharacterDataset() {
                       {value}{tidying && ' ✕'}
                     </button>
                   ))}
-                  <input
-                    className="chards-custom"
-                    placeholder="追加…"
-                    value={custom[axis.key]}
-                    onChange={e => setCustom({ ...custom, [axis.key]: e.target.value })}
-                    onKeyDown={e => { if (e.key === 'Enter') void addCustom(axis.key) }}
-                    disabled={isRunning}
-                  />
+                  {/* スマホの日本語入力では Enter の keydown が key="Unidentified" で来るので、form の送信で足す */}
+                  <form className="chards-custom-form" onSubmit={e => { e.preventDefault(); void addCustom(axis.key) }}>
+                    <input
+                      className="chards-custom"
+                      placeholder="追加…"
+                      enterKeyHint="done"
+                      value={custom[axis.key]}
+                      onChange={e => setCustom({ ...custom, [axis.key]: e.target.value })}
+                      disabled={isRunning}
+                    />
+                  </form>
                 </div>
               </div>
             ))}
