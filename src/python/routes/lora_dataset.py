@@ -24,7 +24,7 @@ from novelai.types import CharacterReference, InpaintParams
 from PIL import Image, UnidentifiedImageError
 
 from .. import app_settings, body_base, body_check, body_export, body_layers, body_parsing, body_rig, content_guard, face_sheet
-from .. import body_motions, body_poses, body_shapes, garments, hairs, model3d_remote, model_3d, see_through_remote, wardrobe
+from .. import body_motions, body_poses, body_shapes, garments, hairs, model3d_remote, model_3d, see_through_remote, toon, wardrobe
 from ..body_parts import PARTS, face_crop, part_mask
 from ..character_sheet import (
     adult_only_tags,
@@ -104,6 +104,7 @@ from ..lora_dataset import (
 from ..models import (
     BodyHairUnderRequest,
     BodyLayersRequest,
+    Model3DAnimeRequest,
     Model3DDressRequest,
     Model3DHairRequest,
     Model3DPoseRequest,
@@ -1916,6 +1917,16 @@ def _all_pose_images(folder: Path) -> list[dict]:
     return sorted(images, key=lambda item: -item["updated"])
 
 
+def _all_anime_images(folder: Path) -> list[dict]:
+    """髪ありの形と、スキンヘッド+髪のモデルのアニメ塗りの動き(新しい順。model でどちらか分かる)。"""
+    images = [{**item, "model": "main"} for item in model_3d.anime_images(folder)]
+    images += [
+        {**item, "name": f"{model_3d.BALD_DIR}/{item['name']}", "model": "bald"}
+        for item in model_3d.anime_images(folder / model_3d.BALD_DIR)
+    ]
+    return sorted(images, key=lambda item: -item["updated"])
+
+
 def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
     entries = []
     for base in _model_3d_bases(character, root_name):
@@ -1933,6 +1944,9 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
             },
             # ポーズの参考の絵(新しい順。スキンヘッド+髪のモデルの絵は bald/ の下)
             "poses": _all_pose_images(folder),
+            # アニメ塗りの動き(新しい順)と、キャラの絵から取った色
+            "anime": _all_anime_images(folder),
+            "toon": model_3d.read_meta(folder).get("toon"),
             # 形状パーツ: 選べる形(部位ごと)と、保存した強さ
             "shapes": {
                 "options": body_shapes.labels(**_shape_flags(character, base)),
@@ -1959,6 +1973,7 @@ def _model_3d_entries(character: dict, root_name: str) -> dict[str, Any]:
     return {
         "configured": model3d_remote.configured(), "bases": entries, "motions": body_motions.labels(),
         "pose_options": body_poses.labels(), "garment_options": garments.options(),
+        "anime_cameras": {k: label for k, (label, _) in model_3d.ANIME_CAMERAS.items()},
         "hair_options": hairs.options(),
         # キャラの見た目のタグから選んだ髪の型(髪を付ける欄の最初の選び)
         "hair_suggestion": hairs.suggest(character.get("appearance_tags") or ""),
@@ -2272,7 +2287,9 @@ async def rig_model_3d(character_id: int, req: Model3DRequest) -> dict[str, Any]
     return _model_3d_entries(character, req.root_name)
 
 
-def _model_3d_rigged(character_id: int, req: Model3DRequest | Model3DDressRequest | Model3DPoseRequest) -> tuple[dict, dict, Path]:
+def _model_3d_rigged(
+    character_id: int, req: Model3DRequest | Model3DDressRequest | Model3DPoseRequest | Model3DAnimeRequest,
+) -> tuple[dict, dict, Path]:
     """
     骨を入れた 3D の形のあるキャラ・素体・フォルダ(無ければ 404・422)。req.model が bald なら、スキンヘッド+髪の
     モデルのフォルダ(形のフォルダの bald/)。
@@ -2360,6 +2377,56 @@ async def pose_model_3d(character_id: int, req: Model3DPoseRequest) -> dict[str,
     def work(job: dict[str, Any]) -> None:
         job["remote"] = "posing"
         model_3d.render_pose(blender, out, req.pose, cameras, req.style, shape_weights=shapes, dressed=req.dressed)
+
+    _start_model_3d_job(character, base, work)
+    return _model_3d_entries(character, req.root_name)
+
+
+def _toon_sources(character: dict) -> list[Path]:
+    """
+    アニメ塗りの色を取るキャラの絵: キャラシートの参照画像と、データセットの顔と表情のシート(toon.sources)。
+    データセットは、どのルート(outputs/ の下のフォルダ)のものでも使う。
+    """
+    ref = character.get("reference_image_path")
+    outputs = _PROJECT_ROOT / "outputs"
+    roots = sorted(p.name for p in outputs.iterdir() if p.is_dir() and not p.name.startswith(".")) if outputs.is_dir() else []
+    folders = [f for f in (_character_root(r, character) for r in roots) if f.is_dir()]
+    return toon.sources(_PROJECT_ROOT / ref if ref else None, folders)
+
+
+@router.post("/character/{character_id}/model-3d/anime")
+async def anime_model_3d(character_id: int, req: Model3DAnimeRequest) -> dict[str, Any]:
+    """
+    骨を入れた形(服を着せた形)を、キャラの絵の色のアニメ塗りで動かして描く(model_3d.render_anime。GPU は使わない)。
+    色は、キャラシートの参照画像とデータセットの顔のシートから取り(toon.extract。1 枚 20 秒ほど)、形のフォルダの
+    meta.json の toon に残して使い回す(repick_colors で取り直す)。顔には、3D に送った正面の写しを映す。
+    """
+    if req.motion not in body_motions.MOTIONS:
+        raise HTTPException(status_code=422, detail=f"動きの種類が違います: {req.motion}")
+    if req.camera not in model_3d.ANIME_CAMERAS:
+        raise HTTPException(status_code=422, detail=f"カメラの向きが違います: {req.camera}")
+    character, base, out = _model_3d_rigged(character_id, req)
+    if req.dressed and not (out / "model_dressed.blend").is_file():
+        raise HTTPException(status_code=422, detail="服を着せた形がありません。先に服を着せてください。")
+    folder = _model_3d_dir(character, base, req.root_name)
+    saved = model_3d.read_meta(folder).get("toon")
+    paths = [] if saved and not req.repick_colors else _toon_sources(character)
+    if not saved and not paths:
+        raise HTTPException(status_code=422, detail="色を取るキャラの絵がありません。参照画像か、データセットの顔のシートを作ってください。")
+    face_image = folder / ("bald_front.png" if req.model == "bald" else "input_front.png")
+    blender = _model_3d_blender()
+
+    def work(job: dict[str, Any]) -> None:
+        palette = saved["palette"] if saved and not req.repick_colors else None
+        if palette is None:
+            job["remote"] = "colors"
+            palette = toon.extract(paths)
+            meta = model_3d.read_meta(folder)
+            meta["toon"] = {"palette": palette, "made": time.time()}
+            model_3d.write_meta(folder, meta)
+        job["remote"] = "anime"
+        face = toon.face_decal(face_image) if face_image.is_file() else None
+        model_3d.render_anime(blender, out, req.motion, req.camera, palette, face=face, dressed=req.dressed)
 
     _start_model_3d_job(character, base, work)
     return _model_3d_entries(character, req.root_name)
@@ -2583,7 +2650,7 @@ def _start_model_3d_job(character: dict, base: dict, work) -> None:  # noqa: ANN
         except (
             model3d_remote.Model3DError, model_3d.Model3DInputError, model_3d.Model3DCleanError,
             model_3d.Model3DRigError, model_3d.Model3DPoseError, model_3d.Model3DImportError, model_3d.Model3DDressError,
-            model_3d.Model3DHairError,
+            model_3d.Model3DHairError, model_3d.Model3DAnimeError, toon.ToonError,
             body_rig.RigError,
             subprocess.TimeoutExpired, OSError,
         ) as exc:
@@ -2603,7 +2670,7 @@ async def get_model_3d_file(character_id: int, base_id: int, name: str, root_nam
     if base is None:
         raise HTTPException(status_code=404, detail="not found")
     folder = _model_3d_dir(character, base, root_name)
-    if name not in model_3d.FILES and name not in {item["name"] for item in _all_pose_images(folder)}:
+    if name not in model_3d.FILES and name not in {item["name"] for item in _all_pose_images(folder) + _all_anime_images(folder)}:
         raise HTTPException(status_code=404, detail="not found")
     path = folder / name
     if not path.is_file():

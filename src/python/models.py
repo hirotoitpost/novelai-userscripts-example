@@ -476,6 +476,18 @@ class Model3DPoseRequest(BaseModel):
     dressed: bool = Field(False, description="服を着せた形(model_dressed.blend)で描く")
 
 
+class Model3DAnimeRequest(BaseModel):
+    """素体の 3D モデルを、キャラの絵の色のアニメ塗りで動かして描く(model_3d.render_anime)。"""
+
+    root_name: str = Field("training_data", description="outputs/ 配下のルートフォルダ名(データセットと同じ)")
+    base_id: int | None = Field(None, description="使う素体。省くとキャラに当てた素体")
+    motion: str = Field("walk", description="動き(body_motions.MOTIONS)")
+    camera: str = Field("three_quarter", description="カメラの向き(model_3d.ANIME_CAMERAS)")
+    model: Literal["main", "bald"] = Field("main", description="main は髪ありの形、bald はスキンヘッド+髪のモデル")
+    dressed: bool = Field(False, description="服を着せた形(model_dressed.blend)で描く")
+    repick_colors: bool = Field(False, description="キャラの絵から色を取り直す(省くと前に取った色)")
+
+
 class Model3DSmoothSpot(BaseModel):
     """ならす所: 休んだ姿勢の体の上の点(Blender の座標 m。Z 上・正面 -Y)と、ならす半径(mm)。"""
 
