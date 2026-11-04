@@ -801,6 +801,7 @@ export default function CharacterDataset() {
               onStateIds={setStateIds}
               includePlain={includePlain}
               onIncludePlain={setIncludePlain}
+              selectedAxes={selected}
               onLoaded={(situations, states) => setSceneLists({ situations, states })}
               stateMethod={stateMethod}
               onStateMethod={setStateMethod}
