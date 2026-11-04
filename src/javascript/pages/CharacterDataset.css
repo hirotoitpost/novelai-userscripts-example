@@ -99,7 +99,19 @@
 
 .chards-variation-tools { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
-.chards-chip--tidy { border-style: dashed; border-color: #ff8a9a; color: #ffb0c8; }
+.chards-chip--tidy { border-style: dashed; border-color: #ff8a9a; color: #ffb0c8; cursor: default; }
+
+.chards-chip-act {
+  margin-left: 0.3rem;
+  padding: 0 0.2rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.chards-custom--edit { width: 14rem; max-width: 100%; border-style: solid; border-color: var(--nai-accent); }
 
 /* 右側のタブ(データセット / 素体) */
 .chards-tabs { display: flex; gap: 0.3rem; margin-left: auto; }

@@ -137,6 +137,22 @@ def test_candidates_start_from_the_defaults_and_can_be_changed(client: TestClien
     assert "standing" not in client.get(url).json()["poses"] and "holding umbrella" in client.get(url).json()["poses"]
 
 
+def test_candidates_can_be_renamed_in_place(client: TestClient) -> None:
+    url = "/api/lora-dataset/variations"
+    poses = client.get(url).json()["poses"]
+    first, second = poses[0], poses[1]
+    # 書き換え: 空白をそろえ、並びの位置はそのまま。ほかの軸は変わらない
+    renamed = client.put(url, json={"axis": "poses", "value": first, "new_value": "  waving ,arms up "}).json()
+    assert renamed["poses"] == ["waving, arms up", *poses[1:]]
+    # 同じ値への書き換えは何もしない
+    assert client.put(url, json={"axis": "poses", "value": second, "new_value": second}).json()["poses"] == renamed["poses"]
+    # もうある値・無い候補・空の値は断る
+    assert client.put(url, json={"axis": "poses", "value": second, "new_value": "waving, arms up"}).status_code == 409
+    assert client.put(url, json={"axis": "poses", "value": first, "new_value": "x"}).status_code == 404
+    assert client.put(url, json={"axis": "poses", "value": second, "new_value": " , "}).status_code == 422
+    assert client.get(url).json()["poses"] == renamed["poses"]
+
+
 def test_extract_endpoint_only_reports(client: TestClient) -> None:
     before = client.get("/api/lora-dataset/variations").json()
     res = client.post("/api/lora-dataset/variations/extract", json={"prompts": ["1girl, grin, beach, running, sundress, from below"]})
