@@ -1403,6 +1403,25 @@ def test_face_decal_finds_the_person_and_the_face_skin(tmp_path: Path) -> None:
     with pytest.raises(toon.ToonError):
         toon.face_decal(tmp_path / "empty.png")
 
+    # 顔の内側だけを残す: 顔の外(首の影)と顔の縁(あごの線)は肌の色で埋める
+    image[40:44, 28:32] = (20, 20, 20)  # 目(顔の内側)
+    image[58:62, 20:40] = (30, 30, 30)  # あごの線(顔の縁)
+    image[66:70, 24:36] = (40, 40, 40)  # 首の影(顔の外)
+    Image.fromarray(image).save(tmp_path / "front.png")
+
+    def parse(img: Image.Image) -> dict:
+        from python import body_parsing
+
+        parts = {name: np.zeros((100, 60), bool) for name in body_parsing.LABELS}
+        parts["face"][10:62, 20:40] = True
+        return parts
+
+    face = toon.face_decal(tmp_path / "front.png", tmp_path / "anime/face_decal.png", parse=parse)
+    assert face["image"] == str((tmp_path / "anime/face_decal.png").resolve())
+    cleaned = np.asarray(Image.open(face["image"]))
+    assert tuple(cleaned[42, 30]) == (20, 20, 20)
+    assert tuple(cleaned[60, 30]) == tuple(cleaned[68, 30]) == (250, 220, 200)
+
 
 def test_render_anime_runs_blender_and_makes_the_gif(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "model.blend").write_bytes(b"blend")
@@ -1464,6 +1483,14 @@ def test_anime_route_picks_the_colors_once_and_draws(client: TestClient, tmp_pat
 
     monkeypatch.setattr(toon, "extract", fake_extract)
     monkeypatch.setattr(model_3d, "render_anime", fake_render)
+    # 顔の写しは、顔の内側だけを残して anime/face_decal.png に書く(部位分けのモデルは使わない)
+    decals: list[Path] = []
+
+    def fake_decal(path, out_path=None, parse=None):  # noqa: ANN001
+        decals.append(out_path)
+        return {"image": str(path), "bbox": [0, 0, 1, 1], "size": [2, 2], "skin": [250, 225, 205]}
+
+    monkeypatch.setattr(toon, "face_decal", fake_decal)
     assert client.post(f"{url}/anime", json={**body, "camera": "top"}).status_code == 422
     assert client.post(f"{url}/anime", json={**body, "dressed": True}).status_code == 422
     res = client.post(f"{url}/anime", json={**body, "model": "bald"})
@@ -1474,6 +1501,7 @@ def test_anime_route_picks_the_colors_once_and_draws(client: TestClient, tmp_pat
     # 顔のシートが 3 枚より少なければ、素体の正面の絵も使う
     assert picked == [["front.png", f"{suit['id']}_front.png"]] and drawn == [(out / model_3d.BALD_DIR, "walk", "front", [250, 225, 205], "bald_front.png", False)]
     assert entry["toon"]["palette"]["sources"] == picked[0]
+    assert decals == [out / model_3d.BALD_DIR / model_3d.ANIME_DIR / "face_decal.png"]
     assert [(a["name"], a["model"]) for a in entry["anime"]] == [(f"bald/{model_3d.ANIME_DIR}/walk_front_body.gif", "bald")]
     got = client.get(f"{url}/file", params={"base_id": suit["id"], "name": f"bald/{model_3d.ANIME_DIR}/walk_front_body.gif"})
     assert got.status_code == 200

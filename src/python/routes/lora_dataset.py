@@ -2425,7 +2425,8 @@ async def anime_model_3d(character_id: int, req: Model3DAnimeRequest) -> dict[st
             meta["toon"] = {"palette": palette, "made": time.time()}
             model_3d.write_meta(folder, meta)
         job["remote"] = "anime"
-        face = toon.face_decal(face_image) if face_image.is_file() else None
+        # 顔の内側だけを残した写し(anime/face_decal.png)を映す
+        face = toon.face_decal(face_image, out / model_3d.ANIME_DIR / "face_decal.png") if face_image.is_file() else None
         model_3d.render_anime(blender, out, req.motion, req.camera, palette, face=face, dressed=req.dressed)
 
     _start_model_3d_job(character, base, work)

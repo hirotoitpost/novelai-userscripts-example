@@ -122,9 +122,18 @@ def extract(paths: list[Path], parse: Callable[[Image.Image], dict[str, np.ndarr
     return palette
 
 
-def face_decal(image_path: Path) -> dict[str, Any]:
-    """顔に映す正面の絵: 人物の範囲(背景と違う所)と、顔の肌の色(人物の上 12% の明るい画素の中央値)。"""
-    rgb = np.asarray(Image.open(image_path).convert("RGB")).astype(float)
+def face_decal(
+    image_path: Path, out_path: Path | None = None,
+    parse: Callable[[Image.Image], dict[str, np.ndarray]] | None = None,
+) -> dict[str, Any]:
+    """
+    顔に映す正面の絵: 人物の範囲(背景と違う所)と、顔の肌の色(人物の上 12% の明るい画素の中央値)。
+    out_path があれば、顔の内側(体の部位分けの顔・目・口・鼻を、人物の高さの 1.2% だけ内へ縮めた所)だけを残し、外を
+    肌の色で埋めた絵をそこに書いて、それを映す。3D と絵のあごの位置が少しずれるので、そのままでは絵のあごの下の影・
+    あごの線が首に黒く映った(2026-11 矢野栄子)。部位分けのモデルが無ければ、元の絵をそのまま映す。
+    """
+    image = Image.open(image_path).convert("RGB")
+    rgb = np.asarray(image).astype(float)
     edge = np.concatenate([rgb[:20].reshape(-1, 3), rgb[-20:].reshape(-1, 3)])
     person = np.abs(rgb - np.median(edge, axis=0)).sum(axis=2) > 30
     ys, xs = np.nonzero(person)
@@ -135,6 +144,22 @@ def face_decal(image_path: Path) -> dict[str, Any]:
     pixels = rgb[top]
     lum = pixels @ _LUM
     skin = np.median(pixels[lum >= np.percentile(lum, 40)], axis=0)
+    if out_path is not None and parse is None:
+        from . import body_parsing
+
+        parse = body_parsing.parse if body_parsing.available() else None
+    if out_path is not None and parse is not None:
+        import cv2
+
+        parts = parse(image)
+        face = parts["face"] | parts["eyes"] | parts["mouth"] | parts["nose"]
+        radius = max(2, round((ys.max() - ys.min()) * 0.012))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+        keep = cv2.erode(face.astype(np.uint8), kernel) > 0
+        cleaned = np.where(keep[..., None], rgb, skin[None, None, :])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(cleaned.round().astype(np.uint8)).save(out_path)
+        image_path = out_path
     return {
         "image": str(image_path.resolve()),
         "bbox": [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())],
