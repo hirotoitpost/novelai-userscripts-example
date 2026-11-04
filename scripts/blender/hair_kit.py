@@ -63,6 +63,8 @@ SPRING = {"bang": 0.3, "side": 0.1, "wisp": 0.06, "nape": 0.08, "bun": 0.25, "ba
 CLEAR = 0.004
 # 垂らす: 繰り返す回数・1 回に落ちる距離(m)・速さを残す割合・曲がりをならす強さ・体から離す距離
 DRAPE_STEPS, DRAPE_FALL, DRAPE_KEEP, DRAPE_BEND, DRAPE_CLEAR = 300, 0.0006, 0.9, 0.12, 0.006
+# 下ろした後ろ髪を並べる範囲(真後ろから左右へ °)。100° では耳の前の房が首の前へ回り込んだ
+SPREAD_BACK = 88
 
 
 def _world_mesh(obj: bpy.types.Object) -> tuple[np.ndarray, list]:
@@ -163,10 +165,11 @@ class Head:
         hit = self.cloth.ray_cast(Vector(at) + Vector(normal) * 0.0005, Vector(normal), 0.08)
         return clear if hit[0] is None else hit[3] + 0.0005 + clear
 
-    def drape(self, path: list, fixed: int, clear: float = DRAPE_CLEAR) -> list:
+    def drape(self, path: list, fixed: int, clear: float = DRAPE_CLEAR, drift=None, drift_below: float = 0.12) -> list:
         """
         道すじ(点の並び)の先 fixed 個を留めて、残りを重力で垂らし、体(頭・肩・背中・胸)に当てて落ち着かせる。
-        長さは保ち、曲がりは少しならす(房が折れないように)。
+        長さは保ち、曲がりは少しならす(房が折れないように)。drift(毎回足す向き)があれば、首から drift_below 下(肩)
+        までの点を、重力と一緒に寄せる(それより下まで寄せると、毛先がほうきのように広がった)。
         """
         p = np.array(path, dtype=float)
         rest = np.linalg.norm(np.diff(p, axis=0), axis=1)
@@ -176,6 +179,9 @@ class Head:
             prev = p.copy()
             p[fixed:] += vel[fixed:]
             p[fixed:, 2] -= DRAPE_FALL
+            if drift is not None:
+                near = p[fixed:, 2] > self.neck - drift_below
+                p[fixed:][near] += drift
             for _ in range(3):
                 for i in range(max(fixed, 1), len(p)):
                     d = p[i] - p[i - 1]
@@ -371,19 +377,31 @@ def tail_bundle(head: Head, cfg: dict, index: int, az: float, el: float) -> list
     parts = [core]
     spread = 0.02 * cfg["tail_volume"]
     count = len(center)
+    # 束の断面の向き(u, v)は、根もとの向きを道すじに沿って少しずつ回して運ぶ。点ごとに決め直すと、道すじが立ったり
+    # 寝たりする所で向きが裏返り、房がねじれて波打った(2026-11 ツインテール)
+    frames = []
+    for i in range(count):
+        tan = center[min(i + 1, count - 1)] - center[max(i - 1, 0)]
+        tan /= np.linalg.norm(tan)
+        if not frames:
+            u = np.cross(tan, n)
+            u = u if np.linalg.norm(u) > 1e-6 else np.cross(tan, [1.0, 0, 0])
+        else:
+            u = frames[-1][1] - tan * (frames[-1][1] @ tan)
+        u /= np.linalg.norm(u)
+        frames.append((tan, u, np.cross(tan, u)))
     for k in range(9):
         a = 2 * math.pi * k / 9
-        path = []
+        path, outs = [], []
         for i, q in enumerate(center):
             t = i / (count - 1)
-            tan = center[min(i + 1, count - 1)] - center[max(i - 1, 0)]
-            tan /= np.linalg.norm(tan)
-            u = np.cross(tan, [0, 0, 1.0]) if abs(tan[2]) < 0.9 else np.cross(tan, [1.0, 0, 0])
-            u /= np.linalg.norm(u)
-            v = np.cross(tan, u)
+            _, u, v = frames[i]
+            radial = u * math.cos(a) + v * math.sin(a)
             r = spread * (0.3 + 1.2 * math.sin(math.pi * min(1.0, t * 1.2)) ** 0.8)
-            path.append(q + (u * math.cos(a) + v * math.sin(a)) * r)
-        strand = lock(f"tail{index}", "tail", path, [head.outward(q) for q in path], 0.036 * cfg["tail_volume"], 0.012)
+            path.append(q + radial * r)
+            outs.append(radial)
+        # 房の平たい面は束の外へ向ける(丸い束になる。体の面の向きにそろえると、後ろから平たい帯に見えた)
+        strand = lock(f"tail{index}", "tail", path, outs, 0.036 * cfg["tail_volume"], 0.012)
         # 束の房は、真ん中の道すじの鎖で一緒に動かす
         strand.chain, strand.along = core.chain, strand.along
         parts.append(strand)
@@ -422,11 +440,16 @@ def build(head: Head, cfg: dict) -> list[Part]:
             if length > 1:
                 # あごより長い房は、あごから先を足して垂らす(肩・胸に沿う)
                 extra = 0.10 * (length - 1)
-                tail = pts[-1] - pts[-2]
+                # 足す向きは下へ少し外向きで、肩までは外へ寄せながら垂らす(房の先の向きのまま足して重力だけで垂らすと、
+                # 鎖骨の坂を内へ滑り、首の前で左右が V に集まった。2026-11 ロング)
+                away = pts[-1] - head.center
+                away[2] = 0
+                away /= max(np.linalg.norm(away), 1e-6)
+                tail = np.array([0, 0, -1.0]) + 0.4 * away
                 tail /= np.linalg.norm(tail)
                 more = max(4, int(extra / 0.012))
                 pts = pts + [pts[-1] + tail * extra * k / more for k in range(1, more + 1)]
-                pts = head.drape(pts, len(pts) - more)
+                pts = head.drape(pts, len(pts) - more, drift=away * DRAPE_FALL * 0.6)
                 ends = [head.outward(q) + fwd * 1.5 for q in pts[-more:]]
                 outs = outs + [o / np.linalg.norm(o) for o in ends]
             parts.append(lock(f"side{side}{m}", "side", pts, outs, 0.028, 0.007, segments=3 if length <= 1 else 4))
@@ -456,7 +479,7 @@ def back_hair(head: Head, cfg: dict) -> list[Part]:
     parts = []
     count = cfg["back_locks"]
     z_end = head.neck - 0.10 * cfg["back_length"]
-    for i, da in enumerate(np.linspace(-100, 100, count)):
+    for i, da in enumerate(np.linspace(-SPREAD_BACK, SPREAD_BACK, count)):
         az = math.pi / 2 + math.radians(da)
         layer = 0.002 * (i % 2)
         top_el, low_el = math.radians(60), hairline(cfg, az) + math.radians(3)
@@ -469,7 +492,10 @@ def back_hair(head: Head, cfg: dict) -> list[Part]:
         more = max(4, int(drop / 0.012))
         pts += [pts[-1] - np.array([0, 0, drop * k / more]) for k in range(1, more + 1)]
         fixed = sum(1 for q in pts if q[2] > head.center[2])
-        pts = head.drape(pts, max(fixed, 2), clear=DRAPE_CLEAR + layer)
+        # 耳の近くの房は、後ろへ寄せながら垂らす(重力だけだと、肩の上から鎖骨の坂を前へ滑り、首の前で V に集まった。
+        # 2026-11 ロング)。前へ垂らすのは顔の横の房
+        drift = np.array([0, 1.0, 0]) * DRAPE_FALL * 0.6 * (abs(da) / SPREAD_BACK) ** 2
+        pts = head.drape(pts, max(fixed, 2), clear=DRAPE_CLEAR + layer, drift=drift)
         outs = [head.outward(q) for q in pts]
         parts.append(lock(f"back{i}", "back", pts, outs, 0.056, 0.009, segments=4))
     return parts

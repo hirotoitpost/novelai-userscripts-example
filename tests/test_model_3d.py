@@ -1317,6 +1317,11 @@ def test_hair_is_suggested_from_the_appearance_tags() -> None:
     assert hairs.suggest("low ponytail")["preset"] == "low_ponytail"
     long = hairs.suggest("long hair, blunt bangs")
     assert long["preset"] == "long" and long["config"]["bangs_part"] == 0.0 and long["config"]["back_length"] == 3.0
+    # 色が間に入った長さのタグ・ハーフアップ(後ろは下ろす)
+    assert hairs.suggest("short black hair")["preset"] == "short"
+    assert hairs.suggest("long pink hair")["preset"] == "long"
+    assert hairs.suggest("shoulders length brown hair")["preset"] == "semi_long"
+    assert hairs.suggest("half updo")["preset"] == "semi_long"
     # まとめ方・長さが分からない・禿げ頭・髪でないタグでは選ばない(bunny は bun ではない)
     for tags in ("black hair", "1boy, balding, short hair", "pubic hair", "bunny ears", ""):
         assert hairs.suggest(tags) is None, tags
