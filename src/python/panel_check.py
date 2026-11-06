@@ -9,6 +9,8 @@
    判定モデルに無い語(「透明」など)は確かめられない。
    あわせて、会話のコマで人物がこちら(読者)を見ていないか(目線)と、そのコマに出てはいけない物(まだもらっていない
    小物など。シーンの absent_tags と、状態で外したタグ)が描かれていないか(続き具合)も見る。
+   後ろ姿のコマ(from behind など)が正面を向いていないか(向き)と、1〜2人のコマに台本より多く描かれていないか
+   (同じキャラが二人など。人数の重複)も見る。
 
 docs/trials/2026-10-14_panel-check.md を参照。
 """
@@ -78,6 +80,47 @@ _GAZE_EXEMPT = re.compile(r"\b(looking at viewer|pov|selfie|eye contact with vie
 _UNWANTED = 0.35
 
 
+# 後ろ姿のコマの印(タグ1つがまるごとこの語のとき。「peeking from behind door」のような言い回しは数えない)。
+# looking back(振り向いて顔を見せる)のコマは向きを確かめない
+_BACK_VIEW_TAGS = {"from behind", "back view", "rear view", "facing away", "back of head"}
+# 後ろ姿とみなす確率(2026-11 実機: 後ろ姿のコマは from behind 0.77 以上、正面を向いたコマは 0)
+_FROM_BEHIND = 0.3
+# 人数の重複を確かめないコマ(背景の人・群衆を描くコマと、陽太の手だけが写る一人称のコマ。手が 1boy と判定される)
+_CROWD = re.compile(
+    r"\b(crowd|audience|multiple (girls|boys|people|others)|\d(girls|boys|others)|everyone|people|pov|male hands|disembodied)\b"
+)
+# 強調・抑制の書き方(1.4::タグ:: / -1::タグ::)の外側
+_WEIGHT = re.compile(r"^-?\d+(\.\d+)?::|::$")
+
+
+def _plain_tags(tags: str) -> set[str]:
+    return {_WEIGHT.sub("", t.strip().lower()).strip() for t in tags.split(",") if t.strip()}
+
+
+def is_back_view(tags: str) -> bool:
+    """後ろ姿のコマか(作画タグ・動作に from behind などのタグがあり、looking back は無い)。"""
+    plain = _plain_tags(tags)
+    return bool(plain & _BACK_VIEW_TAGS) and "looking back" not in plain
+
+
+def cast_counts(appearances: list[str]) -> tuple[int, int]:
+    """登場人物の容姿のタグから、描くはずの女の子・男の子の数。"""
+    girls = sum(1 for a in appearances if re.search(r"\b1girl\b", (a or "").lower()))
+    boys = sum(1 for a in appearances if re.search(r"\b1boy\b", (a or "").lower()))
+    return girls, boys
+
+
+def counts_to_check(appearances: list[str], tags: str) -> tuple[int, int] | None:
+    """
+    人数の重複を確かめるときの、描くはずの (女の子, 男の子) の数。1〜2人のコマだけ(3人以上の数え分けは当てにならない)。
+    群衆・背景の人・一人称の手を描くコマと、性別の分からないキャラがいるコマは確かめない(None)。
+    """
+    girls, boys = cast_counts(appearances)
+    if not 1 <= girls + boys <= 2 or girls + boys != len(appearances) or _CROWD.search(tags.lower()):
+        return None
+    return girls, boys
+
+
 def is_conversation(has_dialogue: bool, people: int, tags: str) -> bool:
     """
     目線を確かめるコマか。セリフがあって人物が描かれるコマ(相手が別のコマにいる1人のコマも含む)。
@@ -114,21 +157,30 @@ class PanelCheck:
     people_seen: int | None = None
     gaze_ok: bool = True
     unwanted: list[str] = field(default_factory=list)
+    # 後ろ姿のコマが後ろ姿に描かれているか(後ろ姿のコマでなければ True)
+    facing_ok: bool = True
+    # 台本より多く描かれた人数(同じキャラが二人など)。重複が無ければ 0
+    extra_people: int = 0
 
     @property
     def ok(self) -> bool:
-        return self.people_ok and self.score >= 0.5 and self.gaze_ok and not self.unwanted
+        return (
+            self.people_ok and self.score >= 0.5 and self.gaze_ok and not self.unwanted and self.facing_ok
+            and not self.extra_people
+        )
 
-    def key(self) -> tuple[bool, bool, int, float]:
-        """よい順に並べるための値(人数 → 出てはいけない物 → 目線 → 描かれたタグの割合の順に見る)。"""
-        return (self.people_ok, not self.unwanted, self.gaze_ok, self.score)
+    def key(self) -> tuple[bool, bool, bool, bool, int, float]:
+        """よい順に並べるための値(人数 → 重複 → 出てはいけない物 → 向き → 目線 → 描かれたタグの割合の順に見る)。"""
+        return (self.people_ok, not self.extra_people, not self.unwanted, self.facing_ok, self.gaze_ok, self.score)
 
     def problems(self) -> list[str]:
-        """そろわなかったものの説明(描かれなかったタグ、目線、出てはいけない物)。"""
+        """そろわなかったものの説明(描かれなかったタグ、目線、出てはいけない物、向き、人数の重複)。"""
         return [
             *self.missing,
             *([] if self.gaze_ok else ["目線(こちらを見ている)"]),
             *(f"出てはいけない: {t}" for t in self.unwanted),
+            *([] if self.facing_ok else ["向き(後ろ姿のはずが、こちらを向いている)"]),
+            *([f"人数が{self.extra_people}人多い(同じキャラの重複など)"] if self.extra_people else []),
         ]
 
 
@@ -138,12 +190,16 @@ def check_panel(
     people: int,
     conversation: bool = False,
     absent: list[str] | None = None,
+    back_view: bool = False,
+    counts: tuple[int, int] | None = None,
 ) -> PanelCheck:
     """
     判定モデルの結果(タグ → 確率)で、1コマを確かめる。people は描くはずの人数(台本の登場人物の数)。
     人数は、判定モデルの 1girl / 2boys などから数える。人がいないはずのコマに人が描かれた(または逆)ときと、
     2人以上のはずが1人しか描かれていないときを外れとみなす(3人以上の数え分けは当てにならないので見ない)。
     conversation(会話のコマ)なら、こちらを見ている(looking at viewer)ときを外れにする。absent は出てはいけないタグ。
+    back_view(後ろ姿のコマ)なら、後ろ姿(from behind / facing away)に見えず、こちらを見ているときを外れにする。
+    counts(描くはずの女の子・男の子の数。counts_to_check)を渡すと、それより多く描かれたときを重複として外れにする。
     """
     present = [t for t in expected if probabilities.get(t, 0.0) >= _PRESENT]
     # 確かめるタグが1つだけのときは、その1つで外れにしない(場所の語などは、描かれていても判定が低いことがある)
@@ -161,7 +217,18 @@ def check_panel(
         people_ok = seen >= 2
     gaze_ok = not conversation or probabilities.get(_VIEWER, 0.0) < _GAZE
     unwanted = [t for t in absent or [] if probabilities.get(t, 0.0) >= _UNWANTED]
-    return PanelCheck(score, people_ok, [t for t in expected if t not in present], seen, gaze_ok, unwanted)
+    facing_ok = not back_view or (
+        max(probabilities.get("from behind", 0.0), probabilities.get("facing away", 0.0)) >= _FROM_BEHIND
+        or probabilities.get(_VIEWER, 0.0) < _GAZE
+    )
+    extra = 0
+    if counts is not None:
+        extra = max(girls - counts[0], 0) + max(boys - counts[1], 0)
+        if counts == (1, 0) and probabilities.get("multiple girls", 0.0) >= 0.5:
+            extra = max(extra, 1)
+        if counts == (0, 1) and probabilities.get("multiple boys", 0.0) >= 0.5:
+            extra = max(extra, 1)
+    return PanelCheck(score, people_ok, [t for t in expected if t not in present], seen, gaze_ok, unwanted, facing_ok, extra)
 
 
 def tag_probabilities(image: Any) -> dict[str, float]:
@@ -259,6 +326,13 @@ def redraw_tags(check: PanelCheck, people: int, attempt: int) -> list[str]:
             tags += ["looking to the side", "profile" if attempt >= 2 else "three-quarter view"]
         tags.append(f"-{weight:g}::{_VIEWER}::")
     tags += [f"-{attempt}::{t}::" for t in check.unwanted]
+    if not check.facing_ok:
+        tags += [f"{weight:g}::from behind::", f"{weight:g}::facing away::", "back", f"-{weight:g}::{_VIEWER}::"]
+    if check.extra_people:
+        if people == 1:
+            tags += ["solo", f"-{weight:g}::multiple girls::", f"-{weight:g}::multiple boys::"]
+        else:
+            tags.append(f"-{weight:g}::clone::")
     return tags
 
 

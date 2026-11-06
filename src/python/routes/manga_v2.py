@@ -147,6 +147,7 @@ from ..models import (
     MangaV2ReferenceCandidate,
     MangaV2ReferenceCandidatesRequest,
     MangaV2CheckRequest,
+    MangaV2PanelReportRequest,
     MangaV2FlowReviewRequest,
     MangaV2ComposeRequest,
     MangaV2RedrawStatesRequest,
@@ -2287,21 +2288,9 @@ def _attachment_header(story_id: int, title: str | None, extension: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(f'{name}.{extension}')}"
 
 
-async def _check_and_redraw(
-    job: Any, story_id: int, req: MangaV2PanelsRequest, api_key: str, max_redraws: int, check_gaze: bool = True
-) -> dict[str, Any]:
-    """
-    コマの絵を確かめ、外れたコマを描き直す(よくなったときだけ置き換える)。戻り値は {checked, flagged, fixed, unresolved}。
-    unresolved は描き直してもそろわなかったコマ(シーン番号と、描かれなかったタグ・目線・出てはいけない物)。
-    確かめるのは、作画タグ・人数に加えて、会話のコマの目線(こちらを見ていないか)と、シーンのネガティブ・状態で外した
-    タグが描かれていないか。
-    """
-    from ..character_sheet import join_tags
-    from ..panel_check import (
-        check_panel, checkable_tags, is_conversation, is_person, redraw_tags, tag_probabilities, tagger_vocabulary,
-        unwanted_tags,
-    )
-
+async def _check_context(story_id: int) -> tuple[set[str], list[dict[str, Any]], dict[int, Any], dict[int, Any], set[str]]:
+    """コマの確かめに使うもの: 判定モデルの語彙、シーン、コマの絵、シーンごとの登場人物、確かめない状態のタグ。"""
+    from ..panel_check import tagger_vocabulary
     from ..panel_states import state_match_tags
 
     vocabulary = await asyncio.to_thread(tagger_vocabulary)
@@ -2314,30 +2303,85 @@ async def _check_and_redraw(
         state_tags = state_match_tags(list_redraw_states(conn))
     finally:
         conn.close()
+    return vocabulary, scenes, panels, cast, state_tags
 
-    async def check(path: str, expected: list[str], people: int, conversation: bool, absent: list[str]):
-        with Image.open(_PROJECT_ROOT / path) as image:
-            probabilities = await asyncio.to_thread(tag_probabilities, image.convert("RGB"))
-        return check_panel(probabilities, expected, people, conversation, absent)
 
+def _check_inputs(
+    scene: dict[str, Any], members: list[dict[str, Any]], vocabulary: set[str], state_tags: set[str], check_gaze: bool
+) -> dict[str, Any]:
+    """1コマの確かめの条件(確かめるタグ・人数・目線・出てはいけない物・後ろ姿・人数の重複)。"""
+    from ..panel_check import checkable_tags, counts_to_check, is_back_view, is_conversation, is_person, unwanted_tags
+
+    people = sum(1 for m in members if is_person(m.get("appearance_tags") or ""))
+    negative = scene.get("negative_prompt") or ""
+    drawn_tags = ", ".join([scene["draft_prompt_tags"] or "", *(m.get("action_tags") or "" for m in members)])
+    return {
+        "expected": checkable_tags(
+            scene["draft_prompt_tags"] or "", [m.get("action_tags") or "" for m in members], vocabulary, state_tags
+        ),
+        "people": people,
+        # シーンのネガティブで「こちらを見ない」と決めたコマは、セリフが無くても目線を確かめる
+        "conversation": check_gaze
+        and (is_conversation(bool(_lettering(scene)[0]), people, drawn_tags) or "looking at viewer" in negative.lower()),
+        "absent": unwanted_tags(scene.get("absent_tags") or "", [m.get("state_remove_tags") or "" for m in members], vocabulary),
+        "back_view": is_back_view(drawn_tags),
+        "counts": counts_to_check([m.get("appearance_tags") or "" for m in members], drawn_tags),
+    }
+
+
+async def _check_image(path: str, inputs: dict[str, Any]) -> Any:
+    from ..panel_check import check_panel, tag_probabilities
+
+    with Image.open(_PROJECT_ROOT / path) as image:
+        probabilities = await asyncio.to_thread(tag_probabilities, image.convert("RGB"))
+    return check_panel(
+        probabilities, inputs["expected"], inputs["people"], inputs["conversation"], inputs["absent"],
+        inputs["back_view"], inputs["counts"],
+    )
+
+
+@router.post("/{story_id}/panel-report")
+async def panel_report(story_id: int, req: MangaV2PanelReportRequest) -> dict[str, Any]:
+    """
+    コマの絵を確かめて、怪しいコマだけを返す(描き直さない。Anlas を使わない)。確かめるのは、作画タグ・人数・
+    出てはいけない物・後ろ姿の向き・人数の重複と、check_gaze なら会話のコマの目線。scene_indexes(0始まり)で絞れる。
+    """
+    vocabulary, scenes, panels, cast, state_tags = await _check_context(story_id)
+    if not scenes:
+        raise HTTPException(status_code=404, detail="story not found")
+    wanted = set(req.scene_indexes) if req.scene_indexes is not None else None
+    targets = [s for s in scenes if s["id"] in panels and (wanted is None or s["scene_index"] in wanted)]
+    flagged = []
+    for scene in targets:
+        result = await _check_image(
+            panels[scene["id"]]["image_path"], _check_inputs(scene, cast.get(scene["id"], []), vocabulary, state_tags, req.check_gaze)
+        )
+        if not result.ok:
+            flagged.append({"scene_index": scene["scene_index"], "scene_id": scene["id"], "problems": result.problems() or ["人数"]})
+    return {"checked": len(targets), "flagged": flagged}
+
+
+async def _check_and_redraw(
+    job: Any, story_id: int, req: MangaV2PanelsRequest, api_key: str, max_redraws: int, check_gaze: bool = True
+) -> dict[str, Any]:
+    """
+    コマの絵を確かめ、外れたコマを描き直す(よくなったときだけ置き換える)。戻り値は {checked, flagged, fixed, unresolved}。
+    unresolved は描き直してもそろわなかったコマ(シーン番号と、描かれなかったタグ・目線・出てはいけない物)。
+    確かめるのは、作画タグ・人数に加えて、会話のコマの目線(こちらを見ていないか)、シーンのネガティブ・状態で外した
+    タグが描かれていないか、後ろ姿のコマの向き、1〜2人のコマの人数の重複。
+    """
+    from ..character_sheet import join_tags
+    from ..panel_check import redraw_tags
+
+    vocabulary, scenes, panels, cast, state_tags = await _check_context(story_id)
     targets = [s for s in scenes if s["id"] in panels]
     summary: dict[str, Any] = {"checked": len(targets), "flagged": 0, "fixed": 0, "unresolved": []}
     for index, scene in enumerate(targets, start=1):
         job.message = f"コマの絵を確かめています {index}/{len(targets)}"
-        members = cast.get(scene["id"], [])
-        expected = checkable_tags(
-            scene["draft_prompt_tags"] or "", [m.get("action_tags") or "" for m in members], vocabulary, state_tags
-        )
-        people = sum(1 for m in members if is_person(m.get("appearance_tags") or ""))
-        negative = scene.get("negative_prompt") or ""
-        drawn_tags = ", ".join([scene["draft_prompt_tags"] or "", *(m.get("action_tags") or "" for m in members)])
-        # シーンのネガティブで「こちらを見ない」と決めたコマは、セリフが無くても目線を確かめる
-        conversation = check_gaze and (
-            is_conversation(bool(_lettering(scene)[0]), people, drawn_tags) or "looking at viewer" in negative.lower()
-        )
-        absent = unwanted_tags(scene.get("absent_tags") or "", [m.get("state_remove_tags") or "" for m in members], vocabulary)
+        inputs = _check_inputs(scene, cast.get(scene["id"], []), vocabulary, state_tags, check_gaze)
+        people = inputs["people"]
         best_panel = panels[scene["id"]]
-        best = await check(best_panel["image_path"], expected, people, conversation, absent)
+        best = await _check_image(best_panel["image_path"], inputs)
         if best.ok:
             continue
         summary["flagged"] += 1
@@ -2353,7 +2397,7 @@ async def _check_and_redraw(
                 drawn = next(p for p in list_manga_panels(conn, story_id) if p["scene_id"] == scene["id"])
             finally:
                 conn.close()
-            result = await check(drawn["image_path"], expected, people, conversation, absent)
+            result = await _check_image(drawn["image_path"], inputs)
             if result.key() > best.key():
                 best, best_panel = result, drawn
             else:

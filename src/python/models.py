@@ -1782,6 +1782,14 @@ class MangaV2CheckRequest(BaseModel):
     check_gaze: bool = True
 
 
+class MangaV2PanelReportRequest(BaseModel):
+    """コマの絵を確かめて、怪しいコマを知らせる(描き直さない)。scene_indexes(0始まり)を省くと全部。"""
+
+    scene_indexes: Optional[list[int]] = None
+    # 会話のコマで、人物がこちらを見ていないかも確かめる
+    check_gaze: bool = False
+
+
 class MangaV2FlowReviewRequest(BaseModel):
     """話のつながりの見直し(つなぎのコマの案)。limit は案を出す場所の数の上限。"""
 
