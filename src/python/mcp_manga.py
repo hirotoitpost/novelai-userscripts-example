@@ -651,6 +651,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         font: str | None = None,
         text_scale: float | None = None,
         monochrome: bool | None = None,
+        avoid_bodies: bool | None = None,
         show_pages: bool = True,
         page_max_size: int = 900,
     ) -> list[TextContent | ImageContent]:
@@ -658,6 +659,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         コマの絵をテンプレートに嵌め、吹き出し・ナレーション・効果音を描いてページにする。
         省略した項目は前回の合成設定を使う。show_pages で全ページの画像も返す(読み味・吹き出しの確認用)。
         monochrome: True でコマの絵を白黒にしてから嵌める(モノクロの漫画。色の残ったコマのシーン番号も知らせる)。
+        avoid_bodies: 吹き出しを人物の体にも掛からない所へ置く(既定 True。手で動かした吹き出しはそのまま)。
         """
         story = await _call("GET", f"/api/story/{story_id}")
         body = dict(story.get("manga_v2_compose_settings") or {})
@@ -667,6 +669,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "font": font,
             "text_scale": text_scale,
             "monochrome": monochrome,
+            "avoid_bodies": avoid_bodies,
         }
         body |= {k: v for k, v in given.items() if v is not None}
         result = await _call("POST", f"/api/manga-v2/{story_id}/compose", body, timeout=600)

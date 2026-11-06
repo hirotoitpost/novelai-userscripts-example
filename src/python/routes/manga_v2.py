@@ -1393,6 +1393,7 @@ def _compose_inputs(
         # 消したフォントを指していても合成は止めず、既定の効果音フォントで描く
         sfx_font_paths={word: installed[fid] for word, fid in sfx_fonts.items() if fid in installed},
         sfx_stamps=stamp_paths,
+        avoid_bodies=req.avoid_bodies,
     )
     if not panels:
         raise HTTPException(status_code=400, detail="先にコマの絵を生成してください。")

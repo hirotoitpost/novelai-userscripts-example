@@ -1676,6 +1676,8 @@ class MangaV2ComposeRequest(BaseModel):
     sfx_scale: float = Field(1.0, ge=0.5, le=2.0)
     # モノクロの漫画。コマの絵を白黒にしてから嵌める(モノクロで描かせても、水や空の場面に色が残ることがある)
     monochrome: bool = False
+    # 吹き出しを、頭だけでなく人物の体にも掛からない所へ置く(人物の切り分けのモデル anime-seg があるとき)
+    avoid_bodies: bool = True
 
 
 # ダウンロードに入れるもの。pages=合成したページ、pages_clean=セリフ・効果音・ナレーションなしのページ、
