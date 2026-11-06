@@ -467,6 +467,41 @@ def _speaker_point(box: Rect, heads: list[Rect], default: tuple[float, float]) -
     return (hx0 + hx1) / 2, hy0 + (hy1 - hy0) * 0.7
 
 
+_FACE_MARGIN = 0.12  # しっぽの先と顔の輪郭の間の余白(頭の短い辺に対する割合)
+_FACE_MARGIN_PX = 8
+
+
+def _face_reach(box: Rect, target: tuple[float, float] | None, heads: list[Rect]) -> float | None:
+    """
+    吹き出しの中心から口元(target)へ向かう線が、顔の輪郭(頭の箱に内接する楕円を余白ぶん広げたもの)に
+    入るまでの距離。しっぽの先はここで止める。口元を含む頭が無ければ None(口元の手前まで伸ばす)。
+    """
+    if target is None:
+        return None
+    tx, ty = target
+    around = [h for h in heads if h[0] <= tx <= h[2] and h[1] <= ty <= h[3]]
+    if not around:
+        return None
+    hx0, hy0, hx1, hy1 = min(around, key=lambda h: ((h[0] + h[2]) / 2 - tx) ** 2 + ((h[1] + h[3]) / 2 - ty) ** 2)
+    margin = max(_FACE_MARGIN_PX, min(hx1 - hx0, hy1 - hy0) * _FACE_MARGIN)
+    ax, ay = (hx1 - hx0) / 2 + margin, (hy1 - hy0) / 2 + margin
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    dx, dy = tx - cx, ty - cy
+    length = max((dx * dx + dy * dy) ** 0.5, 1e-6)
+    # 楕円を円に直して、線(中心 + t × 向き)と交わる最初の t を解く
+    px, py = (cx - (hx0 + hx1) / 2) / ax, (cy - (hy0 + hy1) / 2) / ay
+    ux, uy = dx / length / ax, dy / length / ay
+    a = ux * ux + uy * uy
+    b = 2 * (px * ux + py * uy)
+    c = px * px + py * py - 1
+    if c <= 0:
+        return 0.0  # 吹き出しの中心がもう顔の中
+    disc = b * b - 4 * a * c
+    if disc < 0:
+        return None
+    return max((-b - disc**0.5) / (2 * a), 0.0)
+
+
 def _offpanel_side(
     box: Rect,
     panel: Rect,
@@ -821,12 +856,14 @@ def _draw_lettering(
         elements.append(Element(key, "bubble", line, box, frame))
         # 頭に被ってしまう吹き出しだけ地を透かし、絵が見えるようにする
         opacity = min(style.bubble_opacity, _OVER_HEAD_OPACITY) if _covers_head(box, heads) else style.bubble_opacity
+        target = _tail_target(box, rect, heads, head_ids, speaker_id, side, speaker)
         draw_bubble(
             page,
             box,
             block,
             style.font_path,
-            tail_toward=_tail_target(box, rect, heads, head_ids, speaker_id, side, speaker),
+            tail_toward=target,
+            tail_reach=_face_reach(box, target, heads),
             opacity=opacity,
             shape=final_shape,
         )

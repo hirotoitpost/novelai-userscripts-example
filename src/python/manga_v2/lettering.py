@@ -253,6 +253,21 @@ BUBBLE_SHAPES = tuple(_BUBBLE_SCALES)
 _BUBBLE_PAD = 10
 _OUTLINE = 3
 _WHISPER_OUTLINE = 2
+# しっぽの長さ(吹き出しの短い方の半径に対する割合)。顔の輪郭の手前まで伸ばすが、長すぎると間延びするので上限で止め、
+# 顔が近くても向きが分かるよう小さな下限は残す。顔が分からないときは口元の手前(_TAIL_GAP)で止める
+_TAIL_MIN = 0.15
+_TAIL_MAX = 0.9
+_TAIL_MAX_PX = 90
+_TAIL_GAP = 10
+
+
+def tail_length(rx: float, ry: float, edge: float, reach: float) -> float:
+    """
+    しっぽの長さ(本体の縁から先端まで)。reach は吹き出しの中心から先端を止めたい所(顔の輪郭の手前)まで、
+    edge は中心から同じ方向の縁まで。そこまで届く長さにし、下限・上限で止める。
+    """
+    base = min(rx, ry)
+    return min(max(reach - edge, base * _TAIL_MIN), base * _TAIL_MAX, _TAIL_MAX_PX)
 
 
 # 1列だけのセリフでも楕円が細くなりすぎないよう、幅は高さのこの割合以上にする
@@ -332,6 +347,7 @@ def draw_bubble(
     block: TextBlock,
     font_path: Path,
     tail_toward: tuple[float, float] | None = None,
+    tail_reach: float | None = None,
     opacity: float = 1.0,
     shape: str = "ellipse",
 ) -> None:
@@ -339,16 +355,16 @@ def draw_bubble(
     box(外接長方形)に吹き出しを描き、中央に縦書きで文字を置く。shape は BUBBLE_SHAPES のどれか。
 
     opacity は白い地の不透明度(0で輪郭線だけ)。輪郭線と文字は常に不透明。
+    tail_reach は吹き出しの中心からしっぽの先を止める所までの距離(顔の輪郭の手前)。無ければ口元の手前で止める。
     本体としっぽを1つの形(マスク)にまとめてから輪郭を取るので、地を透かしても
     しっぽの付け根に本体の線が残らない。雲形(心の声)はしっぽの代わりに小さな丸を並べる。
     """
     x0, y0, x1, y1 = box
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
-    tail_len = min(rx, ry) * 0.55
 
-    # 吹き出しとしっぽが収まる範囲だけで描いて貼る
-    margin = round(tail_len) + _OUTLINE * 4
+    # 吹き出しとしっぽが収まる範囲だけで描いて貼る(しっぽは口元までの距離で伸び縮みするので、上限の長さで取る)
+    margin = round(min(min(rx, ry) * _TAIL_MAX, _TAIL_MAX_PX)) + _OUTLINE * 4
     ox, oy = x0 - margin, y0 - margin
     mask = Image.new("L", (x1 - x0 + margin * 2, y1 - y0 + margin * 2), 0)
     shape_draw = ImageDraw.Draw(mask)
@@ -359,6 +375,9 @@ def draw_bubble(
         length = max((dx * dx + dy * dy) ** 0.5, 1)
         ux, uy = dx / length, dy / length
         edge = 1 / max(((ux / rx) ** 2 + (uy / ry) ** 2) ** 0.5, 1e-6)
+        # 先端は、吹き出しの中心と口元を結ぶ線の上の、顔の輪郭の手前(長すぎるときは上限)
+        reach = tail_reach if tail_reach is not None else length - _TAIL_GAP
+        tail_len = tail_length(rx, ry, edge, reach)
         if shape == "cloud":
             # 心の声: 話し手へ向かって小さくなる丸を2つ
             for distance, radius in ((edge + tail_len * 0.35, min(rx, ry) * 0.12), (edge + tail_len * 0.85, min(rx, ry) * 0.07)):
@@ -369,7 +388,7 @@ def draw_bubble(
             inset = edge * (0.75 if shape == "burst" else 1.0) - _OUTLINE * 3
             ex = cx + ux * inset - ox
             ey = cy + uy * inset - oy
-            tip_len = tail_len + _OUTLINE * 3 + edge - inset
+            tip_len = tail_len + edge - inset
             tip = (ex + ux * tip_len, ey + uy * tip_len)
             base_half = min(rx, ry) * 0.16
             px, py = -uy, ux
