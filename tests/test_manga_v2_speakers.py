@@ -10,10 +10,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from python.manga_v2.bodies import cover_function  # noqa: E402
 from python.manga_v2.compose import (  # noqa: E402
     PanelContent,
     _offpanel_side,
@@ -185,6 +187,20 @@ def test_reads_after_keeps_right_to_left_and_top_to_bottom() -> None:
     assert _reads_after((100, 20, 200, 200), earlier)  # 同じ段の左
     assert not _reads_after((450, 20, 550, 200), earlier)  # 同じ段の右
     assert _reads_after((450, 300, 550, 480), earlier)  # 下の段なら右でもよい
+    assert _reads_after((450, 130, 550, 310), earlier)  # はっきり(高さの 6 割以上)下げれば右でもよい
+    assert not _reads_after((450, 80, 550, 260), earlier)  # 少し下げただけでは右に置かない
+
+
+def test_bubble_avoids_the_side_of_another_person() -> None:
+    # 中ほど(x=150〜450)は体で埋まっていて、空きは左右の端だけ。話し手(x=320)には右端の方が少し近いが、
+    # 右端は別の人(x=470)の方が近く、その人のセリフに見えるので左端を選ぶ
+    mask = np.zeros((800, 600), bool)
+    mask[:, 150:450] = True
+    body = cover_function(mask, (0, 0))
+    plain, _ = _place((120, 200), _PANEL, [], prefer_x=320, earlier=[], body=body)
+    assert (plain[0] + plain[2]) / 2 > 300
+    box, _ = _place((120, 200), _PANEL, [], prefer_x=320, earlier=[], others_x=[470], body=body)
+    assert (box[0] + box[2]) / 2 < 300
 
 
 def test_bubble_goes_near_the_speaker_and_away_from_the_other() -> None:
