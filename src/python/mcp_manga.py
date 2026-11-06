@@ -230,6 +230,18 @@ def _project_file(relative: str) -> Path:
     return path
 
 
+async def _export_pdf(story_id: int) -> Path:
+    """合成したページを PDF にして outputs/manga/exports/ に保存し、そのパスを返す。"""
+    content = await _call_bytes("POST", f"/api/manga-v2/{story_id}/download", {"format": "pdf", "contents": ["pages"]})
+    story = await _call("GET", f"/api/story/{story_id}")
+    name = re.sub(r'[\\/:*?"<>|\s]+', "_", (story.get("title") or "").strip())[:60] or "manga"
+    folder = _USER_ROOT / "outputs" / "manga" / "exports"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"story{story_id}_{name}.pdf"
+    path.write_bytes(content)
+    return path
+
+
 async def _wait_job(story_id: int, timeout_seconds: float) -> dict[str, Any]:
     """物語のジョブ(コマの生成など)が終わるまで待つ。"""
     elapsed = 0.0
@@ -269,18 +281,6 @@ async def _wait_model_3d(character_id: int, info: dict[str, Any], base_id: int |
         elapsed += _JOB_POLL_SECONDS
         entry = pick(await _call("GET", f"/api/lora-dataset/character/{character_id}/model-3d"))
     return entry
-
-
-async def _export_pdf(story_id: int) -> Path:
-    """合成したページを PDF にして outputs/manga/exports/ に保存し、そのパスを返す。"""
-    content = await _call_bytes("POST", f"/api/manga-v2/{story_id}/download", {"format": "pdf", "contents": ["pages"]})
-    story = await _call("GET", f"/api/story/{story_id}")
-    name = re.sub(r'[\\/:*?"<>|\s]+', "_", (story.get("title") or "").strip())[:60] or "manga"
-    folder = _USER_ROOT / "outputs" / "manga" / "exports"
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"story{story_id}_{name}.pdf"
-    path.write_bytes(content)
-    return path
 
 
 def register_manga_tools(mcp: MCPServer) -> None:
