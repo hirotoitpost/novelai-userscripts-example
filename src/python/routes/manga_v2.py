@@ -1183,15 +1183,23 @@ async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: Clie
     return _job_response(_start_job(story_id, "panels", runner))
 
 
-# 後ろ姿のコマの印(全体のタグか、そのキャラの動作のタグにあれば後ろ姿)
-_BACK_VIEW = re.compile(r"(?<![\w-])(from behind|back view|rear view|facing away|back of head)(?![\w-])", re.IGNORECASE)
+# 後ろ姿のコマの印(全体のタグか、そのキャラの動作のタグに、タグ1つがまるごとこの語であれば後ろ姿。
+# 「peeking from behind door」のような言い回しは数えない)
+_BACK_VIEW_TAGS = {"from behind", "back view", "rear view", "facing away", "back of head"}
+# 強調・抑制の書き方(1.4::タグ:: / -1::タグ::)の外側
+_TAG_WEIGHT = re.compile(r"^-?\d+(\.\d+)?::|::$")
 # 後ろ姿のコマで、後ろ姿の参照が無いキャラの正面の参照を弱める割合(正面の参照に引っ張られてこちらを向くため)
 _BACK_VIEW_STRENGTH = 0.6
 
 
 def is_back_view(scene_tags: str, action_tags: str | None = None) -> bool:
     """後ろ姿のコマか(looking back のような、振り向いて顔を見せるものは後ろ姿に数えない)。"""
-    return bool(_BACK_VIEW.search(scene_tags or "") or _BACK_VIEW.search(action_tags or ""))
+    plain = {
+        _TAG_WEIGHT.sub("", t.strip().lower()).strip()
+        for t in f"{scene_tags or ''},{action_tags or ''}".split(",")
+        if t.strip()
+    }
+    return bool(plain & _BACK_VIEW_TAGS) and "looking back" not in plain
 
 
 def _scene_references(

@@ -53,6 +53,9 @@ def test_back_view_detection() -> None:
     # 振り向いて顔を見せる・手の甲 は後ろ姿ではない
     assert not manga_v2.is_back_view("looking back, smile")
     assert not manga_v2.is_back_view("back of hand, close-up")
+    assert not manga_v2.is_back_view("peeking from behind wooden door")  # 言い回しの中の from behind
+    assert not manga_v2.is_back_view("from behind, looking back")
+    assert manga_v2.is_back_view("1.4::from behind::, smile")
 
 
 def test_register_and_remove_back_reference(client: TestClient) -> None:
