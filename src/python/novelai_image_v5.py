@@ -22,6 +22,7 @@ import base64
 import io
 import logging
 import re
+import time
 import zipfile
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +30,7 @@ from typing import Any
 import httpx
 from PIL import Image
 
+from .app_logging import record_generation_event, request_summary, sha256_hex
 from .client import api_keys_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -331,6 +333,7 @@ async def generate_image_v5(
     character_tags: list[str] | None = None,
     character_reference: CharacterReferenceInput | list[CharacterReferenceInput] | None = None,
     character_negatives: list[str] | None = None,
+    log_context: dict[str, Any] | None = None,
 ) -> bytes:
     """
     組み立て済みのプロンプトで1枚生成し、PNGバイト列を返す。漫画ページ(コマ割り込み)にも、
@@ -339,6 +342,8 @@ async def generate_image_v5(
     character_reference は V4.5 のみ対応(V5に付けると500が返る。2026-10 実機で確認)。
     複数のキャラの参照をまとめて渡すときはリストにする。character_negatives はキャラごとの
     ネガティブ(character_tags と同じ並び)。
+    送った内容と結果は生成の記録(app_logging.record_generation_event)に残す。log_context はそこに添える情報
+    (どの物語のどのコマか など)。
     """
     body = _build_v5_body(
         prompt,
@@ -360,6 +365,21 @@ async def generate_image_v5(
     if refs:
         _apply_character_reference(body["parameters"], refs)
 
+    event: dict[str, Any] = {"source": "novelai_image_v5", **(log_context or {}), "request": request_summary(body)}
+    started = time.monotonic()
+    try:
+        image = await _request_image(api_key, body)
+    except Exception as exc:
+        elapsed = round(time.monotonic() - started, 2)
+        record_generation_event({**event, "result": {"status": "error", "error": str(exc)[:500], "elapsed_s": elapsed}})
+        raise
+    elapsed = round(time.monotonic() - started, 2)
+    record_generation_event({**event, "result": {"status": "ok", "image_sha256": sha256_hex(image), "elapsed_s": elapsed}})
+    return image
+
+
+async def _request_image(api_key: str, body: dict[str, Any]) -> bytes:
+    """NovelAI に1枚頼んで、PNG バイト列を返す。"""
     keys = api_keys_with_fallback(api_key)
     content = b""
     async with httpx.AsyncClient(timeout=180) as http_client:

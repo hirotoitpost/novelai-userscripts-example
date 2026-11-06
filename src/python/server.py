@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .app_logging import setup_logging
 from .client import app_mode, close_client, init_client
 from .sessions import SessionMiddleware, allowed_origins, check_config
 from .usage import LimitExceeded
@@ -51,6 +52,8 @@ _env_path = _PROJECT_ROOT / ".env"
 # ふだんは .env の値を優先する(PC の環境変数に古い値が残っていても、.env を直せば効くように)。Docker では
 # compose の environment(LLM の場所を http://ollama:11434 にする など)を優先したいので、上書きしない
 load_dotenv(_env_path, override=os.environ.get("APP_IN_CONTAINER") != "1")
+# アプリと uvicorn のログを data/logs/backend.log に日ごとに残す(app_logging.py)
+setup_logging()
 
 
 

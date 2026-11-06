@@ -29,6 +29,9 @@ from novelai.types import (
     InpaintParams,
 )
 
+from novelai._utils.image import crop_and_resize
+
+from ..app_logging import b64_sha256, record_generation_event, sha256_hex
 from ..client import get_client
 from ..sdk_compat import allow_uc_preset_none
 from ..db import (
@@ -119,7 +122,7 @@ def save_generation(
     )
     conn = get_connection()
     try:
-        return record_generation(
+        saved = record_generation(
             conn,
             prompt=gen.prompt,
             negative_prompt=gen.negative_prompt,
@@ -140,6 +143,42 @@ def save_generation(
         )
     finally:
         conn.close()
+    _log_sdk_generation(
+        gen,
+        {"status": "ok", "history_id": saved["id"], "image_paths": image_paths, "image_sha256": [sha256_hex(d) for d in images]},
+    )
+    return saved
+
+
+def _sdk_request_summary(gen: GenerateImageRequest) -> dict[str, Any]:
+    """
+    SDK で送る設定の写し(生成の記録用)。画像はハッシュにする。キャラ参照は SDK が送る形(1024x1536 に整えたもの)の
+    ハッシュなので、漫画のコマの記録(novelai_image_v5 の director_reference_images)と同じものか比べられる。
+    """
+    summary = gen.model_dump(mode="json", exclude_none=True)
+    for ref in summary.get("character_references") or []:
+        try:
+            ref["image"] = f"sha256:{b64_sha256(crop_and_resize(_strip_data_url(ref['image'])))}"
+        except Exception:  # noqa: BLE001 - 記録のための計算なので、失敗しても元の画像のハッシュにする
+            ref["image"] = f"sha256:{b64_sha256(ref['image'])}"
+    for key in ("i2i", "inpaint"):
+        part = summary.get(key) or {}
+        for name in ("image", "mask"):
+            if isinstance(part.get(name), str):
+                part[name] = f"sha256:{b64_sha256(part[name])}"
+    for image in (summary.get("controlnet") or {}).get("images") or []:
+        if isinstance(image.get("image"), str):
+            image["image"] = f"sha256:{b64_sha256(image['image'])}"
+    return summary
+
+
+def _strip_data_url(image_b64: str) -> str:
+    return image_b64.split(",", 1)[1] if "," in image_b64[:100] else image_b64
+
+
+def _log_sdk_generation(gen: GenerateImageRequest, result: dict[str, Any]) -> None:
+    """画像生成ページ・ワード選択など(SDK 経由)の生成を、生成の記録に残す。"""
+    record_generation_event({"source": "sdk", "request": _sdk_request_summary(gen), "result": result})
 
 
 @router.get("/presets", response_model=list[ImagePresetResponse])
@@ -734,6 +773,7 @@ async def generate_image(
         params = GenerateImageParams(**_build_kwargs(req))
         images = await client.image.generate(params)
     except Exception as exc:
+        _log_sdk_generation(req, {"status": "error", "error": str(exc)[:500]})
         raise HTTPException(status_code=_http_status(exc), detail=str(exc))
     # ギャラリーに残すため、返す形式(webp 等)とは別に PNG で保存する
     save_generation(req, [base64.b64decode(b) for b in _pil_to_b64(images, "png")])
@@ -765,6 +805,7 @@ async def generate_image_stream(
                 )
                 yield f"event: {chunk.event_type}\ndata: {payload}\n\n"
         except Exception as exc:
+            _log_sdk_generation(req, {"status": "error", "error": str(exc)[:500]})
             yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
         # 完成した画像だけをギャラリー用に保存する(途中経過の画像は残さない)。
         # 途中で失敗しても、それまでに完成した分は残す。

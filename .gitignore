@@ -27,6 +27,9 @@ outputs/
 # Local SQLite DB (user data, not source code)
 data/
 
+# 生成の記録(single では利用者のフォルダ = リポジトリ直下の logs/。docs/logging_jp.md)
+/logs/
+
 # Reference samples (third-party HTML, not source code)
 samples/
 

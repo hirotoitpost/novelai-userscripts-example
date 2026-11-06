@@ -1458,6 +1458,13 @@ async def _run_panels(
                 character_tags=character_tags,
                 character_reference=references,
                 character_negatives=character_negatives if multiple else None,
+                log_context={
+                    "purpose": "panel_candidate" if req.candidates > 1 else "panel",
+                    "story_id": story_id,
+                    "scene_id": scene["id"],
+                    "scene_index": scene["scene_index"],
+                    "references": used_references,
+                },
             )
             suffix = f"_c{k + 1}" if req.candidates > 1 else ""
             filename = f"story{story_id}_scene{scene['scene_index']}{suffix}_{uuid4().hex[:8]}.png"

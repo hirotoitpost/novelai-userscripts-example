@@ -107,6 +107,29 @@ function Get-RunningProcess($svc) {
     return Get-Process -Id $storedId -ErrorAction SilentlyContinue
 }
 
+# 前回の起動の標準出力・標準エラー(落ちたときのトレースバックなど)を上書きせず、data/run/old/ に日時付きで残す。
+# 残すのは各サーバーの新しい方から $KeepRunLogs 回分。アプリのログは別に data/logs/ に日ごとに残る(app_logging.py)
+$KeepRunLogs = 20
+function Save-PreviousLogs([string]$Name, [hashtable]$Svc) {
+    $oldDir = Join-Path $RunDir 'old'
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    foreach ($file in @($Svc.LogFile, $Svc.ErrFile)) {
+        if ((Test-Path $file) -and ((Get-Item $file).Length -gt 0)) {
+            New-Item -ItemType Directory -Force -Path $oldDir | Out-Null
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($file)
+            Move-Item -Force $file (Join-Path $oldDir "$base.$stamp.log")
+        }
+    }
+    if (Test-Path $oldDir) {
+        foreach ($kind in @("$Name.log", "$Name.err.log")) {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($kind)
+            Get-ChildItem $oldDir -Filter "$base.*.log" |
+                Where-Object { $_.Name -match "^$([regex]::Escape($base))\.\d{8}-\d{6}\.log$" } |
+                Sort-Object Name -Descending | Select-Object -Skip $KeepRunLogs | Remove-Item -Force
+        }
+    }
+}
+
 function Start-Service([string]$Name, [hashtable]$Svc) {
     $existing = Get-RunningProcess $Svc
     if ($existing) {
@@ -118,6 +141,7 @@ function Start-Service([string]$Name, [hashtable]$Svc) {
         return
     }
 
+    Save-PreviousLogs $Name $Svc
     $proc = Start-Process -FilePath $Svc.FilePath -ArgumentList $Svc.ArgumentList `
         -WorkingDirectory $Svc.WorkingDirectory `
         -RedirectStandardOutput $Svc.LogFile -RedirectStandardError $Svc.ErrFile `
