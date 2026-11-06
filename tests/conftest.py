@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# バックエンドを読み込むとプロセスのログ(data/logs/backend.log)を付けるので、テストのログは一時フォルダへ
+os.environ["NAI_LOG_DIR"] = tempfile.mkdtemp(prefix="nai-test-logs-")
 
 from python import db  # noqa: E402
 
@@ -32,3 +37,9 @@ def _default_app_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.delenv("APP_MODE", raising=False)
     monkeypatch.delenv("APP_ALLOWED_ORIGINS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_generation_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """生成の記録(app_logging.record_generation_event)は一時フォルダへ(手元の利用者のフォルダに書かない)。"""
+    monkeypatch.setenv("NAI_GENERATION_LOG_DIR", str(tmp_path / "generation-logs"))
