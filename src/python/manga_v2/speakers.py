@@ -268,6 +268,20 @@ def _identify_in_order(image: Image.Image, heads: list[Box], cast: list[CastMemb
     return [cast[member].id for member in best]
 
 
+# 登場キャラより頭が多いとき、いちばん大きい頭に対する面積がこれ未満の頭は誤検出(小物・背景の模様)とみなす。
+# 奥に小さく写った人でも 0.13 ほどはある(9話で確認)
+_TINY_HEAD = 0.06
+
+
+def drop_tiny_heads(heads: list[Box], cast_size: int) -> list[Box]:
+    """登場キャラより多く見つかった頭のうち、ほかと比べて極端に小さいもの(誤検出)を除く。"""
+    if len(heads) <= cast_size:
+        return heads
+    areas = [(h[2] - h[0]) * (h[3] - h[1]) for h in heads]
+    largest = max(areas)
+    return [h for h, area in zip(heads, areas) if area >= largest * _TINY_HEAD]
+
+
 def identify_heads(image: Image.Image, heads: list[Box], cast: list[CastMember]) -> list[int | None]:
     """
     頭ごとにどのキャラかを返す(分からなければ None)。髪の色が分かるキャラが二人以上いて、

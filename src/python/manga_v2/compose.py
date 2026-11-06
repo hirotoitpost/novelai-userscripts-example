@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from .bodies import BodyCover, body_cover
 from .detect import detect_heads
 from .overlay import OverlayPiece, draw_pieces
-from .speakers import CastMember, identify_heads
+from .speakers import CastMember, drop_tiny_heads, identify_heads
 from .layout import (
     PAGE_HEIGHT,
     PAGE_WIDTH,
@@ -718,6 +718,9 @@ def _draw_picture(
     body: BodyCover | None = None
     if content.image_path is not None and content.image_path.is_file():
         source_heads = detect_heads(content.image_path)
+        if content.speakers:
+            # 小物などの誤検出が話し手の候補に混ざると、消去法で決まるはずの人が決まらない
+            source_heads = drop_tiny_heads(source_heads, len(content.cast))
         with Image.open(content.image_path) as src:
             image = src.convert("RGB")
         source_ids = identify_heads(image, source_heads, content.cast) if content.speakers else []
