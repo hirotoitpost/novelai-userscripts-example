@@ -2127,6 +2127,13 @@ def update_scene_narration(conn: sqlite3.Connection, scene_id: int, narration: s
     conn.commit()
 
 
+def update_scene_dialogue(conn: sqlite3.Connection, scene_id: int, dialogue: list[dict[str, Any]] | None) -> None:
+    """吹き出しのセリフ。None で本文の「」から取り出すのに戻す。"""
+    value = None if dialogue is None else json.dumps(dialogue, ensure_ascii=False)
+    conn.execute("UPDATE story_scenes SET dialogue = ? WHERE id = ?", (value, scene_id))
+    conn.commit()
+
+
 def update_scene_sfx(conn: sqlite3.Connection, scene_id: int, sfx: list[str] | None) -> None:
     """None で未設定に戻す。"""
     conn.execute(

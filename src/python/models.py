@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal, Optional, Union
 
 from novelai.constants.positions import PositionPreset
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 ImageModelLiteral = Literal[
     "nai-diffusion-5-full",
@@ -1969,6 +1969,15 @@ class StoryEditLine(BaseModel):
     speaker_id: Optional[int] = None
 
 
+class MangaV2SceneDialogueRequest(BaseModel):
+    """
+    シーンの吹き出しのセリフ(編集画面と同じ形)。[] で吹き出しを全部消す、None で本文の「」から取り出すのに戻す。
+    話し手がそのシーンにいないセリフは、合成でナレーション(名前「…」)になる。
+    """
+
+    dialogue: Optional[list[StoryEditLine]] = None
+
+
 class StoryEditCharacter(BaseModel):
     """シーンの登場キャラ。outfit_tags は空ならキャラシートのふだんの服装、state_id は状態(null はふだん)。"""
 
@@ -1979,7 +1988,12 @@ class StoryEditCharacter(BaseModel):
 
 
 class StoryEditScene(BaseModel):
-    """1コマ(シーン)。id が null なら新しく足したシーン。"""
+    """
+    1コマ(シーン)。id が null なら新しく足したシーン。知らない項目(台本の形の character_ids・character_actions など)は
+    黙って捨てずに 422 にする(登場人物は characters で送る。捨てると、変えたつもりで変わっていないことに気づけない)。
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     id: Optional[int] = None
     title: Optional[str] = Field(None, max_length=200)
