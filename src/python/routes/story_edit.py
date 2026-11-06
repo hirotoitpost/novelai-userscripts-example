@@ -31,6 +31,7 @@ from ..db import (
     get_manga_v2_ugoira,
     get_story,
     list_manga_pages,
+    count_panel_candidates,
     list_manga_panels,
     set_manga_v2_overrides,
     set_manga_v2_ugoira,
@@ -64,7 +65,9 @@ def _sizes(conn: sqlite3.Connection, story_id: int, custom_pages: bool, scenes: 
     return [size or auto[i] for i, (_, size) in enumerate(scenes)]
 
 
-def _snapshot_scene(scene: dict[str, Any], panel: dict[str, Any] | None, auto_size: str) -> dict[str, Any]:
+def _snapshot_scene(
+    scene: dict[str, Any], panel: dict[str, Any] | None, auto_size: str, candidates: int = 0
+) -> dict[str, Any]:
     if scene.get("dialogue") is not None:
         dialogue = [
             {"text": str(line.get("text") or ""), "speaker_id": line.get("speaker_id")} for line in scene["dialogue"]
@@ -99,6 +102,8 @@ def _snapshot_scene(scene: dict[str, Any], panel: dict[str, Any] | None, auto_si
             for c in scene.get("characters") or []
         ],
         "panel": {"image_path": panel["image_path"], "stale": bool(panel.get("stale"))} if panel else None,
+        # コマの候補の絵の枚数(manga_v2 の candidates で描いたもの。編集画面で見比べて選ぶ)
+        "candidates": candidates,
     }
 
 
@@ -113,6 +118,7 @@ async def get_story_edit(story_id: int) -> dict[str, Any]:
         panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
         auto = _sizes(conn, story_id, bool(story.get("custom_pages")), [(s["page_index"], None) for s in story["scenes"]])
         page_layouts = bool(get_manga_v2_page_layouts(conn, story_id))
+        candidates = count_panel_candidates(conn, story_id)
     finally:
         conn.close()
     return {
@@ -123,7 +129,8 @@ async def get_story_edit(story_id: int) -> dict[str, Any]:
         # 漫画v2のページごとのコマ割りを決めてあるか(あれば、合成はここでのページの区切りではなくそれに従う)
         "page_layouts": page_layouts,
         "scenes": [
-            _snapshot_scene(scene, panels.get(scene["id"]), size) for scene, size in zip(story["scenes"], auto)
+            _snapshot_scene(scene, panels.get(scene["id"]), size, candidates.get(scene["id"], 0))
+            for scene, size in zip(story["scenes"], auto)
         ],
     }
 

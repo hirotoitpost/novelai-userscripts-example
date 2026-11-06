@@ -1609,6 +1609,9 @@ class MangaV2PanelsRequest(BaseModel):
     # 同じ構図に寄ってしまうため。
     vary_seed: bool = False
     reference_fidelity: float = Field(1.0, ge=0.0, le=1.0)
+    # 2以上なら、コマの絵は変えずに候補をこの枚数描く(シードを候補ごとにずらす)。選ぶのは
+    # POST /scenes/{scene_id}/candidates/{candidate_id}/adopt。
+    candidates: int = Field(1, ge=1, le=8)
     # width/height はテンプレートのコマの形から決めるので使わない。
     settings: MangaImageSettings = MangaImageSettings()
 

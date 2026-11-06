@@ -190,3 +190,33 @@
   .sed-cast td { width: auto !important; white-space: normal; }
   .sed-lines li { flex-wrap: wrap; }
 }
+
+/* コマの候補の絵(見比べて1枚を選ぶ) */
+.sed-candidates-open {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 0 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+.sed-candidates {
+  flex: 0 0 18rem;
+  max-width: 100%;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  padding: 0.4rem;
+}
+.sed-candidates-head { display: flex; justify-content: space-between; align-items: center; gap: 0.4rem; }
+.sed-candidate-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  gap: 0.4rem;
+}
+.sed-candidate-list img { width: 100%; display: block; border-radius: 4px; }
+.sed-candidate-actions { display: flex; gap: 0.2rem; margin-top: 0.2rem; }
+.sed-candidate-actions button { padding: 0 0.3rem; font-size: 0.75rem; }

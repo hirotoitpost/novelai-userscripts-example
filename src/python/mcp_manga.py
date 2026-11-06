@@ -271,6 +271,58 @@ async def _wait_model_3d(character_id: int, info: dict[str, Any], base_id: int |
     return entry
 
 
+async def _panel_settings(
+    preset_id: int | None,
+    model: str | None,
+    steps: int | None,
+    scale: float | None,
+    cfg_rescale: float | None,
+    negative_prompt: str | None,
+) -> dict[str, Any]:
+    """コマの生成の設定(プリセットの値に、渡した値を上書き)。"""
+    settings: dict[str, Any] = {}
+    if preset_id is not None:
+        presets = {p["id"]: p for p in await _call("GET", "/api/image/presets")}
+        if preset_id not in presets:
+            raise ValueError(f"プリセット {preset_id} がありません")
+        settings |= {k: v for k, v in presets[preset_id]["settings"].items() if k in _PRESET_KEYS and v is not None}
+    overrides = {
+        "model": model,
+        "steps": steps,
+        "scale": scale,
+        "cfg_rescale": cfg_rescale,
+        "negative_prompt": negative_prompt,
+    }
+    return settings | {k: v for k, v in overrides.items() if v is not None}
+
+
+async def _candidate_number(scene_id: int, number: int) -> dict[str, Any]:
+    """一覧の番号(1始まり)の候補。"""
+    entries = await _call("GET", f"/api/manga-v2/scenes/{scene_id}/candidates")
+    entry = next((e for e in entries if e["number"] == number), None)
+    if entry is None:
+        raise ValueError(f"候補 {number} はありません(候補は {len(entries)} 枚)")
+    return entry
+
+
+async def _candidate_report(scene_id: int, max_size: int) -> list[TextContent | ImageContent]:
+    """コマの候補の番号・シードと、番号付きの一覧の画像(「今」はいまのコマの絵)。"""
+    entries = await _call("GET", f"/api/manga-v2/scenes/{scene_id}/candidates")
+    if not entries:
+        return [TextContent(type="text", text="このコマの候補はありません。")]
+    data = await _call_bytes("GET", f"/api/manga-v2/scenes/{scene_id}/candidates/sheet?tile={max(120, min(max_size // 3, 640))}")
+    with Image.open(io.BytesIO(data)) as src:
+        image = src.convert("RGB")
+    image.thumbnail((max_size, max_size))
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=85)
+    lines = "\n".join(f"{e['number']}: seed {e['seed']}" for e in entries)
+    return [
+        TextContent(type="text", text=f"候補 {len(entries)} 枚(「今」はいまのコマの絵)。\n{lines}"),
+        ImageContent(type="image", data=base64.b64encode(buf.getvalue()).decode(), mime_type="image/jpeg"),
+    ]
+
+
 def register_manga_tools(mcp: MCPServer) -> None:
     """漫画作成のツールを MCP サーバーに登録する。"""
 
@@ -578,20 +630,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         """
         story = await _call("GET", f"/api/story/{story_id}")
         indexes = sorted(scene_indexes) if scene_indexes is not None else [s["scene_index"] for s in story["scenes"]]
-        settings: dict[str, Any] = {}
-        if preset_id is not None:
-            presets = {p["id"]: p for p in await _call("GET", "/api/image/presets")}
-            if preset_id not in presets:
-                raise ValueError(f"プリセット {preset_id} がありません")
-            settings |= {k: v for k, v in presets[preset_id]["settings"].items() if k in _PRESET_KEYS and v is not None}
-        overrides = {
-            "model": model,
-            "steps": steps,
-            "scale": scale,
-            "cfg_rescale": cfg_rescale,
-            "negative_prompt": negative_prompt,
-        }
-        settings |= {k: v for k, v in overrides.items() if v is not None}
+        settings = await _panel_settings(preset_id, model, steps, scale, cfg_rescale, negative_prompt)
         chosen = template or (story.get("manga_v2_compose_settings") or {}).get("template") or "grid4"
         base = {
             "template": chosen,
@@ -633,6 +672,86 @@ def register_manga_tools(mcp: MCPServer) -> None:
                 if p["scene_index"] in indexes
             ],
         }
+
+    @mcp.tool()
+    async def manga_generate_candidates(
+        story_id: int,
+        scene_index: int,
+        count: int = 4,
+        template: str | None = None,
+        color: bool = False,
+        use_character_reference: bool = False,
+        reference_strength: float = 1.0,
+        preset_id: int | None = None,
+        model: str | None = None,
+        steps: int | None = None,
+        scale: float | None = None,
+        cfg_rescale: float | None = None,
+        negative_prompt: str | None = None,
+        seed: int | None = None,
+        timeout_seconds: int = 1200,
+        manga_style: bool = True,
+        max_size: int = 1200,
+    ) -> list[TextContent | ImageContent]:
+        """
+        1コマに候補の絵を count 枚(2〜8)描き、番号付きの一覧の画像を返す。コマの絵は変えない。
+        気に入った番号を manga_pick_candidate で選ぶ(それまでの絵は候補に戻る)。Anlas は枚数分かかる。
+        seed: 1枚目のシード(2枚目からは +1009 ずつ)。省略時は manga_generate_panels と同じ決め方。
+        ほかの引数は manga_generate_panels と同じ。
+        """
+        if not 2 <= count <= 8:
+            raise ValueError("count は 2〜8 にしてください")
+        story = await _call("GET", f"/api/story/{story_id}")
+        scene_id = await _scene_id(None, story_id, scene_index)
+        settings = await _panel_settings(preset_id, model, steps, scale, cfg_rescale, negative_prompt)
+        if seed is not None:
+            settings["seed"] = seed % 4294967296
+        chosen = template or (story.get("manga_v2_compose_settings") or {}).get("template") or "grid4"
+        await _call(
+            "POST",
+            f"/api/manga-v2/{story_id}/panels",
+            {
+                "template": chosen,
+                "skip_existing": False,
+                "color": color,
+                "manga_style": manga_style,
+                "use_character_reference": use_character_reference,
+                "reference_strength": reference_strength,
+                "scene_from": scene_index,
+                "scene_to": scene_index,
+                "candidates": count,
+                "settings": settings,
+            },
+        )
+        job = await _wait_job(story_id, timeout_seconds)
+        if job.get("status") == "error":
+            raise RuntimeError(f"シーン{scene_index}の候補の生成に失敗しました: {job.get('detail')}")
+        if job.get("status") == "running":
+            return [TextContent(type="text", text=f"時間内に終わりませんでした({job.get('message')})")]
+        return [TextContent(type="text", text=job.get("message", "")), *await _candidate_report(scene_id, max_size)]
+
+    @mcp.tool()
+    async def manga_view_candidates(story_id: int, scene_index: int, max_size: int = 1200) -> list[TextContent | ImageContent]:
+        """コマの候補の絵を、番号付きの一覧の画像で見る(「今」はいまのコマの絵)。"""
+        return await _candidate_report(await _scene_id(None, story_id, scene_index), max_size)
+
+    @mcp.tool()
+    async def manga_pick_candidate(story_id: int, scene_index: int, number: int, discard_others: bool = False) -> dict[str, Any]:
+        """
+        一覧の番号(1始まり)の候補をコマの絵にする。それまでの絵は候補に戻る(番号は振り直し)。
+        discard_others なら残りの候補を消す(画像ファイルは残る)。選んだら manga_compose で合成し直す。
+        """
+        scene_id = await _scene_id(None, story_id, scene_index)
+        entry = await _candidate_number(scene_id, number)
+        suffix = "?discard_others=true" if discard_others else ""
+        return await _call("POST", f"/api/manga-v2/scenes/{scene_id}/candidates/{entry['id']}/adopt{suffix}")
+
+    @mcp.tool()
+    async def manga_discard_candidates(story_id: int, scene_index: int, number: int | None = None) -> dict[str, Any]:
+        """コマの候補を消す(number でその1枚だけ)。コマの絵はそのまま。画像ファイルは残る。"""
+        scene_id = await _scene_id(None, story_id, scene_index)
+        query = f"?candidate_id={(await _candidate_number(scene_id, number))['id']}" if number is not None else ""
+        return await _call("DELETE", f"/api/manga-v2/scenes/{scene_id}/candidates{query}")
 
     @mcp.tool()
     async def manga_get_panel_image(story_id: int, scene_index: int, max_size: int = 768) -> ImageContent:
