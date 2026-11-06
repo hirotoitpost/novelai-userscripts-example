@@ -67,6 +67,7 @@ from ..db import (
     replace_stamp_source,
     update_stamp_label,
     list_manga_panels,
+    list_characters,
     list_story_scenes,
     set_manga_v2_compose_settings,
     set_manga_v2_overrides,
@@ -74,6 +75,7 @@ from ..db import (
     set_manga_v2_sfx_stamps,
     update_character_reference,
     update_character_sheet,
+    update_scene_dialogue,
     update_scene_narration,
     update_scene_sfx,
     update_story_final_image,
@@ -172,6 +174,7 @@ from ..models import (
     MangaV2ScaleRequest,
     MangaV2Panel,
     MangaV2PanelsRequest,
+    MangaV2SceneDialogueRequest,
     MangaV2SceneNarrationRequest,
     MangaV2SceneSfxRequest,
     MangaV2SuggestSfxRequest,
@@ -297,6 +300,27 @@ def _scene_speakers(scene: dict[str, Any]) -> tuple[list[int | None], list[CastM
         return [line.get("speaker_id") if line.get("speaker_id") in ids else None for line in _edited_lines(scene)], cast
     text = _scene_text(scene)
     return attribute_speakers(text, _spoken_spans(text)[0], cast), cast
+
+
+def _offpanel_lines(scene: dict[str, Any]) -> list[tuple[int, str]]:
+    """
+    編集画面で決めたセリフのうち、話し手がそのコマの登場人物にいないもの(_lettering の並びの番号, セリフ)。
+    話し手なし(null)のセリフは入れない。
+    """
+    if scene.get("dialogue") is None:
+        return []
+    present = {c["id"] for c in scene.get("characters") or []}
+    return [
+        (index, str(line["text"]).strip())
+        for index, line in enumerate(_edited_lines(scene))
+        if line.get("speaker_id") is not None and line["speaker_id"] not in present
+    ]
+
+
+def _named_line(names: dict[int, str], scene: dict[str, Any], index: int, text: str) -> str:
+    """ナレーションにするセリフ: 名前「…」(心の声（…）はそのまま名前の後ろに付ける)。"""
+    name = names.get(_edited_lines(scene)[index]["speaker_id"], "")
+    return f"{name}{text}" if text.startswith(("（", "(")) else f"{name}「{text}」"
 
 
 def _edited_lines(scene: dict[str, Any]) -> list[dict[str, Any]]:
@@ -978,6 +1002,32 @@ async def delete_novelai_cutout(scene_id: int) -> None:
     image_path.with_name(f"{image_path.stem}.cutout-preview.png").unlink(missing_ok=True)
 
 
+@router.put("/scenes/{scene_id}/dialogue", status_code=204)
+async def put_scene_dialogue(scene_id: int, req: MangaV2SceneDialogueRequest) -> None:
+    """
+    シーンの吹き出しのセリフを決める([] で全部消す、null で本文の「」に戻す)。話し手は、いるキャラなら
+    シーンにいなくても残す(合成でナレーションになる)。いないキャラなら話し手なしにする。
+    """
+    conn = get_connection()
+    try:
+        _scene_and_story(conn, scene_id)
+        lines = None
+        if req.dialogue is not None:
+            lines = [
+                {
+                    "text": line.text.strip(),
+                    "speaker_id": line.speaker_id
+                    if line.speaker_id is not None and get_character(conn, line.speaker_id) is not None
+                    else None,
+                }
+                for line in req.dialogue
+                if line.text.strip()
+            ]
+        update_scene_dialogue(conn, scene_id, lines)
+    finally:
+        conn.close()
+
+
 @router.put("/scenes/{scene_id}/narration", status_code=204)
 async def put_scene_narration(scene_id: int, req: MangaV2SceneNarrationRequest) -> None:
     conn = get_connection()
@@ -1129,10 +1179,12 @@ async def get_speakers(story_id: int) -> list[dict[str, Any]]:
     """
     シーンごとの吹き出しのセリフと、合成で使う話し手の判定結果。台本の確認用。
     speaker_id が null のセリフは、しっぽを一番近い顔へ向ける(話し手が分からない)。
+    offpanel のセリフは、話し手がコマにいないので、合成でナレーション(名前「…」)にする。
     """
     conn = get_connection()
     try:
         scenes = list_story_scenes(conn, story_id)
+        everyone = {c["id"]: c["name"] for c in list_characters(conn)}
     finally:
         conn.close()
     if not scenes:
@@ -1142,16 +1194,18 @@ async def get_speakers(story_id: int) -> list[dict[str, Any]]:
         lines = _lettering(scene)[0]
         speakers, _ = _scene_speakers(scene)
         names = {c["id"]: c["name"] for c in scene.get("characters") or []}
-        result.append(
-            {
-                "scene_id": scene["id"],
-                "scene_index": scene["scene_index"],
-                "lines": [
-                    {"text": line, "speaker_id": speaker, "speaker_name": names.get(speaker) if speaker else None}
-                    for line, speaker in zip(lines, speakers or [None] * len(lines))
-                ],
-            }
-        )
+        offpanel = dict(_offpanel_lines(scene))
+        edited = _edited_lines(scene) if offpanel else []
+        entries = []
+        for index, (line, speaker) in enumerate(zip(lines, speakers or [None] * len(lines))):
+            if index in offpanel:
+                absent = edited[index]["speaker_id"]
+                entries.append({"text": line, "speaker_id": absent, "speaker_name": everyone.get(absent), "offpanel": True})
+            else:
+                entries.append(
+                    {"text": line, "speaker_id": speaker, "speaker_name": names.get(speaker) if speaker else None, "offpanel": False}
+                )
+        result.append({"scene_id": scene["id"], "scene_index": scene["scene_index"], "lines": entries})
     return result
 
 
@@ -1429,6 +1483,7 @@ def _compose_inputs(
             if (stamp := get_stamp(conn, stamp_id)) is not None
         }
         guard_text = minor_guard.story_text(get_story(conn, story_id))
+        names = {c["id"]: c["name"] for c in list_characters(conn)}
     finally:
         conn.close()
     # 未成年キャラの安全対策で止める場面の絵は、前に描いたものが残っていても使わない
@@ -1460,12 +1515,23 @@ def _compose_inputs(
         if s["scene_index"] > last:
             continue
         speakers, cast = _scene_speakers(s)
+        dialogue, sfx = _lettering(s)
+        narration = s.get("narration") or ""
+        # コマにいない人のセリフは、吹き出しにすると別の人の顔へしっぽが向くので、ナレーション(名前「…」)にする
+        offpanel = _offpanel_lines(s)
+        if offpanel:
+            narration = "　".join(t for t in (narration.strip(), *(_named_line(names, s, i, t) for i, t in offpanel)) if t)
+            moved = {i for i, _ in offpanel}
+            keep = [i for i in range(len(dialogue)) if i not in moved]
+            dialogue = [dialogue[i] for i in keep]
+            speakers = [speakers[i] for i in keep] if speakers else speakers
         contents.append(
             PanelContent(
                 _PROJECT_ROOT / panels[s["id"]]["image_path"] if s["id"] in panels else None,
-                *_lettering(s),
+                dialogue,
+                sfx,
                 key=str(s["id"]),
-                narration=s.get("narration") or "",
+                narration=narration,
                 speakers=speakers,
                 cast=cast,
                 monochrome=req.monochrome,

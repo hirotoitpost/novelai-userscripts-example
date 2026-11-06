@@ -249,7 +249,11 @@ async def _speaker_report(story_id: int) -> list[dict[str, Any]]:
     return [
         {
             "scene_index": s["scene_index"],
-            "lines": [f"{line['speaker_name'] or '(不明)'}: {line['text']}" for line in s["lines"]],
+            "lines": [
+                f"{line['speaker_name'] or '(不明)'}: {line['text']}"
+                + ("(コマにいない → ナレーションにする)" if line.get("offpanel") else "")
+                for line in s["lines"]
+            ],
         }
         for s in scenes
         if s["lines"]
@@ -523,10 +527,14 @@ def register_manga_tools(mcp: MCPServer) -> None:
         absent_tags: str | None = None,
         story_id: int | None = None,
         scene_index: int | None = None,
+        dialogue: list[dict[str, Any]] | None = None,
     ) -> str:
         """
         シーンを手直しする(渡した項目だけ)。シーンは scene_id か、story_id + scene_index(0始まり)で指定する
         (両方渡すと食い違いを確かめる)。narration を空文字にするとナレーションを消す。
+        dialogue: 吹き出しのセリフ [{"text": "…", "speaker_id": キャラID か null}, …]。[] で吹き出しを全部消す
+        (text・narration を変えても、決めてあるセリフは消えない。セリフをナレーションに移すときは dialogue=[] も渡す)。
+        話し手がコマにいないセリフは、合成でナレーション(名前「…」)になる。
         negative_prompt はこのコマのネガティブ(ページ・物語より優先。空文字で未設定に戻す)。
         absent_tags はこのコマに出てはいけない物(英語タグ。ネガティブに足し、manga_check_panels で確かめる)。
         character_actions(キャラID → 表情・動作の英語タグ)を変えるときは character_ids も渡す。
@@ -558,6 +566,9 @@ def register_manga_tools(mcp: MCPServer) -> None:
             await _call("PATCH", f"/api/story/scenes/{scene_id}", {"negative_prompt": negative_prompt})
         if absent_tags is not None:
             await _call("PATCH", f"/api/story/scenes/{scene_id}", {"absent_tags": absent_tags})
+        if dialogue is not None:
+            lines = [{"text": str(line.get("text") or ""), "speaker_id": line.get("speaker_id")} for line in dialogue]
+            await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/dialogue", {"dialogue": lines})
         return f"シーン {scene_id} を更新しました"
 
     @mcp.tool()
@@ -1076,27 +1087,17 @@ def register_manga_tools(mcp: MCPServer) -> None:
         生成サイズが変わったコマの絵は描き直し待ちになる(manga_generate_panels で描き直す)。
         """
         data = await _call("GET", f"/api/story/{story_id}/edit")
-        keys = ("id", "title", "text", "prompt_tags", "narration", "sfx", "page_index", "characters", "panel_size")
         body_scenes = []
         for index, scene in enumerate(data["scenes"]):
-            item = {k: scene[k] for k in keys}
-            # コマのネガティブは消さずにそのまま送り直す
-            item["negative_prompt"] = scene.get("negative_prompt")
-            # 決めていたセリフはそのまま、本文から取り出していたものは本文のまま
-            item["dialogue"] = scene["dialogue"] if scene["dialogue_custom"] else None
+            # 決めていたセリフ・コマのネガティブ・出てはいけない物はそのまま、本文から取り出していたものは本文のまま
+            item = _edit_item(scene)
             change = scenes.get(index) or scenes.get(str(index))  # type: ignore[call-overload]
             if change:
                 for key in ("dialogue", "panel_size"):
                     if key in change:
                         item[key] = change[key]
             body_scenes.append(item)
-        body = {
-            "title": data["title"],
-            "panels_per_page": data["panels_per_page"],
-            "custom_pages": data["custom_pages"],
-            "scenes": body_scenes,
-        }
-        return await _call("PUT", f"/api/story/{story_id}/edit", body)
+        return await _put_edit(story_id, data, body_scenes)
 
     @mcp.tool()
     async def manga_insert_scenes(story_id: int, after_index: int, scenes: list[dict[str, Any]]) -> dict[str, Any]:

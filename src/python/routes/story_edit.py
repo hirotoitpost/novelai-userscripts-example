@@ -191,13 +191,22 @@ def _validate(conn: sqlite3.Connection, req: StoryEditRequest, old: dict[int, di
                 _check_adult_only([characters[member.id]], state["add_tags"])
 
 
-def _dialogue_json(scene: StoryEditScene) -> str | None:
-    """セリフを保存する形に。話し手がそのシーンにいなければ話し手なしにする。"""
+def _dialogue_json(conn: sqlite3.Connection, scene: StoryEditScene) -> str | None:
+    """
+    セリフを保存する形に。話し手がいないキャラ(消したキャラなど)なら話し手なしにする。話し手がそのシーンにいない
+    (コマの外から話す)セリフは話し手を残す(合成で、吹き出しではなくナレーション「名前「…」」にする)。
+    """
     if scene.dialogue is None:
         return None
     cast = {c.id for c in scene.characters}
+
+    def speaker(speaker_id: int | None) -> int | None:
+        if speaker_id is None or speaker_id in cast:
+            return speaker_id
+        return speaker_id if get_character(conn, speaker_id) is not None else None
+
     lines = [
-        {"text": line.text.strip(), "speaker_id": line.speaker_id if line.speaker_id in cast else None}
+        {"text": line.text.strip(), "speaker_id": speaker(line.speaker_id)}
         for line in scene.dialogue
         if line.text.strip()
     ]
@@ -215,7 +224,7 @@ def _write_scene(
     """シーンを1つ書く(stored が無ければ新しく作る)。シーンIDを返す。"""
     sfx = json.dumps([w.strip() for w in scene.sfx if w.strip()], ensure_ascii=False) if scene.sfx is not None else None
     values = (
-        scene.title or None, scene.prompt_tags.strip(), scene.narration, sfx, _dialogue_json(scene), scene.panel_size,
+        scene.title or None, scene.prompt_tags.strip(), scene.narration, sfx, _dialogue_json(conn, scene), scene.panel_size,
         index, page_index,
     )
     if stored is None:

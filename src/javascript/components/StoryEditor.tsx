@@ -627,6 +627,10 @@ function SceneCard({
                     onChange={e => editLine(i, { speaker_id: e.target.value ? Number(e.target.value) : null })}>
                     <option value="">話し手なし</option>
                     {scene.characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {/* コマにいない人のセリフは、合成で吹き出しではなくナレーション(名前「…」)になる */}
+                    <optgroup label="コマの外から(ナレーションになる)">
+                      {addable.map(c => <option key={c.id} value={c.id}>{c.name}(コマの外)</option>)}
+                    </optgroup>
                   </select>
                   <input value={l.text} disabled={busy} aria-label={`セリフ${i + 1}`} placeholder="セリフ(（…）で囲むと心の声)"
                     onChange={e => editLine(i, { text: e.target.value })} />

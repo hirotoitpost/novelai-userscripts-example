@@ -160,7 +160,7 @@ def test_create_story_from_the_draft(client: TestClient) -> None:
     volumes = client.get(f"/api/series/{series['id']}").json()["volumes"]
     assert [v["volume_no"] for v in volumes] == [1, 2]
     speakers = client.get(f"/api/manga-v2/{story['id']}/speakers").json()
-    assert speakers[0]["lines"] == [{"text": "先生、見て！", "speaker_id": eiko, "speaker_name": "矢野栄子"}]
+    assert speakers[0]["lines"] == [{"text": "先生、見て！", "speaker_id": eiko, "speaker_name": "矢野栄子", "offpanel": False}]
 
 
 def test_actions_are_per_character() -> None:
