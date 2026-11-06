@@ -46,6 +46,10 @@ from ..db import (
     get_story_growth,
     growth_choices,
     set_manga_panel_image,
+    add_panel_candidate,
+    adopt_panel_candidate,
+    delete_panel_candidates,
+    list_panel_candidates,
     set_scene_overlays,
     set_story_growth,
     set_manga_v2_ugoira,
@@ -93,6 +97,7 @@ from ..manga_v2.compose import (
     split_dense_panels,
 )
 from ..manga_v2.animate import merge_timeline
+from ..manga_v2.candidates import candidate_sheet
 from ..manga_v2.fonts import CATALOG, CATALOG_BY_ID, LICENSE_NAME, download_font
 from ..manga_v2.stamps import (
     STAMP_DIR,
@@ -213,6 +218,8 @@ _PAGE_DIR = _MANGA_DIR / "v2"
 _MAX_CHARACTERS = 4
 # vary_seed のとき、シーンごとにシードをずらす間隔
 _SEED_STEP = 37
+# 候補の絵ごとのシードのずらし幅(シーンごとの _SEED_STEP と重ならない大きさ)
+_CANDIDATE_SEED_STEP = 1009
 
 
 def _require_template(template_id: str) -> None:
@@ -1298,48 +1305,66 @@ async def _run_panels(
         if references:
             job.message += f"(キャラ参照{len(references)}人・V4.5)"
         sexual = is_sexual(scene_tags)
-        image = await generate_image_v5(
-            api_key,
-            build_panel_prompt(
-                join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity, manga_style=req.manga_style,
-                # 場面のキャラが全員、年齢を入れた成人なら、成人の衣装(制服のコスプレ など)のタグを除かない
-                costume_ok=bool(scene_characters) and all(is_defined_adult(c) for c in scene_characters),
-            ),
-            join_tags(
-                build_panel_negative(negatives.get(scene["id"]) or settings.negative_prompt, color=req.color, sexual=sexual),
-                guard_negative,
-                "" if multiple else characters_negative(scene_characters),
-                # 出てはいけない物(まだもらっていない小物など)は、どのネガティブを使うときも足す
-                scene.get("absent_tags") or "",
-            ),
-            model=_REFERENCE_MODEL if references else settings.model,
-            width=width,
-            height=height,
-            steps=settings.steps,
-            scale=settings.scale,
-            sampler=settings.sampler,
-            noise_schedule=settings.noise_schedule,
-            cfg_rescale=settings.cfg_rescale,
-            seed=seed,
-            character_tags=character_tags,
-            character_reference=references,
-            character_negatives=character_negatives if multiple else None,
+        prompt = build_panel_prompt(
+            join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity, manga_style=req.manga_style,
+            # 場面のキャラが全員、年齢を入れた成人なら、成人の衣装(制服のコスプレ など)のタグを除かない
+            costume_ok=bool(scene_characters) and all(is_defined_adult(c) for c in scene_characters),
         )
-        filename = f"story{story_id}_scene{scene['scene_index']}_{uuid4().hex[:8]}.png"
-        (_PANEL_DIR / filename).write_bytes(image)
-
-        conn = get_connection()
-        try:
-            upsert_manga_panel(
-                conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", seed, width, height
+        negative = join_tags(
+            build_panel_negative(negatives.get(scene["id"]) or settings.negative_prompt, color=req.color, sexual=sexual),
+            guard_negative,
+            "" if multiple else characters_negative(scene_characters),
+            # 出てはいけない物(まだもらっていない小物など)は、どのネガティブを使うときも足す
+            scene.get("absent_tags") or "",
+        )
+        # 候補を描くときは、コマの絵は変えずに候補をシードをずらして何枚か描く
+        for k in range(req.candidates):
+            draw_seed = seed if req.candidates == 1 else (seed + k * _CANDIDATE_SEED_STEP) % 4294967296
+            if req.candidates > 1:
+                job.message = f"シーン{scene['scene_index'] + 1}の候補を生成中 ({k + 1}/{req.candidates}枚目・{i}/{len(targets)})"
+            image = await generate_image_v5(
+                api_key,
+                prompt,
+                negative,
+                model=_REFERENCE_MODEL if references else settings.model,
+                width=width,
+                height=height,
+                steps=settings.steps,
+                scale=settings.scale,
+                sampler=settings.sampler,
+                noise_schedule=settings.noise_schedule,
+                cfg_rescale=settings.cfg_rescale,
+                seed=draw_seed,
+                character_tags=character_tags,
+                character_reference=references,
+                character_negatives=character_negatives if multiple else None,
             )
-        finally:
-            conn.close()
+            suffix = f"_c{k + 1}" if req.candidates > 1 else ""
+            filename = f"story{story_id}_scene{scene['scene_index']}{suffix}_{uuid4().hex[:8]}.png"
+            (_PANEL_DIR / filename).write_bytes(image)
+
+            conn = get_connection()
+            try:
+                if req.candidates > 1:
+                    add_panel_candidate(
+                        conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", draw_seed, width, height
+                    )
+                else:
+                    upsert_manga_panel(
+                        conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", draw_seed, width, height
+                    )
+            finally:
+                conn.close()
         job.progress = i
 
     # 確かめのあとの描き直しでも呼ばれるので、最初の生成の知らせを消さない
     job.guard_note = guard_note(blocked, softened) or getattr(job, "guard_note", "")
-    job.message = f"{len(targets) - len(blocked)}コマの絵を生成しました" + (f"。{job.guard_note}" if job.guard_note else "")
+    done = len(targets) - len(blocked)
+    job.message = (
+        f"{done}コマの候補を{req.candidates}枚ずつ生成しました(コマの絵はそのままです。候補から選んでください)"
+        if req.candidates > 1
+        else f"{done}コマの絵を生成しました"
+    ) + (f"。{job.guard_note}" if job.guard_note else "")
 
 
 def guard_note(blocked: list[int], softened: list[int]) -> str:
@@ -1808,6 +1833,76 @@ async def get_blank_regions(scene_id: int) -> list[dict[str, Any]]:
     重ねの quad にそのまま使える(重ねで quad を省いても、ここから選ぶ)。
     """
     return await asyncio.to_thread(_blank_regions_of, scene_id)
+
+
+def _candidate_entries(scene_id: int) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        _scene_and_story(conn, scene_id)
+        rows = list_panel_candidates(conn, scene_id)
+    finally:
+        conn.close()
+    return [
+        {"id": r["id"], "number": n, "image_path": r["image_path"], "seed": r["seed"], "width": r["width"], "height": r["height"]}
+        for n, r in enumerate(rows, start=1)
+    ]
+
+
+@router.get("/scenes/{scene_id}/candidates")
+async def get_panel_candidates(scene_id: int) -> list[dict[str, Any]]:
+    """コマの候補の絵(描いた順。number は一覧の画像に振った 1 始まりの番号)。"""
+    return _candidate_entries(scene_id)
+
+
+@router.get("/scenes/{scene_id}/candidates/sheet")
+def get_panel_candidates_sheet(scene_id: int, tile: int = 360) -> Response:
+    """候補を番号付きで並べた一覧の画像(JPEG)。いまのコマの絵も「今」として先頭に入れる。"""
+    entries = _candidate_entries(scene_id)
+    if not entries:
+        raise HTTPException(status_code=404, detail="このコマの候補はありません。")
+    conn = get_connection()
+    try:
+        panel = next((p for p in list_manga_panels(conn, _scene_and_story(conn, scene_id)[1]["id"]) if p["scene_id"] == scene_id), None)
+    finally:
+        conn.close()
+    items = ([("今", _PROJECT_ROOT / panel["image_path"])] if panel else []) + [
+        (str(e["number"]), _PROJECT_ROOT / e["image_path"]) for e in entries
+    ]
+    sheet = candidate_sheet([(label, path) for label, path in items if path.is_file()], max(120, min(tile, 640)))
+    buf = io.BytesIO()
+    sheet.save(buf, format="JPEG", quality=88)
+    return Response(buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/scenes/{scene_id}/candidates/{candidate_id}/adopt")
+async def adopt_candidate(scene_id: int, candidate_id: int, discard_others: bool = False) -> dict[str, Any]:
+    """
+    候補をコマの絵にする。それまでの絵は候補に戻る(選び直せる)。discard_others なら残りの候補を消す
+    (画像ファイルは残す)。重ねの置き場所はそのまま。
+    """
+    conn = get_connection()
+    try:
+        _scene_and_story(conn, scene_id)
+        chosen = adopt_panel_candidate(conn, scene_id, candidate_id)
+        if chosen is None:
+            raise HTTPException(status_code=404, detail="その候補はこのコマにありません。")
+        if discard_others:
+            delete_panel_candidates(conn, scene_id)
+    finally:
+        conn.close()
+    return {"image_path": chosen["image_path"], "seed": chosen["seed"], "remaining": len(_candidate_entries(scene_id))}
+
+
+@router.delete("/scenes/{scene_id}/candidates")
+async def discard_candidates(scene_id: int, candidate_id: int | None = None) -> dict[str, Any]:
+    """コマの候補を消す(candidate_id でその1枚だけ)。画像ファイルは残す。"""
+    conn = get_connection()
+    try:
+        _scene_and_story(conn, scene_id)
+        removed = delete_panel_candidates(conn, scene_id, candidate_id)
+    finally:
+        conn.close()
+    return {"removed": removed}
 
 
 @router.post("/scenes/{scene_id}/mirror")

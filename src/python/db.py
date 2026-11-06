@@ -556,6 +556,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 漫画v2: 1コマに何枚か描いた候補の絵。選んだ1枚を manga_panels に入れ(元の絵は候補に戻す)、残りは選び終えたら消す。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manga_panel_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            scene_id INTEGER NOT NULL REFERENCES story_scenes(id) ON DELETE CASCADE,
+            image_path TEXT NOT NULL,
+            seed INTEGER,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     # 描き文字スタンプ(素材集のシートを1語ずつに切り出したもの)と、その取り込み元。
     conn.execute(
         """
@@ -2667,6 +2682,84 @@ def upsert_manga_panel(
         (story_id, scene_id, image_path, seed, width, height, now),
     )
     conn.commit()
+
+
+def add_panel_candidate(
+    conn: sqlite3.Connection, story_id: int, scene_id: int, image_path: str, seed: int | None, width: int, height: int
+) -> int:
+    """コマの候補の絵を1枚足し、その ID を返す(コマの絵はそのまま)。"""
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO manga_panel_candidates (story_id, scene_id, image_path, seed, width, height, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
+        """,
+        (story_id, scene_id, image_path, seed, width, height, now),
+    ).fetchone()
+    conn.commit()
+    return int(row["id"])
+
+
+def list_panel_candidates(conn: sqlite3.Connection, scene_id: int) -> list[dict[str, Any]]:
+    """シーンのコマの候補(描いた順)。"""
+    rows = conn.execute(
+        "SELECT * FROM manga_panel_candidates WHERE scene_id = ? ORDER BY id", (scene_id,)
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_panel_candidates(conn: sqlite3.Connection, story_id: int) -> dict[int, int]:
+    """シーンID → 候補の枚数(候補のあるシーンだけ)。"""
+    rows = conn.execute(
+        "SELECT scene_id, COUNT(*) AS n FROM manga_panel_candidates WHERE story_id = ? GROUP BY scene_id", (story_id,)
+    ).fetchall()
+    return {row["scene_id"]: row["n"] for row in rows}
+
+
+def adopt_panel_candidate(conn: sqlite3.Connection, scene_id: int, candidate_id: int) -> dict[str, Any] | None:
+    """
+    候補をコマの絵にする。それまでのコマの絵は候補に戻す(選び直せるように)。選んだ候補は候補から外す。
+    その候補がこのシーンに無ければ None。
+    """
+    chosen = conn.execute(
+        "SELECT * FROM manga_panel_candidates WHERE id = ? AND scene_id = ?", (candidate_id, scene_id)
+    ).fetchone()
+    if chosen is None:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    current = conn.execute("SELECT * FROM manga_panels WHERE scene_id = ?", (scene_id,)).fetchone()
+    if current is not None:
+        conn.execute(
+            """
+            INSERT INTO manga_panel_candidates (story_id, scene_id, image_path, seed, width, height, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (current["story_id"], scene_id, current["image_path"], current["seed"], current["width"], current["height"], now),
+        )
+    conn.execute("DELETE FROM manga_panel_candidates WHERE id = ?", (candidate_id,))
+    conn.execute(
+        """
+        INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (scene_id) DO UPDATE SET image_path = excluded.image_path, seed = excluded.seed,
+            width = excluded.width, height = excluded.height, created_at = excluded.created_at, stale = 0
+        """,
+        (chosen["story_id"], scene_id, chosen["image_path"], chosen["seed"], chosen["width"], chosen["height"], now),
+    )
+    conn.commit()
+    return dict(chosen)
+
+
+def delete_panel_candidates(conn: sqlite3.Connection, scene_id: int, candidate_id: int | None = None) -> int:
+    """シーンの候補を消す(candidate_id を渡すとその1枚だけ)。消した枚数を返す。画像ファイルは残す。"""
+    if candidate_id is None:
+        cur = conn.execute("DELETE FROM manga_panel_candidates WHERE scene_id = ?", (scene_id,))
+    else:
+        cur = conn.execute(
+            "DELETE FROM manga_panel_candidates WHERE scene_id = ? AND id = ?", (scene_id, candidate_id)
+        )
+    conn.commit()
+    return cur.rowcount
 
 
 def set_manga_panel_image(conn: sqlite3.Connection, scene_id: int, image_path: str) -> None:

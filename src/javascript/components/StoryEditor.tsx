@@ -2,6 +2,7 @@ import { Fragment, SyntheticEvent, useEffect, useMemo, useRef, useState } from '
 import type { Character } from './StoryCharacters'
 import type { DatasetState } from './DatasetScenes'
 import ChunkPicker from './ChunkPicker'
+import { PanelCandidates } from './PanelCandidates'
 import { insertTag } from '../tagInsert'
 import './StoryEditor.css'
 
@@ -54,6 +55,8 @@ interface EditScene {
   auto_size: PanelSize | null
   characters: CastRow[]
   panel: { image_path: string; stale: boolean } | null
+  /** コマの候補の絵の枚数(漫画v2で1コマに何枚か描いたもの) */
+  candidates: number
 }
 
 interface EditData {
@@ -263,6 +266,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
       panel_size: null, negative_prompt: null, absent_tags: base ? base.absent_tags : null, auto_size: null,
       characters: base ? base.characters.map(c => ({ ...c, action_tags: '', outfit_tags: c.outfit_tags, state_id: c.state_id })) : [],
       panel: null,
+      candidates: 0,
     }
     const next = [...scenes]
     next.splice(after + 1, 0, fresh)
@@ -439,6 +443,8 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
                     characters={characters}
                     states={states}
                     fileUrl={fileUrl}
+                    apiOrigin={apiOrigin}
+                    onPanel={(image_path, candidates) => setScenes(prev => prev.map(x => (x.key === s.key ? { ...x, candidates, panel: image_path ? { image_path, stale: false } : x.panel } : x)))}
                     onChange={patch => update(i, patch)}
                     onLines={lines => editLines(i, lines)}
                     onMove={to => moveScene(i, to)}
@@ -487,12 +493,16 @@ interface CardProps {
   onAdd: () => void
   onRemove: () => void
   onMirror: () => void
+  apiOrigin: string
+  /** 候補を選んだ・消したあと(選んだ絵のパス、消しただけなら null。残った候補の枚数) */
+  onPanel: (imagePath: string | null, candidates: number) => void
   trackCaret: TrackCaret
 }
 
 function SceneCard({
-  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove, onMirror, trackCaret,
+  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove, onMirror, apiOrigin, onPanel, trackCaret,
 }: CardProps) {
+  const [candidatesOpen, setCandidatesOpen] = useState(false)
   /** チャンクの入れ先にできる欄に付けるもの(フォーカス・カーソル移動で入れ先にする) */
   function tagField(field: TagField, label: string) {
     const track = trackCaret(field, label)
@@ -546,7 +556,17 @@ function SceneCard({
               title="コマの絵を左右反転します(片側だけの髪型などをそろえる。元の絵は残り、もう一度押すと戻ります)"
               aria-label={`コマ${index + 1}の絵を左右反転`}>⇋</button>
           )}
+          {scene.id !== null && scene.candidates > 0 && (
+            <button type="button" className="sed-candidates-open" disabled={busy} onClick={() => setCandidatesOpen(o => !o)}
+              title="このコマに描いた候補の絵を見比べて、使う1枚を選びます">候補 {scene.candidates}</button>
+          )}
         </div>
+        {candidatesOpen && scene.id !== null && (
+          <PanelCandidates apiOrigin={apiOrigin} sceneId={scene.id} index={index} busy={busy} fileUrl={fileUrl}
+            onAdopted={(path, remaining) => onPanel(path, remaining)}
+            onDiscarded={remaining => { onPanel(null, remaining); if (remaining === 0) setCandidatesOpen(false) }}
+            onClose={() => setCandidatesOpen(false)} />
+        )}
 
         <div className="sed-fields">
           <label className="sed-label">作画タグ
