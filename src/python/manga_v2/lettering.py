@@ -253,22 +253,21 @@ BUBBLE_SHAPES = tuple(_BUBBLE_SCALES)
 _BUBBLE_PAD = 10
 _OUTLINE = 3
 _WHISPER_OUTLINE = 2
-# しっぽの長さ(吹き出しの短い方の半径に対する割合)。口元へ届くまで伸ばすが、長すぎると間延びするので上限で止め、
-# 口が近くても形が分かるよう下限は残す。先端は口元の手前(_TAIL_GAP)で止めて、顔に刺さらないようにする
-_TAIL_MIN = 0.3
+# しっぽの長さ(吹き出しの短い方の半径に対する割合)。顔の輪郭の手前まで伸ばすが、長すぎると間延びするので上限で止め、
+# 顔が近くても向きが分かるよう小さな下限は残す。顔が分からないときは口元の手前(_TAIL_GAP)で止める
+_TAIL_MIN = 0.15
 _TAIL_MAX = 0.9
 _TAIL_MAX_PX = 90
 _TAIL_GAP = 10
 
 
-def tail_length(rx: float, ry: float, edge: float, distance: float) -> float:
+def tail_length(rx: float, ry: float, edge: float, reach: float) -> float:
     """
-    しっぽの長さ(本体の縁から先端まで)。distance は吹き出しの中心から口元まで、edge は中心から口元の方向の縁まで。
-    先端が口元の手前に来る長さにし、下限・上限で止める。
+    しっぽの長さ(本体の縁から先端まで)。reach は吹き出しの中心から先端を止めたい所(顔の輪郭の手前)まで、
+    edge は中心から同じ方向の縁まで。そこまで届く長さにし、下限・上限で止める。
     """
     base = min(rx, ry)
-    reach = distance - edge - _TAIL_GAP
-    return min(max(reach, base * _TAIL_MIN), base * _TAIL_MAX, _TAIL_MAX_PX)
+    return min(max(reach - edge, base * _TAIL_MIN), base * _TAIL_MAX, _TAIL_MAX_PX)
 
 
 # 1列だけのセリフでも楕円が細くなりすぎないよう、幅は高さのこの割合以上にする
@@ -348,6 +347,7 @@ def draw_bubble(
     block: TextBlock,
     font_path: Path,
     tail_toward: tuple[float, float] | None = None,
+    tail_reach: float | None = None,
     opacity: float = 1.0,
     shape: str = "ellipse",
 ) -> None:
@@ -355,6 +355,7 @@ def draw_bubble(
     box(外接長方形)に吹き出しを描き、中央に縦書きで文字を置く。shape は BUBBLE_SHAPES のどれか。
 
     opacity は白い地の不透明度(0で輪郭線だけ)。輪郭線と文字は常に不透明。
+    tail_reach は吹き出しの中心からしっぽの先を止める所までの距離(顔の輪郭の手前)。無ければ口元の手前で止める。
     本体としっぽを1つの形(マスク)にまとめてから輪郭を取るので、地を透かしても
     しっぽの付け根に本体の線が残らない。雲形(心の声)はしっぽの代わりに小さな丸を並べる。
     """
@@ -374,8 +375,9 @@ def draw_bubble(
         length = max((dx * dx + dy * dy) ** 0.5, 1)
         ux, uy = dx / length, dy / length
         edge = 1 / max(((ux / rx) ** 2 + (uy / ry) ** 2) ** 0.5, 1e-6)
-        # 先端は、吹き出しの中心と口元を結ぶ線の上の、口元の手前(長すぎるときは上限)
-        tail_len = tail_length(rx, ry, edge, length)
+        # 先端は、吹き出しの中心と口元を結ぶ線の上の、顔の輪郭の手前(長すぎるときは上限)
+        reach = tail_reach if tail_reach is not None else length - _TAIL_GAP
+        tail_len = tail_length(rx, ry, edge, reach)
         if shape == "cloud":
             # 心の声: 話し手へ向かって小さくなる丸を2つ
             for distance, radius in ((edge + tail_len * 0.35, min(rx, ry) * 0.12), (edge + tail_len * 0.85, min(rx, ry) * 0.07)):
