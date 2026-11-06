@@ -20,7 +20,7 @@ import unicodedata
 import zipfile
 from dataclasses import replace
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -666,16 +666,19 @@ async def make_reference_candidates(
     return candidates
 
 
-def register_reference(character_id: int, image_bytes: bytes, seed: int | None = None) -> str:
-    """画像をキャラの参照画像として保存・登録する(seed があれば基準シードにも)。保存先のパスを返す。"""
+def register_reference(character_id: int, image_bytes: bytes, seed: int | None = None, view: str = "front") -> str:
+    """
+    画像をキャラの参照画像として保存・登録する(seed があれば基準シードにも)。保存先のパスを返す。
+    view が back なら後ろ姿のコマ用の参照にする(基準シードは変えない)。
+    """
     _REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"char{character_id}_{uuid4().hex[:8]}.png"
+    filename = f"char{character_id}_{'back_' if view == 'back' else ''}{uuid4().hex[:8]}.png"
     (_REFERENCE_DIR / filename).write_bytes(image_bytes)
     path = f"outputs/manga/refs/{filename}"
     conn = get_connection()
     try:
-        update_character_reference(conn, character_id, path)
-        if seed is not None:
+        update_character_reference(conn, character_id, path, view)
+        if seed is not None and view != "back":
             update_character_sheet(conn, character_id, {"seed": seed})
     finally:
         conn.close()
@@ -713,14 +716,14 @@ async def put_character_reference(character_id: int, req: MangaV2CharacterRefere
     else:
         raise HTTPException(status_code=400, detail="image・scene_id・candidate_path のどれかを指定してください。")
 
-    register_reference(character_id, image_bytes, req.seed)
+    register_reference(character_id, image_bytes, req.seed, req.view)
 
 
 @router.delete("/characters/{character_id}/reference", status_code=204)
-async def delete_character_reference(character_id: int) -> None:
+async def delete_character_reference(character_id: int, view: Literal["front", "back"] = "front") -> None:
     conn = get_connection()
     try:
-        update_character_reference(conn, character_id, None)
+        update_character_reference(conn, character_id, None, view)
     finally:
         conn.close()
 
@@ -1187,21 +1190,48 @@ async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: Clie
     return _job_response(_start_job(story_id, "panels", runner))
 
 
+# 後ろ姿のコマの印(全体のタグか、そのキャラの動作のタグに、タグ1つがまるごとこの語であれば後ろ姿。
+# 「peeking from behind door」のような言い回しは数えない)
+_BACK_VIEW_TAGS = {"from behind", "back view", "rear view", "facing away", "back of head"}
+# 強調・抑制の書き方(1.4::タグ:: / -1::タグ::)の外側
+_TAG_WEIGHT = re.compile(r"^-?\d+(\.\d+)?::|::$")
+# 後ろ姿のコマで、後ろ姿の参照が無いキャラの正面の参照を弱める割合(正面の参照に引っ張られてこちらを向くため)
+_BACK_VIEW_STRENGTH = 0.6
+
+
+def is_back_view(scene_tags: str, action_tags: str | None = None) -> bool:
+    """後ろ姿のコマか(looking back のような、振り向いて顔を見せるものは後ろ姿に数えない)。"""
+    plain = {
+        _TAG_WEIGHT.sub("", t.strip().lower()).strip()
+        for t in f"{scene_tags or ''},{action_tags or ''}".split(",")
+        if t.strip()
+    }
+    return bool(plain & _BACK_VIEW_TAGS) and "looking back" not in plain
+
+
 def _scene_references(
-    characters: list[dict[str, Any]], req: MangaV2PanelsRequest
+    characters: list[dict[str, Any]], req: MangaV2PanelsRequest, scene_tags: str = ""
 ) -> list[CharacterReferenceInput]:
     """
     シーンに出るキャラのうち、参照画像があるもの全員分。以前は1人分(名前順で最初の1人)だけを
     使っていたため、二人の場面でもう一人の見た目まで最初の1人に寄ってしまっていた。
+    後ろ姿のコマでは、後ろ姿の参照があればそれを使い、無ければ正面の参照を弱めて使う。
     """
     refs: list[CharacterReferenceInput] = []
     for character in characters:
+        strength = req.reference_strength
         path = character.get("reference_image_path")
+        if is_back_view(scene_tags, character.get("action_tags")):
+            back = character.get("back_reference_image_path")
+            if back and (_PROJECT_ROOT / back).is_file():
+                path = back
+            else:
+                strength = round(strength * _BACK_VIEW_STRENGTH, 3)
         if path and (_PROJECT_ROOT / path).is_file():
             refs.append(
                 CharacterReferenceInput(
                     image_b64=reference_image_b64((_PROJECT_ROOT / path).read_bytes()),
-                    strength=req.reference_strength,
+                    strength=strength,
                     fidelity=req.reference_fidelity,
                 )
             )
@@ -1301,7 +1331,7 @@ async def _run_panels(
             seed = story_id * 1000 + scene["scene_index"]
         elif req.vary_seed:
             seed = (seed + scene["scene_index"] * _SEED_STEP) % 4294967296
-        references = _scene_references(scene_characters, req) if req.use_character_reference else []
+        references = _scene_references(scene_characters, req, scene_tags) if req.use_character_reference else []
         if references:
             job.message += f"(キャラ参照{len(references)}人・V4.5)"
         sexual = is_sexual(scene_tags)

@@ -954,3 +954,7 @@
   flex-basis: 100%;
   margin: 0;
 }
+
+/* 後ろ姿のコマで使うキャラ参照 */
+.mv2-back-ref { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.3rem; }
+.mv2-ref-thumb--small { width: 40px; height: 56px; }

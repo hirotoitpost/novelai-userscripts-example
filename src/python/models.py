@@ -1284,6 +1284,7 @@ class SceneCharacterResponse(BaseModel):
     name: str
     appearance_tags: str
     reference_image_path: Optional[str] = None
+    back_reference_image_path: Optional[str] = None
     # そのシーンでのこのキャラの表情・動作(英語タグ)
     action_tags: Optional[str] = None
     # そのシーンでの服装(空ならキャラシートのふだんの服装)
@@ -1300,6 +1301,8 @@ class CharacterResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     reference_image_path: Optional[str] = None
+    # 後ろ姿のコマで使うキャラ参照(無ければ正面の参照を弱めて使う)
+    back_reference_image_path: Optional[str] = None
     # 標準の体型(顔・髪・目は appearance_tags)
     body_tags: Optional[str] = None
     trigger_word: Optional[str] = None
@@ -1626,6 +1629,8 @@ class MangaV2CharacterReferenceRequest(BaseModel):
     scene_id: Optional[int] = None
     candidate_path: Optional[str] = None
     seed: Optional[int] = Field(default=None, ge=0, le=4294967295)
+    # back なら後ろ姿のコマ用の参照として登録する(基準シードには入れない)
+    view: Literal["front", "back"] = "front"
 
 
 class MangaV2ReferenceCandidatesRequest(BaseModel):

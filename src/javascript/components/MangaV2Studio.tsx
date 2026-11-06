@@ -401,11 +401,14 @@ export default function MangaV2Studio({
     void saveSfx(scene, words)
   }
 
-  async function setReference(characterId: number, body: { image?: string; scene_id?: number } | null) {
-    const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${characterId}/reference`, {
+  async function setReference(
+    characterId: number, body: { image?: string; scene_id?: number } | null, view: 'front' | 'back' = 'front',
+  ) {
+    const query = !body && view === 'back' ? '?view=back' : ''
+    const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${characterId}/reference${query}`, {
       method: body ? 'PUT' : 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}),
+      ...(body ? { body: JSON.stringify({ ...body, view }) } : {}),
     })
     if (res.ok) await onChanged()
   }
@@ -690,6 +693,28 @@ export default function MangaV2Studio({
                       参照を外す
                     </button>
                   )}
+                  <div className="mv2-back-ref" title="from behind・facing away・back view などのコマで使う参照。無ければ正面の参照を弱めて使います(後ろ姿のはずがこちらを向くのを防ぐ)">
+                    {c.back_reference_image_path && (
+                      <img className="mv2-ref-thumb mv2-ref-thumb--small" src={fileUrl(c.back_reference_image_path)} alt={`${c.name}の後ろ姿の参照`} />
+                    )}
+                    <select
+                      value=""
+                      disabled={busy || panels.length === 0}
+                      aria-label={`${c.name}の後ろ姿の参照`}
+                      onChange={e => { if (e.target.value) void setReference(c.id, { scene_id: Number(e.target.value) }, 'back') }}
+                    >
+                      <option value="">後ろ姿の参照をコマから選ぶ…</option>
+                      {panels.map(p => (
+                        <option key={p.scene_id} value={p.scene_id}>シーン{p.scene_index + 1}の絵</option>
+                      ))}
+                    </select>
+                    {c.back_reference_image_path && (
+                      <button type="button" className="story-secondary" disabled={busy}
+                        onClick={() => setReference(c.id, null, 'back')}>
+                        後ろ姿の参照を外す
+                      </button>
+                    )}
+                  </div>
                 </div>
               </li>
             ))}
