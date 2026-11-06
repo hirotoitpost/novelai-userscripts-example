@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
+from .bodies import BodyCover, body_cover
 from .detect import detect_heads
 from .overlay import OverlayPiece, draw_pieces
 from .speakers import CastMember, identify_heads
@@ -115,6 +116,8 @@ class LetteringStyle:
     text_scale: float = 1.0
     sfx_scale: float = 1.0
     scales: dict[str, float] = field(default_factory=dict)
+    # 吹き出しを、頭だけでなく人物の体にも掛からない所へ置く(人物の切り分けのモデルがあるとき。bodies.py)
+    avoid_bodies: bool = False
 
 
 # 寄りのコマの拡大率(1段ごと)と上限、切り抜く中心(横は段ごとに左右へ振る)
@@ -281,6 +284,7 @@ def _place(
     prefer_x: float | None = None,
     earlier: list[Rect] | None = None,
     rivals: list[Rect] | None = None,
+    body: BodyCover | None = None,
 ) -> tuple[Rect, bool]:
     """
     吹き出しの置き場所。日本の漫画は右から読むので、コマの上辺に沿って右から左へ、
@@ -295,6 +299,9 @@ def _place(
     prefer_x(話し手の頭の横位置)を渡すと、読む順(上の段から、同じ段は右から)を崩さない
     範囲で、話し手に近く、別の人の吹き出し(rivals)からは遠い位置を選ぶ。二人の吹き出しが
     並ぶと、どちらがどちらのセリフか分かりにくいため。earlier はこのコマで先に置いた吹き出し。
+
+    body(四角が人物の体に掛かる割合を返す関数)を渡すと、吹き出し(描き文字・ナレーション以外)は
+    体に掛からない位置を優先する。上下の段がどこも体に掛かるなら、読む順を崩さない範囲でコマの中ほども探す。
     """
     bw, bh = size
     px0, py0, px1, py1 = panel
@@ -346,7 +353,13 @@ def _place(
                 lower = _LOWER_ROW_COST * width * (c[1] - top_row) / max(bottom_row - top_row, 1)
                 return abs(cx - prefer_x) - _RIVAL_GAP_WEIGHT * min(gap, width) + lower
 
+            if body is not None:
+                return min(clear, key=lambda c: cost(c) + _BODY_WEIGHT * width * body(c)), True
             return min(clear, key=cost), True
+    if body is not None and not sfx and not narration:
+        chosen = _body_free(candidates, free, panel, size, placed, heads, earlier or [], body)
+        if chosen is not None:
+            return chosen, True
     for candidate in free:
         if not any(_overlaps(candidate, head) for head in heads):
             return candidate, True
@@ -356,6 +369,88 @@ def _place(
         candidates,
         key=lambda c: (sum(_overlap_area(c, o) for o in placed), sum(_overlap_area(c, h) for h in heads)),
     ), False
+
+
+# 吹き出しの面積のうち、人物の体に掛かってよい割合と、話し手に寄せる置き方での体の重み(コマの幅に対する割合)
+_BODY_LIMIT = 0.08
+_BODY_WEIGHT = 2.0
+
+
+def _body_free(
+    candidates: list[Rect],
+    free: list[Rect],
+    panel: Rect,
+    size: tuple[int, int],
+    placed: list[Rect],
+    heads: list[Rect],
+    earlier: list[Rect],
+    body: BodyCover,
+) -> Rect | None:
+    """
+    頭にも置き済みのものにも重ならず、体にほぼ掛からない位置(上下の段の読む順を優先し、無ければコマの中ほど)。
+    どこも体に掛かるなら、掛かりが一番少ない位置。頭に重ならない空きが無ければ None(いつもの置き方に任せる)。
+    """
+    bw, bh = size
+    px0, py0, px1, py1 = panel
+    step = max(min(bw, bh) // 4, 10)
+    inner = [
+        (x, y, x + bw, y + bh)
+        for y in range(py0 + _BUBBLE_MARGIN, py1 - _BUBBLE_MARGIN - bh + 1, step)
+        for x in range(px1 - _BUBBLE_MARGIN - bw, px0 + _BUBBLE_MARGIN - 1, -step)
+    ]
+    rows = [c for c in free if _reads_after(c, earlier) and not any(_overlaps(c, h) for h in heads)]
+    middle = [
+        c
+        for c in inner
+        if _reads_after(c, earlier)
+        and not any(_overlaps(c, o) for o in placed)
+        and not any(_overlaps(c, h) for h in heads)
+    ]
+    for candidate in rows + middle:
+        if body(candidate) <= _BODY_LIMIT:
+            return candidate
+    pool = rows + middle
+    return min(pool, key=body) if pool else None
+
+
+# 体に掛かる吹き出しを、文字をこの割合まで小さくして体の外へ出す(それより小さくすると読みにくい)
+_BODY_SHRINK = 0.85
+
+
+def _shrink_off_body(
+    best: tuple[Rect, TextBlock, str],
+    text: str,
+    rect: Rect,
+    placed: list[Rect],
+    heads: list[Rect],
+    earlier: list[Rect],
+    body: BodyCover,
+    text_size: int,
+    min_size: int,
+) -> tuple[Rect, TextBlock, str]:
+    """
+    体に掛かる吹き出しは、文字を少しずつ小さく(_BODY_SHRINK まで)して、体に掛からない置き場所を探す。
+    見つからなければ、掛かりがはっきり減る(0.15 以上)ときだけその位置にする。どちらも無ければ元のまま。
+    """
+    cover = body(best[0])
+    if cover <= _BODY_LIMIT:
+        return best
+    shape = best[2]
+    floor = max(min_size, round(text_size * _BODY_SHRINK))
+    better: tuple[Rect, TextBlock, str] | None = None
+    size_now = text_size - _SHRINK_STEP_TEXT
+    while size_now >= floor:
+        block, size = _fit_bubble(text, rect, size_now, shape, min(min_size, size_now))
+        box, free = _place(size, rect, placed, heads=heads, earlier=earlier, body=body)
+        # 読む順を崩す位置(先の吹き出しより上など)には動かさない
+        if free and _reads_after(box, earlier):
+            here = body(box)
+            if here <= _BODY_LIMIT:
+                return box, block, shape
+            if here < cover - 0.15 and better is None:
+                better = (box, block, shape)
+        size_now -= _SHRINK_STEP_TEXT
+    return better or best
 
 
 def _covers_head(box: Rect, heads: list[Rect]) -> bool:
@@ -530,13 +625,15 @@ class _Picture:
     heads: list[Rect]
     head_ids: list[int | None]
     offscreen: dict[int, tuple[float, float]]
+    # ページ上の四角が人物の体に掛かる割合(体を避けないときは None)
+    body: BodyCover | None = None
 
 
 def _draw_panel(
     page: Image.Image, rect: Rect, content: PanelContent, style: LetteringStyle, *, border: bool = True
 ) -> list[Element]:
     """1コマを描く(絵・文字・枠線)。コマ単位のダウンロードで使う。"""
-    picture = _draw_picture(page, rect, content)
+    picture = _draw_picture(page, rect, content, bodies=style.avoid_bodies)
     elements = _draw_lettering(page, rect, content, style, picture)
     if border:
         ImageDraw.Draw(page).rectangle(rect, outline=(0, 0, 0), width=_BORDER)
@@ -544,7 +641,12 @@ def _draw_panel(
 
 
 def _draw_picture(
-    page: Image.Image, rect: Rect, content: PanelContent, cutout: Mapping[str, Any] | None = None
+    page: Image.Image,
+    rect: Rect,
+    content: PanelContent,
+    cutout: Mapping[str, Any] | None = None,
+    *,
+    bodies: bool = False,
 ) -> _Picture:
     """
     コマの絵を rect に嵌め込む(まだ無ければ灰色の仮の絵)。吹き出しの置き場所を決めるための頭の位置を返す。
@@ -558,6 +660,7 @@ def _draw_picture(
     # 頭ごとのキャラID(heads と同じ並び)と、コマの外に切れたキャラの頭の中心(ページ座標)
     head_ids: list[int | None] = []
     offscreen: dict[int, tuple[float, float]] = {}
+    body: BodyCover | None = None
     if content.image_path is not None and content.image_path.is_file():
         source_heads = detect_heads(content.image_path)
         with Image.open(content.image_path) as src:
@@ -588,6 +691,8 @@ def _draw_picture(
             _paste_cutout(page, picture, (x0, y0), cutout or {})
         else:
             page.paste(picture, (x0, y0))
+        if bodies:
+            body = body_cover(picture, (x0, y0), content.image_path, (scale, left, top, content.zoom_step))
         for index, (hx0, hy0, hx1, hy1) in enumerate(source_heads):
             head_id = source_ids[index] if source_ids else None
             box = (
@@ -604,7 +709,7 @@ def _draw_picture(
     else:
         draw.rectangle(rect, fill=(225, 225, 225))
         draw.text((x0 + 12, y0 + 10), "(未生成)", fill=(120, 120, 120))
-    return _Picture(heads, head_ids, offscreen)
+    return _Picture(heads, head_ids, offscreen, body)
 
 
 def _draw_lettering(
@@ -688,15 +793,24 @@ def _draw_lettering(
                     best = (_overridden_box(size, frame, override), block, candidate_shape)
                     break
                 box, free = _place(
-                    size, rect, placed, heads=heads, prefer_x=prefer_x, earlier=bubble_boxes, rivals=rivals
+                    size,
+                    rect,
+                    placed,
+                    heads=heads,
+                    prefer_x=prefer_x,
+                    earlier=bubble_boxes,
+                    rivals=rivals,
+                    body=picture.body,
                 )
                 if free:
                     best = (box, block, candidate_shape)
                     break
             if best is None and text_size <= min_size:
                 block, size = _fit_bubble(text, rect, text_size, shape, min_size)
-                best = (_place(size, rect, placed, heads=heads)[0], block, shape)
+                best = (_place(size, rect, placed, heads=heads, earlier=bubble_boxes, body=picture.body)[0], block, shape)
             text_size -= _SHRINK_STEP_TEXT
+        if override is None and element_scale is None and picture.body is not None:
+            best = _shrink_off_body(best, text, rect, placed, heads, bubble_boxes, picture.body, text_size + _SHRINK_STEP_TEXT, min_size)
         box, block, final_shape = best
         side = _offpanel_side(box, rect, heads, head_ids, offscreen, speaker_id)
         if side is not None and override is None:
@@ -912,10 +1026,10 @@ def compose_page(
     for i in order:
         shape, content = spec.panels[i], panels[i]
         if shape.is_rect:
-            pictures[i] = _draw_picture(page, shape.rect, content, shape.cutout)
+            pictures[i] = _draw_picture(page, shape.rect, content, shape.cutout, bodies=style.avoid_bodies)
         else:
             layer = page.copy()
-            pictures[i] = _draw_picture(layer, shape.rect, content, shape.cutout)
+            pictures[i] = _draw_picture(layer, shape.rect, content, shape.cutout, bodies=style.avoid_bodies)
             mask = Image.new("L", page.size, 0)
             ImageDraw.Draw(mask).polygon(list(shape.points), fill=255)
             page.paste(layer, (0, 0), mask)
