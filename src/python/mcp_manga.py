@@ -271,6 +271,18 @@ async def _wait_model_3d(character_id: int, info: dict[str, Any], base_id: int |
     return entry
 
 
+async def _export_pdf(story_id: int) -> Path:
+    """合成したページを PDF にして outputs/manga/exports/ に保存し、そのパスを返す。"""
+    content = await _call_bytes("POST", f"/api/manga-v2/{story_id}/download", {"format": "pdf", "contents": ["pages"]})
+    story = await _call("GET", f"/api/story/{story_id}")
+    name = re.sub(r'[\\/:*?"<>|\s]+', "_", (story.get("title") or "").strip())[:60] or "manga"
+    folder = _USER_ROOT / "outputs" / "manga" / "exports"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"story{story_id}_{name}.pdf"
+    path.write_bytes(content)
+    return path
+
+
 def register_manga_tools(mcp: MCPServer) -> None:
     """漫画作成のツールを MCP サーバーに登録する。"""
 
@@ -1044,14 +1056,56 @@ def register_manga_tools(mcp: MCPServer) -> None:
         合成したページ(最後に合成したときの設定)を PDF にして保存し、そのパスを返す(outputs/manga/exports/)。
         先に manga_compose しておく。
         """
-        content = await _call_bytes("POST", f"/api/manga-v2/{story_id}/download", {"format": "pdf", "contents": ["pages"]})
+        return str(await _export_pdf(story_id))
+
+    @mcp.tool()
+    async def manga_finish(
+        story_id: int,
+        template: str | None = None,
+        max_lines_per_panel: int | None = None,
+        monochrome: bool | None = None,
+        avoid_bodies: bool | None = None,
+        reset_bubbles: bool = False,
+        report_panels: bool = True,
+        show_pages: bool = False,
+        page_max_size: int = 900,
+    ) -> list[TextContent | ImageContent]:
+        """
+        仕上げを1回で: 合成(manga_compose と同じ。省略した項目は前回の合成設定)→ PDF に書き出し(manga_export_pdf)→
+        怪しいコマの知らせ(manga_report_panels。描き直さない)。PDF のパスとページ数・怪しいコマを返す。
+        reset_bubbles: 手で動かした吹き出しの位置・大きさを消してから合成する(体を避ける自動の置き方に任せ直す)。
+        show_pages で全ページの画像も返す。
+        """
+        if reset_bubbles:
+            await _call("DELETE", f"/api/manga-v2/{story_id}/overrides")
         story = await _call("GET", f"/api/story/{story_id}")
-        name = re.sub(r'[\\/:*?"<>|\s]+', "_", (story.get("title") or "").strip())[:60] or "manga"
-        folder = _USER_ROOT / "outputs" / "manga" / "exports"
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"story{story_id}_{name}.pdf"
-        path.write_bytes(content)
-        return str(path)
+        body = dict(story.get("manga_v2_compose_settings") or {})
+        given = {
+            "template": template,
+            "max_lines_per_panel": max_lines_per_panel,
+            "monochrome": monochrome,
+            "avoid_bodies": avoid_bodies,
+        }
+        body |= {k: v for k, v in given.items() if v is not None}
+        result = await _call("POST", f"/api/manga-v2/{story_id}/compose", body, timeout=900)
+        pdf = await _export_pdf(story_id)
+        lines = [f"{len(result['pages'])}ページを合成し、PDF に書き出しました: {pdf}"]
+        colored = result.get("colored_scenes") or []
+        if colored:
+            lines.append(f"色の付いていたコマ(シーン{'・'.join(map(str, colored))})は白黒にして嵌めました。")
+        if report_panels:
+            try:
+                report = await _call("POST", f"/api/manga-v2/{story_id}/panel-report", {}, timeout=600)
+            except RuntimeError as exc:
+                lines.append(f"コマの確かめはできませんでした: {exc}")
+            else:
+                flagged = report.get("flagged") or []
+                lines.append(f"怪しいコマ {len(flagged)}/{report.get('checked', 0)}")
+                lines.extend(f"- シーン{f['scene_index']}(0始まり): {', '.join(f['problems'])}" for f in flagged)
+        content: list[TextContent | ImageContent] = [TextContent(type="text", text="\n".join(lines))]
+        if show_pages:
+            content.extend(_image_content(_project_file(p), page_max_size) for p in result["pages"])
+        return content
 
     @mcp.tool()
     async def manga_check_panels(

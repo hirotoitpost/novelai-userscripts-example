@@ -178,3 +178,30 @@ def test_model_3d_tools_start_wait_and_show_the_poses(tools: _FakeMCP, monkeypat
     # 頼んだポーズの絵だけを取りに行き、並べて返す
     assert fetched == [f"{url}/file?base_id=3&name=poses/sit_chair_front_line.png"]
     assert result[0].text.startswith("sit_chair") and result[1].type == "image"
+
+
+def test_finish_composes_exports_and_reports(tools: _FakeMCP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_manga, "_USER_ROOT", tmp_path)
+
+    async def fake_bytes(method: str, path: str, body: Any = None, timeout: float = 600) -> bytes:
+        tools.calls.append((method, path, body))  # type: ignore[attr-defined]
+        return b"%PDF"
+
+    monkeypatch.setattr(mcp_manga, "_call_bytes", fake_bytes)
+    tools.responses[("GET", "/api/story/9")] = {  # type: ignore[attr-defined]
+        "title": "海/夏", "manga_v2_compose_settings": {"template": "grid4", "max_lines_per_panel": 3},
+    }
+    tools.responses[("POST", "/api/manga-v2/9/compose")] = {"pages": ["a.png", "b.png"], "final_image_path": "f.png"}  # type: ignore[attr-defined]
+    tools.responses[("POST", "/api/manga-v2/9/panel-report")] = {  # type: ignore[attr-defined]
+        "checked": 2, "flagged": [{"scene_index": 1, "problems": ["向き(後ろ姿のはずが、こちらを向いている)"]}],
+    }
+    result = asyncio.run(tools.tools["manga_finish"](9, monochrome=False, reset_bubbles=True))
+    steps = [(m, p) for m, p, _ in tools.calls]  # type: ignore[attr-defined]
+    assert steps[0] == ("DELETE", "/api/manga-v2/9/overrides")
+    compose = next(b for m, p, b in tools.calls if p == "/api/manga-v2/9/compose")  # type: ignore[attr-defined]
+    assert compose == {"template": "grid4", "max_lines_per_panel": 3, "monochrome": False}
+    assert ("POST", "/api/manga-v2/9/download") in steps and ("POST", "/api/manga-v2/9/panel-report") in steps
+    pdf = tmp_path / "outputs" / "manga" / "exports" / "story9_海_夏.pdf"
+    assert pdf.read_bytes() == b"%PDF"
+    text = result[0].text
+    assert "2ページ" in text and str(pdf) in text and "怪しいコマ 1/2" in text and "シーン1(0始まり)" in text
