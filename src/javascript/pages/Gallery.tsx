@@ -18,7 +18,7 @@ import {
 import FullscreenViewer from '../components/FullscreenViewer'
 import RegionRedrawTool from '../components/RegionRedrawTool'
 import WholeEnhance from '../components/WholeEnhance'
-import { apiFetch, GENERATE_FROM_IMAGE_KEY } from '../api'
+import { apiFetch, GENERATE_FROM_IMAGE_KEY, GalleryImageReferences } from '../api'
 import type { MetadataGenerationSettings } from '../api'
 import { useAuth } from '../context/AuthContext'
 import GalleryMangaDialog, { GALLERY_MANGA_MAX } from '../components/GalleryMangaDialog'
@@ -279,6 +279,7 @@ export default function Gallery() {
    * 似た画像を作るために、この画像の設定を画像生成ページへ送る(生成は、そこで「生成」を押してから)。
    * 画像に埋め込まれた NovelAI の設定を読む。埋め込みが無い画像は、ギャラリーの記録にあるプロンプトだけを送る。
    * シード値も送る(そのまま生成すると同じ画像になる。変えたいときは、画像生成ページでシード値を変える)。
+   * 生成のときに使った参照画像(i2i の元画像・キャラ参照)も送る(画像はパスだけ渡し、画像生成ページで読み込む)。
    */
   async function sendToGenerate(item: GalleryImage) {
     if (!token) return
@@ -312,7 +313,11 @@ export default function Gallery() {
           ],
         }
       }
-      sessionStorage.setItem(GENERATE_FROM_IMAGE_KEY, JSON.stringify({ settings, name }))
+      // 参照画像が読めなくても、設定だけは送る
+      const references = await apiFetch<GalleryImageReferences>(
+        token, `/api/library/images/references?key=${encodeURIComponent(item.key)}`,
+      ).catch(() => null)
+      sessionStorage.setItem(GENERATE_FROM_IMAGE_KEY, JSON.stringify({ settings, name, references }))
       navigate('/generate')
     } catch (e) {
       setError(`画像生成ページへ送れませんでした: ${e instanceof Error ? e.message : String(e)}`)
@@ -760,7 +765,7 @@ export default function Gallery() {
                 うごイラを作る
               </button>
               <button type="button" onClick={() => void sendToGenerate(current)} disabled={sending}
-                title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値も入れます)">
+                title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値と、生成に使った参照画像も入れます)">
                 {sending ? '読み取り中…' : '似た画像を生成(画像生成ページへ)'}
               </button>
               {current.source_key && (

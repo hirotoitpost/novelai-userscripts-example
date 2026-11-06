@@ -32,6 +32,7 @@ from ..db import (
     forget_library_items,
     list_work_authors,
     get_connection,
+    get_generation_entry,
     get_story,
     list_adult_marks,
     list_bookmarks,
@@ -41,6 +42,7 @@ from ..db import (
     list_library_stories,
     list_panel_characters,
     list_scene_tags,
+    list_story_scenes,
     list_story_series,
     list_story_texts,
     set_adult_mark,
@@ -490,6 +492,114 @@ def get_image(key: str) -> GalleryImage:
     if item is None:
         raise HTTPException(status_code=404, detail="画像が見つかりません。")
     return item
+
+
+class ReferenceImage(BaseModel):
+    """似た画像を作るときに引き継ぐ参照画像(パスはギャラリーの画像と同じく、利用者のフォルダからの相対パス)。"""
+
+    image_path: str
+    type: Literal["character", "style", "character&style"] = "character&style"
+    fidelity: float = 1.0
+    strength: float = 1.0
+    label: str = ""
+
+
+class I2iReference(BaseModel):
+    image_path: str
+    strength: float
+    noise: float
+
+
+class ImageReferences(BaseModel):
+    i2i: I2iReference | None = None
+    character_references: list[ReferenceImage] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+def _history_references(entry_id: int) -> ImageReferences:
+    """画像生成・ワード選択で作った画像: 生成のときに使って一緒に保存した参照画像(i2i の元画像とキャラ参照)。"""
+    conn = get_connection()
+    try:
+        entry = get_generation_entry(conn, entry_id)
+    finally:
+        conn.close()
+    if entry is None:
+        return ImageReferences()
+    i2i = None
+    if entry["i2i_image_path"] and (_PROJECT_ROOT / entry["i2i_image_path"]).is_file():
+        i2i = I2iReference(
+            image_path=entry["i2i_image_path"],
+            strength=entry["i2i_strength"] if entry["i2i_strength"] is not None else 0.7,
+            noise=entry["i2i_noise"] if entry["i2i_noise"] is not None else 0.0,
+        )
+    refs = [
+        ReferenceImage(
+            image_path=r["image_path"],
+            type=r.get("type") or "character&style",
+            fidelity=r.get("fidelity", 1.0),
+            strength=r.get("strength", 1.0),
+            label=f"キャラ参照 {i + 1}",
+        )
+        for i, r in enumerate(entry["character_references"])
+        if r.get("image_path") and (_PROJECT_ROOT / r["image_path"]).is_file()
+    ]
+    return ImageReferences(i2i=i2i, character_references=refs)
+
+
+def _panel_references(panel_id: int) -> ImageReferences:
+    """
+    漫画のコマ: そのシーンに出るキャラの、キャラシートの参照画像(後ろ姿のコマは後ろ姿の参照)。コマの生成では
+    参照の強さを記録していないので、強さはコマの生成の既定(後ろ姿で後ろ姿の参照が無ければ弱める)にする。
+    """
+    from .manga_v2 import _BACK_VIEW_STRENGTH, is_back_view
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT story_id, scene_id FROM manga_panels WHERE id = ?", (panel_id,)).fetchone()
+        scenes = list_story_scenes(conn, row["story_id"]) if row else []
+    finally:
+        conn.close()
+    scene = next((s for s in scenes if row and s["id"] == row["scene_id"]), None)
+    if scene is None:
+        return ImageReferences()
+    refs: list[ReferenceImage] = []
+    for character in scene.get("characters") or []:
+        path = character.get("reference_image_path")
+        strength = 1.0
+        if is_back_view(scene.get("draft_prompt_tags") or "", character.get("action_tags")):
+            back = character.get("back_reference_image_path")
+            if back and (_PROJECT_ROOT / back).is_file():
+                path = back
+            else:
+                strength = _BACK_VIEW_STRENGTH
+        if path and (_PROJECT_ROOT / path).is_file():
+            refs.append(
+                ReferenceImage(image_path=path, type="character", strength=strength, label=character.get("name") or "")
+            )
+    notes = (
+        ["漫画のコマは参照の強さを記録していないので、登場キャラのキャラシートの参照画像を既定の強さで入れました"]
+        if refs
+        else []
+    )
+    return ImageReferences(character_references=refs, notes=notes)
+
+
+@router.get("/images/references", response_model=ImageReferences)
+def image_references(key: str) -> ImageReferences:
+    """
+    ギャラリーの画像を作ったときの参照画像(「似た画像を生成」で画像生成ページへ引き継ぐ)。
+    画像生成・ワード選択の画像は生成履歴に保存した i2i の元画像とキャラ参照、漫画のコマは登場キャラの参照画像。
+    それ以外(挿絵ページ・データセット)は記録が無いので空。
+    """
+    kind, _, rest = key.partition(":")
+    try:
+        if kind == "history":
+            return _history_references(int(rest.split(":", 1)[0]))
+        if kind == "panel":
+            return _panel_references(int(rest))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="画像のキーが正しくありません。") from None
+    return ImageReferences()
 
 
 @router.get("/images/similar", response_model=list[SimilarImage])

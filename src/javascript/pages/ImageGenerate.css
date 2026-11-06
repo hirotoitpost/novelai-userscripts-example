@@ -783,3 +783,52 @@
 
 /* i2i の参照画像の操作(貼り付け・切り抜き・戻す・クリア) */
 .ig-i2i-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+/* キャラ参照(Character Reference) */
+.ig-charref-item {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin-top: 0.5rem;
+}
+
+.ig-charref-thumb {
+  width: 72px;
+  height: 96px;
+  object-fit: contain;
+  flex-shrink: 0;
+  border: 1px solid var(--nai-border);
+  border-radius: 4px;
+}
+
+.ig-charref-controls {
+  flex: 1;
+  min-width: 0;
+}
+
+.ig-charref-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.ig-charref-label {
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 10rem;
+}
+
+.ig-charref-add {
+  display: inline-block;
+  margin-top: 0.5rem;
+  cursor: pointer;
+}
+
+.ig-charref-warn {
+  color: var(--nai-warn, #fbbf24);
+  font-size: 0.8rem;
+  margin: 0.4rem 0 0;
+}
