@@ -11,8 +11,9 @@ import type { Character } from '../components/StoryCharacters'
 import {
   apiFetch, GenerateRequest, AnlasEstimateRequest, AnlasEstimateResponse, I2iRequest,
   ImagePreset, ImagePresetSettings, CharacterSheetPrompt, isAuthExpired, notifyAuthExpired, CharacterPromptInput,
-  MetadataGenerationSettings, GENERATE_FROM_IMAGE_KEY,
+  MetadataGenerationSettings, GENERATE_FROM_IMAGE_KEY, CharacterReferenceInput, GalleryImageReferences,
 } from '../api'
+import { fileUrl } from '../library'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
 import { insertTag } from '../tagInsert'
 import ImageCropDialog from '../components/ImageCropDialog'
@@ -21,6 +22,34 @@ import './ImageGenerate.css'
 
 // プリセットは挿絵パネルと共用しており、バックエンドが受け付けるモデルはこの3つだけ。
 const PRESET_MODELS = new Set(['nai-diffusion-5-full', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
+
+const CHARACTER_REFERENCE_TYPES = [
+  { value: 'character&style', label: 'キャラ+スタイル' },
+  { value: 'character',       label: 'キャラのみ' },
+  { value: 'style',           label: 'スタイルのみ' },
+] as const
+
+// キャラ参照(Character Reference)を受け付けるモデル(V5 は NovelAI が受け付けない)
+const REFERENCE_MODELS = new Set(['nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
+
+/** キャラ参照の1件(label はどこから来た参照か。ギャラリーから引き継いだときのキャラ名など) */
+type CharacterRef = CharacterReferenceInput & { label: string }
+
+function readAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+}
+
+/** ギャラリーの画像(利用者のフォルダからの相対パス)を data URL にする。 */
+async function pathToDataUrl(path: string): Promise<string> {
+  const res = await fetch(fileUrl(path), { cache: 'no-store' })
+  if (!res.ok) throw new Error(`画像を読み込めませんでした(HTTP ${res.status})`)
+  return readAsDataUrl(await res.blob())
+}
 
 const AI_DEFAULTS = {
   steps:         27,
@@ -186,6 +215,15 @@ export default function ImageGenerate() {
   // i2i の参照画像: 切り抜く前の画像(「元に戻す」で戻す)と、切り抜きのダイアログ
   const [i2iOriginal, setI2iOriginal] = useState<string | null>(null)
   const [i2iCropping, setI2iCropping] = useState(false)
+  // キャラ参照(Character Reference)。ギャラリーの「似た画像を生成」では、元の画像の参照を引き継ぐ
+  const [charRefs, setCharRefs] = useState<CharacterRef[]>([])
+  const updateCharRef = (index: number, patch: Partial<CharacterRef>) =>
+    setCharRefs(prev => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)))
+  const addCharRefFile = async (file: File) => {
+    if (!file.type.match(/^image\//)) return
+    const image = await readAsDataUrl(file)
+    setCharRefs(prev => [...prev, { image, type: 'character', fidelity: 1.0, strength: 0.7, label: file.name }])
+  }
   const takeI2iFile = useCallback((file: File) => { setI2iOriginal(null); handleI2iFile(file) }, [handleI2iFile])
   // Image-to-Image を使っているあいだは、ページのどこで Ctrl+V しても参照画像にする
   usePasteImage(i2iEnabled, takeI2iFile)
@@ -285,12 +323,50 @@ export default function ImageGenerate() {
       const raw = sessionStorage.getItem(GENERATE_FROM_IMAGE_KEY)
       if (!raw) return
       sessionStorage.removeItem(GENERATE_FROM_IMAGE_KEY)
-      const { settings, name } = JSON.parse(raw) as { settings: MetadataGenerationSettings; name: string }
+      const { settings, name, references } = JSON.parse(raw) as {
+        settings: MetadataGenerationSettings; name: string; references?: GalleryImageReferences | null
+      }
       applyImageSettings(settings, name)
+      if (references) void applyReferences(references)
     } catch {
       // 壊れた受け渡しは無視する
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyImageSettings])
+
+  /** ギャラリーから引き継いだ参照画像(i2i の元画像・キャラ参照)を読み込んで入れる。 */
+  async function applyReferences(refs: GalleryImageReferences) {
+    const notes = [...refs.notes]
+    let i2iDone = false
+    if (refs.i2i) {
+      try {
+        setI2iImage(await pathToDataUrl(refs.i2i.image_path))
+        setI2iOriginal(null)
+        setI2iStrength(refs.i2i.strength)
+        setI2iNoise(refs.i2i.noise)
+        setI2iEnabled(true)
+        i2iDone = true
+      } catch (e) {
+        notes.push(`Image-to-Image の元画像を読み込めませんでした: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    const loaded: CharacterRef[] = []
+    for (const r of refs.character_references) {
+      try {
+        loaded.push({ image: await pathToDataUrl(r.image_path), type: r.type, fidelity: r.fidelity, strength: r.strength, label: r.label })
+      } catch {
+        notes.push(`キャラ参照「${r.label}」の画像を読み込めませんでした`)
+      }
+    }
+    setCharRefs(loaded)
+    const parts = [i2iDone ? 'Image-to-Image の元画像' : '', loaded.length ? `キャラ参照${loaded.length}件` : ''].filter(Boolean)
+    if (!parts.length && !notes.length) return
+    setFromImageMsg(prev => prev && {
+      ...prev,
+      text: parts.length ? `${prev.text}生成に使った参照画像(${parts.join('・')})も入れました。` : prev.text,
+      notes: [...prev.notes, ...notes],
+    })
+  }
 
   /**
    * キャラシートのプロンプト・ネガティブプロンプト・基準シードで入力欄を置き換える。
@@ -504,6 +580,9 @@ export default function ImageGenerate() {
       cfg_rescale:    cfgRescale,
       variety_boost:  varietyBoost,
       i2i,
+      character_references: charRefs.length
+        ? charRefs.map(({ image, type, fidelity, strength }) => ({ image, type, fidelity, strength }))
+        : undefined,
       characters: charPrompts.some(c => c.prompt.trim())
         ? charPrompts
           .filter(c => c.prompt.trim())
@@ -586,7 +665,7 @@ export default function ImageGenerate() {
     }
   }, [token, prompt, negPrompt, model, size, customSize, steps, scale, seed, quality, ucPreset,
       sampler, noiseSchedule, cfgRescale, varietyBoost, charPrompts, charUseCoords,
-      i2iEnabled, i2iImage, i2iStrength, i2iNoise])
+      i2iEnabled, i2iImage, i2iStrength, i2iNoise, charRefs])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -1247,6 +1326,52 @@ export default function ImageGenerate() {
                 </div>
               </div>
             )}
+          </section>
+
+          {/* Character Reference */}
+          <section className="ig-section ig-section--i2i">
+            <span className="ig-label ig-label--inline">キャラ参照(Character Reference)</span>
+            {charRefs.length > 0 && !REFERENCE_MODELS.has(model) && (
+              <p className="ig-charref-warn" role="status">
+                キャラ参照は V4.5 でしか使えません。生成する前に、モデルを NAI Diffusion V4.5 Full にしてください。
+              </p>
+            )}
+            {charRefs.map((c, i) => (
+              <div key={i} className="ig-charref-item">
+                <img className="ig-charref-thumb" src={c.image} alt={`キャラ参照 ${i + 1}`} />
+                <div className="ig-charref-controls">
+                  <div className="ig-charref-head">
+                    <span className="ig-charref-label">{c.label || `キャラ参照 ${i + 1}`}</span>
+                    <select value={c.type} onChange={e => updateCharRef(i, { type: e.target.value as CharacterRef['type'] })}>
+                      {CHARACTER_REFERENCE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                    </select>
+                    <button type="button" className="ig-i2i-clear" onClick={() => setCharRefs(prev => prev.filter((_, j) => j !== i))}>
+                      ✕ 外す
+                    </button>
+                  </div>
+                  <div className="ig-field ig-field--row">
+                    <label className="ig-field-label" htmlFor={`ig-charref-fidelity-${i}`}>Fidelity</label>
+                    <input id={`ig-charref-fidelity-${i}`} type="range" min={0} max={1} step={0.01} value={c.fidelity}
+                      onChange={e => updateCharRef(i, { fidelity: Number(e.target.value) })} className="ig-range" />
+                    <span className="ig-field-value">{c.fidelity.toFixed(2)}</span>
+                  </div>
+                  <div className="ig-field ig-field--row">
+                    <label className="ig-field-label" htmlFor={`ig-charref-strength-${i}`}>Strength</label>
+                    <input id={`ig-charref-strength-${i}`} type="range" min={0} max={1} step={0.01} value={c.strength}
+                      onChange={e => updateCharRef(i, { strength: Number(e.target.value) })} className="ig-range" />
+                    <span className="ig-field-value">{c.strength.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <label className="ig-i2i-clear ig-charref-add">
+              + 参照画像を追加
+              <input type="file" accept="image/*" hidden onChange={e => {
+                const f = e.target.files?.[0]
+                if (f) void addCharRefFile(f)
+                e.target.value = ''
+              }} />
+            </label>
           </section>
 
           {/* Generate button */}

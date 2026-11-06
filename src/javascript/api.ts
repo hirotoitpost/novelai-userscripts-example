@@ -59,6 +59,8 @@ export interface GenerateRequest {
   cfg_rescale?: number
   variety_boost?: boolean
   i2i?: I2iRequest
+  /** キャラ参照(Character Reference)。V4.5 だけで使える(V5 は NovelAI が受け付けない) */
+  character_references?: CharacterReferenceInput[]
   /** キャラごとのプロンプト(V4 以降)。position は画像に対する割合 (x, y)。省くと位置は AI まかせ */
   characters?: { prompt: string; negative_prompt?: string; position?: [number, number]; enabled?: boolean }[]
 }
@@ -162,6 +164,21 @@ export interface MetadataGenerationSettings {
   variety_boost: boolean
   seed: number | null
   source: string
+  notes: string[]
+}
+
+export interface CharacterReferenceInput {
+  /** data URL */
+  image: string
+  type: 'character' | 'style' | 'character&style'
+  fidelity: number
+  strength: number
+}
+
+/** ギャラリーの画像を作ったときの参照画像(GET /api/library/images/references)。パスは fileUrl で読む */
+export interface GalleryImageReferences {
+  i2i: { image_path: string; strength: number; noise: number } | null
+  character_references: { image_path: string; type: CharacterReferenceInput['type']; fidelity: number; strength: number; label: string }[]
   notes: string[]
 }
 
