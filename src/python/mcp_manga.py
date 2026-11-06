@@ -295,6 +295,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
                 "outfit_tags": c.get("outfit_tags"),
                 "seed": c.get("seed"),
                 "has_reference_image": bool(c.get("reference_image_path")),
+                "has_back_reference_image": bool(c.get("back_reference_image_path")),
                 "is_adult": c.get("is_adult", False),
                 "is_minor": c.get("is_minor", False),
                 "age": c.get("age"),
@@ -312,6 +313,21 @@ def register_manga_tools(mcp: MCPServer) -> None:
                 ]
             result.append(item)
         return result
+
+    @mcp.tool()
+    async def manga_set_reference(
+        character_id: int, story_id: int, scene_index: int, view: str = "front"
+    ) -> dict[str, Any]:
+        """
+        生成済みのコマの絵を、キャラ参照の画像にする。view="back" なら後ろ姿のコマ(from behind・facing away・
+        back view などのタグ)用の参照にする。後ろ姿の参照が無いキャラは、後ろ姿のコマで正面の参照を 0.6 倍に弱めて使う
+        (正面の参照に引っ張られて、後ろ姿のはずがこちらを向きやすいため)。そのキャラ一人がうまく描けたコマを選ぶ。
+        """
+        if view not in ("front", "back"):
+            raise ValueError("view は front か back にしてください")
+        scene_id = await _scene_id(None, story_id, scene_index)
+        await _call("PUT", f"/api/manga-v2/characters/{character_id}/reference", {"scene_id": scene_id, "view": view})
+        return {"character_id": character_id, "view": view, "scene_id": scene_id}
 
     @mcp.tool()
     async def manga_create_character(

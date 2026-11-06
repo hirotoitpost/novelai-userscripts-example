@@ -1115,6 +1115,8 @@ def _migrate_scene_characters(conn: sqlite3.Connection) -> None:
 # negative_tags はそのキャラで出てほしくない要素、seed は基準シード。
 _CHARACTERS_EXTRA_COLUMNS = {
     "reference_image_path": "TEXT",
+    # 後ろ姿のコマ(from behind など)で使うキャラ参照。正面の参照だと、後ろ姿のはずがこちらを向きやすいため
+    "back_reference_image_path": "TEXT",
     # 標準の体型(キャラ別データセットの状態は、ここを置き換える。顔・髪・目は appearance_tags)
     "body_tags": "TEXT",
     "trigger_word": "TEXT",
@@ -1330,8 +1332,12 @@ def delete_stamp_source(conn: sqlite3.Connection, key: str) -> None:
     conn.commit()
 
 
-def update_character_reference(conn: sqlite3.Connection, character_id: int, image_path: str | None) -> None:
-    conn.execute("UPDATE characters SET reference_image_path = ? WHERE id = ?", (image_path, character_id))
+def update_character_reference(
+    conn: sqlite3.Connection, character_id: int, image_path: str | None, view: str = "front"
+) -> None:
+    """キャラ参照の画像を入れ替える。view が back なら後ろ姿のコマ用の参照。"""
+    column = "back_reference_image_path" if view == "back" else "reference_image_path"
+    conn.execute(f"UPDATE characters SET {column} = ? WHERE id = ?", (image_path, character_id))
     conn.commit()
 
 
@@ -2250,7 +2256,7 @@ def growth_choices(conn: sqlite3.Connection, story_id: int) -> dict[int, dict[st
 # 成長段階の見た目として段階のキャラシートから写す項目(名前・ID はシーンのキャラのまま。話し手の判定が変わらないように)
 _GROWTH_LOOK_FIELDS = (
     "appearance_tags", "body_tags", "outfit_tags", "style_tags", "negative_tags", "seed", "reference_image_path",
-    "is_adult", "is_minor", "age",
+    "back_reference_image_path", "is_adult", "is_minor", "age",
 )
 
 

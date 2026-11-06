@@ -36,6 +36,8 @@ export interface SceneCharacter {
   appearance_tags: string
   /** 漫画v2のキャラ参照に使う画像 */
   reference_image_path?: string | null
+  /** 後ろ姿のコマ(from behind など)で使うキャラ参照。無ければ正面の参照を弱めて使う */
+  back_reference_image_path?: string | null
   /** そのシーンでの動作・表情 */
   action_tags?: string | null
   /** そのシーンでの服装(空ならふだんの服装) */
