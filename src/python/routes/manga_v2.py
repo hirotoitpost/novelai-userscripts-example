@@ -32,6 +32,7 @@ from novelai import AsyncNovelAI
 
 from ..client import get_client
 from ..db import (
+    panel_references,
     characters_by_scene,
     get_character,
     get_connection,
@@ -213,6 +214,39 @@ _PANEL_DIR = _MANGA_DIR / "panels"
 _REFERENCE_DIR = _MANGA_DIR / "refs"
 # 参照画像の候補(選ばれなかったものも残る。選んだものは refs へ写す)
 _CANDIDATE_DIR = _REFERENCE_DIR / "candidates"
+# コマを描いたときに NovelAI へ送ったキャラ参照の写し(1024x1536 に整えたもの。中身のハッシュで名前を付けて使い回す)。
+# 利用者のフォルダからの相対パス。
+# キャラシートの参照画像をあとで差し替えても、ギャラリーから同じ絵を描き直せるように残す
+_USED_REFERENCE_DIR = (_REFERENCE_DIR / "used").relative_to(_PROJECT_ROOT)
+
+
+def save_used_reference(image_b64: str, root: Path) -> str:
+    """送ったキャラ参照の画像を写し、root からの相対パスを返す(同じ画像は1つにまとめる)。"""
+    data = base64.b64decode(image_b64)
+    folder = root / _USED_REFERENCE_DIR
+    path = folder / f"{hashlib.sha256(data).hexdigest()[:20]}.png"
+    if not path.is_file():
+        folder.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return path.relative_to(root).as_posix()
+
+
+def record_references(refs: list[CharacterReferenceInput], root: Path | None = None) -> list[dict[str, Any]]:
+    """
+    送ったキャラ参照を写して、コマの行に入れる形(db.panel_references)にする。種類は送ったとおり character&style。
+    root は利用者のフォルダ(省くと今の利用者)。
+    """
+    recorded = []
+    for ref in refs:
+        recorded.append(
+            {
+                "image_path": save_used_reference(ref.image_b64, root or _PROJECT_ROOT),
+                "type": "character&style",
+                "fidelity": round(ref.fidelity, 2),
+                "strength": round(ref.strength, 2),
+            }
+        )
+    return recorded
 # 候補の構図。顔と服装が分かり、背景が絵柄を引っ張らないもの
 # (既定は app_settings の reference.candidate_tags。開発管理者のページで変えられる)
 # キャラ参照を使うコマの生成モデル。V5はキャラ参照に未対応(500が返る)。
@@ -1389,6 +1423,7 @@ async def _run_panels(
         references = _scene_references(scene_characters, req, scene_tags) if req.use_character_reference else []
         if references:
             job.message += f"(キャラ参照{len(references)}人・V4.5)"
+        used_references = record_references(references)
         sexual = is_sexual(scene_tags)
         prompt = build_panel_prompt(
             join_tags(count_tags, scene_tags), color=req.color, complexity=settings.complexity, manga_style=req.manga_style,
@@ -1432,11 +1467,13 @@ async def _run_panels(
             try:
                 if req.candidates > 1:
                     add_panel_candidate(
-                        conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", draw_seed, width, height
+                        conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", draw_seed, width, height,
+                        used_references,
                     )
                 else:
                     upsert_manga_panel(
-                        conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", draw_seed, width, height
+                        conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", draw_seed, width, height,
+                        used_references,
                     )
             finally:
                 conn.close()
@@ -2598,7 +2635,7 @@ async def _check_and_redraw(
                 try:
                     upsert_manga_panel(
                         conn, story_id, scene["id"], best_panel["image_path"], best_panel.get("seed"),
-                        best_panel["width"], best_panel["height"],
+                        best_panel["width"], best_panel["height"], panel_references(best_panel),
                     )
                 finally:
                     conn.close()
@@ -2700,9 +2737,10 @@ async def _redraw_states(job: Any, story_id: int, req: MangaV2PanelsRequest, api
                 image.save(_PANEL_DIR / filename, "PNG")
                 conn = get_connection()
                 try:
+                    # 一部を描き直した絵は同じ設定でも同じにならないが、元の絵を描いた参照は残す
                     upsert_manga_panel(
                         conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", panel.get("seed"),
-                        panel["width"], panel["height"],
+                        panel["width"], panel["height"], panel_references(panel),
                     )
                 finally:
                     conn.close()

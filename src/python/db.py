@@ -1067,15 +1067,33 @@ _MANGA_PAGES_EXTRA_COLUMNS = {"seed": "INTEGER"}
 
 # stale: 絵を描いたあとでシーンのタグ・登場人物を編集した(描き直し待ち)。絵は使えるが、コマの生成で
 # 「生成済みを飛ばす」ときも描き直しの対象にする。描き直すと 0 に戻る
-_MANGA_PANELS_EXTRA_COLUMNS = {"stale": "INTEGER NOT NULL DEFAULT 0"}
+# reference_images: 絵を描いたときに NovelAI へ送ったキャラ参照(JSON。[{image_path, type, fidelity, strength}])。
+# image_path は送ったとおりの画像(1024x1536 に整えたもの)の写しで、ギャラリーから同じ絵を描き直すのに使う。
+# 参照を使わずに描いた絵は空の配列、記録する前に描いた絵・部分を描き直した絵は NULL
+_MANGA_PANELS_EXTRA_COLUMNS = {"stale": "INTEGER NOT NULL DEFAULT 0", "reference_images": "TEXT"}
+_MANGA_PANEL_CANDIDATES_EXTRA_COLUMNS = {"reference_images": "TEXT"}
 
 
 def _migrate_manga_panels(conn: sqlite3.Connection) -> None:
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(manga_panels)")}
-    for column, column_type in _MANGA_PANELS_EXTRA_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE manga_panels ADD COLUMN {column} {column_type}")
+    for table, columns in (
+        ("manga_panels", _MANGA_PANELS_EXTRA_COLUMNS),
+        ("manga_panel_candidates", _MANGA_PANEL_CANDIDATES_EXTRA_COLUMNS),
+    ):
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, column_type in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
     conn.commit()
+
+
+def _references_json(references: list[dict[str, Any]] | None) -> str | None:
+    return json.dumps(references) if references is not None else None
+
+
+def panel_references(row: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """コマ(または候補)の行の reference_images。記録が無ければ None。"""
+    raw = row.get("reference_images")
+    return json.loads(raw) if raw is not None else None
 
 
 def _migrate_manga_pages(conn: sqlite3.Connection) -> None:
@@ -2683,31 +2701,41 @@ def upsert_manga_panel(
     seed: int | None,
     width: int,
     height: int,
+    references: list[dict[str, Any]] | None = None,
 ) -> None:
+    """コマの絵を入れる。references は描いたときに送ったキャラ参照(panel_references と同じ形。分からなければ None)。"""
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """
-        INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at, reference_images)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (scene_id) DO UPDATE SET image_path = excluded.image_path, seed = excluded.seed,
-            width = excluded.width, height = excluded.height, created_at = excluded.created_at, stale = 0
+            width = excluded.width, height = excluded.height, created_at = excluded.created_at, stale = 0,
+            reference_images = excluded.reference_images
         """,
-        (story_id, scene_id, image_path, seed, width, height, now),
+        (story_id, scene_id, image_path, seed, width, height, now, _references_json(references)),
     )
     conn.commit()
 
 
 def add_panel_candidate(
-    conn: sqlite3.Connection, story_id: int, scene_id: int, image_path: str, seed: int | None, width: int, height: int
+    conn: sqlite3.Connection,
+    story_id: int,
+    scene_id: int,
+    image_path: str,
+    seed: int | None,
+    width: int,
+    height: int,
+    references: list[dict[str, Any]] | None = None,
 ) -> int:
-    """コマの候補の絵を1枚足し、その ID を返す(コマの絵はそのまま)。"""
+    """コマの候補の絵を1枚足し、その ID を返す(コマの絵はそのまま)。references は upsert_manga_panel と同じ。"""
     now = datetime.now(timezone.utc).isoformat()
     row = conn.execute(
         """
-        INSERT INTO manga_panel_candidates (story_id, scene_id, image_path, seed, width, height, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
+        INSERT INTO manga_panel_candidates (story_id, scene_id, image_path, seed, width, height, created_at, reference_images)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
         """,
-        (story_id, scene_id, image_path, seed, width, height, now),
+        (story_id, scene_id, image_path, seed, width, height, now, _references_json(references)),
     ).fetchone()
     conn.commit()
     return int(row["id"])
@@ -2744,20 +2772,28 @@ def adopt_panel_candidate(conn: sqlite3.Connection, scene_id: int, candidate_id:
     if current is not None:
         conn.execute(
             """
-            INSERT INTO manga_panel_candidates (story_id, scene_id, image_path, seed, width, height, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO manga_panel_candidates
+                (story_id, scene_id, image_path, seed, width, height, created_at, reference_images)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (current["story_id"], scene_id, current["image_path"], current["seed"], current["width"], current["height"], now),
+            (
+                current["story_id"], scene_id, current["image_path"], current["seed"], current["width"],
+                current["height"], now, current["reference_images"],
+            ),
         )
     conn.execute("DELETE FROM manga_panel_candidates WHERE id = ?", (candidate_id,))
     conn.execute(
         """
-        INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO manga_panels (story_id, scene_id, image_path, seed, width, height, created_at, reference_images)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (scene_id) DO UPDATE SET image_path = excluded.image_path, seed = excluded.seed,
-            width = excluded.width, height = excluded.height, created_at = excluded.created_at, stale = 0
+            width = excluded.width, height = excluded.height, created_at = excluded.created_at, stale = 0,
+            reference_images = excluded.reference_images
         """,
-        (chosen["story_id"], scene_id, chosen["image_path"], chosen["seed"], chosen["width"], chosen["height"], now),
+        (
+            chosen["story_id"], scene_id, chosen["image_path"], chosen["seed"], chosen["width"], chosen["height"],
+            now, chosen["reference_images"],
+        ),
     )
     conn.commit()
     return dict(chosen)

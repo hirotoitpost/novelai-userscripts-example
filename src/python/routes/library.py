@@ -34,6 +34,7 @@ from ..db import (
     get_connection,
     get_generation_entry,
     get_story,
+    panel_references,
     list_adult_marks,
     list_bookmarks,
     list_generation_history,
@@ -546,23 +547,56 @@ def _history_references(entry_id: int) -> ImageReferences:
     return ImageReferences(i2i=i2i, character_references=refs)
 
 
+def _embedded_references(path: Path) -> list[tuple[float, float]] | None:
+    """
+    画像に埋め込まれた NovelAI の設定にある、キャラ参照の (強さ, fidelity) の並び。参照を使っていなければ空、
+    設定が読めなければ None。
+    """
+    try:
+        with Image.open(path) as image:
+            info = json.loads(image.info.get("Comment") or "")
+    except (OSError, ValueError):
+        return None
+    strengths = info.get("director_reference_strengths") or []
+    secondary = info.get("director_reference_secondary_strengths") or [0.0] * len(strengths)
+    return [(float(s), round(1 - float(t), 2)) for s, t in zip(strengths, secondary)]
+
+
 def _panel_references(panel_id: int) -> ImageReferences:
     """
-    漫画のコマ: そのシーンに出るキャラの、キャラシートの参照画像(後ろ姿のコマは後ろ姿の参照)。コマの生成では
-    参照の強さを記録していないので、強さはコマの生成の既定(後ろ姿で後ろ姿の参照が無ければ弱める)にする。
+    漫画のコマ: 描いたときに NovelAI へ送ったキャラ参照(コマに記録した、送ったとおりの画像の写しと強さ)。
+    記録する前に描いたコマは、絵に埋め込まれた強さと、今のキャラシートの参照画像(送るときと同じ形に整える)で補う。
+    埋め込みに参照が無ければ、参照を使わずに描いたコマなので空。
     """
-    from .manga_v2 import _BACK_VIEW_STRENGTH, is_back_view
+    from ..novelai_image_v5 import CharacterReferenceInput, reference_image_b64
+    from .manga_v2 import _BACK_VIEW_STRENGTH, is_back_view, record_references
 
     conn = get_connection()
     try:
-        row = conn.execute("SELECT story_id, scene_id FROM manga_panels WHERE id = ?", (panel_id,)).fetchone()
+        row = conn.execute("SELECT * FROM manga_panels WHERE id = ?", (panel_id,)).fetchone()
         scenes = list_story_scenes(conn, row["story_id"]) if row else []
     finally:
         conn.close()
-    scene = next((s for s in scenes if row and s["id"] == row["scene_id"]), None)
+    if row is None:
+        return ImageReferences()
+    recorded = panel_references(dict(row))
+    if recorded is not None:
+        return ImageReferences(
+            character_references=[
+                ReferenceImage(**r, label=f"キャラ参照 {i + 1}")
+                for i, r in enumerate(recorded)
+                if (_PROJECT_ROOT / r["image_path"]).is_file()
+            ]
+        )
+    embedded = _embedded_references(_PROJECT_ROOT / row["image_path"])
+    if embedded == []:
+        return ImageReferences()
+    scene = next((s for s in scenes if s["id"] == row["scene_id"]), None)
     if scene is None:
         return ImageReferences()
-    refs: list[ReferenceImage] = []
+    # コマの生成(_scene_references)と同じ選び方: 参照画像のあるキャラを名前順に、後ろ姿のコマは後ろ姿の参照
+    inputs: list[CharacterReferenceInput] = []
+    names: list[str] = []
     for character in scene.get("characters") or []:
         path = character.get("reference_image_path")
         strength = 1.0
@@ -573,14 +607,24 @@ def _panel_references(panel_id: int) -> ImageReferences:
             else:
                 strength = _BACK_VIEW_STRENGTH
         if path and (_PROJECT_ROOT / path).is_file():
-            refs.append(
-                ReferenceImage(image_path=path, type="character", strength=strength, label=character.get("name") or "")
-            )
-    notes = (
-        ["漫画のコマは参照の強さを記録していないので、登場キャラのキャラシートの参照画像を既定の強さで入れました"]
-        if refs
-        else []
-    )
+            inputs.append(CharacterReferenceInput(reference_image_b64((_PROJECT_ROOT / path).read_bytes()), strength))
+            names.append(character.get("name") or "")
+    notes = []
+    if embedded is not None and len(embedded) == len(inputs):
+        inputs = [
+            CharacterReferenceInput(ref.image_b64, strength, fidelity) for ref, (strength, fidelity) in zip(inputs, embedded)
+        ]
+        notes.append(
+            "このコマは参照画像を記録する前に描いたので、今のキャラシートの参照画像を入れました(強さは絵に残っていた値)。"
+            "描いたあとに参照画像を差し替えていれば、同じ絵にはなりません"
+        )
+    elif inputs:
+        notes.append(
+            "このコマは参照画像を記録する前に描いたので、今のキャラシートの参照画像を既定の強さで入れました。同じ絵にはなりません"
+        )
+    refs = [
+        ReferenceImage(**r, label=name) for r, name in zip(record_references(inputs, _PROJECT_ROOT), names)
+    ]
     return ImageReferences(character_references=refs, notes=notes)
 
 
