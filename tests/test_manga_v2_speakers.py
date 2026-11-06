@@ -25,6 +25,7 @@ from python.manga_v2.compose import (  # noqa: E402
     split_dense_panels,
 )
 from python.manga_v2.speakers import (  # noqa: E402
+    drop_tiny_heads,
     attribute_speakers,
     cast_member,
     cast_members,
@@ -241,3 +242,11 @@ def test_cast_prompt_puts_actions_in_each_character() -> None:
     tags, _, count = _cast_prompt(characters)
     assert tags == ["1girl, brown hair, apron, blush, looking away", "1boy, glasses, hand on own chin"]
     assert count == "1girl, 1boy"
+
+
+def test_drop_tiny_heads_only_when_more_heads_than_cast() -> None:
+    big, small, tiny = (100, 100, 400, 400), (450, 300, 560, 410), (0, 470, 45, 535)
+    # 二人の場面で頭が3つ: 小物の誤検出(面積 3%)だけ除き、奥の小さい人(13%)は残す
+    assert drop_tiny_heads([big, small, tiny], 2) == [big, small]
+    # 頭の数が登場キャラ以下なら何も除かない
+    assert drop_tiny_heads([big, tiny], 2) == [big, tiny]
