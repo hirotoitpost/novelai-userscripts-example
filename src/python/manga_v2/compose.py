@@ -258,17 +258,27 @@ def _overlap_area(a: Rect, b: Rect) -> int:
 # 下の段を使うときの不利(コマの幅に対する割合。吹き出しはなるべく上に置く)
 _RIVAL_GAP_WEIGHT = 0.6
 _LOWER_ROW_COST = 0.3
+# 話し手より別の人(誰か分かった頭)の方が近い位置の不利(コマの幅に対する割合)。別の人のセリフに見えるため
+_WRONG_SIDE_COST = 0.5
+# 先の吹き出しの右に置いてよい段差(先の吹き出しの高さに対する割合)。これだけ下がっていれば上にある方から読まれる
+_STAGGER = 0.6
 
 
 def _reads_after(candidate: Rect, earlier: list[Rect]) -> bool:
     """
     先に置いた吹き出しより後に読まれる位置か。下の段にある吹き出しより上には置かず、
-    同じ高さに並ぶなら左に置く(日本の漫画は上から、右から読む)。
+    同じ高さに並ぶなら左に置く(日本の漫画は上から、右から読む)。右に置くのは、先の吹き出しより
+    はっきり(高さの _STAGGER 以上)下げたときだけ。
     """
     for other in earlier:
         if other[1] >= candidate[3]:
             return False
-        if candidate[1] < other[3] and other[1] < candidate[3] and candidate[2] > other[0] + _BUBBLE_MARGIN:
+        if (
+            candidate[1] < other[3]
+            and other[1] < candidate[3]
+            and candidate[2] > other[0] + _BUBBLE_MARGIN
+            and candidate[1] < other[1] + (other[3] - other[1]) * _STAGGER
+        ):
             return False
     return True
 
@@ -284,6 +294,7 @@ def _place(
     prefer_x: float | None = None,
     earlier: list[Rect] | None = None,
     rivals: list[Rect] | None = None,
+    others_x: list[float] | None = None,
     body: BodyCover | None = None,
 ) -> tuple[Rect, bool]:
     """
@@ -299,6 +310,7 @@ def _place(
     prefer_x(話し手の頭の横位置)を渡すと、読む順(上の段から、同じ段は右から)を崩さない
     範囲で、話し手に近く、別の人の吹き出し(rivals)からは遠い位置を選ぶ。二人の吹き出しが
     並ぶと、どちらがどちらのセリフか分かりにくいため。earlier はこのコマで先に置いた吹き出し。
+    others_x(話し手以外の、誰か分かった頭の横位置)を渡すと、話し手よりその人に近い位置を避ける。
 
     body(四角が人物の体に掛かる割合を返す関数)を渡すと、吹き出し(描き文字・ナレーション以外)は
     体に掛からない位置を優先する。上下の段がどこも体に掛かるなら、読む順を崩さない範囲でコマの中ほども探す。
@@ -351,7 +363,8 @@ def _place(
                     default=width,
                 )
                 lower = _LOWER_ROW_COST * width * (c[1] - top_row) / max(bottom_row - top_row, 1)
-                return abs(cx - prefer_x) - _RIVAL_GAP_WEIGHT * min(gap, width) + lower
+                wrong = _WRONG_SIDE_COST * width if any(abs(cx - x) < abs(cx - prefer_x) for x in others_x or []) else 0.0
+                return abs(cx - prefer_x) - _RIVAL_GAP_WEIGHT * min(gap, width) + lower + wrong
 
             if body is not None:
                 return min(clear, key=lambda c: cost(c) + _BODY_WEIGHT * width * body(c)), True
@@ -427,10 +440,15 @@ def _shrink_off_body(
     body: BodyCover,
     text_size: int,
     min_size: int,
+    *,
+    prefer_x: float | None = None,
+    rivals: list[Rect] | None = None,
+    others_x: list[float] | None = None,
 ) -> tuple[Rect, TextBlock, str]:
     """
     体に掛かる吹き出しは、文字を少しずつ小さく(_BODY_SHRINK まで)して、体に掛からない置き場所を探す。
     見つからなければ、掛かりがはっきり減る(0.15 以上)ときだけその位置にする。どちらも無ければ元のまま。
+    prefer_x・rivals・others_x は _place と同じ(置き直しても話し手の側から離さない)。
     """
     cover = body(best[0])
     if cover <= _BODY_LIMIT:
@@ -441,7 +459,9 @@ def _shrink_off_body(
     size_now = text_size - _SHRINK_STEP_TEXT
     while size_now >= floor:
         block, size = _fit_bubble(text, rect, size_now, shape, min(min_size, size_now))
-        box, free = _place(size, rect, placed, heads=heads, earlier=earlier, body=body)
+        box, free = _place(
+            size, rect, placed, heads=heads, prefer_x=prefer_x, earlier=earlier, rivals=rivals, others_x=others_x, body=body
+        )
         # 読む順を崩す位置(先の吹き出しより上など)には動かさない
         if free and _reads_after(box, earlier):
             here = body(box)
@@ -820,6 +840,7 @@ def _draw_lettering(
         speaker_id = pairs[index][1]
         prefer_x = _speaker_x(heads, head_ids, offscreen, speaker_id)
         rivals = [b for b, who in zip(bubble_boxes, bubble_speakers) if speaker_id is not None and who != speaker_id]
+        others_x = [(h[0] + h[2]) / 2 for h, who in zip(heads, head_ids) if speaker_id is not None and who not in (None, speaker_id)]
         text_size = start_size
         while best is None:
             for candidate_shape in shapes:
@@ -835,6 +856,7 @@ def _draw_lettering(
                     prefer_x=prefer_x,
                     earlier=bubble_boxes,
                     rivals=rivals,
+                    others_x=others_x,
                     body=picture.body,
                 )
                 if free:
@@ -845,7 +867,20 @@ def _draw_lettering(
                 best = (_place(size, rect, placed, heads=heads, earlier=bubble_boxes, body=picture.body)[0], block, shape)
             text_size -= _SHRINK_STEP_TEXT
         if override is None and element_scale is None and picture.body is not None:
-            best = _shrink_off_body(best, text, rect, placed, heads, bubble_boxes, picture.body, text_size + _SHRINK_STEP_TEXT, min_size)
+            best = _shrink_off_body(
+                best,
+                text,
+                rect,
+                placed,
+                heads,
+                bubble_boxes,
+                picture.body,
+                text_size + _SHRINK_STEP_TEXT,
+                min_size,
+                prefer_x=prefer_x,
+                rivals=rivals,
+                others_x=others_x,
+            )
         box, block, final_shape = best
         side = _offpanel_side(box, rect, heads, head_ids, offscreen, speaker_id)
         if side is not None and override is None:
