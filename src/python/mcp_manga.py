@@ -1232,6 +1232,20 @@ def register_manga_tools(mcp: MCPServer) -> None:
         return str(job.get("message", ""))
 
     @mcp.tool()
+    async def manga_report_panels(
+        story_id: int, scene_indexes: list[int] | None = None, check_gaze: bool = False
+    ) -> dict[str, Any]:
+        """
+        コマの絵を自動で確かめ、怪しいコマだけを返す(描き直さない・Anlas を使わない)。生成のあと、1枚ずつ見る前に使う。
+        確かめるのは、作画タグ(判定モデルで見分けられるもの)・人数・absent_tags と状態で外したタグ・後ろ姿のコマ
+        (from behind など)がこちらを向いていないか・1〜2人のコマで同じキャラが重複していないか。check_gaze なら
+        会話のコマの目線も。肌の色の異常は判定できないので、見て確かめる。
+        戻り値: {checked, flagged: [{scene_index(0始まり), problems}]}
+        """
+        body = {"scene_indexes": scene_indexes, "check_gaze": check_gaze}
+        return await _call("POST", f"/api/manga-v2/{story_id}/panel-report", body, timeout=600)
+
+    @mcp.tool()
     async def manga_layout_patterns(count: int) -> list[dict[str, Any]]:
         """コマ数 count(1〜12)のページのコマ割りの候補(id・名前・分割の木)。manga_save_page_layout の tree に使う。"""
         patterns = await _call("GET", f"/api/manga-v2/layout-patterns?count={count}")
