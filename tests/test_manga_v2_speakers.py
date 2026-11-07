@@ -250,3 +250,14 @@ def test_drop_tiny_heads_only_when_more_heads_than_cast() -> None:
     assert drop_tiny_heads([big, small, tiny], 2) == [big, small]
     # 頭の数が登場キャラ以下なら何も除かない
     assert drop_tiny_heads([big, tiny], 2) == [big, tiny]
+
+
+def test_drop_flat_heads_when_more_heads_than_cast() -> None:
+    # 2026-11 実機(温泉旅館の夕食のコマ)の頭の枠: 二人の頭と、手前の油揚げの皿(横長の誤検出)
+    akane, shirane = (195, 119, 436, 442), (499, 384, 731, 655)
+    plate = (171, 1109, 428, 1216)
+    assert drop_tiny_heads([akane, shirane, plate], 2) == [akane, shirane]
+    # 横長の枠を除くと人数より少なくなるなら、横長でも残す(寝そべった人の頭など)
+    lying = (100, 500, 400, 600)
+    assert drop_tiny_heads([akane, lying, plate], 3) == [akane, lying, plate]
+    assert drop_tiny_heads([akane, lying, plate], 2) == [akane, lying, plate]
