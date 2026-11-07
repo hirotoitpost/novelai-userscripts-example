@@ -35,6 +35,7 @@ from ..db import (
     update_character_sheet,
     forget_library_items,
     list_work_authors,
+    get_character,
     get_connection,
     get_generation_entry,
     get_story,
@@ -429,6 +430,47 @@ def _cached_gallery_images() -> list[GalleryImage]:
         return items
 
 
+FILE_KEY_PREFIX = "file:"
+
+
+def find_image(key: str) -> GalleryImage | None:
+    """
+    範囲の描き直し・画質向上・似た画像の生成で使う画像。ギャラリーにある画像はそのキーで、ギャラリーに出ない画像
+    (参照画像の候補・参照画像・顔と表情のシート・素体など。キャラの生成した画像のページで見るもの)は
+    "file:<パス>" で指す。後者のプロンプトとシードは、画像に埋め込まれた NovelAI の設定から読む(無ければ空)。
+    配信しないフォルダ・無いファイルは None。
+    """
+    if not key.startswith(FILE_KEY_PREFIX):
+        return next((i for i in _gallery_images() if i.key == key), None)
+    path = key[len(FILE_KEY_PREFIX):]
+    try:
+        full = _served_path(path)
+    except HTTPException:
+        return None
+    for item in _gallery_images():
+        if item.path == path:
+            return item
+    from ..nai_metadata import generation_settings
+
+    settings = generation_settings(full.read_bytes()) or {}
+    try:
+        with Image.open(full) as image:
+            width, height = image.size
+    except OSError:
+        return None
+    return GalleryImage(
+        key=key, source="generate", path=path,
+        created_at=datetime.fromtimestamp(full.stat().st_mtime, timezone.utc).isoformat(),
+        width=width, height=height, prompt=str(settings.get("prompt") or ""),
+        seed=int(settings["seed"]) if isinstance(settings.get("seed"), (int, float)) else None,
+    )
+
+
+def keys_by_path() -> dict[str, str]:
+    """ギャラリーの画像のパス → キー(キャラの生成した画像のページで、ギャラリーと同じキーを使うため)。"""
+    return {item.path: item.key for item in _cached_gallery_images()}
+
+
 def warm_gallery_cache() -> int:
     """
     起動したときに、利用者ごとのギャラリーの一覧を作り置きする(最初にギャラリーを開いたときに待たせないように。
@@ -645,10 +687,18 @@ class I2iReference(BaseModel):
     noise: float
 
 
+class LinkedCharacter(BaseModel):
+    """生成した画像を関連付けるキャラ(キャラの生成した画像のページから「似た画像を生成」したとき)。"""
+
+    id: int
+    name: str
+
+
 class ImageReferences(BaseModel):
     i2i: I2iReference | None = None
     character_references: list[ReferenceImage] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    character: LinkedCharacter | None = None
 
 
 def _history_references(entry_id: int) -> ImageReferences:
@@ -762,22 +812,47 @@ def _panel_references(panel_id: int) -> ImageReferences:
     return ImageReferences(character_references=refs, notes=notes)
 
 
+# キャラの生成した画像のページから「似た画像を生成」したときに足す、キャラシートの参照画像の強さ(漫画のコマと同じ)
+_SHEET_REFERENCE_STRENGTH = 0.6
+
+
 @router.get("/images/references", response_model=ImageReferences)
-def image_references(key: str) -> ImageReferences:
+def image_references(key: str, character_id: int | None = None) -> ImageReferences:
     """
     ギャラリーの画像を作ったときの参照画像(「似た画像を生成」で画像生成ページへ引き継ぐ)。
     画像生成・ワード選択の画像は生成履歴に保存した i2i の元画像とキャラ参照、漫画のコマは登場キャラの参照画像。
-    それ以外(挿絵ページ・データセット)は記録が無いので空。
+    それ以外(挿絵ページ・データセット・file:<パス> の画像)は記録が無いので空。
+    character_id(キャラの生成した画像のページから)を渡すと、そのキャラを返し(生成した画像をそのキャラに関連付ける)、
+    キャラシートの参照画像がまだ入っていなければ足す。
     """
     kind, _, rest = key.partition(":")
+    refs = ImageReferences()
     try:
         if kind == "history":
-            return _history_references(int(rest.split(":", 1)[0]))
-        if kind == "panel":
-            return _panel_references(int(rest))
+            refs = _history_references(int(rest.split(":", 1)[0]))
+        elif kind == "panel":
+            refs = _panel_references(int(rest))
     except ValueError:
         raise HTTPException(status_code=400, detail="画像のキーが正しくありません。") from None
-    return ImageReferences()
+    if character_id is None:
+        return refs
+    conn = get_connection()
+    try:
+        character = get_character(conn, character_id)
+    finally:
+        conn.close()
+    if character is None:
+        raise HTTPException(status_code=404, detail="キャラが見つかりません。")
+    refs.character = LinkedCharacter(id=character["id"], name=character["name"])
+    sheet = character.get("reference_image_path")
+    names = {r.label for r in refs.character_references}
+    if sheet and (_PROJECT_ROOT / sheet).is_file() and character["name"] not in names:
+        refs.character_references.append(ReferenceImage(
+            image_path=sheet, type="character&style", fidelity=1.0, strength=_SHEET_REFERENCE_STRENGTH,
+            label=character["name"],
+        ))
+        refs.notes.append(f"{character['name']}のキャラシートの参照画像を、キャラ参照に入れました(強さ {_SHEET_REFERENCE_STRENGTH})")
+    return refs
 
 
 @router.get("/images/similar", response_model=list[SimilarImage])

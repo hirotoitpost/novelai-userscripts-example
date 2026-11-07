@@ -174,6 +174,8 @@ export default function ImageGenerate() {
   const [fromImageBusy, setFromImageBusy] = useState(false)
   const [fromImageOver, setFromImageOver] = useState(false)
   const [fromImageMsg,  setFromImageMsg]  = useState<{ text: string; notes: string[]; isError: boolean } | null>(null)
+  // キャラの生成した画像のページから「似た画像を生成」で来たとき、生成した画像を関連付けるキャラ
+  const [linkedCharacter, setLinkedCharacter] = useState<{ id: number; name: string } | null>(null)
 
   // セッション中のみ保持
   const [seed,         setSeed]         = useState<string>('')
@@ -336,6 +338,7 @@ export default function ImageGenerate() {
 
   /** ギャラリーから引き継いだ参照画像(i2i の元画像・キャラ参照)を読み込んで入れる。 */
   async function applyReferences(refs: GalleryImageReferences) {
+    if (refs.character) setLinkedCharacter(refs.character)
     const notes = [...refs.notes]
     let i2iDone = false
     if (refs.i2i) {
@@ -594,6 +597,7 @@ export default function ImageGenerate() {
             enabled: true,
           }))
         : undefined,
+      character_id: linkedCharacter?.id,
     }
 
     try {
@@ -665,7 +669,7 @@ export default function ImageGenerate() {
     }
   }, [token, prompt, negPrompt, model, size, customSize, steps, scale, seed, quality, ucPreset,
       sampler, noiseSchedule, cfgRescale, varietyBoost, charPrompts, charUseCoords,
-      i2iEnabled, i2iImage, i2iStrength, i2iNoise, charRefs])
+      i2iEnabled, i2iImage, i2iStrength, i2iNoise, charRefs, linkedCharacter])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -1374,6 +1378,12 @@ export default function ImageGenerate() {
             </label>
           </section>
 
+          {linkedCharacter && (
+            <p className="ig-linked-character" role="status">
+              生成した画像を「{linkedCharacter.name}」の生成した画像に並べます
+              <button type="button" onClick={() => setLinkedCharacter(null)} aria-label="キャラとの関連付けをやめる">✕</button>
+            </p>
+          )}
           {/* Generate button */}
           <button
             type="button"

@@ -7,7 +7,8 @@
 - panel: 漫画のコマ(そのキャラが出るシーンの、いまのコマの絵)
 - old_panel: 描き直す前のコマ(そのキャラが出るシーンの、どのシーンにも使われていない絵)
 - dataset / face_sheet / body_base: キャラ別データセット・顔と表情のシート・素体(outputs/<ルート>/<キャラのフォルダ>/)
-- history: 生成履歴(プロンプトにキャラのトリガーワードがある画像。トリガーワードが無いキャラは出ない)
+- history: 生成履歴(プロンプトにキャラのトリガーワードがある画像と、このページから「似た画像を生成」・範囲の描き直し・
+  画質向上で作った画像(生成履歴の character_id))
 
 どれも参照画像に選び直せる(候補だけは基準シードも)。整理(cleanup_targets)できるのは、候補・どのキャラにも
 使われていない参照画像・描き直す前のコマ・生成履歴(ブックマークしたものは除く)だけ。整理はごみ箱(trash.py)に
@@ -104,13 +105,22 @@ def _panel_files() -> dict[tuple[int, int], list[Path]]:
     return files
 
 
-def _history_rows(conn: Any, trigger: str | None) -> list[dict[str, Any]]:
-    """生成履歴の行。trigger を渡せば、プロンプト(キャラごとのプロンプトも)にその語があるものだけ。"""
-    rows = [dict(r) for r in conn.execute("SELECT id, prompt, characters, seed, image_paths, created_at FROM generation_history")]
-    if trigger is None:
+def _history_rows(conn: Any, trigger: str | None, character_id: int | None = None) -> list[dict[str, Any]]:
+    """
+    生成履歴の行。trigger・character_id のどちらも無ければ全部。あれば、プロンプト(キャラごとのプロンプトも)に
+    trigger の語があるものと、そのキャラの生成した画像のページから作ったもの(character_id が同じ)。
+    """
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, prompt, characters, seed, image_paths, created_at, character_id FROM generation_history"
+    )]
+    if trigger is None and character_id is None:
         return rows
-    word = re.compile(rf"(?<![\w]){re.escape(trigger)}(?![\w])", re.IGNORECASE)
-    return [r for r in rows if word.search(f"{r['prompt']}\n{r.get('characters') or ''}")]
+    word = re.compile(rf"(?<![\w]){re.escape(trigger)}(?![\w])", re.IGNORECASE) if trigger else None
+    return [
+        r for r in rows
+        if (character_id is not None and r.get("character_id") == character_id)
+        or (word is not None and word.search(f"{r['prompt']}\n{r.get('characters') or ''}"))
+    ]
 
 
 def _history_items(rows: list[dict[str, Any]], bookmarked: set[str]) -> list[dict[str, Any]]:
@@ -159,7 +169,8 @@ def collect(character: dict[str, Any]) -> list[dict[str, Any]]:
         )]
         all_panels = {Path(r[0]).name for r in conn.execute("SELECT image_path FROM manga_panels")}
         trigger = (character.get("trigger_word") or "").strip()
-        history = _history_rows(conn, trigger) if len(trigger) >= 3 else []
+        # トリガーワード(3文字以上)がプロンプトにある画像と、このキャラの生成した画像のページから作った画像
+        history = _history_rows(conn, trigger if len(trigger) >= 3 else None, cid)
         bookmarked = _bookmarked_history(conn)
     finally:
         conn.close()

@@ -63,6 +63,8 @@ export interface GenerateRequest {
   character_references?: CharacterReferenceInput[]
   /** キャラごとのプロンプト(V4 以降)。position は画像に対する割合 (x, y)。省くと位置は AI まかせ */
   characters?: { prompt: string; negative_prompt?: string; position?: [number, number]; enabled?: boolean }[]
+  /** 生成した画像を関連付けるキャラ(キャラの生成した画像のページに並ぶ) */
+  character_id?: number
 }
 
 /** 画像生成ページのキャラごとのプロンプト(localStorage の nai_gen_characters)。逆引きからも渡す */
@@ -180,6 +182,8 @@ export interface GalleryImageReferences {
   i2i: { image_path: string; strength: number; noise: number } | null
   character_references: { image_path: string; type: CharacterReferenceInput['type']; fidelity: number; strength: number; label: string }[]
   notes: string[]
+  /** キャラの生成した画像のページから送ったとき、生成した画像を関連付けるキャラ */
+  character?: { id: number; name: string } | null
 }
 
 /** メタデータ管理ページから画像生成ページへ、読み取った設定を渡すときの sessionStorage のキー */

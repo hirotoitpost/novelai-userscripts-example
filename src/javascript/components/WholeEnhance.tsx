@@ -42,9 +42,11 @@ interface Props {
   imageKey: string
   /** できた画像を開く */
   onOpen: (key: string) => void
+  /** キャラの生成した画像のページから使うとき、そのキャラ(できた画像をそのキャラの画像に並べる) */
+  characterId?: number | null
 }
 
-export default function WholeEnhance({ token, imageKey, onOpen }: Props) {
+export default function WholeEnhance({ token, imageKey, onOpen, characterId }: Props) {
   const [open, setOpen] = useState(false)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [mode, setMode] = useLocalStorage<Mode>('nai_whole_enhance_mode', 'upscale')
@@ -75,7 +77,9 @@ export default function WholeEnhance({ token, imageKey, onOpen }: Props) {
   const start = async () => {
     setError(null)
     try {
-      const started = await apiFetch<Job>(token, '/api/image/enhance', { key: imageKey, mode, scale, strength })
+      const started = await apiFetch<Job>(token, '/api/image/enhance', {
+        key: imageKey, mode, scale, strength, character_id: characterId ?? undefined,
+      })
       setJob(started)
       follow(started.id)
     } catch (e) {
