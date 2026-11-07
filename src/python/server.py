@@ -82,7 +82,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     check_config()
     await init_llm_clients()
     auto_backup = asyncio.create_task(_auto_backup_loop())
+    # ギャラリーの一覧を裏で作り置きする(最初に開いたときに数十秒待たせないように。起動は待たない)
+    from .routes.library import warm_gallery_cache
+
+    warm = asyncio.create_task(asyncio.to_thread(warm_gallery_cache))
     yield
+    warm.cancel()
     auto_backup.cancel()
     await close_client()
     await close_llm_clients()

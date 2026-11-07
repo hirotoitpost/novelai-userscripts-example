@@ -178,14 +178,14 @@ export default function Gallery() {
     void load(0)
   }, [load])
 
-  // 一覧の末尾が見えたら続きを読む
+  // 一覧の末尾に近づいたら続きを読む(画面の約2枚分手前から。次のページの縮小画像はサーバーが先に作っておく)
   const hasMore = items.length < total
   useEffect(() => {
     const target = sentinel.current
     if (!target || !hasMore) return
     const observer = new IntersectionObserver(entries => {
       if (entries.some(e => e.isIntersecting) && !loading) void load(items.length)
-    }, { rootMargin: '600px' })
+    }, { rootMargin: '1600px' })
     observer.observe(target)
     return () => observer.disconnect()
   }, [hasMore, loading, items.length, load])
@@ -613,6 +613,7 @@ export default function Gallery() {
                 <img
                   src={thumbUrl(item.path)}
                   loading="lazy"
+                  decoding="async"
                   alt={describe(item) || SOURCE_LABELS[item.source]}
                   style={item.width && item.height ? { aspectRatio: `${item.width} / ${item.height}` } : undefined}
                 />

@@ -8,6 +8,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 import json
 from datetime import datetime, timezone
 import io
@@ -52,7 +56,7 @@ from ..db import (
 from ..relatedness import Item, idf_weights, normalize_tags, rank
 from .lora_dataset import _safe_name
 from .story import _jobs
-from ..db import user_files
+from ..db import db_path, user_files
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 
@@ -140,12 +144,23 @@ def get_thumb(path: str, w: int = 360) -> FileResponse:
     """
     full = _served_path(path)
     width = min(_THUMB_WIDTHS, key=lambda candidate: abs(candidate - w))
+    thumb = _ensure_thumb(full, width, Path(os.fspath(_THUMB_DIR)))
+    # 内容はパスと更新日時で決まるので、ブラウザに長くキャッシュさせてよい
+    return FileResponse(
+        thumb,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+def _ensure_thumb(full: Path, width: int, thumb_dir: Path) -> Path:
+    """縮小画像を作る(作ってあればそのまま)。thumb_dir は利用者の .thumbs(本物のパス。先読みのスレッドからも呼ぶ)。"""
     digest = hashlib.sha1(
         f"{full}:{full.stat().st_mtime_ns}:{width}".encode()
     ).hexdigest()
-    thumb = _THUMB_DIR / f"{digest}.webp"
+    thumb = thumb_dir / f"{digest}.webp"
     if not thumb.is_file():
-        _THUMB_DIR.mkdir(parents=True, exist_ok=True)
+        thumb_dir.mkdir(parents=True, exist_ok=True)
         with Image.open(full) as src:
             img = src.convert("RGB")
             if img.width > width:
@@ -153,15 +168,37 @@ def get_thumb(path: str, w: int = 360) -> FileResponse:
                     (width, round(img.height * width / img.width)),
                     Image.Resampling.LANCZOS,
                 )
-            tmp = thumb.with_suffix(".tmp")
+            # 同じ縮小画像を2か所(表示と先読み)で同時に作っても壊れないよう、一時ファイルの名前を分ける
+            tmp = thumb.with_suffix(f".{threading.get_ident()}.tmp")
             img.save(tmp, format="WEBP", quality=80)
             tmp.replace(thumb)
-    # 内容はパスと更新日時で決まるので、ブラウザに長くキャッシュさせてよい
-    return FileResponse(
-        thumb,
-        media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=604800"},
-    )
+    return thumb
+
+
+# 一覧の次のページの縮小画像を、表示される前に作っておく(1本のスレッドで順に。表示中の読み込みの邪魔をしないように)
+_prefetcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="thumb-prefetch")
+_PREFETCH_WIDTH = 360
+
+
+def _prefetch_thumbs(paths: list[str]) -> None:
+    """paths(リポジトリルート相対)の縮小画像を、裏で作っておく。配信しないフォルダ・消えたファイルは飛ばす。"""
+    thumb_dir = Path(os.fspath(_THUMB_DIR))
+    fulls = []
+    for path in paths:
+        try:
+            fulls.append(_served_path(path))
+        except HTTPException:
+            continue
+
+    def work() -> None:
+        for full in fulls:
+            try:
+                _ensure_thumb(full, _PREFETCH_WIDTH, thumb_dir)
+            except OSError:
+                continue
+
+    if fulls:
+        _prefetcher.submit(work)
 
 
 class BookmarkRequest(BaseModel):
@@ -340,14 +377,110 @@ def _dataset_images() -> list[GalleryImage]:
     return items
 
 
+# ギャラリーの一覧(全画像)の作り置き。作るのに 2〜3 秒かかり(2026-11: 約6千枚。6割はデータセットのフォルダを
+# 読むところ)、ページを読むたびに作り直すと遅いので、DB とデータセットのフォルダが変わるまで使い回す。
+# ブックマークと手で決めた成人向けの印は、毎回付け直す(切り替えのたびに作り直さないように)。
+# 手でファイルを消したときなど、印に出ない変化もあるので、作り置きは _GALLERY_MAX_AGE 秒で作り直す。
+_GALLERY_MAX_AGE = 300.0
+_gallery_cache: dict[str, tuple[tuple[Any, ...], float, list[GalleryImage]]] = {}
+_gallery_lock = threading.Lock()
+
+
+def _gallery_signature() -> tuple[Any, ...]:
+    """作り置きを使ってよいかの印: 利用者の DB(と WAL)の更新日時・大きさと、データセットのフォルダの更新日時。"""
+    parts: list[Any] = []
+    database = db_path()
+    for path in (database, database.with_name(database.name + "-wal")):
+        try:
+            stat = path.stat()
+            parts.append((path.name, stat.st_mtime_ns, stat.st_size))
+        except FileNotFoundError:
+            continue
+    outputs = Path(os.fspath(_OUTPUTS))
+    if outputs.is_dir():
+        for root in os.scandir(outputs):
+            if not root.is_dir() or root.name.startswith(".") or root.name in ("history", "manga"):
+                continue
+            for folder in os.scandir(root.path):
+                if not folder.is_dir():
+                    continue
+                for sub in _DATASET_SUBDIRS:
+                    try:
+                        parts.append((root.name, folder.name, sub, os.stat(os.path.join(folder.path, sub)).st_mtime_ns))
+                    except FileNotFoundError:
+                        continue
+    return tuple(parts)
+
+
+def _cached_gallery_images() -> list[GalleryImage]:
+    """全画像の一覧の作り置き(ブックマークと手で決めた成人向けの印は付いていない)。中身は書き換えないこと。"""
+    key = os.fspath(_PROJECT_ROOT)
+    with _gallery_lock:
+        signature = _gallery_signature()
+        cached = _gallery_cache.get(key)
+        if cached and cached[0] == signature and time.monotonic() - cached[1] < _GALLERY_MAX_AGE:
+            return cached[2]
+        items = _build_gallery_images()
+        # 作る途中で DB に書くことがある(初めて開いたときの設定の書き込みなど)ので、印は作ったあとに取り直す
+        _gallery_cache[key] = (_gallery_signature(), time.monotonic(), items)
+        return items
+
+
+def warm_gallery_cache() -> int:
+    """
+    起動したときに、利用者ごとのギャラリーの一覧を作り置きする(最初にギャラリーを開いたときに待たせないように。
+    server.py の lifespan から裏で呼ぶ)。作った人数を返す。失敗した人は飛ばす(開いたときに作り直す)。
+    """
+    import logging
+
+    from ..db import app_mode, as_user, get_system_connection, user_db_path
+
+    if app_mode() != "multi":
+        user_ids: list[int | None] = [None]
+    else:
+        conn = get_system_connection()
+        try:
+            user_ids = [row["id"] for row in conn.execute("SELECT id FROM users ORDER BY id")]
+        finally:
+            conn.close()
+    warmed = 0
+    for user_id in user_ids:
+        try:
+            with as_user(user_id):
+                if user_id is not None and not user_db_path(user_id).is_file():
+                    continue
+                _cached_gallery_images()
+                warmed += 1
+        except Exception:  # noqa: BLE001 - 先読みの失敗で起動を止めない
+            logging.getLogger(__name__).warning("ギャラリーの先読みに失敗しました(利用者 %s)", user_id, exc_info=True)
+    return warmed
+
+
 def _gallery_images() -> list[GalleryImage]:
+    """ギャラリーの全画像(ブックマーク・成人向けの印つき。呼ぶたびに新しい物を返すので、書き換えてよい)。"""
+    conn = get_connection()
+    try:
+        marks = list_bookmarks(conn, "image")
+        adult_marks = list_adult_marks(conn, "image")
+    finally:
+        conn.close()
+    items = []
+    for base in _cached_gallery_images():
+        manual = adult_marks.get(base.key)
+        items.append(base.model_copy(update={
+            "bookmarked": base.key in marks,
+            "adult_manual": manual,
+            "adult": manual if manual is not None else base.adult_auto,
+        }))
+    return items
+
+
+def _build_gallery_images() -> list[GalleryImage]:
     conn = get_connection()
     try:
         history = list_generation_history(conn, limit=100000)
         panels = list_library_panels(conn)
         pages = list_library_pages(conn)
-        marks = list_bookmarks(conn, "image")
-        adult_marks = list_adult_marks(conn, "image")
     finally:
         conn.close()
     _, story_adult = _story_adult()
@@ -402,7 +535,6 @@ def _gallery_images() -> list[GalleryImage]:
         )
     items.extend(_dataset_images())
     for item in items:
-        item.bookmarked = item.key in marks
         # 漫画のコマ・挿絵は、そのコマのタグに出ていなくても物語が成人向けなら成人向けに寄せる
         item.adult_auto = (
             _tags_adult(item.prompt)
@@ -410,10 +542,7 @@ def _gallery_images() -> list[GalleryImage]:
             # データセットの R18 フォルダ(generated_r18 / manual_r18)の画像
             or (item.source == "dataset" and item.path.rsplit("/", 2)[-2].endswith("_r18"))
         )
-        item.adult_manual = adult_marks.get(item.key)
-        item.adult = (
-            item.adult_manual if item.adult_manual is not None else item.adult_auto
-        )
+        item.adult = item.adult_auto
     # ファイルが消えているもの(手で消した等)は出さない
     return [item for item in items if (_PROJECT_ROOT / item.path).is_file()]
 
@@ -473,6 +602,8 @@ def list_images(
     # 同じ時刻のもの(1回の生成で複数枚)はキーの順に並べる
     items.sort(key=lambda i: (i.created_at, i.key), reverse=sort == "new")
     limit = max(1, min(limit, 500))
+    # 次のページの縮小画像を先に作っておく(スクロールしたときに、作るのを待たずに出るように)
+    _prefetch_thumbs([i.path for i in items[offset + limit : offset + 2 * limit]])
     return {
         "items": items[offset : offset + limit],
         "total": len(items),
