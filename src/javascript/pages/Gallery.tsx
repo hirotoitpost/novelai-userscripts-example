@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import { masonryColumns, useColumnCount } from '../masonry'
 import PublishDialog, { publishedMessage, PublishTarget } from '../components/PublishDialog'
 import {
   deleteImages,
@@ -189,6 +190,13 @@ export default function Gallery() {
     observer.observe(target)
     return () => observer.disconnect()
   }, [hasMore, loading, items.length, load])
+
+  // 左上から右へ、行ごとに並べる(列の高さをそろえながら。続きを読んでも、並んだ画像は動かない)
+  const columnCount = useColumnCount()
+  const columns = useMemo(
+    () => masonryColumns(items.map(i => (i.width && i.height ? i.height / i.width : 1.5)), columnCount),
+    [items, columnCount],
+  )
 
   const current = viewing !== null ? items[viewing] ?? null : null
   const currentKey = current?.key ?? null
@@ -600,8 +608,11 @@ export default function Gallery() {
         <p className="gallery-empty">{filtered ? '条件に合う画像がありません。' : '画像がまだありません。'}</p>
       )}
 
-      <ul className="gallery-grid">
-        {items.map((item, index) => {
+      <div className="gallery-grid">
+        {columns.map((column, c) => (
+          <ul key={c} className="gallery-column">
+            {column.map(index => {
+          const item = items[index]
           const isSelected = selected.has(item.key)
           const blurred = blurs(item)
           return (
@@ -623,8 +634,10 @@ export default function Gallery() {
               </button>
             </li>
           )
-        })}
-      </ul>
+            })}
+          </ul>
+        ))}
+      </div>
       <div ref={sentinel} className="gallery-sentinel">
         {loading && <span>読み込み中…</span>}
       </div>

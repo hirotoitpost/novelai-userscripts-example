@@ -142,34 +142,22 @@
 }
 
 /* 縦横比がまちまちなので、段組み(masonry風)で詰めて並べる */
+/* 列の数と、どの画像をどの列に置くかは masonry.ts で決める(左上から右へ、行ごとに並ぶように) */
 .gallery-grid {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.gallery-column {
   list-style: none;
   margin: 0;
   padding: 0;
-  columns: 2;
-  column-gap: 0.5rem;
-}
-
-@media (min-width: 640px) {
-  .gallery-grid {
-    columns: 3;
-  }
-}
-
-@media (min-width: 1000px) {
-  .gallery-grid {
-    columns: 4;
-  }
-}
-
-@media (min-width: 1400px) {
-  .gallery-grid {
-    columns: 5;
-  }
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .gallery-tile {
-  break-inside: avoid;
   margin-bottom: 0.5rem;
 }
 
