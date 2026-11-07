@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './FullscreenViewer.css'
 
 interface Props {
@@ -16,12 +16,35 @@ interface Props {
    * 下に出す道具(ギャラリーの「この範囲を高解像度に」など)。region() は、いま画面に見えている範囲を
    * 元の画像のピクセルで返す([x, y, 幅, 高さ]。ズームしていなければ null)。controls は、閉じるボタンなどの操作の
    * 表示が出ているか(しばらく操作が無いと隠れる。道具のメニューも合わせて隠し、絵を見やすくする)。
+   * geometry は、画面上の絵の位置と、画面の範囲を元の画像のピクセルに直す関数(範囲を選ぶ道具で使う)。
    */
-  tool?: (region: () => Region | null, zoomed: boolean, controls: boolean) => ReactNode
+  tool?: (region: () => Region | null, zoomed: boolean, controls: boolean, geometry: ImageGeometry) => ReactNode
+  /** 元の画像を読み込むまで出しておく絵(一覧の縮小画像など。読み込み済みなので、前後に移ったときにすぐ出る) */
+  placeholder?: string
+  /** 先に読み込んでおく画像(前後の画像。左右に移ったときに待たないように) */
+  preload?: string[]
 }
 
 /** 元の画像のピクセルでの範囲 [x, y, 幅, 高さ] */
 export type Region = [number, number, number, number]
+
+/** 画面上の長方形(px) */
+export interface ScreenRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export interface ImageGeometry {
+  /** 画面上の絵の位置と大きさ(ズーム込み)。元の画像を読み込む前は null */
+  imageRect: () => ScreenRect | null
+  /** 画面上の長方形を、元の画像のピクセルの範囲にする(絵の外は切り落とす)。元の画像を読み込む前は null */
+  toImageBox: (rect: ScreenRect) => Region | null
+}
+
+/** 先読みした画像を、ブラウザが捨てないように持っておく数 */
+const PRELOAD_KEEP = 8
 
 /** これだけ操作が無ければ、閉じるボタンなどを隠す */
 const HIDE_CONTROLS_MS = 2500
@@ -61,9 +84,41 @@ const FIT: View = { scale: 1, x: 0, y: 0 }
  * - ズーム: ピンチ・ダブルタップ(ダブルクリック)・ホイール・+/-/0 キー。ズーム中のドラッグは絵の中の移動で、
  *   絵の端からさらに画面の幅の 1/4 以上押し出したときだけページを切り替える(少しのスワイプでは変わらない)
  */
-export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rtl = false, onClose, tool }: Props) {
+export default function FullscreenViewer({
+  src, alt, counter, onPrev, onNext, rtl = false, onClose, tool, placeholder, preload,
+}: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
+  // 元の画像を読み込み終えたか(それまでは placeholder を出す)
+  const [readySrc, setReadySrc] = useState<string | null>(null)
+  const ready = readySrc === src || !placeholder
+  // 範囲の計算(元の画像のピクセル)は、元の画像を出しているときだけ(縮小画像では大きさが違う)
+  const readyRef = useRef(ready)
+  readyRef.current = ready
+  const preloaded = useRef<HTMLImageElement[]>([])
+
+  useEffect(() => {
+    if (!placeholder) return
+    let cancelled = false
+    const image = new Image()
+    const done = () => { if (!cancelled) setReadySrc(src) }
+    image.onload = done
+    image.onerror = done
+    image.src = src
+    if (image.complete && image.naturalWidth) done()
+    return () => { cancelled = true }
+  }, [src, placeholder])
+
+  // 前後の画像を先に読み込む(読み込んだ画像はしばらく持っておき、ブラウザに捨てられないようにする)
+  useEffect(() => {
+    for (const url of preload ?? []) {
+      if (preloaded.current.some(i => i.src === url)) continue
+      const image = new Image()
+      image.decoding = 'async'
+      image.src = url
+      preloaded.current = [...preloaded.current, image].slice(-PRELOAD_KEEP)
+    }
+  }, [preload])
   const [controls, setControls] = useState(true)
   const [view, setView] = useState<View>(FIT)
   const [dragging, setDragging] = useState(false)
@@ -145,7 +200,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     const image = imageRef.current
     const root = rootRef.current
     const { scale, x, y } = viewRef.current
-    if (!image || !root || scale <= MIN_SCALE || !image.naturalWidth) return null
+    if (!image || !root || scale <= MIN_SCALE || !image.naturalWidth || !readyRef.current) return null
     const ratio = image.naturalWidth / image.offsetWidth
     // 画面の端(画面の中心から ±幅/2)が、絵の中心から見てどこか → 絵の左上から見た位置
     const span = (half: number, offset: number, size: number) => {
@@ -157,6 +212,27 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
     const [top, bottom] = span(root.clientHeight / 2, y, image.offsetHeight)
     return [Math.round(left * ratio), Math.round(top * ratio), Math.round((right - left) * ratio), Math.round((bottom - top) * ratio)]
   }, [])
+
+  const geometry = useMemo<ImageGeometry>(() => ({
+    imageRect: () => {
+      const image = imageRef.current
+      if (!image || !image.naturalWidth || !readyRef.current) return null
+      const r = image.getBoundingClientRect()
+      return { left: r.left, top: r.top, width: r.width, height: r.height }
+    },
+    toImageBox: rect => {
+      const image = imageRef.current
+      if (!image || !image.naturalWidth || !readyRef.current) return null
+      const r = image.getBoundingClientRect()
+      const ratio = image.naturalWidth / r.width
+      const x0 = Math.max(0, (rect.left - r.left) * ratio)
+      const y0 = Math.max(0, (rect.top - r.top) * ratio)
+      const x1 = Math.min(image.naturalWidth, (rect.left + rect.width - r.left) * ratio)
+      const y1 = Math.min(image.naturalHeight, (rect.top + rect.height - r.top) * ratio)
+      if (x1 <= x0 || y1 <= y0) return null
+      return [Math.round(x0), Math.round(y0), Math.round(x1 - x0), Math.round(y1 - y0)]
+    },
+  }), [])
 
   /** 拡大した絵が画面からはみ出す量(移動できる範囲)。 */
   const limits = useCallback((scale: number) => {
@@ -424,7 +500,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
       <img
         ref={imageRef}
         className={`fsv-image${dragging || gliding ? ' fsv-image--dragging' : ''}`}
-        src={src}
+        src={ready || !placeholder ? src : placeholder}
         alt={alt}
         draggable={false}
         style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
@@ -447,7 +523,7 @@ export default function FullscreenViewer({ src, alt, counter, onPrev, onNext, rt
         )}
         <button type="button" className="fsv-close" onClick={onClose}>全画面を終わる ✕</button>
       </div>
-      {tool && <div className="fsv-tool">{tool(region, zoomed, controls)}</div>}
+      {tool && <div className="fsv-tool">{tool(region, zoomed, controls, geometry)}</div>}
       {/* 画面読み上げ・キーボード向けの前後のボタン(見た目には出さない) */}
       <div className="fsv-sr">
         <button type="button" onClick={() => onPrev?.()} disabled={!onPrev}>前へ</button>

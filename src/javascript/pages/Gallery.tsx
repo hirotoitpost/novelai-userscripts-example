@@ -697,9 +697,12 @@ export default function Gallery() {
           onPrev={viewing > 0 ? () => step(-1) : undefined}
           onNext={viewing < items.length - 1 || hasMore ? () => step(1) : undefined}
           onClose={() => setFullscreen(false)}
-          tool={token ? (region, zoomed, controls) => (
+          placeholder={thumbUrl(current.path)}
+          preload={[items[viewing - 1], items[viewing + 1], items[viewing + 2]]
+            .filter((i): i is GalleryImage => !!i && !blurs(i)).map(i => fileUrl(i.path))}
+          tool={token ? (region, zoomed, controls, geometry) => (
             <RegionRedrawTool key={current.key} token={token} imageKey={current.key} region={region} zoomed={zoomed} visible={controls}
-              onOpen={key => void openKey(key)} />
+              geometry={geometry} onOpen={key => void openKey(key)} />
           ) : undefined}
         />
       )}

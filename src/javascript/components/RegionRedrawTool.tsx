@@ -1,11 +1,15 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { apiFetch } from '../api'
 import { useLocalStorage } from '../hooks/useLocalStorage'
-import type { Region } from './FullscreenViewer'
+import type { ImageGeometry, Region, ScreenRect } from './FullscreenViewer'
+import { ASPECTS, fitRect, resizeRect, type Handle } from '../cropRect'
 import './RegionRedrawTool.css'
 
 /**
- * 全画面の拡大表示で見ている範囲を、高解像度にする(/api/image/region-redraw)。
+ * 全画面の拡大表示で、絵の一部を高解像度にする(/api/image/region-redraw)。範囲は2通り。
+ * - ズームして、いま見えている範囲
+ * - 「範囲を選ぶ」で、枠をドラッグして決めた範囲(クロップ)。縦横比を 自由 / 1:1 / 2:3 などから選べる
+ * 高解像度にする方法:
  * - 描き直し: この PC で AI 拡大してから、NovelAI の img2img で弱めに描き直す(Opus なら Anlas 0)
  * - AI 拡大だけ: NovelAI を使わない。絵の中身は変わらない
  * 結果はギャラリーに新しい画像として残る(元の画像は変えない)。
@@ -33,27 +37,85 @@ interface Props {
   imageKey: string
   region: () => Region | null
   zoomed: boolean
-  /** 全画面の操作の表示が出ているか。隠れているときはメニューも隠す(作っている途中・結果・エラーの表示は残す) */
+  /** 全画面の操作の表示が出ているか。隠れているときはメニューも隠す(範囲を選んでいる途中・作っている途中・結果・エラーの表示は残す) */
   visible: boolean
+  /** 画面上の絵の位置(範囲を選ぶのに使う)。無ければ範囲は選べない */
+  geometry?: ImageGeometry
   /** できた画像を開く */
   onOpen: (key: string) => void
 }
 
-export default function RegionRedrawTool({ token, imageKey, region, zoomed, visible, onOpen }: Props) {
+export default function RegionRedrawTool({ token, imageKey, region, zoomed, visible, geometry, onOpen }: Props) {
   const [mode, setMode] = useLocalStorage<Mode>('nai_region_redraw_mode', 'normal')
+  const [aspect, setAspect] = useLocalStorage<string>('nai_region_crop_aspect', 'free')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<Result | null>(null)
+  // 範囲を選んでいる間の枠(画面の px)。null なら選んでいない
+  const [crop, setCrop] = useState<ScreenRect | null>(null)
+  const drag = useRef<{ handle: Handle; x: number; y: number; start: ScreenRect; bounds: ScreenRect } | null>(null)
 
-  const menu = zoomed && visible && !busy
+  const ratio = ASPECTS.find(a => a.value === aspect)?.ratio ?? null
+  const cropping = crop !== null
+  const menu = !busy && (cropping || (visible && (zoomed || !!geometry)))
   if (!menu && !busy && !result && !error) return null
 
+  const startCrop = () => {
+    const bounds = geometry?.imageRect()
+    if (!bounds) return
+    // 画面に見えている絵の範囲の、真ん中あたり 6 割
+    const view = {
+      left: Math.max(bounds.left, 0),
+      top: Math.max(bounds.top, 0),
+      width: Math.min(bounds.left + bounds.width, window.innerWidth) - Math.max(bounds.left, 0),
+      height: Math.min(bounds.top + bounds.height, window.innerHeight) - Math.max(bounds.top, 0),
+    }
+    const size = Math.min(view.width, view.height) * 0.6
+    setCrop(fitRect(
+      { left: view.left + (view.width - size) / 2, top: view.top + (view.height - size) / 2, width: size, height: size },
+      view, ratio,
+    ))
+  }
+
+  const chooseAspect = (value: string) => {
+    setAspect(value)
+    const bounds = geometry?.imageRect()
+    if (crop && bounds) setCrop(fitRect(crop, bounds, ASPECTS.find(a => a.value === value)?.ratio ?? null))
+  }
+
+  const onPointerDown = (handle: Handle) => (e: React.PointerEvent) => {
+    const bounds = geometry?.imageRect()
+    if (!crop || !bounds) return
+    e.stopPropagation()
+    try {
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    } catch {
+      // 捕まえられなくても動きは受け取れる
+    }
+    drag.current = { handle, x: e.clientX, y: e.clientY, start: crop, bounds }
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current
+    if (!d) return
+    const dx = e.clientX - d.x
+    const dy = e.clientY - d.y
+    if (d.handle === 'move') {
+      setCrop(fitRect({ ...d.start, left: d.start.left + dx, top: d.start.top + dy }, d.bounds, null))
+    } else {
+      setCrop(resizeRect(d.start, d.handle, dx, dy, d.bounds, ratio))
+    }
+  }
+
+  const onPointerUp = () => { drag.current = null }
+
   const run = async () => {
-    const box = region()
+    const box = crop ? geometry?.toImageBox(crop) ?? null : region()
     if (!box) return
     setBusy(true)
     setError(null)
     setResult(null)
+    setCrop(null)
     try {
       const body = mode === 'upscale'
         ? { key: imageKey, box, mode: 'upscale' }
@@ -66,23 +128,71 @@ export default function RegionRedrawTool({ token, imageKey, region, zoomed, visi
     }
   }
 
+  const pixels = crop ? geometry?.toImageBox(crop) : null
+
   return (
     <div className="region-tool">
+      {crop && (
+        <div className="region-crop-layer" onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
+          <div
+            className="region-crop-box"
+            style={{ left: crop.left, top: crop.top, width: crop.width, height: crop.height }}
+            onPointerDown={onPointerDown('move')}
+          >
+            {(['nw', 'ne', 'sw', 'se'] as const).map(h => (
+              <span key={h} className={`region-crop-handle region-crop-handle--${h}`} onPointerDown={onPointerDown(h)} />
+            ))}
+            {pixels && <span className="region-crop-size">{pixels[2]}×{pixels[3]}</span>}
+          </div>
+        </div>
+      )}
       {menu && (
-        <>
-          <div className="region-tool-modes" role="group" aria-label="高解像度にする方法">
+        <div className="region-tool-menu">
+          {(cropping || zoomed) && <div className="region-tool-modes" role="group" aria-label="高解像度にする方法">
             {MODES.map(m => (
               <button key={m.value} type="button" title={m.title} aria-pressed={mode === m.value}
                 className={mode === m.value ? 'is-on' : undefined} onClick={() => setMode(m.value)}>
                 {m.label}
               </button>
             ))}
+          </div>}
+          {cropping && (
+            <div className="region-tool-modes" role="group" aria-label="範囲の縦横比">
+              {ASPECTS.map(a => (
+                <button key={a.value} type="button" aria-pressed={aspect === a.value}
+                  className={aspect === a.value ? 'is-on' : undefined} onClick={() => chooseAspect(a.value)}>
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="region-tool-modes">
+            {cropping ? (
+              <>
+                <button type="button" className="region-tool-run" onClick={() => void run()} disabled={!pixels}
+                  title="枠で選んだ範囲を切り出して高解像度にします。結果はギャラリーに新しい画像として残ります">
+                  選んだ範囲を高解像度に
+                </button>
+                <button type="button" onClick={() => setCrop(null)}>やめる</button>
+              </>
+            ) : (
+              <>
+                {geometry && (
+                  <button type="button" onClick={startCrop}
+                    title="枠をドラッグして範囲を決めます(角で大きさ、中で位置。縦横比は自由・1:1 などから選べます)">
+                    範囲を選ぶ
+                  </button>
+                )}
+                {zoomed && (
+                  <button type="button" className="region-tool-run" onClick={() => void run()}
+                    title="いま見えている範囲を切り出して高解像度にします。結果はギャラリーに新しい画像として残ります">
+                    見えている範囲を高解像度に
+                  </button>
+                )}
+              </>
+            )}
           </div>
-          <button type="button" className="region-tool-run" onClick={() => void run()}
-            title="いま見えている範囲を切り出して高解像度にします。結果はギャラリーに新しい画像として残ります">
-            この範囲を高解像度に
-          </button>
-        </>
+        </div>
       )}
       {busy && (
         <p className="region-tool-status" role="status">

@@ -54,3 +54,61 @@
 .region-tool-error {
   color: #ffb4be;
 }
+
+.region-tool-menu {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.region-tool button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 範囲を選ぶ枠。画面全体を覆って、全画面表示のズーム・前後の操作を止める(枠の外は暗くする) */
+.region-crop-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  touch-action: none;
+}
+
+.region-crop-box {
+  position: fixed;
+  box-sizing: border-box;
+  border: 2px solid #b8a4ff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  cursor: move;
+  touch-action: none;
+}
+
+.region-crop-handle {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #7c5cff;
+  touch-action: none;
+}
+
+.region-crop-handle--nw { left: -12px; top: -12px; cursor: nwse-resize; }
+.region-crop-handle--ne { right: -12px; top: -12px; cursor: nesw-resize; }
+.region-crop-handle--sw { left: -12px; bottom: -12px; cursor: nesw-resize; }
+.region-crop-handle--se { right: -12px; bottom: -12px; cursor: nwse-resize; }
+
+.region-crop-size {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.75rem;
+  pointer-events: none;
+}

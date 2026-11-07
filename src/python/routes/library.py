@@ -133,6 +133,9 @@ def get_file(path: str, download: bool = False) -> FileResponse:
         # 動くページ(漫画のうごイラ)はアニメ WebP。ほかは PNG
         media_type="image/webp" if full.suffix.lower() == ".webp" else "image/png",
         filename=full.name if download else None,
+        # 全画面で前後の画像を先読みしたものを、移ったときにそのまま使えるよう少しの間キャッシュさせる。
+        # 顔・表情シートのように同じ名前で描き直す画像もあるので、長くはしない
+        headers={"Cache-Control": "private, max-age=300"},
     )
 
 

@@ -384,6 +384,9 @@ export default function CharacterImages() {
             setPreview(fullscreen)
             setFullscreen(null)
           }}
+          placeholder={thumbUrl(visible[fullscreen].path, 240)}
+          preload={[visible[fullscreen - 1], visible[fullscreen + 1], visible[fullscreen + 2]]
+            .filter((i): i is Item => !!i).map(i => fileUrl(i.path))}
           tool={(_region, _zoomed, controls) => controls && (
             <button
               type="button"
