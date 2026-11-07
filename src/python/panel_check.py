@@ -53,15 +53,17 @@ def checkable_tags(
 ) -> list[str]:
     """
     作画タグ・動作のタグのうち、判定モデルで確かめられるもの。人数・絵柄・構図・時間帯と、表情(驚き・得意げ など。
-    判定モデルの当たり外れが大きく、確かめると正しい絵まで外れにした)は除く。
+    判定モデルの当たり外れが大きく、確かめると正しい絵まで外れにした)と、塗り・光の当たり方のタグ(anime coloring・
+    painterly など。2026-11 実機: 塗りのタグが入った話では、ほとんどのコマがこれだけで外れになった)は除く。
     """
     from .dataset_variations import axis_of
+    from .panel_accuracy import is_render_tag
 
     tags = [t for t in _clean_tags(", ".join([prompt_tags, *actions])).split(", ") if t]
     return [
         t for t in dict.fromkeys(t.lower() for t in tags)
         if t in vocabulary and not _SKIP.match(t) and not _PEOPLE.match(t) and axis_of(t) != "expressions"
-        and t not in (skip or set())
+        and not is_render_tag(t) and t not in (skip or set())
     ]
 
 

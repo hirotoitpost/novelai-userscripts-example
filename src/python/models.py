@@ -1800,6 +1800,17 @@ class MangaV2PanelReportRequest(BaseModel):
     check_gaze: bool = False
 
 
+class MangaV2PanelAccuracyRequest(BaseModel):
+    """
+    コマの絵の精度を測る(panel_accuracy.py)。story_ids の物語をまとめて集計する。scene_indexes(0始まり)は
+    物語が1つのときだけ効く。include_panels で1コマずつの結果も返す。
+    """
+
+    story_ids: list[int] = Field(min_length=1, max_length=50)
+    scene_indexes: Optional[list[int]] = None
+    include_panels: bool = True
+
+
 class MangaV2FlowReviewRequest(BaseModel):
     """話のつながりの見直し(つなぎのコマの案)。limit は案を出す場所の数の上限。"""
 
