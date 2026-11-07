@@ -273,8 +273,22 @@ def _identify_in_order(image: Image.Image, heads: list[Box], cast: list[CastMemb
 _TINY_HEAD = 0.06
 
 
+# 頭とみなす形の、幅÷高さの上限。人の頭の枠は縦長か正方形に近い(実機の頭で 0.6〜1.3)。横に長い枠は、皿や
+# 料理などの誤検出(2026-11 実機: 温泉旅館の夕食のコマで、手前の油揚げの皿が 2.4 の横長の頭として見つかり、
+# 頭の数が人数より多くなって、話し手を並び順で決められず、吹き出しのしっぽが皿へ向いた)
+_MAX_HEAD_ASPECT = 1.8
+
+
 def drop_tiny_heads(heads: list[Box], cast_size: int) -> list[Box]:
-    """登場キャラより多く見つかった頭のうち、ほかと比べて極端に小さいもの(誤検出)を除く。"""
+    """
+    登場キャラより多く見つかった頭のうち、誤検出を除く: 頭らしくない横長の枠(皿・料理など)と、ほかと比べて極端に
+    小さいもの(小物・背景の模様)。横長の枠を除くと人数より少なくなるときは、横長の枠は残す。
+    """
+    if len(heads) <= cast_size:
+        return heads
+    shaped = [h for h in heads if (h[2] - h[0]) <= (h[3] - h[1]) * _MAX_HEAD_ASPECT]
+    if len(shaped) >= cast_size:
+        heads = shaped
     if len(heads) <= cast_size:
         return heads
     areas = [(h[2] - h[0]) * (h[3] - h[1]) for h in heads]
