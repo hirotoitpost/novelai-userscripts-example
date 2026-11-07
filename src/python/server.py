@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .app_logging import setup_logging
+from .win_accept import install as install_resilient_accept
 from .client import app_mode, close_client, init_client
 from .sessions import SessionMiddleware, allowed_origins, check_config
 from .usage import LimitExceeded
@@ -54,6 +55,8 @@ _env_path = _PROJECT_ROOT / ".env"
 load_dotenv(_env_path, override=os.environ.get("APP_IN_CONTAINER") != "1")
 # アプリと uvicorn のログを data/logs/backend.log に日ごとに残す(app_logging.py)
 setup_logging()
+# Windows で、接続1件の受け付けの失敗(WinError 64 など)で待ち受けが閉じて止まらないようにする(win_accept.py)
+install_resilient_accept()
 
 
 
