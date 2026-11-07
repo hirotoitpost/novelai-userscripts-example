@@ -140,6 +140,7 @@ def save_generation(
             characters=characters,
             based_on_id=based_on,
             source_key=source_key,
+            character_id=gen.character_id,
         )
     finally:
         conn.close()
@@ -415,9 +416,9 @@ async def region_redraw(req: RegionRedrawRequest, client: ClientDep) -> dict[str
     from ..nai_metadata import generation_settings
     from ..region_redraw import RegionError, clamp_box, target_size, upscale_size
     from ..upscaler import enlarge
-    from .library import _gallery_images, _history_key, _served_path
+    from .library import _history_key, _served_path, find_image
 
-    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    item = find_image(req.key)
     if item is None:
         raise HTTPException(status_code=404, detail="画像が見つかりません。")
     data = _served_path(item.path).read_bytes()
@@ -454,7 +455,7 @@ async def region_redraw(req: RegionRedrawRequest, client: ClientDep) -> dict[str
             raise HTTPException(status_code=_http_status(exc), detail=str(exc))
         images = [base64.b64decode(b) for b in _pil_to_b64(generated, "png")]
     based_on = int(item.key.split(":")[1]) if item.key.startswith("history:") else None
-    saved = save_generation(gen, images, based_on=based_on, source_key=item.key)
+    saved = save_generation(gen.model_copy(update={"character_id": req.character_id}), images, based_on=based_on, source_key=item.key)
     conn = get_connection()
     try:
         row = conn.execute("SELECT image_paths FROM generation_history WHERE id = ?", (saved["id"],)).fetchone()
@@ -571,9 +572,9 @@ async def enhance_plan(key: str) -> dict[str, Any]:
 
     from ..region_redraw import RegionError
     from ..whole_enhance import SCALES, redraw_size, suggestion, upscale_target
-    from .library import _gallery_images, _served_path
+    from .library import _served_path, find_image
 
-    item = next((i for i in _gallery_images() if i.key == key), None)
+    item = find_image(key)
     if item is None:
         raise HTTPException(status_code=404, detail="画像が見つかりません。")
     with Image.open(_served_path(item.path)) as opened:
@@ -602,9 +603,9 @@ async def start_enhance(req: EnhanceRequest, client: ClientDep) -> dict[str, Any
     import asyncio
 
 
-    from .library import _gallery_images
+    from .library import find_image
 
-    item = next((i for i in _gallery_images() if i.key == req.key), None)
+    item = find_image(req.key)
     if item is None:
         raise HTTPException(status_code=404, detail="画像が見つかりません。")
     job_id = uuid4().hex
@@ -697,7 +698,9 @@ async def _run_enhance(job: _EnhanceJob, req: EnhanceRequest, item: Any, api_key
                 job.message = "描き直した絵を AI 拡大しています"
                 final = await asyncio.to_thread(enlarge, final, target, AI_MAX_INPUT, tiles(60, 40, "描き直した絵を AI 拡大しています"))
         based_on = int(item.key.split(":")[1]) if item.key.startswith("history:") else None
-        saved = save_generation(gen, [_png_bytes(final)], based_on=based_on, source_key=item.key)
+        saved = save_generation(
+            gen.model_copy(update={"character_id": req.character_id}), [_png_bytes(final)], based_on=based_on, source_key=item.key
+        )
         conn = get_connection()
         try:
             row = conn.execute("SELECT image_paths FROM generation_history WHERE id = ?", (saved["id"],)).fetchone()

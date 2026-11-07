@@ -43,9 +43,11 @@ interface Props {
   geometry?: ImageGeometry
   /** できた画像を開く */
   onOpen: (key: string) => void
+  /** キャラの生成した画像のページから使うとき、そのキャラ(できた画像をそのキャラの画像に並べる) */
+  characterId?: number | null
 }
 
-export default function RegionRedrawTool({ token, imageKey, region, zoomed, visible, geometry, onOpen }: Props) {
+export default function RegionRedrawTool({ token, imageKey, region, zoomed, visible, geometry, onOpen, characterId }: Props) {
   const [mode, setMode] = useLocalStorage<Mode>('nai_region_redraw_mode', 'normal')
   const [aspect, setAspect] = useLocalStorage<string>('nai_region_crop_aspect', 'free')
   const [busy, setBusy] = useState(false)
@@ -117,9 +119,10 @@ export default function RegionRedrawTool({ token, imageKey, region, zoomed, visi
     setResult(null)
     setCrop(null)
     try {
+      const linked = { character_id: characterId ?? undefined }
       const body = mode === 'upscale'
-        ? { key: imageKey, box, mode: 'upscale' }
-        : { key: imageKey, box, mode: 'redraw', strength: STRENGTH[mode] }
+        ? { key: imageKey, box, mode: 'upscale', ...linked }
+        : { key: imageKey, box, mode: 'redraw', strength: STRENGTH[mode], ...linked }
       setResult(await apiFetch<Result>(token, '/api/image/region-redraw', body))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))

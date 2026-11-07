@@ -19,8 +19,8 @@ import {
 import FullscreenViewer from '../components/FullscreenViewer'
 import RegionRedrawTool from '../components/RegionRedrawTool'
 import WholeEnhance from '../components/WholeEnhance'
-import { apiFetch, GENERATE_FROM_IMAGE_KEY, GalleryImageReferences } from '../api'
-import type { MetadataGenerationSettings } from '../api'
+import { apiFetch } from '../api'
+import { prepareGenerateFromImage } from '../generateFromImage'
 import { useAuth } from '../context/AuthContext'
 import GalleryMangaDialog, { GALLERY_MANGA_MAX } from '../components/GalleryMangaDialog'
 import type { GalleryMangaJob } from '../components/GalleryMangaDialog'
@@ -283,49 +283,13 @@ export default function Gallery() {
     }
   }
 
-  /**
-   * 似た画像を作るために、この画像の設定を画像生成ページへ送る(生成は、そこで「生成」を押してから)。
-   * 画像に埋め込まれた NovelAI の設定を読む。埋め込みが無い画像は、ギャラリーの記録にあるプロンプトだけを送る。
-   * シード値も送る(そのまま生成すると同じ画像になる。変えたいときは、画像生成ページでシード値を変える)。
-   * 生成のときに使った参照画像(i2i の元画像・キャラ参照)も送る(画像はパスだけ渡し、画像生成ページで読み込む)。
-   */
+  /** 似た画像を作るために、この画像の設定を画像生成ページへ送る(generateFromImage.ts。生成は、そこで「生成」を押してから)。 */
   async function sendToGenerate(item: GalleryImage) {
     if (!token) return
     setSending(true)
     setError(null)
-    const name = describe(item) || SOURCE_LABELS[item.source]
     try {
-      let settings: MetadataGenerationSettings
-      try {
-        // 表示用に読み込み済みの画像(別オリジンの <img>)はキャッシュから使えないので、読み直す
-        const res = await fetch(fileUrl(item.path), { cache: 'no-store' })
-        if (!res.ok) throw new Error(`画像を読み込めませんでした(HTTP ${res.status})`)
-        const blob = await res.blob()
-        const image = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = () => resolve(reader.result as string)
-          reader.onerror = () => reject(reader.error)
-          reader.readAsDataURL(blob)
-        })
-        settings = await apiFetch<MetadataGenerationSettings>(token, '/api/metadata/generation', { image })
-      } catch (e) {
-        if (!item.prompt.trim()) throw e
-        settings = {
-          prompt: item.prompt, negative_prompt: '', characters: [], use_coords: false,
-          model: item.model, width: item.width, height: item.height, size_preset: null,
-          steps: null, scale: null, sampler: null, noise_schedule: null, cfg_rescale: null,
-          variety_boost: false, seed: item.seed, source: 'ギャラリーの記録',
-          notes: [
-            'この画像には生成設定が埋め込まれていなかったので、ギャラリーの記録にあるプロンプト・モデル・サイズ・シード値だけを入れました',
-            'ネガティブプロンプトは空です。ステップ数などは今の設定のままです',
-          ],
-        }
-      }
-      // 参照画像が読めなくても、設定だけは送る
-      const references = await apiFetch<GalleryImageReferences>(
-        token, `/api/library/images/references?key=${encodeURIComponent(item.key)}`,
-      ).catch(() => null)
-      sessionStorage.setItem(GENERATE_FROM_IMAGE_KEY, JSON.stringify({ settings, name, references }))
+      await prepareGenerateFromImage(token, item, describe(item) || SOURCE_LABELS[item.source])
       navigate('/generate')
     } catch (e) {
       setError(`画像生成ページへ送れませんでした: ${e instanceof Error ? e.message : String(e)}`)

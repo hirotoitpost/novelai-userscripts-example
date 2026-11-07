@@ -832,3 +832,23 @@
   font-size: 0.8rem;
   margin: 0.4rem 0 0;
 }
+
+/* キャラの生成した画像のページから来たとき、生成した画像を関連付けるキャラ */
+.ig-linked-character {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--nai-accent);
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+.ig-linked-character button {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}

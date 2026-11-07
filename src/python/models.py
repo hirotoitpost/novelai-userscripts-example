@@ -99,6 +99,8 @@ class GenerateImageRequest(BaseModel):
     controlnet: Optional[ControlNetRequest] = None
     character_references: Optional[list[CharacterReferenceRequest]] = None
     characters: Optional[list[CharacterRequest]] = None
+    # キャラの生成した画像のページから「似た画像を生成」したとき、そのキャラ(生成履歴に記録し、そのキャラの画像に並べる)
+    character_id: Optional[int] = None
 
 
 EmotionLiteral = Literal[
@@ -137,6 +139,8 @@ class RegionRedrawRequest(BaseModel):
     strength: float = Field(0.35, ge=0.1, le=0.8)
     # 無ければ元の画像のシード
     seed: Optional[int] = Field(None, ge=0, le=4294967295)
+    # キャラの生成した画像のページから使ったとき、そのキャラ(結果をそのキャラの画像に並べる)
+    character_id: Optional[int] = None
 
 
 class EnhanceRequest(BaseModel):
@@ -149,6 +153,8 @@ class EnhanceRequest(BaseModel):
     scale: Literal[2, 4] = 2
     strength: float = Field(0.35, ge=0.1, le=0.8)
     seed: Optional[int] = Field(None, ge=0, le=4294967295)
+    # キャラの生成した画像のページから使ったとき、そのキャラ(結果をそのキャラの画像に並べる)
+    character_id: Optional[int] = None
 
 
 class RegionRedrawResponse(BaseModel):

@@ -175,3 +175,18 @@
     grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   }
 }
+
+/* 全画面の下の道具(範囲の描き直しと、参照画像にする・似た画像を生成) */
+.cimg-fs-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cimg-fs-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}

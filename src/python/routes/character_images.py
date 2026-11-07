@@ -45,8 +45,14 @@ async def get_kinds() -> dict[str, Any]:
 @router.get("/{character_id}")
 async def get_images(character_id: int) -> dict[str, Any]:
     """そのキャラの画像の一覧(新しい順)。"""
+    from .library import FILE_KEY_PREFIX, keys_by_path
+
     character = _character(character_id)
     items = await asyncio.to_thread(character_images.collect, character)
+    # 範囲の描き直し・画質向上・似た画像の生成で使うキー(ギャラリーにある画像はギャラリーと同じキー、無ければ file:<パス>)
+    keys = await asyncio.to_thread(keys_by_path)
+    for item in items:
+        item["key"] = keys.get(item["path"], f"{FILE_KEY_PREFIX}{item['path']}")
     return {**_kinds(), "reference_image_path": character.get("reference_image_path"), "items": items}
 
 

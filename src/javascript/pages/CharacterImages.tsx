@@ -2,13 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import FullscreenViewer from '../components/FullscreenViewer'
 import ImagePreview from '../components/ImagePreview'
+import RegionRedrawTool from '../components/RegionRedrawTool'
+import WholeEnhance from '../components/WholeEnhance'
+import { useAuth } from '../context/AuthContext'
+import { prepareGenerateFromImage } from '../generateFromImage'
 import { API_ORIGIN, fileUrl, formatDate, getJson, readErrorDetail, thumbUrl } from '../library'
 import './Publications.css'
 import './CharacterImages.css'
 
 /**
  * キャラごとの生成した画像(参照画像の候補・参照画像・漫画のコマ・描き直す前のコマ・データセット・顔と表情のシート・素体・
- * 生成履歴)を一覧で見て、参照画像に選び直す。下の「古い画像の整理」で、候補・使われていない参照画像・描き直す前のコマ・
+ * 生成履歴)を一覧で見て、参照画像に選び直す。拡大表示・全画面から、画質を上げる(全体)・範囲を高解像度にする・
+ * 似た画像を生成する(キャラシートの参照画像も入れて画像生成ページへ)ことができ、できた画像はこのキャラに関連付いて
+ * この一覧に並ぶ(生成履歴の character_id)。下の「古い画像の整理」で、候補・使われていない参照画像・描き直す前のコマ・
  * 生成履歴をごみ箱へ移す(30日のあいだは元に戻せる)。拡大した画面の「全画面」で、画面いっぱいに出して(ズーム・前後も)見比べられる。
  * API は /api/character-images(character_images.py)。
  */
@@ -20,6 +26,8 @@ interface Kind {
 
 interface Item {
   kind: string
+  /** 範囲の描き直し・画質向上・似た画像の生成で使うキー(ギャラリーと同じキー、無ければ file:<パス>) */
+  key: string
   path: string
   bytes: number
   created_at: string
@@ -63,6 +71,10 @@ async function postJson<T>(path: string, method: string, body: unknown): Promise
 
 export default function CharacterImages() {
   const navigate = useNavigate()
+  const { token } = useAuth()
+  // 画質向上・範囲の描き直しでできた画像(一覧を読み直したあとで開く)
+  const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
   const [params, setParams] = useSearchParams()
   const characterId = Number(params.get('character')) || null
   const [characters, setCharacters] = useState<Character[]>([])
@@ -188,6 +200,43 @@ export default function CharacterImages() {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  // できた画像を、読み直した一覧で開く
+  useEffect(() => {
+    if (!pendingKey || !data) return
+    const index = data.items.findIndex(i => i.key === pendingKey)
+    setPendingKey(null)
+    if (index < 0) {
+      setNotice('できた画像は、ギャラリーにあります(このキャラの一覧には出ませんでした)。')
+      return
+    }
+    setKindFilter('all')
+    setShown(n => Math.max(n, index + 1))
+    setFullscreen(null)
+    setPreview(index)
+  }, [pendingKey, data])
+
+  /** 画質向上・範囲の描き直しでできた画像を開く(このキャラに関連付けてあるので、一覧を読み直すと並ぶ) */
+  async function openMade(key: string) {
+    await load()
+    setPendingKey(key)
+  }
+
+  /** 似た画像を作るために、画像生成ページへ送る(キャラシートの参照画像も入れ、できた画像をこのキャラに関連付ける)。 */
+  async function sendToGenerate(item: Item) {
+    if (!token || characterId === null) return
+    setSending(true)
+    setError(null)
+    try {
+      const name = `${character?.name ?? ''} ${kindLabel[item.kind] ?? item.kind}`.trim()
+      await prepareGenerateFromImage(token, { key: item.key, path: item.path, seed: item.seed }, name, characterId)
+      navigate('/generate')
+    } catch (e) {
+      setError(`画像生成ページへ送れませんでした: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSending(false)
     }
   }
 
@@ -370,6 +419,16 @@ export default function CharacterImages() {
             >
               {visible[index]?.path === data?.reference_image_path ? 'いまの参照画像' : '参照画像にする'}
             </button>
+            {token && visible[index] && (
+              <>
+                <button type="button" className="ipv-btn" disabled={sending} onClick={() => void sendToGenerate(visible[index])}
+                  title="この画像の設定(プロンプト・シードなど)と、キャラシートの参照画像を画像生成ページに入れます。できた画像はこのキャラの一覧に並びます">
+                  {sending ? '読み取り中…' : '似た画像を生成'}
+                </button>
+                <WholeEnhance key={visible[index].key} token={token} imageKey={visible[index].key} characterId={characterId}
+                  onOpen={key => void openMade(key)} />
+              </>
+            )}
           </>
         )}
       />
@@ -387,15 +446,32 @@ export default function CharacterImages() {
           placeholder={thumbUrl(visible[fullscreen].path, 240)}
           preload={[visible[fullscreen - 1], visible[fullscreen + 1], visible[fullscreen + 2]]
             .filter((i): i is Item => !!i).map(i => fileUrl(i.path))}
-          tool={(_region, _zoomed, controls) => controls && (
-            <button
-              type="button"
-              className="fsv-close"
-              disabled={busy || visible[fullscreen].path === data?.reference_image_path}
-              onClick={() => void chooseReference(visible[fullscreen])}
-            >
-              {visible[fullscreen].path === data?.reference_image_path ? 'いまの参照画像' : '参照画像にする'}
-            </button>
+          tool={(region, zoomed, controls, geometry) => (
+            <div className="cimg-fs-tools">
+              {token && (
+                <RegionRedrawTool key={visible[fullscreen].key} token={token} imageKey={visible[fullscreen].key}
+                  region={region} zoomed={zoomed} visible={controls} geometry={geometry} characterId={characterId}
+                  onOpen={key => void openMade(key)} />
+              )}
+              {controls && (
+                <div className="cimg-fs-row">
+                  <button
+                    type="button"
+                    className="fsv-close"
+                    disabled={busy || visible[fullscreen].path === data?.reference_image_path}
+                    onClick={() => void chooseReference(visible[fullscreen])}
+                  >
+                    {visible[fullscreen].path === data?.reference_image_path ? 'いまの参照画像' : '参照画像にする'}
+                  </button>
+                  {token && (
+                    <button type="button" className="fsv-close" disabled={sending}
+                      onClick={() => void sendToGenerate(visible[fullscreen])}>
+                      {sending ? '読み取り中…' : '似た画像を生成'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         />
       )}

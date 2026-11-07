@@ -162,7 +162,7 @@ def test_adopting_a_candidate_swaps_the_recorded_references(client) -> None:
 def test_other_images_have_no_references(client) -> None:
     test_client, _ = client
     assert test_client.get("/api/library/images/references", params={"key": "illustration:3"}).json() == {
-        "i2i": None, "character_references": [], "notes": []
+        "i2i": None, "character_references": [], "notes": [], "character": None
     }
     assert test_client.get("/api/library/images/references", params={"key": "history:abc:x.png"}).status_code == 400
 
