@@ -132,3 +132,45 @@ def test_generations_linked_to_a_character_are_listed_for_it(client) -> None:
         conn.close()
     paths = {i["path"] for i in test_client.get(f"/api/character-images/{mio['id']}").json()["items"]}
     assert "outputs/history/linked.png" in paths and "outputs/history/other.png" not in paths
+
+
+def test_sheet_reference_is_not_added_twice(client) -> None:
+    test_client, root = client
+    mio = _character(root)
+    conn = db.get_connection()
+    try:
+        # みおが出ているコマ(描いたときの参照に、みおの参照がもう入っている)
+        story = db.create_story(conn, "x", 1, 4)
+        db.add_story_scenes(conn, story["id"], [{"draft_title": "1", "draft_text": "a", "draft_prompt_tags": "", "novelai_text": "a"}])
+        scene = db.list_story_scenes(conn, story["id"])[0]
+        db.set_scene_characters(conn, scene["id"], [mio["id"]])
+        panel = db.upsert_manga_panel(conn, story["id"], scene["id"], _png(root, "outputs/manga/panels/story1_scene0_a.png"), 1, 64, 96)
+        panel_id = panel["id"] if isinstance(panel, dict) else conn.execute("SELECT id FROM manga_panels").fetchone()[0]
+        # 描いたときに送った参照の写し(大きさを整えたものなので、キャラシートの画像とは中身が違う)を記録してあるコマ
+        used = _png(root, "outputs/manga/refs/used/0123.png", comment='{"x": 1}')
+        conn.execute(
+            "UPDATE manga_panels SET reference_images = ? WHERE id = ?",
+            ('[{"image_path": "%s", "type": "character", "fidelity": 1.0, "strength": 0.6}]' % used, panel_id),
+        )
+        conn.commit()
+        # キャラシートの参照画像と同じ中身を、生成履歴に参照として保存した画像
+        copy = root / "outputs" / "history" / "refs" / "copy.png"
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        copy.write_bytes((root / mio["reference_image_path"]).read_bytes())
+        history = db.record_generation(
+            conn, prompt="1girl", negative_prompt=None, model="m", size="[64, 96]", steps=1, scale=1.0, seed=1,
+            chunk_ids=[], image_paths=[_png(root, "outputs/history/made.png")],
+            character_references=[{"image_path": "outputs/history/refs/copy.png", "type": "character", "fidelity": 1.0, "strength": 0.5}],
+        )
+    finally:
+        conn.close()
+    from_panel = test_client.get(
+        "/api/library/images/references", params={"key": f"panel:{panel_id}", "character_id": mio["id"]}
+    ).json()
+    assert from_panel["character"]["id"] == mio["id"]
+    # コマに出ているキャラなので、記録した参照(キャラ参照 1)だけ。キャラシートの参照画像は足さない
+    assert [r["label"] for r in from_panel["character_references"]] == ["キャラ参照 1"]
+    from_history = test_client.get(
+        "/api/library/images/references", params={"key": f"history:{history['id']}:made.png", "character_id": mio["id"]}
+    ).json()
+    assert [r["image_path"] for r in from_history["character_references"]] == ["outputs/history/refs/copy.png"]
