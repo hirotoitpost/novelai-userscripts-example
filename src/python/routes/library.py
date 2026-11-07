@@ -816,6 +816,16 @@ def _panel_references(panel_id: int) -> ImageReferences:
 _SHEET_REFERENCE_STRENGTH = 0.6
 
 
+def _has_same_image(refs: ImageReferences, image: Path) -> bool:
+    """引き継ぐキャラ参照に、同じ中身の画像がもう入っているか(生成履歴に保存した参照の写しは、名前が違っても中身が同じ)。"""
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    for ref in refs.character_references:
+        path = _PROJECT_ROOT / ref.image_path
+        if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == digest:
+            return True
+    return False
+
+
 @router.get("/images/references", response_model=ImageReferences)
 def image_references(key: str, character_id: int | None = None) -> ImageReferences:
     """
@@ -839,14 +849,20 @@ def image_references(key: str, character_id: int | None = None) -> ImageReferenc
     conn = get_connection()
     try:
         character = get_character(conn, character_id)
+        # 漫画のコマなら、そのコマに出ているキャラ(描いたときの参照に、そのキャラの参照がもう入っている)
+        in_panel = kind == "panel" and conn.execute(
+            "SELECT 1 FROM manga_panels p JOIN scene_characters sc ON sc.scene_id = p.scene_id"
+            " WHERE p.id = ? AND sc.character_id = ?",
+            (int(rest), character_id),
+        ).fetchone() is not None
     finally:
         conn.close()
     if character is None:
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
     refs.character = LinkedCharacter(id=character["id"], name=character["name"])
     sheet = character.get("reference_image_path")
-    names = {r.label for r in refs.character_references}
-    if sheet and (_PROJECT_ROOT / sheet).is_file() and character["name"] not in names:
+    if sheet and (_PROJECT_ROOT / sheet).is_file() and not in_panel and not _has_same_image(refs, _PROJECT_ROOT / sheet) \
+            and character["name"] not in {r.label for r in refs.character_references}:
         refs.character_references.append(ReferenceImage(
             image_path=sheet, type="character&style", fidelity=1.0, strength=_SHEET_REFERENCE_STRENGTH,
             label=character["name"],
