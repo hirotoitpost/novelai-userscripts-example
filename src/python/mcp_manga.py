@@ -1301,6 +1301,20 @@ def register_manga_tools(mcp: MCPServer) -> None:
         return await _call("POST", f"/api/manga-v2/{story_id}/panel-report", body, timeout=600)
 
     @mcp.tool()
+    async def manga_panel_accuracy(
+        story_ids: list[int], scene_indexes: list[int] | None = None, include_panels: bool = False
+    ) -> dict[str, Any]:
+        """
+        コマの絵の精度を数字で測る(描き直さない・Anlas を使わない。1コマ数秒)。story_ids の物語をまとめて集計する。
+        指定したタグ(作画タグ・動作・服装・容姿・体型。塗りのタグは除く)の、種類ごと(容姿・服・ポーズ・構図・場所・
+        表情・体型・性的な描写)の的中率と、外れの多いタグ、出てはいけない物(ネガティブ・absent_tags 等)が描かれたコマ、
+        年齢区分(general / sensitive / questionable / explicit)の内訳と、物語・コマの意図との食い違いを返す。
+        設定(参照の強さ・塗りのタグなど)を変えた物語どうしを比べるのに使う。include_panels で1コマずつの結果も返す。
+        """
+        body = {"story_ids": story_ids, "scene_indexes": scene_indexes, "include_panels": include_panels}
+        return await _call("POST", "/api/manga-v2/panel-accuracy", body, timeout=1800)
+
+    @mcp.tool()
     async def manga_layout_patterns(count: int) -> list[dict[str, Any]]:
         """コマ数 count(1〜12)のページのコマ割りの候補(id・名前・分割の木)。manga_save_page_layout の tree に使う。"""
         patterns = await _call("GET", f"/api/manga-v2/layout-patterns?count={count}")

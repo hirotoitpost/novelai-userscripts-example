@@ -67,6 +67,7 @@ from ..db import (
     list_stamps,
     replace_stamp_source,
     update_stamp_label,
+    list_adult_marks,
     list_manga_panels,
     list_characters,
     list_story_scenes,
@@ -155,6 +156,7 @@ from ..models import (
     MangaV2ReferenceCandidate,
     MangaV2ReferenceCandidatesRequest,
     MangaV2CheckRequest,
+    MangaV2PanelAccuracyRequest,
     MangaV2PanelReportRequest,
     MangaV2FlowReviewRequest,
     MangaV2ComposeRequest,
@@ -2595,6 +2597,59 @@ async def panel_report(story_id: int, req: MangaV2PanelReportRequest) -> dict[st
         if not result.ok:
             flagged.append({"scene_index": scene["scene_index"], "scene_id": scene["id"], "problems": result.problems() or ["人数"]})
     return {"checked": len(targets), "flagged": flagged}
+
+
+def _tagger_scores(path: str) -> tuple[dict[str, float], dict[str, float]]:
+    """判定モデルの結果: (一般タグ → 確率, 年齢区分 → 確率)。"""
+    from ..image_tagger import tag_image
+
+    with Image.open(_PROJECT_ROOT / path) as image:
+        scores = tag_image(image.convert("RGB"))
+    general = {s.tag: s.probability for s in scores if s.category == "general"}
+    ratings = {s.tag: s.probability for s in scores if s.category == "rating"}
+    return general, ratings
+
+
+@router.post("/panel-accuracy")
+async def panel_accuracy(req: MangaV2PanelAccuracyRequest) -> dict[str, Any]:
+    """
+    コマの絵の精度を測る(Anlas を使わない)。物語ごとのコマを判定モデルにかけ、指定したタグの種類ごとの的中率・
+    外れの多いタグ・出てはいけない物・年齢区分(物語・コマの意図との食い違い)をまとめて返す。panel_accuracy.py を参照。
+    """
+    from .. import content_guard
+    from ..panel_accuracy import AccuracyReport, measure_panel
+    from ..panel_check import tagger_vocabulary
+
+    vocabulary = await asyncio.to_thread(tagger_vocabulary)
+    conn = get_connection()
+    try:
+        marks = list_adult_marks(conn, "book")
+        stories = []
+        for story_id in dict.fromkeys(req.story_ids):
+            scenes = list_story_scenes(conn, story_id)
+            if not scenes:
+                raise HTTPException(status_code=404, detail=f"物語 {story_id} がありません")
+            panels = {p["scene_id"]: p for p in list_manga_panels(conn, story_id)}
+            stories.append((story_id, scenes, panels, characters_by_scene(conn, story_id)))
+    finally:
+        conn.close()
+    wanted = set(req.scene_indexes) if req.scene_indexes is not None and len(stories) == 1 else None
+    report = AccuracyReport()
+    for story_id, scenes, panels, cast in stories:
+        # 成人向けか: 本棚で手で決めたものを優先し、無ければシーンのタグで判定する(本棚の自動判定と同じ語)
+        adult = marks.get(str(story_id))
+        if adult is None:
+            adult = any(content_guard.tags_adult(s["draft_prompt_tags"]) for s in scenes)
+        if adult:
+            report.adult_stories.add(story_id)
+        for scene in scenes:
+            if scene["id"] not in panels or (wanted is not None and scene["scene_index"] not in wanted):
+                continue
+            general, ratings = await asyncio.to_thread(_tagger_scores, panels[scene["id"]]["image_path"])
+            report.panels.append(
+                measure_panel(story_id, scene, cast.get(scene["id"], []), vocabulary, general, ratings, bool(adult))
+            )
+    return report.to_dict(include_panels=req.include_panels)
 
 
 async def _check_and_redraw(
