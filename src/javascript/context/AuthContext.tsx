@@ -63,9 +63,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const controller = new AbortController()
+    // 片付け(画面を離れる・開発中の StrictMode で効果を2回走らせる)で止めた問い合わせの結果は使わない。
+    // 止めた問い合わせを「聞けなかった」として single・未ログインにすると、ログイン済みでもいったんログイン画面へ
+    // 飛ばされ、そこからホームへ移って、再読み込みのたびに開いていたページから離れていた(2026-11 実機)
+    let cancelled = false
     const timer = window.setTimeout(() => controller.abort(), 5000)
     fetchSession(controller.signal)
       .then(info => {
+        if (cancelled) return
         if (info.mode === 'multi') {
           // multi では NovelAI のトークンも復号鍵もブラウザに置かない(single のときの残りも消す)
           localStorage.removeItem(TOKEN_STORAGE)
@@ -75,9 +80,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setSession(info)
       })
-      .catch(() => setSession({ mode: 'single', authenticated: false, has_api_token: false, has_encryption_key: false }))
+      .catch(() => {
+        // 時間切れ(5秒)・つながらないときだけ、single として動く
+        if (!cancelled) setSession({ mode: 'single', authenticated: false, has_api_token: false, has_encryption_key: false })
+      })
       .finally(() => window.clearTimeout(timer))
-    return () => { window.clearTimeout(timer); controller.abort() }
+    return () => { cancelled = true; window.clearTimeout(timer); controller.abort() }
   }, [])
 
   const refreshSession = useCallback(async () => {
