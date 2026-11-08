@@ -42,6 +42,8 @@ export interface SceneCharacter {
   action_tags?: string | null
   /** そのシーンでの服装(空ならふだんの服装) */
   scene_outfit_tags?: string | null
+  /** そのシーンでの容姿(空ならキャラシートの容姿)。appearance_tags はこれを当てたあとの見た目 */
+  scene_appearance_tags?: string | null
   /** そのシーンでの状態(キャラ別データセットの状態)。appearance_tags は状態を当てたあとの見た目 */
   state_id?: number | null
   state_name?: string | null

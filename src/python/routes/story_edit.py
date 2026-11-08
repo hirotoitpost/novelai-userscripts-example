@@ -98,6 +98,7 @@ def _snapshot_scene(
                 "action_tags": c.get("action_tags") or "",
                 "outfit_tags": c.get("scene_outfit_tags") or "",
                 "state_id": c.get("state_id"),
+                "appearance_tags": c.get("scene_appearance_tags") or "",
             }
             for c in scene.get("characters") or []
         ],
@@ -146,20 +147,29 @@ def _page_indexes(req: StoryEditRequest) -> list[int]:
     return [numbers[value] for value in raw]
 
 
-def _image_key(prompt_tags: str, characters: list[tuple[int, str, str, int | None]]) -> tuple[Any, ...]:
-    """絵に効く内容(タグ・登場人物とその動作・服装・状態)。これが変わったら描き直し待ちにする。"""
-    return (prompt_tags.strip(), tuple(sorted((i, a.strip(), o.strip(), s) for i, a, o, s in characters)))
+def _image_key(prompt_tags: str, characters: list[tuple[int, str, str, int | None, str]]) -> tuple[Any, ...]:
+    """絵に効く内容(タグ・登場人物とその動作・服装・状態・容姿)。これが変わったら描き直し待ちにする。"""
+    return (
+        prompt_tags.strip(),
+        tuple(sorted((i, a.strip(), o.strip(), s, ap.strip()) for i, a, o, s, ap in characters)),
+    )
 
 
 def _edited_key(scene: StoryEditScene) -> tuple[Any, ...]:
-    return _image_key(scene.prompt_tags, [(c.id, c.action_tags, c.outfit_tags, c.state_id) for c in scene.characters])
+    return _image_key(
+        scene.prompt_tags,
+        [(c.id, c.action_tags, c.outfit_tags, c.state_id, c.appearance_tags) for c in scene.characters],
+    )
 
 
 def _stored_key(scene: dict[str, Any]) -> tuple[Any, ...]:
     return _image_key(
         scene["draft_prompt_tags"] or "",
         [
-            (c["id"], c.get("action_tags") or "", c.get("scene_outfit_tags") or "", c.get("state_id"))
+            (
+                c["id"], c.get("action_tags") or "", c.get("scene_outfit_tags") or "", c.get("state_id"),
+                c.get("scene_appearance_tags") or "",
+            )
             for c in scene.get("characters") or []
         ],
     )
@@ -282,6 +292,7 @@ def _write_cast(conn: sqlite3.Connection, scene_id: int, scene: StoryEditScene) 
         actions={c.id: c.action_tags for c in scene.characters},
         outfits={c.id: c.outfit_tags for c in scene.characters},
         states={c.id: c.state_id for c in scene.characters},
+        appearances={c.id: c.appearance_tags for c in scene.characters},
     )
 
 

@@ -711,7 +711,10 @@ async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
         )
         for row, scene in zip(list_story_scenes(conn, story["id"]), req.scenes):
             if scene.character_ids:
-                set_scene_characters(conn, row["id"], scene.character_ids, scene.character_actions, scene.character_outfits)
+                set_scene_characters(
+                    conn, row["id"], scene.character_ids, scene.character_actions, scene.character_outfits,
+                    appearances=scene.character_appearances,
+                )
             if scene.narration:
                 update_scene_narration(conn, row["id"], scene.narration)
             if scene.dialogue is not None:
@@ -2583,7 +2586,7 @@ async def put_scene_characters(scene_id: int, req: SetSceneCharactersRequest) ->
             if character is None:
                 raise HTTPException(status_code=404, detail="character not found")
             _check_adult_only([character], state["add_tags"])
-        set_scene_characters(conn, scene_id, req.character_ids, req.actions, req.outfits, req.states)
+        set_scene_characters(conn, scene_id, req.character_ids, req.actions, req.outfits, req.states, req.appearances)
     finally:
         conn.close()
 

@@ -1290,14 +1290,18 @@ _TAG_WEIGHT = re.compile(r"^-?\d+(\.\d+)?::|::$")
 _BACK_VIEW_STRENGTH = 0.6
 
 
+# 振り向いて顔を見せるタグ(looking back over shoulder のような言い回しも含めて、この語で始まるもの)
+_FACE_SHOWN_PREFIXES = ("looking back", "looking at viewer")
+
+
 def is_back_view(scene_tags: str, action_tags: str | None = None) -> bool:
-    """後ろ姿のコマか(looking back のような、振り向いて顔を見せるものは後ろ姿に数えない)。"""
+    """後ろ姿のコマか(looking back・looking at viewer のような、振り向いて顔を見せるものは後ろ姿に数えない)。"""
     plain = {
         _TAG_WEIGHT.sub("", t.strip().lower()).strip()
         for t in f"{scene_tags or ''},{action_tags or ''}".split(",")
         if t.strip()
     }
-    return bool(plain & _BACK_VIEW_TAGS) and "looking back" not in plain
+    return bool(plain & _BACK_VIEW_TAGS) and not any(t.startswith(_FACE_SHOWN_PREFIXES) for t in plain)
 
 
 def _scene_references(
@@ -1327,6 +1331,21 @@ def _scene_references(
                 )
             )
     return refs
+
+
+def back_view_cast(scene_tags: str, members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    後ろ姿のキャラは、容姿から顔だけのタグ(beautiful face・face visible・目の色 など)を外す。キャラシートの
+    「face visible」などがキャラごとのプロンプトに入ると、ネガティブに looking back を入れても振り向いて顔を見せる。
+    """
+    from ..character_sheet import drop_face_tags
+
+    result = []
+    for member in members:
+        if is_back_view(scene_tags, member.get("action_tags")):
+            member = {**member, "appearance_tags": drop_face_tags(member.get("appearance_tags"))}
+        result.append(member)
+    return result
 
 
 # 人数のタグ。一人ずつの容姿にある「1girl」「1boy」を数えて、二人以上の場面の全体のプロンプトに入れる
@@ -1411,7 +1430,7 @@ async def _run_panels(
             scene_tags = minor_guard.all_ages_tags(scene_tags)
             scene_characters = minor_guard.all_ages_members(scene_characters)
             guard_negative = minor_guard.all_ages_negative()
-        character_tags, character_negatives, count_tags = _cast_prompt(scene_characters)
+        character_tags, character_negatives, count_tags = _cast_prompt(back_view_cast(scene_tags, scene_characters))
         # 二人以上なら、キャラごとのネガティブはキャラの欄に分ける(全体にまとめると打ち消し合う)
         multiple = len(character_tags) > 1
         # シードの優先順: 設定で指定 > キャラシートの基準シード > シーンごとに変える

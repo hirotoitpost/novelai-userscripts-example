@@ -18,13 +18,16 @@ interface Props {
   disabled?: boolean
 }
 
-interface Row { state: number | null; outfit: string; action: string }
+interface Row { state: number | null; outfit: string; action: string; appearance: string }
 
 /** キャラの衣装(衣装のタブで登録した服。/api/wardrobe/outfits) */
 interface Outfit { id: number; character_id: number; name: string; tags: string }
 
 function rowOf(c: SceneCharacter): Row {
-  return { state: c.state_id ?? null, outfit: c.scene_outfit_tags ?? '', action: c.action_tags ?? '' }
+  return {
+    state: c.state_id ?? null, outfit: c.scene_outfit_tags ?? '', action: c.action_tags ?? '',
+    appearance: c.scene_appearance_tags ?? '',
+  }
 }
 
 async function errorDetail(res: Response): Promise<string> {
@@ -33,7 +36,7 @@ async function errorDetail(res: Response): Promise<string> {
 }
 
 /**
- * シーンの演出: キャラごとの状態・その場面の服装・動作と、シチュエーションの書き込み。
+ * シーンの演出: キャラごとの状態・その場面の服装・動作・容姿と、シチュエーションの書き込み。
  * 状態はキャラ別データセットと同じく容姿を一時的に変え、コマ・挿絵の生成のたびに効く(キャラシートは変えない)。
  * シチュエーションは、選んだときにシーンのタグ・服装・動作へタグを書き込むだけ(書き込んだあとは手で直せる)。
  * その場面の服装は、キャラに登録した衣装から選んで入れることもできる(入れたあとは手で直せる)。
@@ -73,7 +76,10 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
   const dirty = current.some(c => {
     const row = rows[c.id]
     const saved = rowOf(c)
-    return row && (row.state !== saved.state || row.outfit !== saved.outfit || row.action !== saved.action)
+    return row && (
+      row.state !== saved.state || row.outfit !== saved.outfit || row.action !== saved.action
+      || row.appearance !== saved.appearance
+    )
   })
   const off = busy || disabled
 
@@ -102,6 +108,7 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
         states: pick(r => r.state),
         outfits: pick(r => r.outfit),
         actions: pick(r => r.action),
+        appearances: pick(r => r.appearance),
       }),
     })
     if (!res.ok) throw new Error(await errorDetail(res))
@@ -145,7 +152,7 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
     <div className="scene-dir">
       <table className="scene-dir-table">
         <thead>
-          <tr><th>キャラ</th><th>状態</th><th>この場面の服装</th><th>動作・表情</th></tr>
+          <tr><th>キャラ</th><th>状態</th><th>この場面の服装</th><th>動作・表情</th><th>この場面の容姿</th></tr>
         </thead>
         <tbody>
           {current.map(c => {
@@ -179,6 +186,12 @@ export default function SceneDirection({ apiOrigin, sceneId, current, situations
                 <td>
                   <input value={row.action} disabled={off} placeholder="smile, waving など" aria-label={`${c.name}の動作・表情`}
                     onChange={e => edit(c.id, { action: e.target.value })} />
+                </td>
+                <td>
+                  <input value={row.appearance} disabled={off} placeholder="空欄ならキャラシートの容姿"
+                    aria-label={`${c.name}のこの場面の容姿`}
+                    title="顔・髪・目のタグをこの場面だけ差し替えます(髪を下ろす など)。後ろ姿のコマでは、顔だけのタグは自動で外れます"
+                    onChange={e => edit(c.id, { appearance: e.target.value })} />
                 </td>
               </tr>
             )

@@ -114,6 +114,7 @@ def _script_to_edit(scene: dict[str, Any], page_index: int) -> dict[str, Any]:
     """台本の形のシーン(manga_create_scripted_story)を、PUT /edit の新しいシーンにする。"""
     actions = {int(k): v for k, v in (scene.get("character_actions") or {}).items()}
     outfits = {int(k): v for k, v in (scene.get("character_outfits") or {}).items()}
+    looks = {int(k): v for k, v in (scene.get("character_appearances") or {}).items()}
     item: dict[str, Any] = {
         "id": None,
         "title": scene.get("title"),
@@ -125,7 +126,10 @@ def _script_to_edit(scene: dict[str, Any], page_index: int) -> dict[str, Any]:
         "panel_size": None,
         "dialogue": scene.get("dialogue"),
         "characters": [
-            {"id": cid, "action_tags": actions.get(cid, ""), "outfit_tags": outfits.get(cid, ""), "state_id": None}
+            {
+                "id": cid, "action_tags": actions.get(cid, ""), "outfit_tags": outfits.get(cid, ""), "state_id": None,
+                "appearance_tags": looks.get(cid, ""),
+            }
             for cid in scene.get("character_ids") or []
         ],
     }
@@ -499,6 +503,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
               prompt_tags には人数・場所・時間帯・構図・二人の位置関係など全体のことだけを書く
           sfx: 描き文字の効果音のリスト
           character_outfits: {キャラID: この場面の服装の英語タグ}。キャラシートのふだんの服装の代わりに使う(水着・浴衣など)
+          character_appearances: {キャラID: この場面の容姿(顔・髪・目)の英語タグ}。キャラシートの容姿の代わりに使う
+              (髪を下ろす など。後ろ姿のコマでは顔のタグは自動で外れる)
           dialogue: [{"text": "…", "speaker_id": キャラID か null}, …]。あれば本文の「」の代わりにこれを吹き出しにし、
               話し手を推定しない。地の文に名前が出ない話し手(幼い子など)のセリフに使う。（…）で囲むと心の声
           negative_prompt: このコマのネガティブ(ページ・物語のネガティブより優先。manga_set_negatives)
@@ -540,6 +546,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         story_id: int | None = None,
         scene_index: int | None = None,
         dialogue: list[dict[str, Any]] | None = None,
+        character_appearances: dict[int, str] | None = None,
     ) -> str:
         """
         シーンを手直しする(渡した項目だけ)。シーンは scene_id か、story_id + scene_index(0始まり)で指定する
@@ -551,10 +558,11 @@ def register_manga_tools(mcp: MCPServer) -> None:
         absent_tags はこのコマに出てはいけない物(英語タグ。ネガティブに足し、manga_check_panels で確かめる)。
         character_actions(キャラID → 表情・動作の英語タグ)を変えるときは character_ids も渡す。
         character_outfits(キャラID → この場面の服装の英語タグ。空ならキャラシートのふだんの服装)と
-        character_states(キャラID → 状態の ID。manga_list_scene_presets。null でふだん)も同じ。
+        character_states(キャラID → 状態の ID。manga_list_scene_presets。null でふだん)、
+        character_appearances(キャラID → この場面の容姿の英語タグ。空ならキャラシートの容姿)も同じ。
         絵に効く項目(prompt_tags・character_ids・character_actions・服装・状態)を変えたら manga_generate_panels で描き直す。
         """
-        per_character = (character_actions, character_outfits, character_states)
+        per_character = (character_actions, character_outfits, character_states, character_appearances)
         if any(v is not None for v in per_character) and character_ids is None:
             raise ValueError("キャラごとの項目を変えるときは character_ids も渡してください")
         scene_id = await _scene_id(scene_id, story_id, scene_index)
@@ -569,6 +577,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
                 body["outfits"] = character_outfits
             if character_states is not None:
                 body["states"] = character_states
+            if character_appearances is not None:
+                body["appearances"] = character_appearances
             await _call("PUT", f"/api/story/scenes/{scene_id}/characters", body)
         if narration is not None:
             await _call("PUT", f"/api/manga-v2/scenes/{scene_id}/narration", {"narration": narration})

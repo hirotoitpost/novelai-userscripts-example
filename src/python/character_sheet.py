@@ -116,7 +116,7 @@ def character_minor_tags(character: dict[str, Any]) -> list[str]:
     """
     text = ", ".join(
         str(character.get(k) or "")
-        for k in ("name", "trigger_word", "appearance_tags", "body_tags", "outfit_tags", "style_tags")
+        for k in ("name", "trigger_word", "appearance_tags", "sheet_appearance_tags", "body_tags", "outfit_tags", "style_tags")
     )
     return minor_tags(text, adult=content_guard.is_defined_adult(character))
 
@@ -411,6 +411,25 @@ def split_body(appearance: str) -> tuple[str, str]:
         words = set(_plain(tag).replace("(", " ").replace(")", " ").split())
         (body if words & BODY_SHAPE_WORDS and not words & _FACE_WORDS else face).append(tag)
     return ", ".join(face), ", ".join(body)
+
+
+# 顔だけに効く語(目・まつ毛・頬の赤み など)。後ろ姿のコマでは、これを含む容姿のタグを外す(顔を見せる絵に引っ張られる)。
+# 髪のタグ(hair between eyes など)は後ろからも見えるので残す
+_FACE_ONLY_WORDS = {
+    "face", "eyes", "eye", "eyelashes", "eyebrows", "eyeliner", "eyeshadow", "pupils", "iris", "lips", "lipstick",
+    "mouth", "nose", "blush", "freckles", "jitome", "tsurime", "tareme", "makeup", "expression", "smile", "glasses",
+}
+
+
+def drop_face_tags(appearance: str | None) -> str:
+    """容姿のタグから、顔だけに効くタグ(beautiful face・face visible・yellow eyes・blush など)を外す。"""
+    kept = []
+    for tag in split_tags(appearance):
+        words = set(_plain(tag).replace("(", " ").replace(")", " ").replace("_", " ").split())
+        if words & _FACE_ONLY_WORDS and "hair" not in words:
+            continue
+        kept.append(tag)
+    return ", ".join(kept)
 
 
 def adult_only_tags(tags: str) -> list[str]:

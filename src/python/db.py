@@ -1139,6 +1139,10 @@ def _migrate_scene_characters(conn: sqlite3.Connection) -> None:
     # state_id: そのコマでのそのキャラの状態(キャラ別データセットの状態。容姿を一時的に変える)
     if "state_id" not in existing:
         conn.execute("ALTER TABLE scene_characters ADD COLUMN state_id INTEGER")
+    # appearance_tags: そのコマでのそのキャラの容姿(顔・髪・目)。あれば、キャラシートの容姿の代わりに使う
+    # (後ろ姿で顔のタグを外す、髪を下ろす など)
+    if "appearance_tags" not in existing:
+        conn.execute("ALTER TABLE scene_characters ADD COLUMN appearance_tags TEXT")
     conn.commit()
 
 
@@ -2479,30 +2483,41 @@ def set_scene_characters(
     actions: dict[int, str] | None = None,
     outfits: dict[int, str] | None = None,
     states: dict[int, int | None] | None = None,
+    appearances: dict[int, str] | None = None,
 ) -> None:
     """
     シーンに出るキャラを設定し直す。actions はキャラごとの表情・動作、outfits はその場面の服装(英語タグ)、
-    states はその場面の状態(dataset_states の id。None で状態なし)。
-    渡さなければ、残るキャラの動作・服装・状態はそのまま残す(登場人物の付け替えで、書いたものが消えないように)。
+    states はその場面の状態(dataset_states の id。None で状態なし)、appearances はその場面の容姿(英語タグ。
+    空ならキャラシートの容姿)。
+    渡さなければ、残るキャラの動作・服装・状態・容姿はそのまま残す(登場人物の付け替えで、書いたものが消えないように)。
     """
     rows = conn.execute(
-        "SELECT character_id, action_tags, outfit_tags, state_id FROM scene_characters WHERE scene_id = ?", (scene_id,)
+        "SELECT character_id, action_tags, outfit_tags, state_id, appearance_tags FROM scene_characters WHERE scene_id = ?",
+        (scene_id,),
     ).fetchall()
     kept_actions = {row["character_id"]: row["action_tags"] for row in rows}
     kept_outfits = {row["character_id"]: row["outfit_tags"] for row in rows}
     kept_states = {row["character_id"]: row["state_id"] for row in rows}
+    kept_appearances = {row["character_id"]: row["appearance_tags"] for row in rows}
     if actions is not None:
         kept_actions = {character_id: (actions.get(character_id) or "").strip() or None for character_id in character_ids}
     if outfits is not None:
         kept_outfits = {character_id: (outfits.get(character_id) or "").strip() or None for character_id in character_ids}
     if states is not None:
         kept_states = {character_id: states.get(character_id) for character_id in character_ids}
+    if appearances is not None:
+        kept_appearances = {
+            character_id: (appearances.get(character_id) or "").strip() or None for character_id in character_ids
+        }
     conn.execute("DELETE FROM scene_characters WHERE scene_id = ?", (scene_id,))
     conn.executemany(
-        "INSERT OR IGNORE INTO scene_characters (scene_id, character_id, action_tags, outfit_tags, state_id)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO scene_characters (scene_id, character_id, action_tags, outfit_tags, state_id, appearance_tags)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (scene_id, character_id, kept_actions.get(character_id), kept_outfits.get(character_id), kept_states.get(character_id))
+            (
+                scene_id, character_id, kept_actions.get(character_id), kept_outfits.get(character_id),
+                kept_states.get(character_id), kept_appearances.get(character_id),
+            )
             for character_id in character_ids
         ],
     )
@@ -2514,7 +2529,7 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
     rows = conn.execute(
         """
         SELECT sc.scene_id, sc.action_tags AS scene_action_tags, sc.outfit_tags AS scene_outfit_tags,
-               sc.state_id AS scene_state_id, c.*
+               sc.state_id AS scene_state_id, sc.appearance_tags AS scene_appearance_tags, c.*
         FROM scene_characters sc
         JOIN characters c ON c.id = sc.character_id
         JOIN story_scenes s ON s.id = sc.scene_id
@@ -2547,6 +2562,13 @@ def characters_by_scene(conn: sqlite3.Connection, story_id: int) -> dict[int, li
         character["scene_outfit_tags"] = outfit
         if outfit:
             character["outfit_tags"] = outfit
+        # その場面の容姿(後ろ姿で顔のタグを外す など)があれば、キャラシートの容姿の代わりに使う
+        appearance = character.pop("scene_appearance_tags")
+        character["scene_appearance_tags"] = appearance
+        if appearance:
+            # 年齢の手がかりは、差し替える前のキャラシートの容姿でも見る(場面の容姿で消しても未成年対策をすり抜けない)
+            character["sheet_appearance_tags"] = character.get("appearance_tags")
+            character["appearance_tags"] = appearance
         # その場面の状態(食べ過ぎでお腹が出る など)があれば、キャラ別データセットと同じく容姿+体型を状態の見た目にする。
         # 消された状態は無視する
         state = states.get(character.pop("scene_state_id"))

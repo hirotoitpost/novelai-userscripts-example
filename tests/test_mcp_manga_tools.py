@@ -127,7 +127,7 @@ def test_insert_reorder_remove_scenes(tools: _FakeMCP) -> None:
     assert ids == [10, 11, None, 12, 13]
     inserted = body["scenes"][2]
     assert inserted["page_index"] == 0 and inserted["dialogue"] == [{"text": "がおー！", "speaker_id": 171}]
-    assert inserted["characters"] == [{"id": 171, "action_tags": "", "outfit_tags": "frog swimsuit", "state_id": None}]
+    assert inserted["characters"] == [{"id": 171, "action_tags": "", "outfit_tags": "frog swimsuit", "state_id": None, "appearance_tags": ""}]
 
     asyncio.run(tools.tools["manga_reorder_scenes"](5, [3, 2, 1, 0]))
     assert [s["id"] for s in tools.calls[-1][2]["scenes"]] == [13, 12, 11, 10]  # type: ignore[attr-defined]
