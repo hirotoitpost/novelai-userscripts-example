@@ -550,3 +550,41 @@ def test_body_parts_can_be_added_and_edited(client: TestClient) -> None:
     # 性的な場面のタグは、素体の部位に入れられない
     bad = client.post("/api/lora-dataset/sheet-items/body", json={"label": "x", "group": "trunk", "tags": "sex, cowboy shot"})
     assert bad.status_code == 422
+
+
+def test_nipple_close_ups_only_for_nude_and_weighted_detail_tags(client: TestClient) -> None:
+    keys = {p.key for p in body_base.PARTS if p.nude_only}
+    assert keys == {"nipple_front", "nipple_side", "nipple_three_quarter", "nipple_below"}
+    # 強調の書き方でも、裸の素体の形のタグとして通る(性器は相変わらず弾く)
+    assert body_base.clean_extra("1.5::inverted nipples::, large breasts", nude=True) == []
+    assert body_base.clean_extra("1.5::pussy::", nude=True) == ["pussy"]
+    suit_user = _character(client, "suit")
+    suit = _base(client, name="スーツ")
+    entries = client.put(f"/api/lora-dataset/character/{suit_user['id']}/body-base", json={"body_base_id": suit["id"]}).json()
+    assert not {p["key"]: p for p in entries["parts"]}["nipple_front"]["available"]
+    assert client.post(f"/api/lora-dataset/character/{suit_user['id']}/body-base",
+                       json={"keys": ["nipple_front"]}).status_code == 422
+
+
+def test_redrawing_keeps_history_and_can_pick_it_back(client: TestClient, tmp_path: Path) -> None:
+    adult = _character(client, "hist", is_adult=1, age=30)
+    base = _base(client, name="裸", kind="nude", skin_tone="fair")
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": base["id"]})
+    for _ in range(2):
+        assert client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                           json={"keys": ["nipple_front"], "auto_check": False}).status_code == 200
+    entries = client.get(f"/api/lora-dataset/character/{adult['id']}/body-base").json()
+    part = {p["key"]: p for p in entries["parts"]}["nipple_front"]
+    assert part["history"] == 1 and part["path"]
+    history = client.get(f"/api/lora-dataset/character/{adult['id']}/body-base/history",
+                         params={"part": "nipple_front"}).json()
+    assert len(history) == 1 and history[0]["path"].endswith(".png")
+    old = (tmp_path / history[0]["path"]).read_bytes()
+    picked = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base/history/select",
+                         json={"part": "nipple_front", "file": history[0]["file"]})
+    assert picked.status_code == 200, picked.text
+    now = {p["key"]: p for p in picked.json()["parts"]}["nipple_front"]
+    # 選んだ絵が今の絵になり、それまでの絵は履歴へ(どちらも残る)
+    assert (tmp_path / now["path"]).read_bytes() == old and now["history"] == 1
+    assert client.post(f"/api/lora-dataset/character/{adult['id']}/body-base/history/select",
+                       json={"part": "nipple_front", "file": "nope.png"}).status_code == 404

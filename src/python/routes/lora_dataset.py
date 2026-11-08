@@ -119,6 +119,7 @@ from ..models import (
     BodyBaseOptionOrderRequest,
     BodyBaseOptionRequest,
     BodyBaseSaveRequest,
+    BodyBaseHistorySelectRequest,
     BodyBaseSheetRequest,
     CharacterBodyBaseRequest,
     CharacterDatasetRequest,
@@ -1082,6 +1083,39 @@ def _body_dir(character: dict, base: dict, root_name: str) -> Path:
     return _character_root(root_name, character) / body_base.file_dir_name(base)
 
 
+def _part_available(base: dict | None, part: body_base.BodyPart) -> bool:
+    """その素体で描ける部位か(裸の素体では寄りの一部を描かない。乳首のアップは裸の素体だけ)。"""
+    if base is None:
+        return not part.nude_only
+    return part.nude if base["kind"] == "nude" else not part.nude_only
+
+
+_HISTORY_DIR = "history"
+
+
+def _history_files(path: Path) -> list[Path]:
+    """部位の絵の履歴(描き直す前の絵。新しい順)。<フォルダ>/history/<素体>_<部位>_<時刻>.png。"""
+    folder = path.parent / _HISTORY_DIR
+    if not folder.is_dir():
+        return []
+    return sorted(folder.glob(f"{path.stem}_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _keep_history(path: Path) -> None:
+    """描き直す前に、今の絵(とキャプション・自動チェックの結果)を履歴へ移す。"""
+    if not path.is_file():
+        return
+    folder = path.parent / _HISTORY_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = f"{path.stem}_{int(path.stat().st_mtime * 1000)}"
+    while (folder / f"{stem}.png").exists():
+        stem += "_"
+    for suffix in (".png", ".txt", ".check.json"):
+        source = path.with_suffix(suffix)
+        if source.is_file():
+            source.replace(folder / f"{stem}{suffix}")
+
+
 def _body_entries(character: dict, root_name: str) -> dict[str, Any]:
     """キャラに当てた素体と、部位ごとの描いた絵のパス(描いていなければ null)。裸の素体を当てられるかも返す。"""
     base = _character_base(character)
@@ -1091,14 +1125,17 @@ def _body_entries(character: dict, root_name: str) -> dict[str, Any]:
         path = _body_dir(character, base, root_name) / f"{base['id']}_{part.key}.png" if base else None
         drawn = path is not None and path.is_file()
         check_path = path.with_suffix(".check.json") if path is not None else None
+        history = _history_files(path) if path is not None else []
         parts.append({
+            # 描き直す前の絵(新しい順)の枚数。GET .../body-base/history で一覧、POST .../history/select で選び直す
+            "history": len(history),
             # 自動チェックの結果(合否・理由・描いた回数。チェックせずに描いた絵は null)
             "auto_check": json.loads(check_path.read_text(encoding="utf-8")) if drawn and check_path.is_file() else None,
             "key": part.key,
             "label": part.label,
             "group": part.group,
             "check": part.check,
-            "available": base is None or base["kind"] != "nude" or part.nude,
+            "available": _part_available(base, part),
             "path": path.relative_to(_PROJECT_ROOT).as_posix() if drawn else None,
             "updated": path.stat().st_mtime if drawn else None,
         })
@@ -1306,6 +1343,10 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
         skipped = [p.label for p in parts if not p.nude]
         if skipped:
             raise HTTPException(status_code=422, detail=f"裸の素体では描かない部位です(全身図で確かめます): {', '.join(skipped)}")
+    else:
+        only = [p.label for p in parts if p.nude_only]
+        if only:
+            raise HTTPException(status_code=422, detail=f"裸の素体だけで描く部位です: {', '.join(only)}")
     options = _options()
     prompts = {p.key: body_base.prompt(character, base, p, options, modest=modest) for p in parts}
     _check_tags(character, ", ".join(prompts.values()), _load_guard(None), nude)
@@ -1366,6 +1407,8 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
                         await asyncio.sleep(2)
                 image, result = best
                 path = folder / f"{base['id']}_{part.key}.png"
+                # 前の絵は消さずに履歴へ(あとで選び直せる)
+                _keep_history(path)
                 image.save(path, "PNG")
                 check_path = path.with_suffix(".check.json")
                 if result is not None:
@@ -1393,6 +1436,41 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/character/{character_id}/body-base/history")
+async def get_body_base_history(character_id: int, part: str, root_name: str = "training_data") -> list[dict[str, Any]]:
+    """部位の絵の履歴(描き直す前の絵。新しい順)。"""
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    path = _body_dir(character, base, root_name) / f"{base['id']}_{part}.png"
+    return [
+        {"file": p.name, "path": p.relative_to(_PROJECT_ROOT).as_posix(), "updated": p.stat().st_mtime}
+        for p in _history_files(path)
+    ]
+
+
+@router.post("/character/{character_id}/body-base/history/select")
+async def select_body_base_history(character_id: int, req: BodyBaseHistorySelectRequest) -> dict[str, Any]:
+    """履歴の絵を今の絵に戻す(今の絵は履歴へ移す。どの絵も消えない)。"""
+    character = _load_character(character_id)
+    base = _character_base(character)
+    if base is None:
+        raise HTTPException(status_code=422, detail="このキャラには素体を当てていません。")
+    path = _body_dir(character, base, req.root_name) / f"{base['id']}_{req.part}.png"
+    chosen = next((p for p in _history_files(path) if p.name == req.file), None)
+    if chosen is None:
+        raise HTTPException(status_code=404, detail="その履歴の絵が見つかりません。")
+    _keep_history(path)
+    for suffix in (".png", ".txt", ".check.json"):
+        source = chosen.with_suffix(suffix)
+        if source.is_file():
+            source.replace(path.with_suffix(suffix))
+    # 選んだ絵を今の時刻にする(画面の読み直しで新しい絵として出す)
+    path.touch()
+    return _body_entries(_load_character(character_id), req.root_name)
 
 
 # --- 素体の2Dモデル(body_rig.py。Blender で骨を入れる) ---

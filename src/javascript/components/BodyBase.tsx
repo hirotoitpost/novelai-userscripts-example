@@ -52,7 +52,12 @@ interface Part {
   updated: number | null
   /** 自動チェックの結果(チェックせずに描いた絵は null) */
   auto_check: { passed: boolean; score: number; reasons: string[]; attempts: number } | null
+  /** 描き直す前の絵の枚数(履歴から選び直せる) */
+  history?: number
 }
+
+/** 部位の絵の履歴(描き直す前の絵。新しい順) */
+interface HistoryItem { file: string; path: string; updated: number }
 
 interface CharacterBody {
   base: Base | null
@@ -165,6 +170,9 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zoomKey, setZoomKey] = useState<string | null>(null)
+  // 履歴を開いている部位と、その絵の一覧
+  const [historyKey, setHistoryKey] = useState<string | null>(null)
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([])
   // 編集中の部位(item が null なら、group に足す)
   const [editingPart, setEditingPart] = useState<{ item: SheetItem | null; group: string } | null>(null)
   // 2Dモデル(Blender で骨を入れたもの)
@@ -192,6 +200,28 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       .then(r => (r.ok ? r.json() : null))
       .then(setBody)
       .catch(() => setBody(null))
+  }
+  async function openHistory(key: string) {
+    if (historyKey === key) { setHistoryKey(null); return }
+    setHistoryKey(key)
+    setHistoryItems([])
+    const res = await fetch(`/api/lora-dataset/character/${characterId}/body-base/history?part=${encodeURIComponent(key)}&root_name=${encodeURIComponent(rootName)}`)
+    setHistoryItems(res.ok ? await res.json() : [])
+  }
+  async function pickHistory(key: string, file: string) {
+    setError(null)
+    const res = await fetch(`/api/lora-dataset/character/${characterId}/body-base/history/select`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ part: key, file, root_name: rootName }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      setError(typeof data?.detail === 'string' ? data.detail : `HTTP ${res.status}`)
+      return
+    }
+    setBody(await res.json())
+    setHistoryKey(null)
   }
   function loadOptions() {
     fetch('/api/lora-dataset/body-bases/options').then(r => (r.ok ? r.json() : null)).then(setOptions).catch(() => {})
@@ -635,6 +665,27 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
                     {p.auto_check.passed ? '✓ チェック済み' : `⚠ ${p.auto_check.reasons.join('・')}`}
                     {p.auto_check.attempts > 1 && `(${p.auto_check.attempts}回)`}
                   </span>
+                )}
+                {!!p.history && (
+                  <button type="button" className="sie-edit" disabled={busy} onClick={() => void openHistory(p.key)}
+                    title="描き直す前の絵。選ぶと今の絵と入れ替わります(どの絵も消えません)">
+                    {historyKey === p.key ? '履歴を閉じる' : `履歴 ${p.history}`}
+                  </button>
+                )}
+                {historyKey === p.key && (
+                  <div className="bdb-history">
+                    {historyItems.length === 0 && <span className="lora-hint">読み込み中…</span>}
+                    {historyItems.map(h => (
+                      <figure key={h.file} className="bdb-history-item">
+                        <img src={`${fileUrl(h.path)}&v=${h.updated}`} alt={`${p.label}の履歴`} loading="lazy" />
+                        <figcaption>
+                          {new Date(h.updated * 1000).toLocaleString()}
+                          <button type="button" className="lora-btn lora-btn--secondary" disabled={busy}
+                            onClick={() => void pickHistory(p.key, h.file)}>この絵にする</button>
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
                 )}
                 <details className="bdb-check">
                   <summary>確かめる点</summary>
