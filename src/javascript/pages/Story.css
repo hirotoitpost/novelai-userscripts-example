@@ -958,3 +958,43 @@
 /* 後ろ姿のコマで使うキャラ参照 */
 .mv2-back-ref { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.3rem; }
 .mv2-ref-thumb--small { width: 40px; height: 56px; }
+
+/* コレクションを作る(CollectionMaker) */
+.collection-maker-group {
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.collection-maker-group legend {
+  font-size: 0.9em;
+  padding: 0 4px;
+}
+
+.story-section .collection-maker-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.story-section .collection-maker-check input {
+  width: auto;
+}
+
+.collection-maker-order {
+  display: inline-block;
+  min-width: 1.4em;
+  border-radius: 50%;
+  background: #446;
+  color: #fff;
+  font-size: 0.8em;
+  text-align: center;
+}
+
+.collection-maker-wide {
+  flex: 1;
+}

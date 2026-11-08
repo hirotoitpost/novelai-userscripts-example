@@ -12,6 +12,7 @@ import StoryCharacters, { Character, SceneCharacter } from '../components/StoryC
 import SceneCast from '../components/SceneCast'
 import SceneDirection from '../components/SceneDirection'
 import StoryEditor from '../components/StoryEditor'
+import CollectionMaker from '../components/CollectionMaker'
 import type { DatasetState, Situation } from '../components/DatasetScenes'
 import MangaV2Studio, { MangaV2ComposeSettings } from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
@@ -820,6 +821,15 @@ export default function Story() {
                   </button>
                 )}
               </div>
+            </section>
+
+            <section className="story-section">
+              <h2>1c. または、下着・水着のコレクションを作る</h2>
+              <p className="story-intro">
+                選んだ成人キャラで、テーマ(衣装)ごとの下着・水着コレクションや、ポーズごとのからかいコレクションの台本を作ります。
+                できた物語はそのままコマの生成に進めます(セリフ・タグは編集画面で直せます)。
+              </p>
+              <CollectionMaker apiOrigin={API_ORIGIN} disabled={busy} onCreated={id => void openStory(id)} />
             </section>
 
             <section className="story-section">
