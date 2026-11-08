@@ -125,7 +125,7 @@ def _script_to_edit(scene: dict[str, Any], page_index: int) -> dict[str, Any]:
         "narration": scene.get("narration"),
         "sfx": scene.get("sfx") or [],
         "page_index": page_index,
-        "panel_size": None,
+        "panel_size": scene.get("panel_size"),
         "dialogue": scene.get("dialogue"),
         "characters": [
             {

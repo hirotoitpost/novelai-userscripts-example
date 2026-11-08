@@ -733,6 +733,9 @@ async def create_scripted_story(req: ScriptedStoryRequest) -> StoryResponse:
                 update_scene_negative(conn, row["id"], scene.negative_prompt)
             if scene.absent_tags:
                 update_scene_absent(conn, row["id"], scene.absent_tags)
+            if scene.panel_size:
+                conn.execute("UPDATE story_scenes SET panel_size = ? WHERE id = ?", (scene.panel_size, row["id"]))
+                conn.commit()
             # 効果音は未設定(None)だとAI提案の対象になるので、台本で無しなら空にしておく
             update_scene_sfx(conn, row["id"], [s.strip() for s in scene.sfx or [] if s.strip()])
         update_story_status(conn, story["id"], "written")

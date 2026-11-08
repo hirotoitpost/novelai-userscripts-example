@@ -132,6 +132,8 @@ class Pose:
     side_negative: bool = False
     # 頭が下がる前屈。お尻の上に頭・まとめ髪が出るのを打ち消し、まとめ髪のキャラはそのコマだけ髪を下ろす
     bend: bool = False
+    # コマの生成サイズ。前屈・股のぞきは体が絵の半分ほどなので、縦長だと脚が伸びる → 正方形
+    size: str | None = None
 
 
 # コレクションの正面の立ちポーズ(テーマごとに順に回す)
@@ -153,7 +155,7 @@ BACK_POSES = (
     Pose("forward_bend", "立位体前屈",
          "standing forward bend, bent over, straight legs, legs together, touching toes, hands on floor, from behind, "
          "directly behind, symmetrical, ass focus, head hidden behind legs, face hidden", "full body", "……やわらかいでしょ",
-         face_away=True, side_negative=True, bend=True),
+         face_away=True, side_negative=True, bend=True, size="square"),
 )
 
 TEASE = "teasing, smug, smirk, blush"
@@ -193,7 +195,7 @@ TEASE_POSES = (
          face_away=True),
     Pose("through_legs", "股のぞき(逆さの顔)",
          "bent over, looking through legs, upside-down face, face between legs, looking at viewer, from behind, ass focus, "
-         "hands on knees", "full body", "……さかさまの、わたし", through_legs=True),
+         "hands on knees", "full body", "……さかさまの、わたし", through_legs=True, size="square"),
     Pose("wedgie_stand", "食い込み(立って引き上げる)",
          "standing, from behind, wedgie, pulling own panties up, looking back over shoulder, ass focus", "cowboy shot",
          "……くいこんだ", wedgie=True),
@@ -237,10 +239,11 @@ def _join(*parts: str | None) -> str:
 
 def _scene(
     tags: str, ids: list[int], actions: dict[int, str], outfits: dict[int, str], negative: str,
-    *, narration: str | None = None, line: tuple[int, str] | None = None,
+    *, narration: str | None = None, line: tuple[int, str] | None = None, size: str | None = None,
 ) -> dict[str, Any]:
     dialogue = [{"text": line[1], "speaker_id": line[0]}] if line else []
     return {
+        "panel_size": size,
         "text": f"「{line[1]}」" if line else (narration or "…"),
         "prompt_tags": tags,
         "character_ids": ids,
@@ -305,7 +308,7 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
                 scenes.append(_scene(
                     panel_tags("solo", pose.framing), [cid], {cid: action}, {cid: look(i, theme)}, negative,
                     narration=f"{pose.label}　{characters[i]['name']}",
-                    line=(cid, pose.line) if options.lines else None,
+                    line=(cid, pose.line) if options.lines else None, size=pose.size,
                 ))
     else:
         for n, theme in enumerate(themes):
@@ -327,7 +330,7 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
                               SIDE_NEGATIVE if pose.side_negative else "", HEAD_ABOVE_NEGATIVE if pose.bend else "",
                               HAIR_UP_NEGATIVE if hair_down else ""),
                         narration=f"{label}　{characters[i]['name']}",
-                        line=(cid, pose.line) if options.lines else None,
+                        line=(cid, pose.line) if options.lines else None, size=pose.size,
                     )
                     if hair_down:
                         scene["character_appearances"] = {cid: hair_down}
