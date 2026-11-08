@@ -635,6 +635,14 @@ class SheetItemRequest(BaseModel):
     check: str = Field("", max_length=400)
 
 
+class BodyBaseHistorySelectRequest(BaseModel):
+    """素体の部位の履歴の絵(GET .../body-base/history の file)を今の絵に戻す。"""
+
+    part: str = Field(min_length=1, max_length=80)
+    file: str = Field(min_length=1, max_length=200)
+    root_name: str = "training_data"
+
+
 class BodyBaseSheetRequest(FaceSheetRequest):
     """
     キャラに当てた素体で、部位(body_base.PARTS のキー)を1枚ずつ描く。描いてある部位は描き直す(上書き)。

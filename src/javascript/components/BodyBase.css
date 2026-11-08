@@ -91,3 +91,29 @@
 .bdb-filter { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.4rem; }
 .bdb-filter .lora-input { flex: 1 1 12rem; min-width: 0; }
 .bdb-filter .lora-select { flex: 0 1 auto; width: auto; min-width: 0; }
+
+/* 部位の絵の履歴(描き直す前の絵から選び直す) */
+.bdb-history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.bdb-history-item {
+  margin: 0;
+  width: 96px;
+  font-size: 0.75em;
+}
+
+.bdb-history-item img {
+  width: 96px;
+  height: auto;
+  border-radius: 4px;
+}
+
+.bdb-history-item figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

@@ -45,6 +45,8 @@ class BodyPart:
     negative: str = ""
     # 真後ろから描く部位。選択肢に真後ろのタグ(rear_tags)があれば、そちらを使う
     rear: bool = False
+    # 裸の素体だけで描く部位(乳首のアップ。素体スーツ・水着素体では描かない)
+    nude_only: bool = False
 
 
 GROUPS: tuple[tuple[str, str], ...] = (
@@ -121,6 +123,20 @@ PARTS: tuple[BodyPart, ...] = (
     # 裸の素体でも描く(3Dモデルの乳首の部品の形を見るため。ユーザーの依頼 2026-11-08)
     BodyPart("chest", "胸郭", "upper body, front view, facing viewer, chest, ribcage, arms at sides, expressionless", "trunk",
              "胸郭は卵形で、下へ広がる。胸骨の下端(みぞおち)は肘の高さより少し上"),
+    # 乳首のアップ(3Dモデルの乳首の部品を作るため、いろいろな向きから。裸の素体だけ。ユーザーの依頼 2026-11-08)
+    BodyPart("nipple_front", "乳首(正面)", "close-up, breast close-up, nipple, areola, front view, facing viewer, chest focus, "
+             "head out of frame", "trunk",
+             "乳輪は円形で、乳首はその中心。乳房の頂点よりわずかに外下を向く。左右の乳首の間隔は胸の幅の約半分",
+             nude_only=True),
+    BodyPart("nipple_side", "乳首(側面)", "close-up, breast close-up, nipple, areola, from side, side view, profile, "
+             "chest focus, head out of frame", "trunk",
+             "横から見ると乳首は乳輪から前へ突き出す(陥没なら乳輪の面より奥)。乳輪はわずかに盛り上がる", nude_only=True),
+    BodyPart("nipple_three_quarter", "乳首(斜め)", "close-up, breast close-up, nipple, areola, three-quarter view, "
+             "chest focus, head out of frame", "trunk",
+             "斜めから見ると乳輪は楕円に見え、乳首の高さと乳輪の盛り上がりが分かる", nude_only=True),
+    BodyPart("nipple_below", "乳首(下から)", "close-up, breast close-up, nipple, areola, from below, underboob, "
+             "chest focus, head out of frame", "trunk",
+             "下から見ると乳房の下縁(乳房下溝)の丸みと、乳首の向き(わずかに上・外)が分かる", nude_only=True),
     BodyPart("abdomen", "腹部", "midriff, navel, abdomen, cropped torso, front view", "trunk",
              "臍は腸骨稜(骨盤の上縁)のやや上。腹直筋は臍の上下に分かれて見える。脇腹は外腹斜筋のふくらみ", nude=False),
     BodyPart("upper_back", "背部(肩甲骨・脊柱)", f"upper body, {_FROM_BEHIND}, back, shoulder blades, spine", "trunk",
@@ -256,6 +272,13 @@ def body_tags(base: dict[str, Any], options: Options, *, modest: bool = False, r
     return join_tags(*tags, base.get("extra_tags"))
 
 
+_WEIGHT_RE = re.compile(r"^-?\d+(\.\d+)?::|::$")
+
+
+def _plain_weight(tag: str) -> str:
+    return _WEIGHT_RE.sub("", tag.strip()).strip().lower()
+
+
 def clean_extra(text: str, *, nude: bool = False) -> list[str]:
     """
     素体の「足すタグ」に入れられないタグ(性的な場面のタグ)。素体は体の形を見るためのもので、性的な絵ではない。
@@ -264,7 +287,8 @@ def clean_extra(text: str, *, nude: bool = False) -> list[str]:
     """
     if nude:
         allowed = {t.lower() for t in content_guard.words("body_base.nude_detail_tags")}
-        text = ", ".join(t for t in split_tags(text) if t.strip().lower() not in allowed)
+        # 強調・抑制の書き方(1.5::puffy nipples::)の外側は見ずに比べる
+        text = ", ".join(t for t in split_tags(text) if _plain_weight(t) not in allowed)
     return content_guard.find("scene.sexual_tags", text or "")
 
 
