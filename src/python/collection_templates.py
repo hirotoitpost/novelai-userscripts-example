@@ -57,6 +57,14 @@ HEAD_ABOVE_NEGATIVE = (
 # まとめ髪(ポニーテール・お団子)は前屈でお尻の上に出やすいので、そのコマだけ髪を下ろす
 _HAIR_UP_WORDS = {"ponytail", "ponytails", "bun", "buns", "updo", "chignon", "topknot"}
 HAIR_UP_NEGATIVE = "ponytail, high ponytail, hair bun, updo, hair tie"
+# 前屈で床へ垂れる髪(長い髪のキャラだけ。短い髪のキャラに付けるとロングヘアになる)
+HANGING_HAIR = "hair hanging down to floor between hands"
+_LONG_HAIR_WORDS = ("long hair", "very long hair", "absurdly long hair")
+
+
+def has_long_hair(appearance: str | None) -> bool:
+    tags = {t.strip().lower() for t in (appearance or "").split(",")}
+    return any(word in tags for word in _LONG_HAIR_WORDS)
 
 
 def hair_down_appearance(appearance: str | None) -> str | None:
@@ -143,8 +151,7 @@ BACK_POSES = (
     # 立位体前屈: 膝を伸ばして足をそろえ(足首を交差させ)、腰から前に倒れて手を床につく。頭は脚の向こうで顔は見えない
     Pose("forward_bend", "立位体前屈",
          "standing forward bend, bent over, straight legs, legs together, touching toes, hands on floor, from behind, "
-         "directly behind, symmetrical, ass focus, head hidden behind legs, face hidden, "
-         "hair hanging down to floor between hands", "full body", "……やわらかいでしょ",
+         "directly behind, symmetrical, ass focus, head hidden behind legs, face hidden", "full body", "……やわらかいでしょ",
          face_away=True, side_negative=True, bend=True),
 )
 
@@ -308,9 +315,13 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
                 front = STAND_POSES[(n + i * 2) % len(STAND_POSES)]
                 back = BACK_POSES[(n + i) % len(BACK_POSES)]
                 for pose, label in ((front, theme.name), (back, f"{theme.name}・後ろ")):
-                    hair_down = hair_down_appearance(characters[i].get("appearance_tags")) if pose.bend else None
+                    appearance = characters[i].get("appearance_tags")
+                    hair_down = hair_down_appearance(appearance) if pose.bend else None
+                    action = pose.action
+                    if pose.bend and (hair_down or has_long_hair(appearance)):
+                        action = _join(action, HANGING_HAIR)
                     scene = _scene(
-                        panel_tags("solo", pose.framing), [cid], {cid: pose.action}, {cid: look(i, theme)},
+                        panel_tags("solo", pose.framing), [cid], {cid: action}, {cid: look(i, theme)},
                         _join(base_negative, NO_WEDGIE, HEAD_BETWEEN_LEGS, FACE_AWAY_NEGATIVE if pose.face_away else "",
                               SIDE_NEGATIVE if pose.side_negative else "", HEAD_ABOVE_NEGATIVE if pose.bend else "",
                               HAIR_UP_NEGATIVE if hair_down else ""),

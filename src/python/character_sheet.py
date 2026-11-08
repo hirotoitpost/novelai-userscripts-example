@@ -418,6 +418,8 @@ def split_body(appearance: str) -> tuple[str, str]:
 _FACE_ONLY_WORDS = {
     "face", "eyes", "eye", "eyelashes", "eyebrows", "eyeliner", "eyeshadow", "pupils", "iris", "lips", "lipstick",
     "mouth", "nose", "blush", "freckles", "jitome", "tsurime", "tareme", "makeup", "expression", "smile", "glasses",
+    # 前髪は後ろからは見えない。残すと正面向きに引っ張られる(blunt bangs で後ろ姿の候補がこちらを向いた)
+    "bangs",
 }
 
 
