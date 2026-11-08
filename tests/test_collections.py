@@ -69,9 +69,13 @@ def test_wedgie_only_in_wedgie_poses_and_content_negatives_everywhere() -> None:
         wedgie_pose = "wedgie" in ",".join(s["character_actions"].values())
         assert ("wedgie" in negative) is not wedgie_pose
         assert "explicit" in s["prompt_tags"]
-    # 顔なしの後ろ姿は、振り向きを打ち消す
+    # 顔なしの後ろ姿は、振り向きを打ち消し、頭は枠の外
     away = next(s for s in scenes if (s["narration"] or "").startswith("四つんばい(背面・顔なし)"))
-    assert "looking back" in away["negative_prompt"]
+    assert "looking back" in away["negative_prompt"] and "head out of frame" in away["character_actions"][1]
+    # 脚の間の頭は、股のぞきのポーズだけ
+    for s in scenes[1:-1]:
+        through = (s["narration"] or "").startswith("股のぞき")
+        assert ("head between legs" in s["negative_prompt"]) is not through
 
 
 def test_collection_options_pick_poses_themes_body_and_style() -> None:
@@ -83,10 +87,12 @@ def test_collection_options_pick_poses_themes_body_and_style() -> None:
     assert all(not s["dialogue"] for s in scenes)
     assert "curvy" not in scenes[1]["character_outfits"][1]
     normal = build_collection(PAIR, CollectionOptions(kind="swimsuit", themes=["ハイレグ"]))["scenes"]
-    # みんな + テーマの見出し + 2人 + みんな。体つきの既定はすらっと
-    assert len(normal) == 5 and normal[1]["character_ids"] == [] and "slender" in normal[2]["character_outfits"][1]
+    # みんな + テーマの見出し + 2人×(正面・背面) + みんな。体つきの既定はすらっと
+    assert len(normal) == 7 and normal[1]["character_ids"] == [] and "slender" in normal[2]["character_outfits"][1]
+    assert "front view" in normal[2]["character_actions"][1] and "from behind" in normal[3]["character_actions"][1]
+    assert normal[3]["narration"].startswith("ハイレグ・後ろ")
     # キャラごとに違う衣装
-    assert normal[2]["character_outfits"][1] != normal[3]["character_outfits"][2]
+    assert normal[2]["character_outfits"][1] != normal[4]["character_outfits"][2]
     with pytest.raises(ValueError):
         build_collection(PAIR, CollectionOptions(kind="tease_lingerie", poses=["nope"]))
 
@@ -97,7 +103,7 @@ def test_api_makes_a_story_only_with_adult_characters(client: TestClient) -> Non
     res = client.post("/api/collections", json={"kind": "lingerie", "character_ids": [adult], "themes": ["白レース"]})
     assert res.status_code == 200, res.text
     story = res.json()
-    assert story["n_scenes"] == 4 and story["title"] == "しらねの下着コレクション"
+    assert story["n_scenes"] == 5 and story["title"] == "しらねの下着コレクション"
     # 年齢を入れていないキャラ・未成年は作れない
     unknown_age = _character("だれか", None)
     res = client.post("/api/collections", json={"kind": "swimsuit", "character_ids": [adult, unknown_age]})
