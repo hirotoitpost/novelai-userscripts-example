@@ -92,6 +92,7 @@ export default function CharacterSheetEditor({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const backFileRef = useRef<HTMLInputElement>(null)
 
   // 別のキャラに切り替えたら、書きかけの内容は捨てる
   useEffect(() => {
@@ -222,14 +223,14 @@ export default function CharacterSheetEditor({
     }
   }
 
-  async function uploadReference(file: File) {
+  async function uploadReference(file: File, view: 'front' | 'back' = 'front') {
     if (!file.type.startsWith('image/')) return
     setError(null)
     try {
       const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${character.id}/reference`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: await readFileAsDataURL(file) }),
+        body: JSON.stringify({ image: await readFileAsDataURL(file), view }),
       })
       if (!res.ok) throw new Error(await errorDetail(res))
       onSaved()
@@ -238,9 +239,11 @@ export default function CharacterSheetEditor({
     }
   }
 
-  async function removeReference() {
-    if (!window.confirm(`${character.name}の参照画像を外しますか？(画像ファイルは残ります)`)) return
-    await fetch(`${apiOrigin}/api/manga-v2/characters/${character.id}/reference`, { method: 'DELETE' }).catch(() => {})
+  async function removeReference(view: 'front' | 'back' = 'front') {
+    const what = view === 'back' ? '後ろ姿の参照画像' : '参照画像'
+    if (!window.confirm(`${character.name}の${what}を外しますか？(画像ファイルは残ります)`)) return
+    await fetch(`${apiOrigin}/api/manga-v2/characters/${character.id}/reference?view=${view}`, { method: 'DELETE' })
+      .catch(() => {})
     onSaved()
   }
 
@@ -348,6 +351,52 @@ export default function CharacterSheetEditor({
                 setDraft(({ seed: _seed, ...rest }) => rest)
                 onSaved()
               }}
+            />
+          )}
+        </div>
+      )}
+
+      {showReference && (
+        <div className={classes.field}>
+          <span className={classes.label}>
+            後ろ姿の参照画像(from behind・facing away などの後ろ姿のコマで使います。無ければ正面の参照を弱めて使います)
+          </span>
+          {character.back_reference_image_path && fileUrl && (
+            <img className="chards-ref" src={fileUrl(character.back_reference_image_path)} alt={`${character.name}の後ろ姿の参照画像`} />
+          )}
+          <input
+            ref={backFileRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file) void uploadReference(file, 'back')
+              e.target.value = ''
+            }}
+          />
+          <div className={classes.actions}>
+            <button type="button" className={classes.button} onClick={() => backFileRef.current?.click()} disabled={busy}>
+              {character.back_reference_image_path ? '後ろ姿の参照を差し替え' : '後ろ姿の参照を登録'}
+            </button>
+            {character.back_reference_image_path && (
+              <button type="button" className={classes.button} onClick={() => void removeReference('back')} disabled={busy}>
+                外す
+              </button>
+            )}
+          </div>
+          {fileUrl && (
+            <ReferenceCandidates
+              apiOrigin={apiOrigin}
+              characterId={character.id}
+              fileUrl={fileUrl}
+              disabled={busy}
+              defaultStyle={candidateStyle}
+              buttonClass={classes.button}
+              labelClass={classes.label}
+              errorClass={classes.error}
+              view="back"
+              onChosen={onSaved}
             />
           )}
         </div>

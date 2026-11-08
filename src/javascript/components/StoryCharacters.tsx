@@ -13,6 +13,8 @@ export interface Character {
   notes: string | null
   created_at: string
   reference_image_path?: string | null
+  /** 後ろ姿のコマ(from behind・facing away など)で使うキャラ参照 */
+  back_reference_image_path?: string | null
   trigger_word?: string | null
   outfit_tags?: string | null
   style_tags?: string | null

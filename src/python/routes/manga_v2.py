@@ -186,6 +186,7 @@ from ..models import (
 )
 from .. import app_settings
 from ..character_sheet import (
+    drop_face_tags,
     safe_negative,
     character_prompt_tags,
     characters_negative,
@@ -674,20 +675,71 @@ async def generate_reference_candidates(
         raise HTTPException(status_code=404, detail="キャラが見つかりません。")
     if not character_prompt_tags(character):
         raise HTTPException(status_code=400, detail="キャラシートに容姿のタグがありません。")
+    if req.view == "back":
+        back = back_view_setup(character, req.back_reference_strength)
+        if req.style == "illustration":
+            return await make_illustration_candidates(client, back.character, req.count, model=req.model, back=back)
+        return await make_reference_candidates(
+            client.api_key, back.character, req.count, color=req.color, model=req.model, back=back
+        )
     if req.style == "illustration":
         return await make_illustration_candidates(client, character, req.count, model=req.model)
     return await make_reference_candidates(client.api_key, character, req.count, color=req.color, model=req.model)
 
 
+# 後ろ姿の候補で、振り向いて顔を見せないよう打ち消すタグ
+_BACK_CANDIDATE_NEGATIVE = "looking back, looking at viewer, looking over shoulder, face, eyes, profile, from side, front view"
+
+
+class BackViewSetup:
+    """後ろ姿の候補の組み立て: 顔だけのタグを外したキャラ、構図のタグ、足すネガティブ、弱めた正面の参照。"""
+
+    def __init__(self, character: dict[str, Any], tags: str, reference: CharacterReferenceInput | None) -> None:
+        self.character = character
+        self.tags = tags
+        self.negative = _BACK_CANDIDATE_NEGATIVE
+        self.reference = reference
+
+
+def back_view_setup(character: dict[str, Any], strength: float) -> BackViewSetup:
+    """キャラシートから後ろ姿の候補の組み立てを作る。正面の参照画像があれば strength に弱めて使う(0 で使わない)。"""
+    front = character.get("reference_image_path")
+    reference = None
+    if strength > 0 and front and (_PROJECT_ROOT / front).is_file():
+        reference = CharacterReferenceInput(
+            image_b64=reference_image_b64((_PROJECT_ROOT / front).read_bytes()), strength=strength, fidelity=1.0
+        )
+    faceless = {**character, "appearance_tags": drop_face_tags(character.get("appearance_tags"))}
+    return BackViewSetup(faceless, str(app_settings.get("reference.back_candidate_tags")), reference)
+
+
 async def make_illustration_candidates(
-    client: AsyncNovelAI, character: dict[str, Any], count: int, *, model: str | None = None
+    client: AsyncNovelAI,
+    character: dict[str, Any],
+    count: int,
+    *,
+    model: str | None = None,
+    back: BackViewSetup | None = None,
 ) -> list[dict[str, Any]]:
     """
     漫画のコマ用ではなく、キャラ別データセットと同じ組み立て(SDK・キャラシートの画風・基本のネガティブ)で
     参照画像の候補を作る。画像生成ページやデータセットの絵に近い候補になる。全年齢の立ち絵にするのは同じ。
+    back があれば後ろ姿の候補にする(顔だけのタグを外し、後ろ向きの構図と振り向きを打ち消すネガティブ)。
     """
-    prompt = join_tags(sheet_prompt(character), app_settings.get("reference.candidate_tags"))
-    cfg = GenConfig(output_root=_CANDIDATE_DIR, model=model or _REFERENCE_MODEL, negative_prompt=sheet_negative(character))
+    from novelai.types import CharacterReference
+
+    layout = back.tags if back else app_settings.get("reference.candidate_tags")
+    prompt = join_tags(sheet_prompt(character), layout)
+    negative = sheet_negative(character, extra=back.negative if back else None)
+    refs = None
+    if back and back.reference:
+        refs = [CharacterReference(
+            image=base64.b64decode(back.reference.image_b64), type="character", fidelity=1.0,
+            strength=back.reference.strength,
+        )]
+    cfg = GenConfig(
+        output_root=_CANDIDATE_DIR, model=model or _REFERENCE_MODEL, negative_prompt=negative, character_references=refs
+    )
     _CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
     candidates: list[dict[str, Any]] = []
     for _ in range(count):
@@ -700,26 +752,38 @@ async def make_illustration_candidates(
 
 
 async def make_reference_candidates(
-    api_key: str, character: dict[str, Any], count: int, *, color: bool = True, model: str | None = None
+    api_key: str,
+    character: dict[str, Any],
+    count: int,
+    *,
+    color: bool = True,
+    model: str | None = None,
+    back: BackViewSetup | None = None,
 ) -> list[dict[str, Any]]:
     """
     キャラシートから参照画像の候補を count 枚生成して保存し、{path, seed} の並びを返す。
     参照画像は全年齢の立ち絵にする(露出のある候補が混じらないよう、ネガティブで打ち消す)。
+    back があれば後ろ姿の候補にする(正面の参照は弱めて使う)。
     """
     tags = character_prompt_tags(character)
+    layout = back.tags if back else app_settings.get("reference.candidate_tags")
     _CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
     candidates: list[dict[str, Any]] = []
     for _ in range(count):
         seed = random.randrange(4294967296)
         image = await generate_image_v5(
             api_key,
-            build_panel_prompt(app_settings.get("reference.candidate_tags"), color=color, complexity=None),
-            join_tags(build_panel_negative(None, color=color), safe_negative(), character.get("negative_tags")),
+            build_panel_prompt(layout, color=color, complexity=None),
+            join_tags(
+                build_panel_negative(None, color=color), safe_negative(), character.get("negative_tags"),
+                back.negative if back else None,
+            ),
             model=model or _REFERENCE_MODEL,
             width=832,
             height=1216,
             seed=seed,
             character_tags=[tags],
+            character_reference=back.reference if back else None,
         )
         filename = f"char{character['id']}_{seed}_{uuid4().hex[:6]}.png"
         (_CANDIDATE_DIR / filename).write_bytes(image)

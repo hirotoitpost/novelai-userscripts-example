@@ -35,6 +35,8 @@ from .db import user_files
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # バックエンドが返す outputs/ のパスの基準(multi では MCP サーバーの利用者のフォルダ。db.UserPath)
 _USER_ROOT = user_files()
+# manga_reference_candidates で描いた候補(キャラID → [{path, seed}])。manga_pick_reference_candidate で番号から選ぶ
+_reference_candidates: dict[int, list[dict[str, Any]]] = {}
 # バックエンドは既定で http、dev-ctl.ps1 -Https なら LAN 用の証明書(scripts/make_lan_cert.py)で https で動く
 _CA_FILE = _PROJECT_ROOT / "data" / "certs" / "ca.crt"
 _SCHEME_FILE = _PROJECT_ROOT / "data" / "run" / "backend.scheme"
@@ -400,6 +402,46 @@ def register_manga_tools(mcp: MCPServer) -> None:
         scene_id = await _scene_id(None, story_id, scene_index)
         await _call("PUT", f"/api/manga-v2/characters/{character_id}/reference", {"scene_id": scene_id, "view": view})
         return {"character_id": character_id, "view": view, "scene_id": scene_id}
+
+    @mcp.tool()
+    async def manga_reference_candidates(
+        character_id: int, view: str = "front", count: int = 4, style: str = "manga", back_reference_strength: float = 0.35
+    ) -> list[TextContent | ImageContent]:
+        """
+        キャラシートから参照画像の候補を count 枚(1〜4)描いて、番号付きの一覧で見る。NovelAI の Anlas を使う。
+        view="back" なら後ろ姿のコマ用の候補(顔だけのタグを外し、後ろ向きで描く。正面の参照を
+        back_reference_strength に弱めて使い、髪型・服を寄せる)。style は manga(コマと同じ)か illustration。
+        気に入った番号を manga_pick_reference_candidate で登録する。
+        """
+        if view not in ("front", "back"):
+            raise ValueError("view は front か back にしてください")
+        made: list[dict[str, Any]] = []
+        for _ in range(max(1, min(count, 4))):
+            made += await _call(
+                "POST", f"/api/manga-v2/characters/{character_id}/reference-candidates",
+                {"count": 1, "style": style, "view": view, "back_reference_strength": back_reference_strength},
+                timeout=300,
+            )
+        _reference_candidates[character_id] = made
+        lines = [f"{i}: {c['path']} (seed {c['seed']})" for i, c in enumerate(made, start=1)]
+        grid = _face_grid([{"path": c["path"], "label": str(i)} for i, c in enumerate(made, start=1)], 384)
+        return [TextContent(type="text", text="\n".join(lines)), grid]
+
+    @mcp.tool()
+    async def manga_pick_reference_candidate(character_id: int, number: int, view: str = "front") -> dict[str, Any]:
+        """
+        manga_reference_candidates で描いた候補の番号(1始まり)を、キャラの参照画像にする。
+        view="front" なら基準シードにも入れる。view="back" なら後ろ姿のコマ用の参照にする(基準シードは変えない)。
+        """
+        made = _reference_candidates.get(character_id) or []
+        if not 1 <= number <= len(made):
+            raise ValueError("先に manga_reference_candidates で候補を描いてください(番号は1始まり)")
+        picked = made[number - 1]
+        body: dict[str, Any] = {"candidate_path": picked["path"], "view": view}
+        if view == "front":
+            body["seed"] = picked["seed"]
+        await _call("PUT", f"/api/manga-v2/characters/{character_id}/reference", body)
+        return {"character_id": character_id, "view": view, "path": picked["path"]}
 
     @mcp.tool()
     async def manga_create_character(
