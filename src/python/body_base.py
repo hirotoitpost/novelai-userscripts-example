@@ -10,7 +10,7 @@
 - swimsuit(水着素体): 無地の水着(上下のセパレート。タグは開発管理者の設定)。素体スーツと同じく全年齢で、どのキャラにも使える
   (腕・脚・肩の形まで見え、漫画の水着の場面にも使える)。
 - nude(裸の素体): 乳首は描き、性器は描かない(タグはコンテンツガードの body_base.nude_*)。成人キャラだけに使える(nude_block_reason)。
-  胸・腹・骨盤・大腿の寄りの絵は描かない(全身図で確かめる。部位の nude が False のもの)。
+  腹・骨盤・大腿の寄りの絵は描かない(全身図で確かめる。部位の nude が False のもの)。胸のアップは 3D の乳首の部品のために描く。
 
 部位は解剖学の区分(全身・頭頸部・体幹・上肢・下肢)で並べ、1枚ごとに、人体の構造として確かめる点(check)を添える。
 部位はコードの既定(PARTS)に、DB(sheet_items の sheet='body')の上書き(名前・タグ・ネガティブ・サイズ・確かめる点)と、
@@ -39,7 +39,7 @@ class BodyPart:
     # 人体の構造として確かめる点(画面に出す)
     check: str
     size: str = "square"
-    # 裸の素体でも描くか(胸・腹・骨盤・大腿の寄りは描かない)
+    # 裸の素体でも描くか(腹・骨盤・大腿の寄りは描かない。胸のアップは描く)
     nude: bool = True
     # この部位だけに足すネガティブ
     negative: str = ""
@@ -118,8 +118,9 @@ PARTS: tuple[BodyPart, ...] = (
     BodyPart("neck_shoulder", "頸部・肩(鎖骨)", "upper body, front view, facing viewer, collarbone, neck, shoulders, expressionless",
              "head",
              "胸鎖乳突筋が耳の後ろから鎖骨の内端へ斜めに走る。鎖骨はほぼ水平でゆるいS字。首の太さは顔の幅の半分強", nude=False),
+    # 裸の素体でも描く(3Dモデルの乳首の部品の形を見るため。ユーザーの依頼 2026-11-08)
     BodyPart("chest", "胸郭", "upper body, front view, facing viewer, chest, ribcage, arms at sides, expressionless", "trunk",
-             "胸郭は卵形で、下へ広がる。胸骨の下端(みぞおち)は肘の高さより少し上", nude=False),
+             "胸郭は卵形で、下へ広がる。胸骨の下端(みぞおち)は肘の高さより少し上"),
     BodyPart("abdomen", "腹部", "midriff, navel, abdomen, cropped torso, front view", "trunk",
              "臍は腸骨稜(骨盤の上縁)のやや上。腹直筋は臍の上下に分かれて見える。脇腹は外腹斜筋のふくらみ", nude=False),
     BodyPart("upper_back", "背部(肩甲骨・脊柱)", f"upper body, {_FROM_BEHIND}, back, shoulder blades, spine", "trunk",
@@ -255,11 +256,15 @@ def body_tags(base: dict[str, Any], options: Options, *, modest: bool = False, r
     return join_tags(*tags, base.get("extra_tags"))
 
 
-def clean_extra(text: str) -> list[str]:
+def clean_extra(text: str, *, nude: bool = False) -> list[str]:
     """
     素体の「足すタグ」に入れられないタグ(性的な場面のタグ)。素体は体の形を見るためのもので、性的な絵ではない。
-    裸は種類(nude)で決めるので、足すタグには書かせない。
+    裸は種類(nude)で決めるので、足すタグには書かせない。ただし裸の素体では、乳首・乳輪の形と妊娠のタグ
+    (ガードの body_base.nude_detail_tags。完全一致)は入れてよい(3Dモデルの乳首の部品を形ごとに作るため)。
     """
+    if nude:
+        allowed = {t.lower() for t in content_guard.words("body_base.nude_detail_tags")}
+        text = ", ".join(t for t in split_tags(text) if t.strip().lower() not in allowed)
     return content_guard.find("scene.sexual_tags", text or "")
 
 

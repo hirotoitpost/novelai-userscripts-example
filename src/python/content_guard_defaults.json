@@ -322,6 +322,15 @@
       "previous": ["nude, completely nude, barbie doll anatomy, featureless breasts, featureless crotch, no nipples"]
     },
     {
+      "key": "body_base.nude_detail_tags",
+      "group": "素体",
+      "label": "裸の素体の足すタグに入れてよい体のタグ",
+      "description": "裸の素体(成人キャラだけ)の「足すタグ」に、性的な場面のタグでも入れてよい体の形のタグ(3Dモデルの乳首の部品を、形ごと・体の状態ごとに作るため)。完全一致。性器のタグはここに入れない(性器は描かない)。",
+      "kind": "words",
+      "match": "exact",
+      "value": ["nipples", "puffy nipples", "inverted nipples", "large nipples", "small nipples", "dark nipples", "pink nipples", "areolae", "large areolae", "small areolae", "dark areolae", "puffy areolae", "pregnant", "pregnant belly"]
+    },
+    {
       "key": "body_base.nude_negative",
       "group": "素体",
       "label": "裸の素体のネガティブ",
