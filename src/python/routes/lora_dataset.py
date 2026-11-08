@@ -1043,7 +1043,7 @@ def _check_body_base(req: BodyBaseSaveRequest) -> None:
         value = getattr(req, field)
         if value and value not in options[field]:
             raise HTTPException(status_code=422, detail=f"{body_base.FIELD_LABELS[field]}の選択肢に無い値です: {value}")
-    found = body_base.clean_extra(req.extra_tags)
+    found = body_base.clean_extra(req.extra_tags, nude=req.kind == "nude")
     if found:
         raise HTTPException(
             status_code=422,

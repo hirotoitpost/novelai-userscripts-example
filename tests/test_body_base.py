@@ -45,8 +45,8 @@ def test_parts_follow_anatomical_regions() -> None:
     assert {p.group for p in body_base.PARTS} == groups
     assert len(body_base.ITEMS) == len(body_base.PARTS)  # キーが重ならない
     assert all(p.check for p in body_base.PARTS)
-    # 裸の素体では、胸・腹・骨盤・大腿の寄りを描かない
-    assert {p.key for p in body_base.PARTS if not p.nude} == {"neck_shoulder", "chest", "abdomen", "pelvis", "thigh_knee"}
+    # 裸の素体では、腹・骨盤・大腿の寄りを描かない(胸のアップは 3D の乳首の部品のために描く)
+    assert {p.key for p in body_base.PARTS if not p.nude} == {"neck_shoulder", "abdomen", "pelvis", "thigh_knee"}
 
 
 def test_face_tags_drop_body_and_skin() -> None:
@@ -149,6 +149,14 @@ def test_bad_values_and_sexual_extra_tags_are_refused(client: TestClient) -> Non
     assert client.post("/api/lora-dataset/body-bases", json={"name": "x", "build": "huge"}).status_code == 422
     assert client.post("/api/lora-dataset/body-bases", json={"name": "x", "extra_tags": "nipples"}).status_code == 422
     assert client.post("/api/lora-dataset/body-bases", json={"name": "x", "kind": "nude", "extra_tags": "pussy"}).status_code == 422
+    # 裸の素体だけは、乳首・乳輪の形と妊娠のタグを入れてよい(性器は相変わらず入れられない)
+    ok = client.post("/api/lora-dataset/body-bases", json={
+        "name": "形", "kind": "nude", "extra_tags": "puffy nipples, pregnant, large areolae, dark areolae"})
+    assert ok.status_code == 200, ok.text
+    assert client.post("/api/lora-dataset/body-bases", json={
+        "name": "形2", "kind": "nude", "extra_tags": "inverted nipples, pussy"}).status_code == 422
+    assert client.post("/api/lora-dataset/body-bases", json={
+        "name": "形3", "kind": "swimsuit", "extra_tags": "puffy nipples"}).status_code == 422
     _base(client)
     assert client.post("/api/lora-dataset/body-bases", json={"name": "素体"}).status_code == 409
 
@@ -167,9 +175,10 @@ def test_nude_base_only_for_adults(client: TestClient, tmp_path: Path) -> None:
 
     assigned = client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": base["id"]}).json()
     assert assigned["nude_allowed"] is True
-    assert not {p["key"]: p for p in assigned["parts"]}["chest"]["available"]
-    # 胸などの寄りは描かない
-    assert client.post(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"keys": ["chest"]}).status_code == 422
+    assert {p["key"]: p for p in assigned["parts"]}["chest"]["available"]
+    assert not {p["key"]: p for p in assigned["parts"]}["pelvis"]["available"]
+    # 腹・骨盤などの寄りは描かない(胸のアップは描く)
+    assert client.post(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"keys": ["pelvis"]}).status_code == 422
 
     res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"keys": ["front"]})
     assert res.text.count('"status": "ok"') == 1
