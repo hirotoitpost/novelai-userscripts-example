@@ -44,6 +44,7 @@ from .routes.push import router as push_router
 from .routes.series import router as series_router
 from .routes.story import router as story_router
 from .routes.story_edit import router as story_edit_router
+from .routes.collections import router as collections_router
 from .routes.user import router as user_router
 from .routes.works import router as works_router
 from .routes.writer import router as writer_router
@@ -154,6 +155,7 @@ app.include_router(series_router)
 app.include_router(works_router)
 app.include_router(story_router)
 app.include_router(story_edit_router)
+app.include_router(collections_router)
 app.include_router(user_router)
 app.include_router(writer_router)
 
