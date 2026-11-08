@@ -97,10 +97,23 @@ def test_collection_options_pick_poses_themes_body_and_style() -> None:
     bend = [s for s in backs if "standing forward bend" in s["character_actions"][1]]
     assert len(bend) == 1 and "head between legs" in bend[0]["negative_prompt"] and "looking back" in bend[0]["negative_prompt"]
     assert "three-quarter view" in bend[0]["negative_prompt"] and "directly behind" in bend[0]["character_actions"][1]
+    # 頭がお尻の上に出る絵を打ち消す。まとめ髪でないキャラは容姿をそのまま使う
+    assert "head above hips" in bend[0]["negative_prompt"] and "character_appearances" not in bend[0]
     # キャラごとに違う衣装
     assert normal[2]["character_outfits"][1] != normal[4]["character_outfits"][2]
     with pytest.raises(ValueError):
         build_collection(PAIR, CollectionOptions(kind="tease_lingerie", poses=["nope"]))
+
+
+def test_forward_bend_lets_tied_hair_down_for_that_panel_only() -> None:
+    akane = {"id": 3, "name": "あかね", "appearance_tags": "1girl, silver hair, very long hair, high ponytail, yellow eyes"}
+    scenes = build_collection([akane], CollectionOptions(kind="swimsuit"))["scenes"]
+    bend = next(s for s in scenes if "standing forward bend" in ",".join(s["character_actions"].values()))
+    assert bend["character_appearances"][3] == "1girl, silver hair, very long hair, yellow eyes, hair down, hair hanging down"
+    assert "hair tie" in bend["negative_prompt"]
+    # ほかのコマはキャラシートの容姿のまま
+    assert sum("character_appearances" in s for s in scenes) == 1
+    ScriptedStoryRequest(title="x", scenes=scenes)
 
 
 def test_api_makes_a_story_only_with_adult_characters(client: TestClient) -> None:
