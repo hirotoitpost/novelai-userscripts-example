@@ -114,6 +114,12 @@ def test_forward_bend_lets_tied_hair_down_for_that_panel_only() -> None:
     # ほかのコマはキャラシートの容姿のまま
     assert sum("character_appearances" in s for s in scenes) == 1
     ScriptedStoryRequest(title="x", scenes=scenes)
+    # 床へ垂れる髪は長い髪のキャラだけ(ボブに付けるとロングヘアになる)
+    assert "hair hanging down to floor" in bend["character_actions"][3]
+    bob = {"id": 4, "name": "こはく", "appearance_tags": "1girl, white hair, short hair, bob cut"}
+    bob_bend = next(s for s in build_collection([bob], CollectionOptions(kind="lingerie"))["scenes"]
+                    if "standing forward bend" in ",".join(s["character_actions"].values()))
+    assert "hair hanging down" not in bob_bend["character_actions"][4] and "character_appearances" not in bob_bend
 
 
 def test_api_makes_a_story_only_with_adult_characters(client: TestClient) -> None:

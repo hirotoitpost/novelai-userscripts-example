@@ -52,6 +52,8 @@ def test_drop_face_tags_keeps_hair_and_body() -> None:
     assert drop_face_tags(SHEET) == "1girl, silver hair, high ponytail, hair between eyes"
     assert drop_face_tags("1girl, 1.2::light purple eyes::, jitome, long eyelashes, large breasts") == "1girl, large breasts"
     assert drop_face_tags("") == ""
+    # 前髪は後ろからは見えないので外す(hair を含む髪のタグは残す)
+    assert drop_face_tags("white hair, bob cut, blunt bangs, swept bangs, hair between eyes") == "white hair, bob cut, hair between eyes"
 
 
 def test_back_view_cast_drops_face_tags_only_when_facing_away() -> None:
