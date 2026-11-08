@@ -953,6 +953,9 @@ class ScriptSceneInput(BaseModel):
     negative_prompt: Optional[str] = Field(None, max_length=4000)
     # このコマに出てはいけない物(まだもらっていない小物など。英語タグ)。ネガティブに足し、コマの確かめで見る
     absent_tags: Optional[str] = Field(None, max_length=1000)
+    # コマの生成サイズ(縦長 832×1216 / 横長 1216×832 / 正方形 1024×1024)。null なら入る枠の形から自動。
+    # 前屈のように体が絵の半分ほどしか占めない構図は、縦長だと脚が伸びるので正方形にする
+    panel_size: Optional[Literal["portrait", "landscape", "square"]] = None
 
 
 class ScriptedStoryRequest(BaseModel):

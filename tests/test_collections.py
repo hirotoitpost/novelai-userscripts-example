@@ -99,6 +99,10 @@ def test_collection_options_pick_poses_themes_body_and_style() -> None:
     assert "three-quarter view" in bend[0]["negative_prompt"] and "directly behind" in bend[0]["character_actions"][1]
     # 頭がお尻の上に出る絵を打ち消す。まとめ髪でないキャラは容姿をそのまま使う
     assert "head above hips" in bend[0]["negative_prompt"] and "character_appearances" not in bend[0]
+    # 前屈・股のぞきは正方形で描く(縦長だと脚が伸びる)。ほかのコマは枠の形から自動
+    assert bend[0]["panel_size"] == "square" and backs[0]["panel_size"] is None
+    tease = build_collection(PAIR[:1], CollectionOptions(kind="tease_swimsuit", poses=["through_legs", "lean_lips"]))["scenes"]
+    assert [s["panel_size"] for s in tease[1:-1]] == ["square", None]
     # キャラごとに違う衣装
     assert normal[2]["character_outfits"][1] != normal[4]["character_outfits"][2]
     with pytest.raises(ValueError):
@@ -129,6 +133,20 @@ def test_api_makes_a_story_only_with_adult_characters(client: TestClient) -> Non
     assert res.status_code == 200, res.text
     story = res.json()
     assert story["n_scenes"] == 5 and story["title"] == "しらねの下着コレクション"
+    # 台本の生成サイズはシーンに入る
+    conn = db.get_connection()
+    try:
+        sizes = [s["panel_size"] for s in db.list_story_scenes(conn, story["id"])]
+    finally:
+        conn.close()
+    assert sizes == [None] * 5
+    res = client.post("/api/collections", json={"kind": "tease_swimsuit", "character_ids": [adult], "poses": ["through_legs"]})
+    conn = db.get_connection()
+    try:
+        sizes = [s["panel_size"] for s in db.list_story_scenes(conn, res.json()["id"])]
+    finally:
+        conn.close()
+    assert sizes == [None, "square", None]
     # 年齢を入れていないキャラ・未成年は作れない
     unknown_age = _character("だれか", None)
     res = client.post("/api/collections", json={"kind": "swimsuit", "character_ids": [adult, unknown_age]})
