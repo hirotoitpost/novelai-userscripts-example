@@ -146,3 +146,49 @@ def test_illustration_candidates_use_the_dataset_prompt(
     assert "white background" in call["prompt"]
     assert "beard" in call["cfg"].negative_prompt and call["cfg"].model == "nai-diffusion-4-5-full"
     assert call["seed"] == candidate["seed"] and call["size"] == (832, 1216)
+
+
+def test_back_view_candidates_drop_the_face_and_register_as_back(client: TestClient, tmp_path: Path) -> None:
+    conn = db.get_connection()
+    try:
+        character = db.save_character(conn, "あかね", "1girl, silver hair, high ponytail, yellow eyes, beautiful face, face visible")
+        db.update_character_sheet(conn, character["id"], {"outfit_tags": "white coat", "seed": 123})
+    finally:
+        conn.close()
+    character_id = character["id"]
+    # 正面の参照画像があれば、弱めて使う
+    front = tmp_path / "outputs" / "manga" / "refs" / "front.png"
+    front.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 12), "red").save(front)
+    conn = db.get_connection()
+    try:
+        db.update_character_reference(conn, character_id, "outputs/manga/refs/front.png")
+    finally:
+        conn.close()
+
+    res = client.post(
+        f"/api/manga-v2/characters/{character_id}/reference-candidates",
+        json={"count": 1, "view": "back", "back_reference_strength": 0.3},
+        headers=AUTH,
+    )
+    assert res.status_code == 200, res.text
+    call = client.calls[0]  # type: ignore[attr-defined]
+    assert call["character_tags"] == ["1girl, silver hair, high ponytail, white coat"]
+    assert "from behind" in call["prompt"] and "looking at viewer" not in call["prompt"]
+    assert "looking back" in call["negative"]
+    assert call["character_reference"].strength == 0.3
+
+    # 選ぶと後ろ姿の参照になり、基準シードは変えない
+    chosen = res.json()[0]
+    res = client.put(
+        f"/api/manga-v2/characters/{character_id}/reference",
+        json={"candidate_path": chosen["path"], "view": "back"},
+    )
+    assert res.status_code == 204, res.text
+    conn = db.get_connection()
+    try:
+        saved = db.get_character(conn, character_id)
+    finally:
+        conn.close()
+    assert saved["back_reference_image_path"].startswith("outputs/manga/refs/char")
+    assert saved["reference_image_path"] == "outputs/manga/refs/front.png" and saved["seed"] == 123

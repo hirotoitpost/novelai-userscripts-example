@@ -1653,6 +1653,10 @@ class MangaV2ReferenceCandidatesRequest(BaseModel):
     model: Optional[str] = None
     # manga: 漫画のコマと同じ組み立て(manga style)。illustration: キャラ別データセットと同じ組み立て(キャラシートの画風)
     style: Literal["manga", "illustration"] = "manga"
+    # back: 後ろ姿のコマ用の候補(顔だけのタグを外し、後ろ向きの構図にする)
+    view: Literal["front", "back"] = "front"
+    # 後ろ姿の候補で、正面の参照画像を弱く使う(髪型・服を寄せる)。強いと振り向いて顔を見せやすい
+    back_reference_strength: float = Field(default=0.35, ge=0, le=1)
 
 
 class MangaV2ReferenceCandidate(BaseModel):

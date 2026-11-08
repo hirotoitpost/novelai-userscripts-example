@@ -40,6 +40,14 @@ SETTINGS: tuple[Setting, ...] = (
         "solo, cowboy shot, standing, looking at viewer, smile, simple background, white background",
     ),
     Setting(
+        "reference.back_candidate_tags",
+        "キャラの参照画像",
+        "後ろ姿の候補の構図のタグ",
+        "キャラシートの「後ろ姿」の候補を作るときの、構図・背景のタグ(顔を見せないよう、振り向きはネガティブに入る)。",
+        "text",
+        "solo, full body, standing, from behind, back view, facing away, back of head, simple background, white background",
+    ),
+    Setting(
         "reference.auto_count",
         "キャラの参照画像",
         "自動で選ぶときの候補の枚数",

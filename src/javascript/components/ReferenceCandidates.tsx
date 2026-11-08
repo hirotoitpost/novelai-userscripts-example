@@ -23,6 +23,8 @@ interface Props {
   buttonClass?: string
   labelClass?: string
   errorClass?: string
+  /** back なら後ろ姿のコマ用の参照の候補(顔だけのタグを外し、後ろ向きで描く。選んでも基準シードは変えない) */
+  view?: 'front' | 'back'
 }
 
 /** 一度に作る候補の数 */
@@ -40,8 +42,9 @@ async function errorDetail(res: Response): Promise<string> {
  */
 export default function ReferenceCandidates({
   apiOrigin, characterId, fileUrl, onChosen, disabled, defaultStyle = 'manga',
-  buttonClass = '', labelClass = '', errorClass = '',
+  buttonClass = '', labelClass = '', errorClass = '', view = 'front',
 }: Props) {
+  const back = view === 'back'
   // 候補の生成は NovelAI を呼ぶので、ログイン中のトークンを渡す(無ければサーバーの永続トークン)
   const { token } = useAuth()
   const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
@@ -82,7 +85,7 @@ export default function ReferenceCandidates({
         const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${characterId}/reference-candidates`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ count: 1, style }),
+          body: JSON.stringify({ count: 1, style, view }),
         })
         if (!res.ok) throw new Error(await errorDetail(res))
         const made: Candidate[] = await res.json()
@@ -102,7 +105,10 @@ export default function ReferenceCandidates({
       const res = await fetch(`${apiOrigin}/api/manga-v2/characters/${characterId}/reference`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ candidate_path: candidate.path, seed: candidate.seed }),
+        // 後ろ姿の参照は基準シードに入れない(正面の参照のシードを残す)
+        body: JSON.stringify(back
+          ? { candidate_path: candidate.path, view: 'back' }
+          : { candidate_path: candidate.path, seed: candidate.seed }),
       })
       if (!res.ok) throw new Error(await errorDetail(res))
       setCandidates([])
@@ -129,7 +135,9 @@ export default function ReferenceCandidates({
         </select>
       </label>
       <button type="button" className={buttonClass} onClick={() => void generate()} disabled={busy}>
-        {generating ? `候補を生成中… ${done}/${COUNT}` : candidates.length ? '候補を作り直す' : 'キャラシートから候補を生成'}
+        {generating
+          ? `候補を生成中… ${done}/${COUNT}`
+          : candidates.length ? '候補を作り直す' : back ? 'キャラシートから後ろ姿の候補を生成' : 'キャラシートから候補を生成'}
       </button>
       {generating && (
         <div className="ref-progress" role="status" aria-live="polite">
@@ -152,7 +160,9 @@ export default function ReferenceCandidates({
         <>
           {candidates.length > 0 && (
             <span className={labelClass}>
-              押すと拡大します。気に入った1枚を「この絵にする」と、参照画像と基準シードに登録します(コマの見た目がその絵に寄ります)
+              {back
+                ? '押すと拡大します。気に入った1枚を「この絵にする」と、後ろ姿のコマ用の参照に登録します(後ろ姿のコマはその絵に寄ります)'
+                : '押すと拡大します。気に入った1枚を「この絵にする」と、参照画像と基準シードに登録します(コマの見た目がその絵に寄ります)'}
             </span>
           )}
           <div className="ref-candidates">
