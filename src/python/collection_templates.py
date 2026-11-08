@@ -36,7 +36,8 @@ ITEM = {"lingerie": "lingerie", "swimsuit": "swimsuit", "tease_lingerie": "linge
 # 体つき(場面の服装の先頭に足す)。sheet はキャラシートの体型のまま
 BODIES = {
     "sheet": "",
-    "slender": "shiny skin, slender, athletic, toned, slim waist, long legs, skindentation",
+    # 引き締まった体(athletic・toned)は入れない(腹筋・背筋が強く出る)。戦うキャラなどはキャラシートの体型に書く
+    "slender": "shiny skin, slender, slim waist, long legs, skindentation",
     "curvy": "shiny skin, curvy, slim waist, wide hips, thick thighs, skindentation",
 }
 
