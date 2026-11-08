@@ -57,9 +57,9 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   const adults = characters.filter(isAdult)
   const pickedThemes = themeNames.filter(t => themes.size === 0 || themes.has(t))
   const pickedPoses = (catalog?.poses ?? []).filter(p => poses.size === 0 || poses.has(p.key))
-  // コマ数の目安: みんなのコマ2枚 + (からかい: ポーズ×人数 / コレクション: テーマ×(見出し+人数))
+  // コマ数の目安: みんなのコマ2枚 + (からかい: ポーズ×人数 / コレクション: テーマ×(見出し+人数×正面・背面))
   const panels = cast.length === 0 ? 0
-    : 2 + (tease ? pickedPoses.length * cast.length : pickedThemes.length * (1 + cast.length))
+    : 2 + (tease ? pickedPoses.length * cast.length : pickedThemes.length * (1 + cast.length * 2))
 
   function toggle(set: Set<string>, value: string, update: (next: Set<string>) => void) {
     const next = new Set(set)

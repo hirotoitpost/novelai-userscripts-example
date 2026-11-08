@@ -49,6 +49,8 @@ HAND_NEGATIVE = "bad hands, malformed hands, extra fingers, missing fingers, fus
 # 食い込みのポーズ以外では、引っ張る・食い込む絵にしない
 NO_WEDGIE = "wedgie, pulling panties"
 FACE_AWAY_NEGATIVE = "looking back, looking at viewer, looking over shoulder"
+# お尻を上げたポーズで、脚の間から後頭部が見える(顔の向きが体と合わない)絵にしない。逆さの顔は「股のぞき」のポーズだけ
+HEAD_BETWEEN_LEGS = "head between legs, looking through legs, back of head between legs"
 
 
 @dataclass(frozen=True)
@@ -98,15 +100,25 @@ class Pose:
     face_away: bool = False
     # しゃがみ(膝をつく絵に流れやすいので打ち消す)
     squat: bool = False
+    # 脚の間から逆さの顔を見せる(股のぞき)。これ以外のポーズでは、脚の間の頭を打ち消す
+    through_legs: bool = False
 
 
-# コレクションの立ちポーズ(テーマごとに順に回す)
+# コレクションの正面の立ちポーズ(テーマごとに順に回す)
 STAND_POSES = (
-    Pose("hip", "腰に手", "hand on hip, confident smile, looking at viewer", "cowboy shot", "……どう？"),
-    Pose("behind", "手を後ろ", "hands behind back, smile, looking at viewer", "cowboy shot", "似合ってる？"),
-    Pose("hair", "髪に手", "one hand in hair, posing, looking at viewer", "cowboy shot", "……ちょっと、照れる"),
-    Pose("shoulder", "肩越し", "looking over shoulder, smile", "cowboy shot", "後ろも、見て"),
-    Pose("stretch", "伸び", "arms raised, stretching, smile", "cowboy shot", "ん〜っ"),
+    Pose("hip", "腰に手", "front view, hand on hip, confident smile, looking at viewer", "cowboy shot", "……どう？"),
+    Pose("behind", "手を後ろ", "front view, hands behind back, smile, looking at viewer", "cowboy shot", "似合ってる？"),
+    Pose("hair", "髪に手", "front view, one hand in hair, posing, looking at viewer", "cowboy shot", "……ちょっと、照れる"),
+    Pose("stretch", "伸び", "front view, arms raised, stretching, smile", "cowboy shot", "ん〜っ"),
+)
+# コレクションの背面のポーズ(テーマごとに正面のあとに入れる。振り返るものと、顔を見せない後ろ姿を交互に)
+BACK_POSES = (
+    Pose("back_look", "後ろ姿(振り返る)", "from behind, back, looking back over shoulder, smile", "cowboy shot", "後ろも、見て"),
+    Pose("back_away", "後ろ姿", "from behind, back view, facing away, back, hands behind head", "cowboy shot", "……背中、どう？",
+         face_away=True),
+    Pose("back_hip", "後ろ姿(腰に手)", "from behind, back, hand on hip, looking back, smile", "full body", "うしろ姿も、自信あり"),
+    Pose("back_hair", "後ろ姿(髪をかき上げる)", "from behind, back view, facing away, hand in hair, back", "cowboy shot",
+         "……見てる？", face_away=True),
 )
 
 TEASE = "teasing, smug, smirk, blush"
@@ -142,8 +154,11 @@ TEASE_POSES = (
          "lying on back, upside-down, head down, legs up, legs together, hair spread out, looking up at viewer, from above",
          "full body", "……上から、見ないで"),
     Pose("all_fours_away", "四つんばい(背面・顔なし)",
-         "all fours, facing away, from behind, back, ass focus, head down, face hidden", "full body", "……どこ、見てるの",
+         "all fours, facing away, from behind, ass focus, head out of frame, lower body", "lower body", "……どこ、見てるの",
          face_away=True),
+    Pose("through_legs", "股のぞき(逆さの顔)",
+         "bent over, looking through legs, upside-down face, face between legs, looking at viewer, from behind, ass focus, "
+         "hands on knees", "full body", "……さかさまの、わたし", through_legs=True),
     Pose("wedgie_stand", "食い込み(立って引き上げる)",
          "standing, from behind, wedgie, pulling own panties up, looking back over shoulder, ass focus", "cowboy shot",
          "……くいこんだ", wedgie=True),
@@ -249,6 +264,7 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
             for i, cid in enumerate(ids):
                 negative = _join(base_negative, "" if pose.wedgie else NO_WEDGIE,
                                  FACE_AWAY_NEGATIVE if pose.face_away else "",
+                                 "" if pose.through_legs else HEAD_BETWEEN_LEGS,
                                  "kneeling, all fours, seiza" if pose.squat else "")
                 action = pose.action if pose.face_away else _join(pose.action, TEASE)
                 scenes.append(_scene(
@@ -261,13 +277,16 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
             scenes.append(_scene(_join(stage, theme.scenery, "no humans, scenery", options.style_tags), [], {}, {},
                                  base_negative, narration=theme.name))
             for i, cid in enumerate(ids):
-                pose = STAND_POSES[(n + i * 2) % len(STAND_POSES)]
-                scenes.append(_scene(
-                    panel_tags("solo", pose.framing, "front view"), [cid], {cid: pose.action}, {cid: look(i, theme)},
-                    _join(base_negative, NO_WEDGIE),
-                    narration=f"{theme.name}　{characters[i]['name']}",
-                    line=(cid, pose.line) if options.lines else None,
-                ))
+                # 正面と背面を1コマずつ
+                front = STAND_POSES[(n + i * 2) % len(STAND_POSES)]
+                back = BACK_POSES[(n + i) % len(BACK_POSES)]
+                for pose, label in ((front, theme.name), (back, f"{theme.name}・後ろ")):
+                    scenes.append(_scene(
+                        panel_tags("solo", pose.framing), [cid], {cid: pose.action}, {cid: look(i, theme)},
+                        _join(base_negative, NO_WEDGIE, HEAD_BETWEEN_LEGS, FACE_AWAY_NEGATIVE if pose.face_away else ""),
+                        narration=f"{label}　{characters[i]['name']}",
+                        line=(cid, pose.line) if options.lines else None,
+                    ))
     last = themes[-1]
     scenes.append(_scene(
         panel_tags(group, "cowboy shot"), ids,
