@@ -50,6 +50,22 @@ HAND_NEGATIVE = "bad hands, malformed hands, extra fingers, missing fingers, fus
 NO_WEDGIE = "wedgie, pulling panties"
 FACE_AWAY_NEGATIVE = "looking back, looking at viewer, looking over shoulder"
 SIDE_NEGATIVE = "from side, side view, profile, three-quarter view, head visible, hair hanging beside legs"
+# 前屈で、お尻の上に頭(お団子・ポニーテールの根元)が出る絵にしない
+HEAD_ABOVE_NEGATIVE = (
+    "head above hips, head visible above buttocks, hair bun above buttocks, ponytail above buttocks, head on top"
+)
+# まとめ髪(ポニーテール・お団子)は前屈でお尻の上に出やすいので、そのコマだけ髪を下ろす
+_HAIR_UP_WORDS = {"ponytail", "ponytails", "bun", "buns", "updo", "chignon", "topknot"}
+HAIR_UP_NEGATIVE = "ponytail, high ponytail, hair bun, updo, hair tie"
+
+
+def hair_down_appearance(appearance: str | None) -> str | None:
+    """容姿からまとめ髪のタグを外し、髪を下ろした容姿にする。まとめ髪のタグが無ければ None(そのまま使う)。"""
+    tags = [t.strip() for t in (appearance or "").split(",") if t.strip()]
+    kept = [t for t in tags if not set(t.lower().replace("_", " ").split()) & _HAIR_UP_WORDS]
+    if len(kept) == len(tags):
+        return None
+    return _join(", ".join(kept), "hair down, hair hanging down")
 # お尻を上げたポーズで、脚の間から後頭部が見える(顔の向きが体と合わない)絵にしない。逆さの顔は「股のぞき」のポーズだけ
 HEAD_BETWEEN_LEGS = "head between legs, looking through legs, back of head between legs"
 
@@ -105,6 +121,8 @@ class Pose:
     through_legs: bool = False
     # 真後ろから描く(斜め横から描くと頭が脚の横に出るので、横向きを打ち消す)
     side_negative: bool = False
+    # 頭が下がる前屈。お尻の上に頭・まとめ髪が出るのを打ち消し、まとめ髪のキャラはそのコマだけ髪を下ろす
+    bend: bool = False
 
 
 # コレクションの正面の立ちポーズ(テーマごとに順に回す)
@@ -125,8 +143,9 @@ BACK_POSES = (
     # 立位体前屈: 膝を伸ばして足をそろえ(足首を交差させ)、腰から前に倒れて手を床につく。頭は脚の向こうで顔は見えない
     Pose("forward_bend", "立位体前屈",
          "standing forward bend, bent over, straight legs, legs together, touching toes, hands on floor, from behind, "
-         "directly behind, symmetrical, ass focus, head hidden behind legs, face hidden", "full body", "……やわらかいでしょ",
-         face_away=True, side_negative=True),
+         "directly behind, symmetrical, ass focus, head hidden behind legs, face hidden, "
+         "hair hanging down to floor between hands", "full body", "……やわらかいでしょ",
+         face_away=True, side_negative=True, bend=True),
 )
 
 TEASE = "teasing, smug, smirk, blush"
@@ -289,13 +308,18 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
                 front = STAND_POSES[(n + i * 2) % len(STAND_POSES)]
                 back = BACK_POSES[(n + i) % len(BACK_POSES)]
                 for pose, label in ((front, theme.name), (back, f"{theme.name}・後ろ")):
-                    scenes.append(_scene(
+                    hair_down = hair_down_appearance(characters[i].get("appearance_tags")) if pose.bend else None
+                    scene = _scene(
                         panel_tags("solo", pose.framing), [cid], {cid: pose.action}, {cid: look(i, theme)},
                         _join(base_negative, NO_WEDGIE, HEAD_BETWEEN_LEGS, FACE_AWAY_NEGATIVE if pose.face_away else "",
-                              SIDE_NEGATIVE if pose.side_negative else ""),
+                              SIDE_NEGATIVE if pose.side_negative else "", HEAD_ABOVE_NEGATIVE if pose.bend else "",
+                              HAIR_UP_NEGATIVE if hair_down else ""),
                         narration=f"{label}　{characters[i]['name']}",
                         line=(cid, pose.line) if options.lines else None,
-                    ))
+                    )
+                    if hair_down:
+                        scene["character_appearances"] = {cid: hair_down}
+                    scenes.append(scene)
     last = themes[-1]
     scenes.append(_scene(
         panel_tags(group, "cowboy shot"), ids,
