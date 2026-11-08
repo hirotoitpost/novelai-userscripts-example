@@ -27,7 +27,15 @@ const PANEL_SIZES: { value: PanelSize; label: string }[] = [
 /** サイズの呼び名(縦長・横長・正方形) */
 const sizeName = (size: PanelSize) => PANEL_SIZES.find(z => z.value === size)?.label.split(' ')[0] ?? size
 
-interface CastRow { id: number; name: string; action_tags: string; outfit_tags: string; state_id: number | null }
+interface CastRow {
+  id: number
+  name: string
+  action_tags: string
+  outfit_tags: string
+  state_id: number | null
+  /** この場面の容姿(空ならキャラシートの容姿) */
+  appearance_tags?: string
+}
 
 interface EditScene {
   /** 新しく足したシーンは null */
@@ -70,7 +78,7 @@ interface EditData {
 }
 
 /** プロンプトチャンクの入れ先にできる欄: シーンの作画タグ、キャラのこの場面の服装・動作 */
-type TagField = { scene: string; kind: 'prompt' } | { scene: string; kind: 'outfit' | 'action'; character: number }
+type TagField = { scene: string; kind: 'prompt' } | { scene: string; kind: 'outfit' | 'action' | 'appearance'; character: number }
 
 /** チャンクの入れ先を覚えるための、欄の見分け(data-tag-field に入れる) */
 function fieldId(f: TagField): string {
@@ -103,11 +111,11 @@ async function errorDetail(res: Response): Promise<string> {
   return `HTTP ${res.status}`
 }
 
-/** 絵に効く内容(タグ・登場人物とその動作・服装・状態)。保存したときの内容と比べて「描き直し待ち」を出す */
+/** 絵に効く内容(タグ・登場人物とその動作・服装・状態・容姿)。保存したときの内容と比べて「描き直し待ち」を出す */
 function imageKey(s: Pick<EditScene, 'prompt_tags' | 'characters' | 'panel_size'>): string {
   const cast = [...s.characters]
     .sort((a, b) => a.id - b.id)
-    .map(c => [c.id, c.action_tags.trim(), c.outfit_tags.trim(), c.state_id])
+    .map(c => [c.id, c.action_tags.trim(), c.outfit_tags.trim(), c.state_id, (c.appearance_tags ?? '').trim()])
   return JSON.stringify([s.prompt_tags.trim(), cast, s.panel_size])
 }
 
@@ -158,10 +166,10 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
       caretPos = inserted.caret
       update(index, { prompt_tags: inserted.value })
     } else {
-      const key = field.kind === 'outfit' ? 'outfit_tags' : 'action_tags'
+      const key = field.kind === 'outfit' ? 'outfit_tags' : field.kind === 'appearance' ? 'appearance_tags' : 'action_tags'
       const member = scene.characters.find(c => c.id === field.character)
       if (!member) return
-      const inserted = insertTag(member[key], caret.start, caret.end, text)
+      const inserted = insertTag(member[key] ?? '', caret.start, caret.end, text)
       caretPos = inserted.caret
       update(index, { characters: scene.characters.map(c => (c.id === member.id ? { ...c, [key]: inserted.value } : c)) })
     }
@@ -301,7 +309,10 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
         panel_size: s.panel_size,
         negative_prompt: s.negative_prompt?.trim() || null,
         absent_tags: s.absent_tags?.trim() || null,
-        characters: s.characters.map(c => ({ id: c.id, action_tags: c.action_tags, outfit_tags: c.outfit_tags, state_id: c.state_id })),
+        characters: s.characters.map(c => ({
+          id: c.id, action_tags: c.action_tags, outfit_tags: c.outfit_tags, state_id: c.state_id,
+          appearance_tags: c.appearance_tags ?? '',
+        })),
       })),
     }
   }
@@ -603,6 +614,11 @@ function SceneCard({
                     <td><input value={c.action_tags} placeholder="動作・表情" disabled={busy} aria-label={`${c.name}の動作`}
                       onChange={e => editCast(c.id, { action_tags: e.target.value })}
                       {...tagField({ scene: scene.key, kind: 'action', character: c.id }, `コマ${index + 1}・${c.name}の動作`)} /></td>
+                    <td><input value={c.appearance_tags ?? ''} placeholder="容姿(空欄ならキャラシート)" disabled={busy}
+                      aria-label={`${c.name}のこの場面の容姿`}
+                      title="顔・髪・目のタグをこの場面だけ差し替えます(髪を下ろす など)。後ろ姿のコマでは、顔だけのタグは自動で外れます"
+                      onChange={e => editCast(c.id, { appearance_tags: e.target.value })}
+                      {...tagField({ scene: scene.key, kind: 'appearance', character: c.id }, `コマ${index + 1}・${c.name}の容姿`)} /></td>
                     <td><button type="button" disabled={busy} aria-label={`${c.name}を外す`}
                       onClick={() => setCast(scene.characters.filter(x => x.id !== c.id))}>✕</button></td>
                   </tr>

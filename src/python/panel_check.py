@@ -100,9 +100,12 @@ def _plain_tags(tags: str) -> set[str]:
 
 
 def is_back_view(tags: str) -> bool:
-    """後ろ姿のコマか(作画タグ・動作に from behind などのタグがあり、looking back は無い)。"""
+    """
+    後ろ姿のコマか(作画タグ・動作に from behind などのタグがあり、looking back・looking at viewer で始まる
+    振り向きのタグ(looking back over shoulder など)は無い)。
+    """
     plain = _plain_tags(tags)
-    return bool(plain & _BACK_VIEW_TAGS) and "looking back" not in plain
+    return bool(plain & _BACK_VIEW_TAGS) and not any(t.startswith(("looking back", "looking at viewer")) for t in plain)
 
 
 def cast_counts(appearances: list[str]) -> tuple[int, int]:

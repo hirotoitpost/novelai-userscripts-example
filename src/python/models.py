@@ -933,6 +933,9 @@ class ScriptSceneInput(BaseModel):
     character_actions: dict[int, str] = Field(default_factory=dict)
     # キャラID → そのコマでの服装(英語タグ)。あれば、キャラシートのふだんの服装の代わりに使う(水着・浴衣など)
     character_outfits: dict[int, str] = Field(default_factory=dict)
+    # キャラID → そのコマでの容姿(顔・髪・目の英語タグ)。あれば、キャラシートの容姿の代わりに使う
+    # (後ろ姿で顔のタグを外す、髪を下ろす など)
+    character_appearances: dict[int, str] = Field(default_factory=dict)
     narration: Optional[str] = Field(None, max_length=80)
     sfx: Optional[list[str]] = Field(None, max_length=8)
     # 1行ずつのセリフと話し手。あれば本文の「」の代わりにこれを吹き出しにする(話し手の推定をしない)。
@@ -1295,6 +1298,7 @@ class SceneCharacterResponse(BaseModel):
     action_tags: Optional[str] = None
     # そのシーンでの服装(空ならキャラシートのふだんの服装)
     scene_outfit_tags: Optional[str] = None
+    scene_appearance_tags: Optional[str] = None
     # そのシーンでの状態(キャラ別データセットの状態)。appearance_tags は状態を当てたあとの見た目
     state_id: Optional[int] = None
     state_name: Optional[str] = None
@@ -1414,6 +1418,8 @@ class SetSceneCharactersRequest(BaseModel):
     outfits: Optional[dict[int, str]] = None
     # キャラID → そのシーンでの状態(dataset_states の id。null で状態なし)。省略すると、残るキャラの状態はそのまま
     states: Optional[dict[int, Optional[int]]] = None
+    # キャラID → そのシーンでの容姿(英語タグ。空ならキャラシートの容姿)。省略すると、残るキャラの容姿はそのまま
+    appearances: Optional[dict[int, str]] = None
 
 
 class SceneRangeRequest(BaseModel):
@@ -2014,12 +2020,16 @@ class MangaV2SceneDialogueRequest(BaseModel):
 
 
 class StoryEditCharacter(BaseModel):
-    """シーンの登場キャラ。outfit_tags は空ならキャラシートのふだんの服装、state_id は状態(null はふだん)。"""
+    """
+    シーンの登場キャラ。outfit_tags は空ならキャラシートのふだんの服装、state_id は状態(null はふだん)、
+    appearance_tags は空ならキャラシートの容姿。
+    """
 
     id: int
     action_tags: str = ""
     outfit_tags: str = ""
     state_id: Optional[int] = None
+    appearance_tags: str = ""
 
 
 class StoryEditScene(BaseModel):
