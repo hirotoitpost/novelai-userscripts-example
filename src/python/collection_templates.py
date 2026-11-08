@@ -49,6 +49,7 @@ HAND_NEGATIVE = "bad hands, malformed hands, extra fingers, missing fingers, fus
 # 食い込みのポーズ以外では、引っ張る・食い込む絵にしない
 NO_WEDGIE = "wedgie, pulling panties"
 FACE_AWAY_NEGATIVE = "looking back, looking at viewer, looking over shoulder"
+SIDE_NEGATIVE = "from side, side view, profile, three-quarter view, head visible, hair hanging beside legs"
 # お尻を上げたポーズで、脚の間から後頭部が見える(顔の向きが体と合わない)絵にしない。逆さの顔は「股のぞき」のポーズだけ
 HEAD_BETWEEN_LEGS = "head between legs, looking through legs, back of head between legs"
 
@@ -102,6 +103,8 @@ class Pose:
     squat: bool = False
     # 脚の間から逆さの顔を見せる(股のぞき)。これ以外のポーズでは、脚の間の頭を打ち消す
     through_legs: bool = False
+    # 真後ろから描く(斜め横から描くと頭が脚の横に出るので、横向きを打ち消す)
+    side_negative: bool = False
 
 
 # コレクションの正面の立ちポーズ(テーマごとに順に回す)
@@ -119,6 +122,11 @@ BACK_POSES = (
     Pose("back_hip", "後ろ姿(腰に手)", "from behind, back, hand on hip, looking back, smile", "full body", "うしろ姿も、自信あり"),
     Pose("back_hair", "後ろ姿(髪をかき上げる)", "from behind, back view, facing away, hand in hair, back", "cowboy shot",
          "……見てる？", face_away=True),
+    # 立位体前屈: 膝を伸ばして足をそろえ(足首を交差させ)、腰から前に倒れて手を床につく。頭は脚の向こうで顔は見えない
+    Pose("forward_bend", "立位体前屈",
+         "standing forward bend, bent over, straight legs, legs together, touching toes, hands on floor, from behind, "
+         "directly behind, symmetrical, ass focus, head hidden behind legs, face hidden", "full body", "……やわらかいでしょ",
+         face_away=True, side_negative=True),
 )
 
 TEASE = "teasing, smug, smirk, blush"
@@ -283,7 +291,8 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
                 for pose, label in ((front, theme.name), (back, f"{theme.name}・後ろ")):
                     scenes.append(_scene(
                         panel_tags("solo", pose.framing), [cid], {cid: pose.action}, {cid: look(i, theme)},
-                        _join(base_negative, NO_WEDGIE, HEAD_BETWEEN_LEGS, FACE_AWAY_NEGATIVE if pose.face_away else ""),
+                        _join(base_negative, NO_WEDGIE, HEAD_BETWEEN_LEGS, FACE_AWAY_NEGATIVE if pose.face_away else "",
+                              SIDE_NEGATIVE if pose.side_negative else ""),
                         narration=f"{label}　{characters[i]['name']}",
                         line=(cid, pose.line) if options.lines else None,
                     ))

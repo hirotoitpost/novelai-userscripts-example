@@ -91,6 +91,12 @@ def test_collection_options_pick_poses_themes_body_and_style() -> None:
     assert len(normal) == 7 and normal[1]["character_ids"] == [] and "slender" in normal[2]["character_outfits"][1]
     assert "front view" in normal[2]["character_actions"][1] and "from behind" in normal[3]["character_actions"][1]
     assert normal[3]["narration"].startswith("ハイレグ・後ろ")
+    # 背面のポーズは順に回る。立位体前屈は顔を見せず、脚の間の頭も打ち消す
+    backs = [s for s in build_collection(PAIR[:1], CollectionOptions(kind="lingerie"))["scenes"]
+             if "・後ろ" in (s["narration"] or "")]
+    bend = [s for s in backs if "standing forward bend" in s["character_actions"][1]]
+    assert len(bend) == 1 and "head between legs" in bend[0]["negative_prompt"] and "looking back" in bend[0]["negative_prompt"]
+    assert "three-quarter view" in bend[0]["negative_prompt"] and "directly behind" in bend[0]["character_actions"][1]
     # キャラごとに違う衣装
     assert normal[2]["character_outfits"][1] != normal[4]["character_outfits"][2]
     with pytest.raises(ValueError):
