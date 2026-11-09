@@ -650,6 +650,10 @@ class BodyBaseSheetRequest(FaceSheetRequest):
     """
 
     auto_check: bool = True
+    # 参照画像(キャラシートの絵)を既定で使う。使わないとタグだけで描くので、顔・画風が参照画像やコマの絵から離れる
+    # (2026-11 美香: 前髪・巻き髪・塗りが別人に)。強さはコマの生成と同じ 0.6
+    use_reference: bool = True
+    reference_strength: float = Field(0.6, ge=0.0, le=1.0)
 
 
 class CharacterDatasetRequest(BaseModel):

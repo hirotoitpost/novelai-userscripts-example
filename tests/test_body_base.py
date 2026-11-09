@@ -613,3 +613,13 @@ def test_yoga_range_of_motion_parts_open_the_legs(client: TestClient) -> None:
     assert "spread legs" in front_negative
     groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
     assert {"id": "rom", "label": "可動域(ヨガ)"} in groups
+
+
+def test_body_base_uses_the_reference_image_by_default() -> None:
+    # 素体は参照画像を既定で使う(顔・画風をキャラシートの絵に寄せる)。顔・表情シートは今までどおり
+    from python.models import BodyBaseSheetRequest, FaceSheetRequest
+
+    req = BodyBaseSheetRequest(keys=["front"])
+    assert req.use_reference is True and req.reference_strength == 0.6
+    assert FaceSheetRequest(keys=["front"]).use_reference is False
+
