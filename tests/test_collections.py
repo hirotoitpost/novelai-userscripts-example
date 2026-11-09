@@ -103,6 +103,12 @@ def test_collection_options_pick_poses_themes_body_and_style() -> None:
     assert bend[0]["panel_size"] == "square" and backs[0]["panel_size"] is None
     tease = build_collection(PAIR[:1], CollectionOptions(kind="tease_swimsuit", poses=["through_legs", "lean_lips"]))["scenes"]
     assert [s["panel_size"] for s in tease[1:-1]] == ["square", None]
+    # お尻を突き出す系は全身で描く(脚・足先が切れない)
+    butt = build_collection(PAIR[:1], CollectionOptions(
+        kind="tease_lingerie", poses=["bent_over", "all_fours_back", "hand_butt", "wedgie_bent", "wedgie_squat"]))["scenes"]
+    assert all("full body" in s["prompt_tags"] and "cowboy shot" not in s["prompt_tags"] for s in butt[1:-1])
+    # 足先まで入るよう強調し、足の切れを打ち消す(しゃがみはもともと全身)
+    assert all("1.4::full body::" in s["prompt_tags"] and "feet out of frame" in s["negative_prompt"] for s in butt[1:-2])
     # キャラごとに違う衣装
     assert normal[2]["character_outfits"][1] != normal[4]["character_outfits"][2]
     with pytest.raises(ValueError):
