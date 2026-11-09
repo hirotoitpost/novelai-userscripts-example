@@ -47,6 +47,8 @@ class BodyPart:
     rear: bool = False
     # 裸の素体だけで描く部位(乳首のアップ。素体スーツ・水着素体では描かない)
     nude_only: bool = False
+    # 脚を開くポーズ(可動域のヨガ)。素体のネガティブの「脚を開かない」タグ(OPEN_LEGS_NEGATIVE)を、この部位だけ外す
+    open_legs: bool = False
 
 
 GROUPS: tuple[tuple[str, str], ...] = (
@@ -55,6 +57,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("trunk", "体幹"),
     ("upper_limb", "上肢"),
     ("lower_limb", "下肢"),
+    ("rom", "可動域(ヨガ)"),
 )
 
 _STAND = "full body, standing, arms at sides, expressionless"
@@ -166,6 +169,57 @@ PARTS: tuple[BodyPart, ...] = (
              "内くるぶしは外より高く前。親指が最も太く、指先は弧を描く",
              negative="soles, feet up, foreshortening, sitting, lying, presenting foot, bent over, bending forward, full body, face"),
 )
+
+# 可動域(ヨガ): 3Dモデルの関節の動く範囲を見るため、股関節を大きく動かすポーズを全身で描く(ユーザーの依頼 2026-11-09)。
+# 股関節まわり(腸骨稜・鼠径部のしわ・大転子・殿溝・内転筋)を詳しく描く。股の扱いは素体の種類のまま
+# (裸の素体は featureless crotch。ガードの body_base.nude_tags)。前後開脚・鳩・ローランジは、2026-11 の試しでは
+# 座りや膝立ちになりやすかった(ユーザーの判断で、そのまま残す)
+_HIP = ("1.2::hip joint::, hip bones, iliac crest, inguinal crease, 1.1::groin crease::, greater trochanter, inner thighs, "
+        "adductor muscles, gluteal fold, detailed anatomy, anatomical accuracy")
+_ROM_FACE = "expressionless, closed mouth"
+_ROM_NEGATIVE = "pussy, cameltoe, anus, pubic hair, mosaic censoring, bar censor, censored"
+# 素体のネガティブにある、脚を開かせないタグ(裸の素体のガード body_base.nude_negative)。open_legs の部位では外す
+OPEN_LEGS_NEGATIVE = frozenset({"spread legs"})
+ROM_PARTS: tuple[BodyPart, ...] = tuple(
+    BodyPart(key, label, f"full body, {pose}, {_HIP}, {_ROM_FACE}", "rom", check,
+             negative=join_tags(_ROM_NEGATIVE, _BARE_FEET_NEGATIVE, negative), open_legs=True)
+    for key, label, pose, check, negative in (
+        ("yoga_front_split", "前後開脚(屈曲・伸展)",
+         "1.4::front split::, hanumanasana, splits, front leg extended forward, back leg extended backward, both legs straight, "
+         "groin near floor, hips square, hands on floor, from side, side view",
+         "前脚の股関節は屈曲、後ろ脚は伸展。骨盤は正面を向き、鼠径部のしわは前脚側で深く、後ろ脚側で伸びる", ""),
+        ("yoga_middle_split", "左右開脚(外転)",
+         "1.4::middle split::, straddle split, flexible, sitting on floor, legs spread wide sideways, legs straight, toes up, "
+         "hands on floor in front, front view, facing viewer",
+         "大腿骨は寛骨臼を中心に横へ回る。内転筋が伸び、鼠径部のしわは左右へ斜めに開く", ""),
+        ("yoga_butterfly", "合蹠(外旋・外転)",
+         "butterfly pose, bound angle pose, sitting on floor, soles of feet together, knees out to sides, hands holding feet, "
+         "back straight, front view, facing viewer",
+         "股関節の外旋。膝は床へ下がり、大腿の内側が上を向く。大転子は後ろへ回る", ""),
+        ("yoga_garland", "深いスクワット(深い屈曲)",
+         "garland pose, malasana, deep squat, heels on floor, knees apart, palms together at chest, elbows pressing knees, "
+         "front view, facing viewer",
+         "股関節の深い屈曲と外転。腹と大腿が近づき、鼠径部は深く折れる", ""),
+        ("yoga_pigeon", "鳩のポーズ(外旋+伸展)",
+         "1.4::pigeon pose::, yoga, one leg bent in front on floor with shin across, other leg straight back, "
+         "upper body upright, hands on floor, three-quarter view",
+         "前脚は外旋、後ろ脚は伸展。後ろ脚の鼠径部は伸び、前脚の殿部は床に沈む", ""),
+        ("yoga_low_lunge", "ローランジ(伸展)",
+         "1.4::low lunge::, anjaneyasana, yoga, kneeling on one knee, front foot flat on floor, front knee bent at right angle, "
+         "back leg extended behind, back knee and top of foot on floor, hips pushed forward, arms raised, from side, side view",
+         "後ろ脚の股関節の伸展。腸腰筋の線(上前腸骨棘から大腿前面)が伸びる", ""),
+        ("yoga_forward_bend", "立位前屈(屈曲)",
+         "1.4::standing forward bend::, uttanasana, bent over, torso against legs, legs straight, legs together, "
+         "palms flat on floor, head down, from side, side view",
+         "骨盤ごと前へ倒れる(腰だけ曲げない)。坐骨が上を向き、殿溝が伸びる", ""),
+        ("yoga_bridge", "ブリッジ(伸展)",
+         "1.4::glute bridge::, bridge pose, lying on back, shoulders and head on floor, knees bent at right angle, "
+         "feet flat on floor, hips lifted, straight line from knees to shoulders, arms on floor, from side, side view",
+         "股関節の伸展。膝・腰・肩が一直線、大殿筋が締まり、鼠径部が平らに伸びる",
+         "backbend, wheel pose, arched back, plow pose"),
+    )
+)
+PARTS = PARTS + ROM_PARTS
 
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
@@ -320,7 +374,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
-        _BARE_FEET if part.group == "whole" else "",
+        _BARE_FEET if part.group in ("whole", "rom") else "",
         BACKGROUND,
         character.get("style_tags"),
     )
@@ -353,6 +407,17 @@ def outfit_prompt(character: dict[str, Any], base: dict[str, Any], outfit_tags: 
         BACKGROUND,
         character.get("style_tags"),
     )
+
+
+def part_negative(negative_prompt: str, part: BodyPart) -> str:
+    """
+    1枚のネガティブ: 素体全体のネガティブに部位のネガティブを足す。脚を開くポーズ(open_legs)では、
+    素体のネガティブの「脚を開かない」タグ(OPEN_LEGS_NEGATIVE)を外す。
+    """
+    tags = split_tags(negative_prompt)
+    if part.open_legs:
+        tags = [t for t in tags if _plain_weight(t) not in OPEN_LEGS_NEGATIVE]
+    return join_tags(", ".join(tags), part.negative)
 
 
 def negative(base: dict[str, Any], part: BodyPart | None = None, *, modest: bool = False) -> str:

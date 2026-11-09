@@ -1384,10 +1384,8 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
         for index, part in enumerate(parts, start=1):
             event: dict[str, Any] = {"current": index, "total": len(parts), "key": part.key, "label": part.label}
             try:
-                # 部位ごとのネガティブ(手を突き出さない など)を足す
-                part_cfg = dataclasses.replace(
-                    cfg, negative_prompt=join_tags(cfg.negative_prompt, part.negative)
-                ) if part.negative else cfg
+                # 部位ごとのネガティブ(手を突き出さない など)を足す。脚を開くポーズは「脚を開かない」タグを外す
+                part_cfg = dataclasses.replace(cfg, negative_prompt=body_base.part_negative(cfg.negative_prompt or "", part))
                 # 自動チェック: 合わなければシードを変えて描き直し、合う絵が出なければ点数のいちばん高い絵を残す
                 best: tuple[Image.Image, body_check.CheckResult | None] | None = None
                 tries = attempts if req.auto_check else 1

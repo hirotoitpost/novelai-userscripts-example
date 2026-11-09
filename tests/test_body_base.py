@@ -588,3 +588,28 @@ def test_redrawing_keeps_history_and_can_pick_it_back(client: TestClient, tmp_pa
     assert (tmp_path / now["path"]).read_bytes() == old and now["history"] == 1
     assert client.post(f"/api/lora-dataset/character/{adult['id']}/body-base/history/select",
                        json={"part": "nipple_front", "file": "nope.png"}).status_code == 404
+
+
+def test_yoga_range_of_motion_parts_open_the_legs(client: TestClient) -> None:
+    # 可動域(ヨガ): 股関節を大きく動かすポーズを全身・はだしで。股関節まわりを詳しく、股の扱いは素体の種類のまま
+    rom = [p for p in body_base.PARTS if p.group == "rom"]
+    assert {p.key for p in rom} >= {"yoga_middle_split", "yoga_butterfly", "yoga_garland", "yoga_bridge"}
+    assert all(p.nude and p.open_legs and "hip joint" in p.tags for p in rom)
+    # 脚を開くポーズでは、素体のネガティブの「脚を開かない」タグだけを外す(重み付きでも)
+    part = body_base.ITEMS["yoga_middle_split"]
+    negative = body_base.part_negative("1.2::spread legs::, pussy, blush", part)
+    assert "spread legs" not in negative and "pussy" in negative and "blush" in negative
+    assert "spread legs" in body_base.part_negative("spread legs", body_base.ITEMS["front"])
+
+    adult = _character(client, "rom", is_adult=1, age=22)
+    base = _base(client, name="裸", kind="nude", skin_tone="fair")
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": base["id"]})
+    res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                      json={"keys": ["yoga_middle_split", "front"], "auto_check": False})
+    assert res.text.count('"status": "ok"') == 2
+    (split_prompt, split_negative), (_, front_negative) = client.calls[-2:]  # type: ignore[attr-defined]
+    assert "middle split" in split_prompt and "featureless crotch" in split_prompt and "barefoot" in split_prompt
+    assert "spread legs" not in split_negative and "pussy" in split_negative
+    assert "spread legs" in front_negative
+    groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
+    assert {"id": "rom", "label": "可動域(ヨガ)"} in groups
