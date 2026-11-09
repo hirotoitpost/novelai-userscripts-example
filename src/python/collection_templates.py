@@ -134,6 +134,8 @@ class Pose:
     bend: bool = False
     # コマの生成サイズ。前屈・股のぞきは体が絵の半分ほどなので、縦長だと脚が伸びる → 正方形
     size: str | None = None
+    # 全身(足先まで)を描かせる(full body だけだと太ももで切れる)。足の切れを打ち消す
+    whole: bool = False
 
 
 # コレクションの正面の立ちポーズ(テーマごとに順に回す)
@@ -159,21 +161,25 @@ BACK_POSES = (
 )
 
 TEASE = "teasing, smug, smirk, blush"
+WHOLE_BODY = "1.4::full body::, feet, wide shot"
+CROPPED_NEGATIVE = "feet out of frame, cropped legs, close-up, cowboy shot"
+# お尻を突き出す・前かがみ系のポーズは、腰から上(cowboy shot)だと脚・足先が切れるので全身で描く(ユーザーの依頼 2026-11-09)。
+# 縦長で比率が崩れなければ縦長のまま。崩れる前屈・股のぞきだけ正方形(size)
 # からかいのポーズ(キャラ全員がそれぞれ演じる)
 TEASE_POSES = (
     Pose("bent_over", "前かがみでお尻を突き出す",
-         "bent over, hands on floor, ass up, from behind, ass focus, looking back over shoulder", "cowboy shot", "……見てた？"),
+         "bent over, hands on floor, ass up, from behind, ass focus, looking back over shoulder", WHOLE_BODY, "……見てた？", whole=True),
     Pose("lean_lips", "前かがみで唇に指",
          "leaning forward, hands on knees, cleavage, finger to lips, looking at viewer", "upper body", "……近い？"),
     Pose("lying_side", "横寝", "lying on side, head on hand, hand on hip, looking at viewer", "full body", "……となり、空いてる"),
     Pose("squat_chin", "しゃがんで頬杖", "squatting, knees together, chin on hands, looking up at viewer", "full body",
          "……ここから、見上げる", squat=True),
     Pose("all_fours_back", "四つんばいで振り返る",
-         "on all fours, arched back, from behind, looking back over shoulder, ass focus", "cowboy shot", "……ころん"),
+         "on all fours, arched back, from behind, looking back over shoulder, ass focus", WHOLE_BODY, "……ころん", whole=True),
     Pose("cross_legs", "脚組み座り", "sitting, crossed legs, leaning back, hand on thigh, looking at viewer", "full body",
          "……座って、待ってる"),
     Pose("hand_butt", "お尻に手を当てて振り返る",
-         "standing, from behind, hand on own butt, looking back over shoulder, ass focus", "cowboy shot", "……さわりたい？"),
+         "standing, from behind, hand on own butt, looking back over shoulder, ass focus", WHOLE_BODY, "……さわりたい？", whole=True),
     Pose("hands_head", "頭の後ろで手を組む", "hands behind head, arms up, armpits, hip sway, looking at viewer", "cowboy shot",
          "……腋、見せたげる"),
     Pose("squat_back", "後ろ向きにしゃがむ",
@@ -201,7 +207,7 @@ TEASE_POSES = (
          "……くいこんだ", wedgie=True),
     Pose("wedgie_bent", "食い込み(前かがみで引っ張る)",
          "bent over, hand on knee, wedgie, tugging own panties, from behind, looking back over shoulder, ass focus",
-         "cowboy shot", "こういうの、好きなんでしょ", wedgie=True),
+         WHOLE_BODY, "こういうの、好きなんでしょ", wedgie=True, whole=True),
     Pose("wedgie_squat", "食い込み(しゃがんで引き上げる)",
          "squatting, facing away, wedgie, pulling own panties, looking back over shoulder, ass focus", "full body",
          "……直して？", wedgie=True, squat=True),
@@ -303,7 +309,8 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
                 negative = _join(base_negative, "" if pose.wedgie else NO_WEDGIE,
                                  FACE_AWAY_NEGATIVE if pose.face_away else "",
                                  "" if pose.through_legs else HEAD_BETWEEN_LEGS,
-                                 "kneeling, all fours, seiza" if pose.squat else "")
+                                 "kneeling, all fours, seiza" if pose.squat else "",
+                                 CROPPED_NEGATIVE if pose.whole else "")
                 action = pose.action if pose.face_away else _join(pose.action, TEASE)
                 scenes.append(_scene(
                     panel_tags("solo", pose.framing), [cid], {cid: action}, {cid: look(i, theme)}, negative,
