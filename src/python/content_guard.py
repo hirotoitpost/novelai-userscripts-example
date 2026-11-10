@@ -191,19 +191,26 @@ def words(key: str) -> frozenset[str]:
 # ---- 成人の衣装(制服のコスプレ など) ----
 
 # 衣装の例外にしない語(子どもの体・年齢そのものを表す語)。成人の年齢を入れても、組み合わせで成人を表しても、
-# これに当たるタグは未成年の手がかりのまま(絵が子どもの体になるため)。開発管理者のページで衣装のタグに
-# 足しても効かないよう、ここに持つ
-_NEVER_COSTUME = re.compile(
-    r"\b(loli(ta)?|shota|child(ren)?|kids?|toddler|bab(y|ies)|infant|little (girl|boy)s?|young (girl|boy)s?|"
-    r"underage|minor|teen(age|ager)?s?|petite child|elementary|kindergarten|randoseru|aged down|"
-    r"jk|joshi ?kousei|school ?(girl|boy)s?|students?|(high|middle) school)\b",
-    re.IGNORECASE,
+# これに当たるタグは未成年の手がかりのまま(絵が子どもの体になるため)。この固定の語は、開発管理者のページで衣装のタグに
+# 足しても、ガードのパスワードがあっても外せない最低線(画面には「固定」として出す)。足す語はガードの
+# safety.never_costume_tags(パスワードで守る。外すときに要る)
+NEVER_COSTUME_PATTERNS: tuple[str, ...] = (
+    "loli(ta)?", "shota", "child(ren)?", "kids?", "toddler", "bab(y|ies)", "infant", "little (girl|boy)s?",
+    "young (girl|boy)s?", "underage", "minor", "teen(age|ager)?s?", "petite child", "elementary", "kindergarten",
+    "randoseru", "aged down", "jk", "joshi ?kousei", "school ?(girl|boy)s?", "students?", "(high|middle) school",
 )
+_NEVER_COSTUME = re.compile(r"\b(" + "|".join(NEVER_COSTUME_PATTERNS) + r")\b", re.IGNORECASE)
+# 画面に出す固定の語(describe_one の fixed)
+_FIXED = {"safety.never_costume_tags": list(NEVER_COSTUME_PATTERNS)}
 
 
 def is_costume(tag: str) -> bool:
     """成人も衣装として着るタグか(safety.adult_costume_tags。子どもの体・年齢・身分を表す語は当たらない)。"""
-    return search("safety.adult_costume_tags", tag) and not _NEVER_COSTUME.search(tag or "")
+    return (
+        search("safety.adult_costume_tags", tag)
+        and not _NEVER_COSTUME.search(tag or "")
+        and not search("safety.never_costume_tags", tag)
+    )
 
 
 def adult_marked(tags: str) -> bool:
@@ -409,6 +416,8 @@ def describe_one(key: str) -> dict[str, Any]:
         "maximum": rule.maximum,
         "choices": [{"value": v, "label": label} for v, label in zip(rule.choices, rule.choice_labels)],
         "updated_at": loaded.updated.get(key),
+        # コードにある固定の分(画面では変えられない最低線)
+        "fixed": _FIXED.get(key, []),
     }
 
 

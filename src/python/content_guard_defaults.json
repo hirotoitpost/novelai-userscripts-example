@@ -7,8 +7,14 @@
       "label": "年齢区分が未定義のキャラの扱い",
       "description": "性的な場面(コマ・ページ)に、キャラシートで成人とも未成年とも定義していないキャラがいるとき(キャラが割り当てられていない場面も含む)の扱い。止める: その場面は生成しない。全年齢で描く: 性的なタグを外し、未成年対策のネガティブを足して描く。未成年と定義したキャラや、未成年の手がかりがあるキャラがいる場面は、これに関係なく止める。",
       "kind": "choice",
-      "choices": ["block", "all_ages"],
-      "choice_labels": ["止める", "全年齢で描く"],
+      "choices": [
+        "block",
+        "all_ages"
+      ],
+      "choice_labels": [
+        "止める",
+        "全年齢で描く"
+      ],
       "value": "block"
     },
     {
@@ -19,9 +25,27 @@
       "kind": "patterns",
       "match": "substring",
       "value": [
-        "女子高生", "男子高校生", "高校生", "高校[一二三1-3１-３]年", "女子中学生", "男子中学生", "中学生", "中学[一二三1-3１-３]年",
-        "小学生", "小学[一二三四五六1-6１-６]年", "園児", "幼稚園", "保育園", "ランドセル", "児童", "幼女", "女児", "男児",
-        "(?<![0-9０-９])(1[0-7]|[1-9])[歳才]", "(?<![0-9０-９])(１[０-７]|[１-９])[歳才]", "(?<![一二三四五六七八九十百])十[一二三四五六七]?[歳才]",
+        "女子高生",
+        "男子高校生",
+        "高校生",
+        "高校[一二三1-3１-３]年",
+        "女子中学生",
+        "男子中学生",
+        "中学生",
+        "中学[一二三1-3１-３]年",
+        "小学生",
+        "小学[一二三四五六1-6１-６]年",
+        "園児",
+        "幼稚園",
+        "保育園",
+        "ランドセル",
+        "児童",
+        "幼女",
+        "女児",
+        "男児",
+        "(?<![0-9０-９])(1[0-7]|[1-9])[歳才]",
+        "(?<![0-9０-９])(１[０-７]|[１-９])[歳才]",
+        "(?<![一二三四五六七八九十百])十[一二三四五六七]?[歳才]",
         "(?<![一二三四五六七八九十百])[一二三四五六七八九][歳才]"
       ]
     },
@@ -33,20 +57,66 @@
       "kind": "patterns",
       "match": "word",
       "value": [
-        "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
-        "underwear", "lingerie", "panties", "bra", "brassiere",
-        "see-through", "pussy", "penis", "cum", "bondage"
+        "nsfw",
+        "nude",
+        "naked",
+        "nipples?",
+        "topless",
+        "bottomless",
+        "sex",
+        "underwear",
+        "lingerie",
+        "panties",
+        "bra",
+        "brassiere",
+        "see-through",
+        "pussy",
+        "penis",
+        "cum",
+        "bondage"
       ],
       "previous": [
         [
-          "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
-          "underwear", "lingerie", "panties", "bra", "brassiere",
-          "see-through", "cleavage", "pussy", "penis", "cum", "bondage"
+          "nsfw",
+          "nude",
+          "naked",
+          "nipples?",
+          "topless",
+          "bottomless",
+          "sex",
+          "underwear",
+          "lingerie",
+          "panties",
+          "bra",
+          "brassiere",
+          "see-through",
+          "cleavage",
+          "pussy",
+          "penis",
+          "cum",
+          "bondage"
         ],
         [
-          "nsfw", "nude", "naked", "nipples?", "topless", "bottomless", "sex",
-          "underwear", "lingerie", "panties", "bra", "brassiere", "swimsuit", "bikini",
-          "see-through", "cleavage", "pussy", "penis", "cum", "bondage"
+          "nsfw",
+          "nude",
+          "naked",
+          "nipples?",
+          "topless",
+          "bottomless",
+          "sex",
+          "underwear",
+          "lingerie",
+          "panties",
+          "bra",
+          "brassiere",
+          "swimsuit",
+          "bikini",
+          "see-through",
+          "cleavage",
+          "pussy",
+          "penis",
+          "cum",
+          "bondage"
         ]
       ]
     },
@@ -58,12 +128,57 @@
       "kind": "patterns",
       "match": "word",
       "value": [
-        "jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit",
-        "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?",
-        "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage",
-        "minor", "young(?! (woman|women|man|men|adult|adults|lady|ladies))", "aged down", "toddler", "little girl", "little boy"
+        "jk",
+        "joshi ?kousei",
+        "school ?uniform",
+        "serafuku",
+        "gym uniform",
+        "school ?swimsuit",
+        "randoseru",
+        "kindergarten",
+        "(high|middle|elementary) school",
+        "school ?(girl|boy)s?",
+        "students?",
+        "loli",
+        "shota",
+        "child(ren)?",
+        "kids?",
+        "teen(age|ager)?",
+        "underage",
+        "minor",
+        "young(?! (woman|women|man|men|adult|adults|lady|ladies))",
+        "aged down",
+        "toddler",
+        "little girl",
+        "little boy"
       ],
-      "previous": [["jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit", "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?", "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage", "minor", "young", "aged down", "toddler", "little girl", "little boy"]]
+      "previous": [
+        [
+          "jk",
+          "joshi ?kousei",
+          "school ?uniform",
+          "serafuku",
+          "gym uniform",
+          "school ?swimsuit",
+          "randoseru",
+          "kindergarten",
+          "(high|middle|elementary) school",
+          "school ?(girl|boy)s?",
+          "students?",
+          "loli",
+          "shota",
+          "child(ren)?",
+          "kids?",
+          "teen(age|ager)?",
+          "underage",
+          "minor",
+          "young",
+          "aged down",
+          "toddler",
+          "little girl",
+          "little boy"
+        ]
+      ]
     },
     {
       "key": "dataset.adult_only_tags",
@@ -72,7 +187,12 @@
       "description": "キャラ別データセットで、これに当たるタグ(状態・シチュエーション・バリエーションの中)は、成人キャラ(キャラシートの成人フラグ)にだけ使える。使うときは、未成年を示すタグ(未成年ガード)と一緒には使えない。全年齢・R18 のどちらでも効く。",
       "kind": "patterns",
       "match": "word",
-      "value": ["pregnan(t|cy)", "maternity", "lactation", "breast ?feeding"]
+      "value": [
+        "pregnan(t|cy)",
+        "maternity",
+        "lactation",
+        "breast ?feeding"
+      ]
     },
     {
       "key": "general.safe_negative",
@@ -81,7 +201,9 @@
       "description": "全年齢のデータセット生成、キャラシートの読み込み(画像生成ページ)、参照画像の候補で、ネガティブに必ず足す。",
       "kind": "text",
       "value": "nsfw, nude, underwear",
-      "previous": ["nsfw, nude, underwear, swimsuit, cleavage"]
+      "previous": [
+        "nsfw, nude, underwear, swimsuit, cleavage"
+      ]
     },
     {
       "key": "dataset.r18_positive",
@@ -107,8 +229,25 @@
       "kind": "patterns",
       "match": "word",
       "value": [
-        "nsfw", "nude", "naked", "sex", "penis", "pussy", "nipples", "fellatio", "cum", "vaginal", "anal",
-        "masturbation", "fingering", "intercourse", "topless", "bottomless", "erection", "ejaculation", "orgasm"
+        "nsfw",
+        "nude",
+        "naked",
+        "sex",
+        "penis",
+        "pussy",
+        "nipples",
+        "fellatio",
+        "cum",
+        "vaginal",
+        "anal",
+        "masturbation",
+        "fingering",
+        "intercourse",
+        "topless",
+        "bottomless",
+        "erection",
+        "ejaculation",
+        "orgasm"
       ]
     },
     {
@@ -119,11 +258,34 @@
       "kind": "patterns",
       "match": "tag",
       "value": [
-        "child", "children", "kid", "kids", "loli", "lolita", "shota", "toddler", "baby",
-        "young girl", "little girl", "young boy", "little boy",
-        "school uniform", "serafuku", "student", "schoolgirl", "schoolboy", "classroom",
-        "elementary school", "middle school", "high school", "randoseru",
-        "children with cameras", "petite child", "underage", "teen", "teenager"
+        "child",
+        "children",
+        "kid",
+        "kids",
+        "loli",
+        "lolita",
+        "shota",
+        "toddler",
+        "baby",
+        "young girl",
+        "little girl",
+        "young boy",
+        "little boy",
+        "school uniform",
+        "serafuku",
+        "student",
+        "schoolgirl",
+        "schoolboy",
+        "classroom",
+        "elementary school",
+        "middle school",
+        "high school",
+        "randoseru",
+        "children with cameras",
+        "petite child",
+        "underage",
+        "teen",
+        "teenager"
       ]
     },
     {
@@ -143,9 +305,26 @@
       "stricter": "fewer",
       "match": "word",
       "value": [
-        "pussy", "vagina", "vaginal", "clitoris", "labia", "anus", "anal", "penis", "testicles", "sex",
-        "intercourse", "penetration", "creampie", "cum in pussy", "cumdrip", "fingering", "cunnilingus",
-        "spread legs", "pubic hair", "pussy juice"
+        "pussy",
+        "vagina",
+        "vaginal",
+        "clitoris",
+        "labia",
+        "anus",
+        "anal",
+        "penis",
+        "testicles",
+        "sex",
+        "intercourse",
+        "penetration",
+        "creampie",
+        "cum in pussy",
+        "cumdrip",
+        "fingering",
+        "cunnilingus",
+        "spread legs",
+        "pubic hair",
+        "pussy juice"
       ]
     },
     {
@@ -157,8 +336,22 @@
       "stricter": "fewer",
       "match": "word",
       "value": [
-        "pussy", "vagina", "vaginal", "clitoris", "labia", "sex", "intercourse", "penetration", "creampie",
-        "cum in pussy", "cumdrip", "fingering", "cunnilingus", "spread legs", "pubic hair", "pussy juice"
+        "pussy",
+        "vagina",
+        "vaginal",
+        "clitoris",
+        "labia",
+        "sex",
+        "intercourse",
+        "penetration",
+        "creampie",
+        "cum in pussy",
+        "cumdrip",
+        "fingering",
+        "cunnilingus",
+        "spread legs",
+        "pubic hair",
+        "pussy juice"
       ]
     },
     {
@@ -184,7 +377,9 @@
       "description": "漫画の下書きで R18 のパターン(プレイ・シナリオの型)を選んだときに、大枠シナリオと台本の指示文に入れる決まり。年齢(18 歳以上)を入れた成人キャラが登場するときだけ使われる(子どもなど成人でないキャラがいても使える。性的なコマに成人以外がいれば、そのコマは全年齢にする)。",
       "kind": "text",
       "value": "成人向け。性的な場面に出すのは18歳以上の成人の人物だけで、学生や子どもとして描かない。未成年の人物(子ども・連れ子など)は、性的な場面のコマには出さない。性的な場面は合意のある関係として描く",
-      "previous": ["成人向け。登場人物は全員18歳以上の成人として描き、学生や子どもとして描かない。性的な場面は合意のある関係として描く"]
+      "previous": [
+        "成人向け。登場人物は全員18歳以上の成人として描き、学生や子どもとして描かない。性的な場面は合意のある関係として描く"
+      ]
     },
     {
       "key": "draft.content_rule",
@@ -193,7 +388,9 @@
       "description": "漫画の下書きの大枠シナリオと台本の指示文に入れる決まり。",
       "kind": "text",
       "value": "全年齢向け(一般誌・少年誌の水準)。性的な描写はしない。水着・体操服・パジャマなど、日常や行事で自然な服装は描いてよい",
-      "previous": ["全年齢向け。露出・性的な描写はしない"]
+      "previous": [
+        "全年齢向け。露出・性的な描写はしない"
+      ]
     },
     {
       "key": "draft.default_negative",
@@ -214,15 +411,51 @@
       "kind": "words",
       "match": "word",
       "value": [
-        "breasts", "breast", "nipples", "cleavage", "ass", "butt", "crotch",
-        "pussy", "penis", "nude", "naked", "underwear", "panties", "bra", "lingerie",
-        "topless", "bottomless"
+        "breasts",
+        "breast",
+        "nipples",
+        "cleavage",
+        "ass",
+        "butt",
+        "crotch",
+        "pussy",
+        "penis",
+        "nude",
+        "naked",
+        "underwear",
+        "panties",
+        "bra",
+        "lingerie",
+        "topless",
+        "bottomless"
       ],
       "previous": [
         [
-          "breasts", "breast", "nipples", "cleavage", "navel", "thighs", "thigh", "ass", "butt", "hips", "crotch",
-          "pussy", "penis", "nude", "naked", "underwear", "panties", "bra", "lingerie", "swimsuit", "bikini",
-          "topless", "bottomless", "sweat", "wet"
+          "breasts",
+          "breast",
+          "nipples",
+          "cleavage",
+          "navel",
+          "thighs",
+          "thigh",
+          "ass",
+          "butt",
+          "hips",
+          "crotch",
+          "pussy",
+          "penis",
+          "nude",
+          "naked",
+          "underwear",
+          "panties",
+          "bra",
+          "lingerie",
+          "swimsuit",
+          "bikini",
+          "topless",
+          "bottomless",
+          "sweat",
+          "wet"
         ]
       ]
     },
@@ -241,7 +474,20 @@
       "description": "未成年の手がかりのタグのうち、成人も衣装として着るもの。キャラに 18 歳以上の年齢を入れてあるか、タグの組み合わせで成人を表している(成人を表すタグ)ときは、未成年の手がかりにしない。子どもの体・年齢・身分を表す語(loli・child・student など)は、ここに足しても例外にならない。",
       "kind": "patterns",
       "match": "word",
-      "value": ["school ?uniform", "serafuku", "gym uniform"]
+      "value": [
+        "school ?uniform",
+        "serafuku",
+        "gym uniform"
+      ]
+    },
+    {
+      "key": "safety.never_costume_tags",
+      "group": "未成年キャラの安全対策",
+      "label": "衣装の例外にしない語(追加分)",
+      "description": "成人の衣装として扱うタグ(コスプレ)に当たっても、例外にしない語(子どもの体・年齢・身分を表す語)。ここに足した語は、成人の年齢を入れても未成年の手がかりのまま。下の「固定」の語はコードにあり、画面では外せない。",
+      "kind": "patterns",
+      "match": "word",
+      "value": []
     },
     {
       "key": "safety.adult_markers",
@@ -250,7 +496,14 @@
       "description": "これがタグにあれば、成人の衣装として扱うタグ(制服 など)を未成年の手がかりにしない。",
       "kind": "patterns",
       "match": "word",
-      "value": ["mature female", "mature male", "adult", "milf", "office lady", "adult cosplay"]
+      "value": [
+        "mature female",
+        "mature male",
+        "adult",
+        "milf",
+        "office lady",
+        "adult cosplay"
+      ]
     },
     {
       "key": "similar.adult_naming_rule",
@@ -267,7 +520,12 @@
       "description": "「性的な場面とみなすタグ」に加えて、これがあるプロンプト・場面を成人向けと自動判定する。",
       "kind": "patterns",
       "match": "word",
-      "value": ["explicit", "uncensored", "hentai", "r-?18"]
+      "value": [
+        "explicit",
+        "uncensored",
+        "hentai",
+        "r-?18"
+      ]
     },
     {
       "key": "library.adult_text",
@@ -277,9 +535,40 @@
       "kind": "patterns",
       "match": "substring",
       "value": [
-        "セックス", "膣", "陰茎", "陰核", "ペニス", "ちんぽ", "ちんちん", "おちんぽ", "まんこ", "クリトリス", "乳首",
-        "愛液", "精液", "射精", "中出し", "フェラ", "手マン", "潮吹き", "全裸", "性器", "勃起", "肉棒", "秘部", "秘所",
-        "アナル", "肛門", "ディルド", "バイブ", "絶頂", "喘ぎ", "喘いで", "イっちゃ", "イッちゃ", "イク[ッっ！!]"
+        "セックス",
+        "膣",
+        "陰茎",
+        "陰核",
+        "ペニス",
+        "ちんぽ",
+        "ちんちん",
+        "おちんぽ",
+        "まんこ",
+        "クリトリス",
+        "乳首",
+        "愛液",
+        "精液",
+        "射精",
+        "中出し",
+        "フェラ",
+        "手マン",
+        "潮吹き",
+        "全裸",
+        "性器",
+        "勃起",
+        "肉棒",
+        "秘部",
+        "秘所",
+        "アナル",
+        "肛門",
+        "ディルド",
+        "バイブ",
+        "絶頂",
+        "喘ぎ",
+        "喘いで",
+        "イっちゃ",
+        "イッちゃ",
+        "イク[ッっ！!]"
       ]
     },
     {
@@ -300,7 +589,11 @@
       "description": "pixiv から描き文字の素材を取り込むとき、このタグがあれば成人向けの素材にする(pixiv の年齢制限が付いた作品は、タグに関係なく成人向け)。完全一致。",
       "kind": "words",
       "match": "exact",
-      "value": ["R-18", "R18", "R-18G"]
+      "value": [
+        "R-18",
+        "R18",
+        "R-18G"
+      ]
     },
     {
       "key": "body_base.minor_tags",
@@ -309,8 +602,62 @@
       "description": "キャラシート(名前・トリガーワード・容姿・体型・服装・画風)にこれがあると、裸の素体を当てない・描かない。素体スーツは胸・曲線の設定を使わず控えめに描く。裸の素体の足すタグにも入れられない。キャラ別データセットの未成年ガードとは別に持つ(あちらを空にしても、素体はこれで判定する)。",
       "kind": "patterns",
       "match": "word",
-      "value": ["jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit", "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?", "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage", "minor", "young(?! (woman|women|man|men|adult|adults|lady|ladies))", "aged down", "toddler", "little girl", "little boy", "baby", "infant"],
-      "previous": [["jk", "joshi ?kousei", "school ?uniform", "serafuku", "gym uniform", "school ?swimsuit", "randoseru", "kindergarten", "(high|middle|elementary) school", "school ?(girl|boy)s?", "students?", "loli", "shota", "child(ren)?", "kids?", "teen(age|ager)?", "underage", "minor", "young", "aged down", "toddler", "little girl", "little boy", "baby", "infant"]]
+      "value": [
+        "jk",
+        "joshi ?kousei",
+        "school ?uniform",
+        "serafuku",
+        "gym uniform",
+        "school ?swimsuit",
+        "randoseru",
+        "kindergarten",
+        "(high|middle|elementary) school",
+        "school ?(girl|boy)s?",
+        "students?",
+        "loli",
+        "shota",
+        "child(ren)?",
+        "kids?",
+        "teen(age|ager)?",
+        "underage",
+        "minor",
+        "young(?! (woman|women|man|men|adult|adults|lady|ladies))",
+        "aged down",
+        "toddler",
+        "little girl",
+        "little boy",
+        "baby",
+        "infant"
+      ],
+      "previous": [
+        [
+          "jk",
+          "joshi ?kousei",
+          "school ?uniform",
+          "serafuku",
+          "gym uniform",
+          "school ?swimsuit",
+          "randoseru",
+          "kindergarten",
+          "(high|middle|elementary) school",
+          "school ?(girl|boy)s?",
+          "students?",
+          "loli",
+          "shota",
+          "child(ren)?",
+          "kids?",
+          "teen(age|ager)?",
+          "underage",
+          "minor",
+          "young",
+          "aged down",
+          "toddler",
+          "little girl",
+          "little boy",
+          "baby",
+          "infant"
+        ]
+      ]
     },
     {
       "key": "body_base.nude_tags",
@@ -319,7 +666,9 @@
       "description": "裸の素体(成人キャラだけ)の1枚に足すタグ。乳首は描き、性器は描かない(股はのっぺりさせる)。",
       "kind": "text",
       "value": "nude, completely nude, nipples, featureless crotch",
-      "previous": ["nude, completely nude, barbie doll anatomy, featureless breasts, featureless crotch, no nipples"]
+      "previous": [
+        "nude, completely nude, barbie doll anatomy, featureless breasts, featureless crotch, no nipples"
+      ]
     },
     {
       "key": "body_base.nude_detail_tags",
@@ -328,7 +677,22 @@
       "description": "裸の素体(成人キャラだけ)の「足すタグ」に、性的な場面のタグでも入れてよい体の形のタグ(3Dモデルの乳首の部品を、形ごと・体の状態ごとに作るため)。完全一致。性器のタグはここに入れない(性器は描かない)。",
       "kind": "words",
       "match": "exact",
-      "value": ["nipples", "puffy nipples", "inverted nipples", "large nipples", "small nipples", "dark nipples", "pink nipples", "areolae", "large areolae", "small areolae", "dark areolae", "puffy areolae", "pregnant", "pregnant belly"]
+      "value": [
+        "nipples",
+        "puffy nipples",
+        "inverted nipples",
+        "large nipples",
+        "small nipples",
+        "dark nipples",
+        "pink nipples",
+        "areolae",
+        "large areolae",
+        "small areolae",
+        "dark areolae",
+        "puffy areolae",
+        "pregnant",
+        "pregnant belly"
+      ]
     },
     {
       "key": "body_base.nude_negative",
@@ -337,7 +701,9 @@
       "description": "裸の素体の1枚に足すネガティブ(R18 のネガティブと一緒に入る)。",
       "kind": "text",
       "value": "pussy, penis, testicles, pubic hair, genitals, sex, cum, aroused, seductive smile, spread legs, sexually suggestive, blush",
-      "previous": ["nipples, areolae, pussy, penis, testicles, pubic hair, genitals, sex, cum, aroused, seductive smile, spread legs, sexually suggestive, blush"]
+      "previous": [
+        "nipples, areolae, pussy, penis, testicles, pubic hair, genitals, sex, cum, aroused, seductive smile, spread legs, sexually suggestive, blush"
+      ]
     },
     {
       "key": "body_base.suit_negative",
@@ -346,7 +712,9 @@
       "description": "素体スーツ・水着素体(全年齢)の1枚に足すネガティブ(全年齢のネガティブと一緒に入る)。胸の谷間は体型のうちなので入れない。",
       "kind": "text",
       "value": "see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout",
-      "previous": ["cleavage, see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout"]
+      "previous": [
+        "cleavage, see-through, latex, shiny clothes, black bodysuit, covered nipples, cameltoe, wedgie, cutout"
+      ]
     },
     {
       "key": "body_base.modest_negative",
@@ -355,7 +723,9 @@
       "description": "未成年の手がかりがあるキャラの素体スーツに、さらに足すネガティブ(胸・腰を寄りや構図で強調しない)。体型そのものはキャラのまま描く(少年誌の一般的なキャラの体型を消さない)。",
       "kind": "text",
       "value": "ass focus, breast focus, from below, skin-tight, sexualized, seductive, sexy pose",
-      "previous": ["ass focus, breast focus, from below, curvy, wide hips, large breasts, huge breasts, skin-tight, sexualized, seductive, sexy pose"]
+      "previous": [
+        "ass focus, breast focus, from below, curvy, wide hips, large breasts, huge breasts, skin-tight, sexualized, seductive, sexy pose"
+      ]
     },
     {
       "key": "body_base.modest_skip",
@@ -365,7 +735,12 @@
       "kind": "words",
       "match": "exact",
       "value": [],
-      "previous": [["chest", "build:curvy"]]
+      "previous": [
+        [
+          "chest",
+          "build:curvy"
+        ]
+      ]
     },
     {
       "key": "body_base.male_adult_tags",
@@ -374,6 +749,53 @@
       "description": "性別が男性(値 male)の裸の素体に、成人として描かせるために足すタグ。女性は「R18 で足すタグ」を使う。",
       "kind": "text",
       "value": "adult, mature male"
+    },
+    {
+      "key": "body_base.rom_negative",
+      "group": "素体",
+      "label": "可動域(ヨガ)の部位のネガティブ",
+      "description": "まとまりが「可動域(ヨガ)」の部位の1枚に足すネガティブ。脚を大きく開くので、股・肛門・陰毛・修正を打ち消す(素体の種類のネガティブと一緒に入る)。",
+      "kind": "text",
+      "value": "pussy, cameltoe, anus, pubic hair, mosaic censoring, bar censor, censored"
+    },
+    {
+      "key": "body_base.pregnancy_negative",
+      "group": "素体",
+      "label": "妊娠の経過の部位のネガティブ",
+      "description": "まとまりが「妊娠の経過」の部位の1枚に足すネガティブ(素体の種類のネガティブと一緒に入る)。肛門は打ち消さない(2026-11 ユーザーの判断)。",
+      "kind": "text",
+      "value": "pussy, cameltoe, pubic hair, mosaic censoring, bar censor, censored"
+    },
+    {
+      "key": "body_base.open_legs_allowed",
+      "group": "素体",
+      "label": "脚を開くポーズで外すネガティブ",
+      "description": "脚を開くポーズ(可動域のヨガ)の部位だけ、素体のネガティブ(裸の素体のネガティブ など)から外すタグ。完全一致(重み付きでも当たる)。減らすほど守りが強い。",
+      "kind": "words",
+      "match": "exact",
+      "stricter": "fewer",
+      "value": [
+        "spread legs"
+      ]
+    },
+    {
+      "key": "body_base.adult_only_groups",
+      "group": "素体",
+      "label": "成人キャラだけで描く部位のまとまり",
+      "description": "素体の部位のまとまり(id)のうち、素体の種類(素体スーツ・水着素体も)によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描くもの。pregnancy は妊娠の経過。",
+      "kind": "words",
+      "match": "exact",
+      "value": [
+        "pregnancy"
+      ]
+    },
+    {
+      "key": "collection.content_negative",
+      "group": "コレクション",
+      "label": "コレクションで描いてはいけないもの",
+      "description": "下着・水着のコレクションとからかいコレクションの、どのコマにも入れるネガティブ(乳首・乳輪・性器・cameltoe など)。",
+      "kind": "text",
+      "value": "nipples, areolae, nipple outline, covered nipples, pussy, genitals, pubic hair, anus, cameltoe, crotch focus, spread legs, see-through panties, child, loli, multiple views"
     }
   ]
 }

@@ -151,6 +151,15 @@ SETTINGS: tuple[Setting, ...] = (
         "plain navy tankini, swim shorts, matte fabric, barefoot",
     ),
     Setting(
+        "body_base.pregnant_drop_tags",
+        "素体",
+        "妊娠の経過で外す体型のタグ",
+        "素体の部位のまとまりが「妊娠の経過」のとき、プロンプトから外すタグ(お腹とぶつかる細身・腹筋のタグ。素体の選択肢・足すタグ・"
+        "キャラの容姿から)。カンマ区切り。重み付きでも当たる。",
+        "text",
+        "slim, slender, thin, skinny, flat stomach, narrow waist, slender waist, toned, toned stomach, abs, athletic, muscular",
+    ),
+    Setting(
         "model_3d.check_attempts",
         "素体の3Dモデル",
         "自動チェックで作る回数",

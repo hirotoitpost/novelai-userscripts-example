@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from . import content_guard
+
 Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit"]
 
 KINDS: dict[str, str] = {
@@ -41,11 +43,7 @@ BODIES = {
     "curvy": "shiny skin, curvy, slim waist, wide hips, thick thighs, skindentation",
 }
 
-# 打ち消す: 描いてはいけないもの(どのコマにも入れる)
-CONTENT_NEGATIVE = (
-    "nipples, areolae, nipple outline, covered nipples, pussy, genitals, pubic hair, anus, cameltoe, crotch focus, "
-    "spread legs, see-through panties, child, loli, multiple views"
-)
+# 打ち消す: 描いてはいけないもの(どのコマにも入れる)は、コンテンツガードの collection.content_negative(開発管理者のページ)
 HAND_NEGATIVE = "bad hands, malformed hands, extra fingers, missing fingers, fused fingers, twisted wrist, extra arms, extra hands"
 # 食い込みのポーズ以外では、引っ張る・食い込む絵にしない
 NO_WEDGIE = "wedgie, pulling panties"
@@ -278,7 +276,7 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
         raise ValueError("テーマが1つもありません。")
     stage, item = STAGES[kind], ITEM[kind]
     explicit = "explicit" if options.explicit else ""
-    base_negative = _join(CONTENT_NEGATIVE, HAND_NEGATIVE)
+    base_negative = _join(content_guard.text("collection.content_negative"), HAND_NEGATIVE)
     ids = [int(c["id"]) for c in characters]
     names = "・".join(str(c["name"]) for c in characters)
 
