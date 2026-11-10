@@ -17,6 +17,8 @@ interface Rule {
   /** choice の選択肢(先のものほど強い守り) */
   choices: { value: string; label: string }[]
   updated_at: string | null
+  /** コードにある固定の分(画面では変えられない最低線) */
+  fixed?: string[]
 }
 
 type Direction = 'same' | 'stricter' | 'looser' | 'invalid'
@@ -280,6 +282,11 @@ export default function ContentGuardRules({ onSaved }: { onSaved?: (what: string
                   {' '}<span className="adm-hint">{list ? `${(rule.value as string[]).length}件` : shown(rule, rule.value)}</span>
                 </summary>
                 <p className="adm-hint">{rule.description}</p>
+                {rule.fixed && rule.fixed.length > 0 && (
+                  <p className="adm-hint">
+                    固定(コードにあり、外せない。{rule.fixed.length}件): <code>{rule.fixed.join(', ')}</code>
+                  </p>
+                )}
                 <p className="adm-hint">
                   <code>{rule.key}</code>
                   {list && ` ・ 1行に1つ(${count}件)`}

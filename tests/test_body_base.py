@@ -615,6 +615,100 @@ def test_yoga_range_of_motion_parts_open_the_legs(client: TestClient) -> None:
     assert {"id": "rom", "label": "可動域(ヨガ)"} in groups
 
 
+def test_pregnancy_parts_show_the_stages_from_four_views(client: TestClient) -> None:
+    # 妊娠の経過: 3か月・5か月・7か月・臨月 × 正面・側面・背面・斜め。裸・素体スーツ・水着素体のどれでも描く
+    preg = [p for p in body_base.PARTS if p.group == "pregnancy"]
+    assert len(preg) == 16 and all(p.nude and not p.nude_only and body_base.adult_only(p) for p in preg)
+    assert not body_base.adult_only(body_base.ITEMS["front"])
+    assert {p.key for p in preg} >= {"preg3_front", "preg5_side", "preg7_back", "preg9_three_quarter"}
+    # 背面は全身を強めない(お腹を背中側に描いた)。ほかは全身を強める
+    assert "full body::" not in body_base.ITEMS["preg9_back"].tags and body_base.ITEMS["preg9_back"].rear
+    assert "1.3::full body::" in body_base.ITEMS["preg9_front"].tags
+    # 股の打ち消しは部位ではなくガード(body_base.pregnancy_negative)から足す。部位を画面で書き換えても外れない
+    assert "pussy" not in body_base.ITEMS["preg5_side"].negative
+    assert "pussy" in body_base.part_negative("", body_base.ITEMS["preg5_side"])
+
+    adult = _character(client, "preg", is_adult=1, age=22)
+    base = _base(client, name="スーツ", kind="suit", build="slender", extra_tags="slender waist, flat stomach, medium breasts")
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": base["id"]})
+    res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                      json={"keys": ["preg9_side", "front"], "auto_check": False})
+    assert res.text.count('"status": "ok"') == 2
+    (preg_prompt, preg_negative), (front_prompt, _) = client.calls[-2:]  # type: ignore[attr-defined]
+    # お腹とぶつかる体型のタグは、妊娠の部位だけ外す
+    assert "huge belly" in preg_prompt and "barefoot" in preg_prompt and "medium breasts" in preg_prompt
+    assert "slender waist" not in preg_prompt and "flat stomach" not in preg_prompt.replace(preg_negative, "")
+    assert "slender waist" in front_prompt and "pussy" in preg_negative
+    groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
+    assert {"id": "pregnancy", "label": "妊娠の経過"} in groups
+
+    # 成人フラグ・年齢の無いキャラには、全年齢の素体でも描かない(3か月のタグには pregnant が入らない)
+    for index, sheet in enumerate(({"is_adult": 0}, {"is_adult": 1}, {"is_adult": 1, "age": 16})):
+        other = _character(client, f"preg_other{index}", **sheet)
+        client.put(f"/api/lora-dataset/character/{other['id']}/body-base", json={"body_base_id": base["id"]})
+        res = client.post(f"/api/lora-dataset/character/{other['id']}/body-base",
+                          json={"keys": ["preg3_front"], "auto_check": False})
+        assert res.status_code == 403, res.text
+
+
+def test_body_base_part_guards_are_edited_on_the_screens(client: TestClient) -> None:
+    # 可動域・妊娠の経過の打ち消し、脚を開くポーズで外すタグ、成人キャラだけのまとまりはガード、
+    # 妊娠の経過で外す体型のタグは設定(どれも開発管理者のページで編集する)
+    from python import app_settings, content_guard
+
+    rom = body_base.ITEMS["yoga_middle_split"]
+    content_guard.set_value("body_base.rom_negative", "pussy, mosaic censoring")
+    content_guard.set_value("body_base.open_legs_allowed", [])
+    try:
+        negative = body_base.part_negative("spread legs, blush", rom)
+        assert "mosaic censoring" in negative and "anus" not in negative and "spread legs" in negative
+    finally:
+        content_guard.reset("body_base.rom_negative")
+        content_guard.reset("body_base.open_legs_allowed")
+    assert "anus" in body_base.part_negative("", rom) and "spread legs" not in body_base.part_negative("spread legs", rom)
+
+    content_guard.set_value("body_base.adult_only_groups", ["pregnancy", "rom"])
+    try:
+        assert body_base.adult_only(rom)
+    finally:
+        content_guard.reset("body_base.adult_only_groups")
+    assert not body_base.adult_only(rom)
+
+    character = {"appearance_tags": "1girl"}
+    base = {"kind": "suit", "extra_tags": "slender waist, abs, medium breasts"}
+    part = body_base.ITEMS["preg7_front"]
+    assert "slender waist" not in body_base.prompt(character, base, part, {})
+    app_settings.set_value("body_base.pregnant_drop_tags", "abs")
+    try:
+        text = body_base.prompt(character, base, part, {})
+        assert "slender waist" in text and "abs" not in text.split(", ")
+    finally:
+        app_settings.set_value("body_base.pregnant_drop_tags", None)
+
+    rules = {r["key"]: r for r in content_guard.describe()}
+    assert {"body_base.rom_negative", "body_base.pregnancy_negative", "body_base.open_legs_allowed",
+            "body_base.adult_only_groups", "collection.content_negative"} <= set(rules)
+
+
+def test_never_costume_words_can_be_added_but_the_fixed_floor_stays() -> None:
+    # 衣装の例外にしない語: 固定の語(loli・child など)は外せない最低線として画面に出し、足す語はガードで編集する
+    from python import content_guard
+
+    rule = content_guard.describe_one("safety.never_costume_tags")
+    assert "loli(ta)?" in rule["fixed"] and rule["value"] == []
+    content_guard.set_value("safety.adult_costume_tags", ["school ?uniform", "loli", "maid"])
+    try:
+        assert content_guard.is_costume("school uniform") and content_guard.is_costume("maid")
+        assert not content_guard.is_costume("loli")  # 衣装のタグに足しても、固定の語は例外にならない
+        content_guard.set_value("safety.never_costume_tags", ["maid"])
+        assert not content_guard.is_costume("maid")
+        # 足した語を外すのは守りが緩む変更(ガードのパスワードが要る)
+        assert content_guard.change_direction("safety.never_costume_tags", [])["direction"] == "looser"
+    finally:
+        content_guard.reset("safety.adult_costume_tags")
+        content_guard.reset("safety.never_costume_tags")
+
+
 def test_body_base_uses_the_reference_image_by_default() -> None:
     # 素体は参照画像を既定で使う(顔・画風をキャラシートの絵に寄せる)。顔・表情シートは今までどおり
     from python.models import BodyBaseSheetRequest, FaceSheetRequest

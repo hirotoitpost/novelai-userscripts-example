@@ -47,7 +47,8 @@ class BodyPart:
     rear: bool = False
     # 裸の素体だけで描く部位(乳首のアップ。素体スーツ・水着素体では描かない)
     nude_only: bool = False
-    # 脚を開くポーズ(可動域のヨガ)。素体のネガティブの「脚を開かない」タグ(OPEN_LEGS_NEGATIVE)を、この部位だけ外す
+    # 脚を開くポーズ(可動域のヨガ)。素体のネガティブの「脚を開かない」タグ(ガードの body_base.open_legs_allowed)を、
+    # この部位だけ外す
     open_legs: bool = False
 
 
@@ -58,6 +59,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("upper_limb", "上肢"),
     ("lower_limb", "下肢"),
     ("rom", "可動域(ヨガ)"),
+    ("pregnancy", "妊娠の経過"),
 )
 
 _STAND = "full body, standing, arms at sides, expressionless"
@@ -177,12 +179,12 @@ PARTS: tuple[BodyPart, ...] = (
 _HIP = ("1.2::hip joint::, hip bones, iliac crest, inguinal crease, 1.1::groin crease::, greater trochanter, inner thighs, "
         "adductor muscles, gluteal fold, detailed anatomy, anatomical accuracy")
 _ROM_FACE = "expressionless, closed mouth"
-_ROM_NEGATIVE = "pussy, cameltoe, anus, pubic hair, mosaic censoring, bar censor, censored"
-# 素体のネガティブにある、脚を開かせないタグ(裸の素体のガード body_base.nude_negative)。open_legs の部位では外す
-OPEN_LEGS_NEGATIVE = frozenset({"spread legs"})
+# 股・肛門・修正の打ち消しは、ガードの body_base.rom_negative(part_negative でまとまりごとに足す)。
+# 脚を開かせないタグ(裸の素体のガード body_base.nude_negative の spread legs)は、open_legs の部位では外す
+# (外すタグはガードの body_base.open_legs_allowed)
 ROM_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {pose}, {_HIP}, {_ROM_FACE}", "rom", check,
-             negative=join_tags(_ROM_NEGATIVE, _BARE_FEET_NEGATIVE, negative), open_legs=True)
+             negative=join_tags(_BARE_FEET_NEGATIVE, negative), open_legs=True)
     for key, label, pose, check, negative in (
         ("yoga_front_split", "前後開脚(屈曲・伸展)",
          "1.4::front split::, hanumanasana, splits, front leg extended forward, back leg extended backward, both legs straight, "
@@ -219,7 +221,42 @@ ROM_PARTS: tuple[BodyPart, ...] = tuple(
          "backbend, wheel pose, arched back, plow pose"),
     )
 )
-PARTS = PARTS + ROM_PARTS
+
+# 妊娠の経過: 3か月・5か月・7か月・臨月を、全身の正面・側面・背面・斜めで描く(ユーザーの依頼 2026-11-10)。
+# 裸の素体・素体スーツ・水着素体のどれでも描ける。お腹の大きさは段階ごとに重みで抑える(2026-11 の試し: 重みなしでは
+# 5か月がもう臨月に近かった)。正面・側面・斜めは全身を強める(裸の素体で、腰の上で切れた)。背面は全身を強めると、
+# お腹を背中側に描いた(ゆら・臨月)ので、全身の背面のまま(ユーザーの判断で、最初の絵に戻した)
+_PREG_FULL = "1.3::full body::, head to toe, feet visible"
+_PREG_FULL_NEGATIVE = "close-up, cropped legs, feet out of frame, lower body cropped"
+# 股・修正の打ち消しはガードの body_base.pregnancy_negative、成人キャラだけにするのはガードの
+# body_base.adult_only_groups、お腹とぶつかる体型のタグは設定の body_base.pregnant_drop_tags(どれも画面で編集する)
+_PREG_STAGES = (
+    ("3", "3か月", "1.1::slight belly bulge::, small belly, lower belly slightly rounded",
+     "big belly, huge belly, pregnant belly", "外見はほぼ変わらない。下腹(恥骨の上)がわずかに丸くなる"),
+    ("5", "5か月", "0.8::pregnant::, small round belly, slight belly bulge",
+     "big belly, huge belly, very large belly", "下腹がはっきりふくらむ。子宮底は臍の少し下"),
+    ("7", "7か月", "pregnant, round belly, 0.9::big belly::",
+     "flat stomach, huge belly, very large belly", "臍の上までふくらむ。臍が浅くなり、腰が少し反る"),
+    ("9", "臨月", "1.1::pregnant::, big belly, 1.1::huge belly::, belly protruding",
+     "flat stomach, small belly", "子宮底はみぞおちの近く。お腹が前へ突き出し、反り腰で重心が後ろへ寄る"),
+)
+_PREG_VIEWS = ("front", "side", "back", "three_quarter")
+
+
+def _pregnancy_part(stage: tuple[str, str, str, str, str], view: BodyPart) -> BodyPart:
+    key, label, tags, negative, check = stage
+    full = view.key != "back"
+    return dataclasses.replace(
+        view, key=f"preg{key}_{view.key}", label=f"妊娠{label}・{view.label}", group="pregnancy", check=check,
+        tags=join_tags(_PREG_FULL if full else "", view.tags, tags),
+        negative=join_tags(view.negative, negative, _PREG_FULL_NEGATIVE if full else ""),
+    )
+
+
+PREGNANCY_PARTS: tuple[BodyPart, ...] = tuple(
+    _pregnancy_part(stage, next(p for p in PARTS if p.key == view)) for stage in _PREG_STAGES for view in _PREG_VIEWS
+)
+PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS
 
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
@@ -374,12 +411,15 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
-        _BARE_FEET if part.group in ("whole", "rom") else "",
+        _BARE_FEET if part.group in ("whole", "rom", "pregnancy") else "",
         BACKGROUND,
         character.get("style_tags"),
     )
     if part.rear:
         tags = ", ".join(t for t in split_tags(tags) if not _REAR_HIDDEN_RE.search(t))
+    if part.group == "pregnancy":
+        drop = {_plain_weight(t) for t in split_tags(str(app_settings.get("body_base.pregnant_drop_tags")))}
+        tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in drop)
     return tags
 
 
@@ -412,12 +452,24 @@ def outfit_prompt(character: dict[str, Any], base: dict[str, Any], outfit_tags: 
 def part_negative(negative_prompt: str, part: BodyPart) -> str:
     """
     1枚のネガティブ: 素体全体のネガティブに部位のネガティブを足す。脚を開くポーズ(open_legs)では、
-    素体のネガティブの「脚を開かない」タグ(OPEN_LEGS_NEGATIVE)を外す。
+    素体のネガティブの「脚を開かない」タグ(ガードの body_base.open_legs_allowed)を外す。まとまりごとの
+    打ち消し(ガードの body_base.<まとまり>_negative。可動域・妊娠の経過)も足す。
     """
     tags = split_tags(negative_prompt)
     if part.open_legs:
-        tags = [t for t in tags if _plain_weight(t) not in OPEN_LEGS_NEGATIVE]
-    return join_tags(", ".join(tags), part.negative)
+        allowed = {_plain_weight(t) for t in content_guard.words("body_base.open_legs_allowed")}
+        tags = [t for t in tags if _plain_weight(t) not in allowed]
+    group = _GROUP_NEGATIVE.get(part.group)
+    return join_tags(", ".join(tags), part.negative, content_guard.text(group) if group else "")
+
+
+# まとまりごとに足す打ち消し(ガードの項目)。部位の画面で部位のネガティブを書き換えても外れない
+_GROUP_NEGATIVE = {"rom": "body_base.rom_negative", "pregnancy": "body_base.pregnancy_negative"}
+
+
+def adult_only(part: BodyPart) -> bool:
+    """成人キャラだけで描く部位か(まとまりがガードの body_base.adult_only_groups にある。素体の種類によらない)。"""
+    return part.group in content_guard.words("body_base.adult_only_groups")
 
 
 def negative(base: dict[str, Any], part: BodyPart | None = None, *, modest: bool = False) -> str:
