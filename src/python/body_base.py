@@ -49,6 +49,8 @@ class BodyPart:
     nude_only: bool = False
     # 脚を開くポーズ(可動域のヨガ)。素体のネガティブの「脚を開かない」タグ(OPEN_LEGS_NEGATIVE)を、この部位だけ外す
     open_legs: bool = False
+    # 妊娠の経過。成人キャラだけに描く。お腹とぶつかる体型のタグ(PREGNANT_DROP)を、この部位だけ外す
+    pregnant: bool = False
 
 
 GROUPS: tuple[tuple[str, str], ...] = (
@@ -58,6 +60,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("upper_limb", "上肢"),
     ("lower_limb", "下肢"),
     ("rom", "可動域(ヨガ)"),
+    ("pregnancy", "妊娠の経過"),
 )
 
 _STAND = "full body, standing, arms at sides, expressionless"
@@ -219,7 +222,47 @@ ROM_PARTS: tuple[BodyPart, ...] = tuple(
          "backbend, wheel pose, arched back, plow pose"),
     )
 )
-PARTS = PARTS + ROM_PARTS
+
+# 妊娠の経過: 3か月・5か月・7か月・臨月を、全身の正面・側面・背面・斜めで描く(ユーザーの依頼 2026-11-10)。
+# 裸の素体・素体スーツ・水着素体のどれでも描ける。お腹の大きさは段階ごとに重みで抑える(2026-11 の試し: 重みなしでは
+# 5か月がもう臨月に近かった)。正面・側面・斜めは全身を強める(裸の素体で、腰の上で切れた)。背面は全身を強めると、
+# お腹を背中側に描いた(ゆら・臨月)ので、全身の背面のまま(ユーザーの判断で、最初の絵に戻した)
+_PREG_FULL = "1.3::full body::, head to toe, feet visible"
+_PREG_FULL_NEGATIVE = "close-up, cropped legs, feet out of frame, lower body cropped"
+_PREG_NEGATIVE = "pussy, cameltoe, pubic hair, mosaic censoring, bar censor, censored"
+# お腹とぶつかる体型のタグ(素体の選択肢・足すタグから、妊娠の部位だけ外す)
+PREGNANT_DROP = frozenset({
+    "slim", "slender", "thin", "skinny", "flat stomach", "narrow waist", "slender waist", "toned", "toned stomach", "abs",
+    "athletic", "muscular",
+})
+_PREG_STAGES = (
+    ("3", "3か月", "1.1::slight belly bulge::, small belly, lower belly slightly rounded",
+     "big belly, huge belly, pregnant belly", "外見はほぼ変わらない。下腹(恥骨の上)がわずかに丸くなる"),
+    ("5", "5か月", "0.8::pregnant::, small round belly, slight belly bulge",
+     "big belly, huge belly, very large belly", "下腹がはっきりふくらむ。子宮底は臍の少し下"),
+    ("7", "7か月", "pregnant, round belly, 0.9::big belly::",
+     "flat stomach, huge belly, very large belly", "臍の上までふくらむ。臍が浅くなり、腰が少し反る"),
+    ("9", "臨月", "1.1::pregnant::, big belly, 1.1::huge belly::, belly protruding",
+     "flat stomach, small belly", "子宮底はみぞおちの近く。お腹が前へ突き出し、反り腰で重心が後ろへ寄る"),
+)
+_PREG_VIEWS = ("front", "side", "back", "three_quarter")
+
+
+def _pregnancy_part(stage: tuple[str, str, str, str, str], view: BodyPart) -> BodyPart:
+    key, label, tags, negative, check = stage
+    full = view.key != "back"
+    return dataclasses.replace(
+        view, key=f"preg{key}_{view.key}", label=f"妊娠{label}・{view.label}", group="pregnancy", check=check,
+        tags=join_tags(_PREG_FULL if full else "", view.tags, tags),
+        negative=join_tags(view.negative, negative, _PREG_FULL_NEGATIVE if full else "", _PREG_NEGATIVE),
+        pregnant=True,
+    )
+
+
+PREGNANCY_PARTS: tuple[BodyPart, ...] = tuple(
+    _pregnancy_part(stage, next(p for p in PARTS if p.key == view)) for stage in _PREG_STAGES for view in _PREG_VIEWS
+)
+PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS
 
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
@@ -374,12 +417,14 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
-        _BARE_FEET if part.group in ("whole", "rom") else "",
+        _BARE_FEET if part.group in ("whole", "rom", "pregnancy") else "",
         BACKGROUND,
         character.get("style_tags"),
     )
     if part.rear:
         tags = ", ".join(t for t in split_tags(tags) if not _REAR_HIDDEN_RE.search(t))
+    if part.pregnant:
+        tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in PREGNANT_DROP)
     return tags
 
 

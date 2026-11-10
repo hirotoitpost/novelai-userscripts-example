@@ -1337,6 +1337,14 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
     nude = base["kind"] == "nude"
     parts = [body_parts[k] for k in dict.fromkeys(req.keys)]
     reason, modest = _age_checks(character)
+    # 妊娠の経過は、素体の種類によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)
+    # だけ。3か月のタグには成人キャラだけのタグ(pregnant)が入らないので、部位で止める
+    pregnant = [p.label for p in parts if p.pregnant]
+    if pregnant and (reason or modest):
+        raise HTTPException(
+            status_code=403,
+            detail=f"妊娠の経過は、成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描きます: {', '.join(pregnant)}",
+        )
     if nude:
         if reason:
             raise HTTPException(status_code=403, detail=reason)

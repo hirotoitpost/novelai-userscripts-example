@@ -623,7 +623,7 @@ class CharacterBodyBaseRequest(BaseModel):
 class SheetItemRequest(BaseModel):
     """
     顔・表情シート・素体の項目の追加と書き換え(全キャラ共通)。group は face なら angle / expression、body なら
-    whole / head / trunk / upper_limb / lower_limb / rom(可動域・ヨガ)。tags はその項目で足すプロンプト(構図を含む)。
+    whole / head / trunk / upper_limb / lower_limb / rom(可動域・ヨガ) / pregnancy(妊娠の経過)。tags はその項目で足すプロンプト(構図を含む)。
     """
 
     label: str = Field(min_length=1, max_length=40)

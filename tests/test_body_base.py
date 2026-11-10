@@ -615,6 +615,39 @@ def test_yoga_range_of_motion_parts_open_the_legs(client: TestClient) -> None:
     assert {"id": "rom", "label": "可動域(ヨガ)"} in groups
 
 
+def test_pregnancy_parts_show_the_stages_from_four_views(client: TestClient) -> None:
+    # 妊娠の経過: 3か月・5か月・7か月・臨月 × 正面・側面・背面・斜め。裸・素体スーツ・水着素体のどれでも描く
+    preg = [p for p in body_base.PARTS if p.group == "pregnancy"]
+    assert len(preg) == 16 and all(p.pregnant and p.nude and not p.nude_only for p in preg)
+    assert {p.key for p in preg} >= {"preg3_front", "preg5_side", "preg7_back", "preg9_three_quarter"}
+    # 背面は全身を強めない(お腹を背中側に描いた)。ほかは全身を強める
+    assert "full body::" not in body_base.ITEMS["preg9_back"].tags and body_base.ITEMS["preg9_back"].rear
+    assert "1.3::full body::" in body_base.ITEMS["preg9_front"].tags
+    assert "pussy" in body_base.ITEMS["preg5_side"].negative
+
+    adult = _character(client, "preg", is_adult=1, age=22)
+    base = _base(client, name="スーツ", kind="suit", build="slender", extra_tags="slender waist, flat stomach, medium breasts")
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": base["id"]})
+    res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                      json={"keys": ["preg9_side", "front"], "auto_check": False})
+    assert res.text.count('"status": "ok"') == 2
+    (preg_prompt, preg_negative), (front_prompt, _) = client.calls[-2:]  # type: ignore[attr-defined]
+    # お腹とぶつかる体型のタグは、妊娠の部位だけ外す
+    assert "huge belly" in preg_prompt and "barefoot" in preg_prompt and "medium breasts" in preg_prompt
+    assert "slender waist" not in preg_prompt and "flat stomach" not in preg_prompt.replace(preg_negative, "")
+    assert "slender waist" in front_prompt
+    groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
+    assert {"id": "pregnancy", "label": "妊娠の経過"} in groups
+
+    # 成人フラグ・年齢の無いキャラには、全年齢の素体でも描かない(3か月のタグには pregnant が入らない)
+    for index, sheet in enumerate(({"is_adult": 0}, {"is_adult": 1}, {"is_adult": 1, "age": 16})):
+        other = _character(client, f"preg_other{index}", **sheet)
+        client.put(f"/api/lora-dataset/character/{other['id']}/body-base", json={"body_base_id": base["id"]})
+        res = client.post(f"/api/lora-dataset/character/{other['id']}/body-base",
+                          json={"keys": ["preg3_front"], "auto_check": False})
+        assert res.status_code == 403, res.text
+
+
 def test_body_base_uses_the_reference_image_by_default() -> None:
     # 素体は参照画像を既定で使う(顔・画風をキャラシートの絵に寄せる)。顔・表情シートは今までどおり
     from python.models import BodyBaseSheetRequest, FaceSheetRequest
