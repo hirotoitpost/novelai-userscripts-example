@@ -339,7 +339,8 @@ async def _create_cast(import_id: int, features: Any, genre: str, api_key: str, 
     すでにあれば、名前に番号を付けて別のキャラにする(元のキャラを書き換えない)。
     """
     from ..db import save_character, update_character_sheet
-    from ..manga_similar import ADULT_AGE, name_people
+    from ..manga_similar import name_people
+    from ..safety_floor import is_minor_age
 
     item = _require(import_id)
     adult = bool(item.get("adult"))
@@ -364,9 +365,9 @@ async def _create_cast(import_id: int, features: Any, genre: str, api_key: str, 
             created = save_character(conn, name, ", ".join(dict.fromkeys(tags)), notes)
             age = info.get("age")
             if adult:
-                # R18 の取り込みの人物は成人(年齢は人物づくりで 18 歳以上を確かめてある)
+                # R18 の取り込みの人物は成人(年齢は人物づくりで成人の年齢以上を確かめてある)
                 created = update_character_sheet(conn, created["id"], {"age": age, "is_adult": 1, "is_minor": 0}) or created
-            elif age is not None and age < ADULT_AGE:
+            elif is_minor_age(age):
                 # 全年齢の取り込みでは、未成年と考えた人物だけ年齢を入れる(未成年キャラの安全対策が効く)。
                 # 成人と考えた人物も成人にはしない(見た目から考えた年齢なので、確かめてから入れる)
                 created = update_character_sheet(conn, created["id"], {"age": age, "is_adult": 0, "is_minor": 1}) or created

@@ -20,6 +20,7 @@ from typing import Any
 from PIL import Image
 
 from . import content_guard
+from .safety_floor import is_adult_age
 
 # 舞台として使わないタグ(絵柄・構図・人数・画面の作り)
 _NOT_SETTING = {
@@ -347,9 +348,6 @@ _NAMING_SYSTEM = """あなたは漫画のキャラクター設定を作る編集
   足す(例: "brown hair, short hair, green eyes")。渡されたタグとかぶるもの・矛盾するものは書かない。足りていれば空文字"""
 
 
-# R18 の取り込みで作る人物の年齢の下限
-ADULT_AGE = 18
-
 
 # 名前の付け方。新しく作る(似た漫画)か、作品のセリフから名前を拾う(自分の作品の作り直し)か
 _NEW_NAMES = "- キャラ名の無い人物には、実在の人物や、既存の作品のキャラクターの名前は使わない\n"
@@ -436,7 +434,7 @@ async def name_people(
                 if not name:
                     break
                 age = _age(item.get("age"))
-                if adult and (age is None or age < ADULT_AGE):
+                if adult and not is_adult_age(age):
                     break
                 look = [t.strip() for t in str(item.get("look") or "").split(",") if t.strip()]
                 named.append(

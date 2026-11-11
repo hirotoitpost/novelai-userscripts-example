@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import app_settings, content_guard
+from .safety_floor import is_minor_age
 from .character_sheet import character_minor_tags, join_tags, r18_negative, r18_positive, split_body, split_tags
 
 
@@ -509,7 +510,7 @@ def nude_block_reason(character: dict[str, Any]) -> str | None:
     """
     if not character.get("is_adult"):
         return "裸の素体は、成人キャラ(キャラシートの成人フラグ)にだけ当てられます。"
-    if character.get("is_minor") or (character.get("age") is not None and int(character["age"]) < 18):
+    if character.get("is_minor") or is_minor_age(character.get("age")):
         return "未成年と定義されたキャラには、裸の素体を当てられません。"
     if character.get("age") is None:
         return "裸の素体は、キャラシートに年齢(18 歳以上)を入れたキャラにだけ当てられます。"
@@ -520,7 +521,7 @@ def nude_block_reason(character: dict[str, Any]) -> str | None:
 
 
 def _is_minor(character: dict[str, Any]) -> bool:
-    return bool(character.get("is_minor")) or (character.get("age") is not None and int(character["age"]) < 18)
+    return bool(character.get("is_minor")) or is_minor_age(character.get("age"))
 
 
 def _sheet_minor_tags(character: dict[str, Any]) -> list[str]:
