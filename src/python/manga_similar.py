@@ -21,105 +21,8 @@ from PIL import Image
 
 from . import content_guard
 from .safety_floor import is_adult_age
+from . import vocabulary as vocab
 
-# 舞台として使わないタグ(絵柄・構図・人数・画面の作り)
-_NOT_SETTING = {
-    "comic",
-    "monochrome",
-    "greyscale",
-    "spot color",
-    "speech bubble",
-    "translated",
-    "border",
-    "multiple views",
-    "4koma",
-    "manga",
-    "white background",
-    "simple background",
-    "blurry",
-    "blurry background",
-    "depth of field",
-    "solo",
-    "solo focus",
-    "male focus",
-    "female focus",
-    "no humans",
-    "commentary request",
-    "highres",
-    "text focus",
-    "english text",
-    "japanese text",
-    "sound effects",
-    "onomatopoeia",
-    "emphasis lines",
-    "motion lines",
-    "close-up",
-    "upper body",
-    "cowboy shot",
-    "full body",
-    "portrait",
-    "from side",
-    "from above",
-    "from below",
-    "from behind",
-    "profile",
-}
-# 人物の見た目として使う語(髪・目・服・小物)。表情やしぐさは場面ごとに変わるので使わない
-_LOOK_WORDS = {
-    "hair",
-    "bangs",
-    "sidelocks",
-    "ahoge",
-    "ponytail",
-    "twintails",
-    "braid",
-    "bun",
-    "bob",
-    "eyes",
-    "glasses",
-    "eyewear",
-    "shirt",
-    "jacket",
-    "coat",
-    "dress",
-    "skirt",
-    "pants",
-    "shorts",
-    "kimono",
-    "apron",
-    "sweater",
-    "hoodie",
-    "cardigan",
-    "vest",
-    "suit",
-    "necktie",
-    "bowtie",
-    "uniform",
-    "hat",
-    "beret",
-    "cap",
-    "ribbon",
-    "hairclip",
-    "hairband",
-    "headband",
-    "headphones",
-    "scarf",
-    "earrings",
-    "choker",
-    "blazer",
-    "sailor",
-    "serafuku",
-    "gakuran",
-    "collar",
-    "sleeves",
-    "hood",
-    "mole",
-    "freckles",
-    "beard",
-    "mustache",
-}
-# R18 の取り込みでは、体つきも人物の見た目に入れる(全年齢では similar.excluded_words で使わない)
-_ADULT_LOOK_WORDS = {"breasts", "hips", "thighs", "ass", "abs", "muscular", "curvy", "plump", "toned", "cleavage", "navel"}
 _COLOURS = "black|brown|light brown|dark brown|blonde|red|blue|green|pink|purple|white|grey|silver|orange|aqua|multicolored"
 _HAIR_COLOUR = re.compile(rf"^({_COLOURS}) hair$")
 # 色のタグ(髪・目)。一人の見た目には、それぞれ一番多いものだけを入れる(白黒の作品では色を読み違える)
@@ -236,7 +139,7 @@ def read_pages(
             if (
                 s.category == "general"
                 and s.probability >= _SETTING_PROB
-                and s.tag not in _NOT_SETTING
+                and s.tag not in vocab.words("similar.not_setting_tags")
                 and not _is_person_or_look(s.tag)
                 and _is_safe(s.tag, adult)
             ):
@@ -259,17 +162,13 @@ def read_pages(
     )
 
 
-# 人物の様子を表すタグ(舞台ではない)
-_PERSON_STATE = {"drooling", "saliva", "blush", "tears", "crying", "sweat", "sweatdrop", "food on face", "heart"}
-
-
 def _is_person_or_look(tag: str) -> bool:
     """人数・人物の容姿や表情のタグか(舞台のタグには入れない)。"""
-    from .image_tagger import _COUNT_TAGS, _is_person_tag
+    from .image_tagger import _is_person_tag
 
     return (
-        tag in _COUNT_TAGS
-        or tag in _PERSON_STATE
+        tag in vocab.items("tagger.count_tags")
+        or tag in vocab.words("similar.person_state_tags")
         or tag in ("multiple girls", "multiple boys", "multiple others")
         or bool(re.match(r"^\d\+?(girls?|boys?|others?)$", tag))
         or _is_person_tag(tag)
@@ -277,7 +176,7 @@ def _is_person_or_look(tag: str) -> bool:
 
 
 def _is_look(tag: str, adult: bool = False) -> bool:
-    words = _LOOK_WORDS | _ADULT_LOOK_WORDS if adult else _LOOK_WORDS
+    words = vocab.words("similar.look_words") | vocab.words("similar.adult_look_words") if adult else vocab.words("similar.look_words")
     return bool(_words(tag) & words) and _is_safe(tag, adult)
 
 

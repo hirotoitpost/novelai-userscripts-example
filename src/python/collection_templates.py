@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from . import content_guard
+from . import vocabulary as vocab
 
 Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit"]
 
@@ -53,23 +54,20 @@ SIDE_NEGATIVE = "from side, side view, profile, three-quarter view, head visible
 HEAD_ABOVE_NEGATIVE = (
     "head above hips, head visible above buttocks, hair bun above buttocks, ponytail above buttocks, head on top"
 )
-# まとめ髪(ポニーテール・お団子)は前屈でお尻の上に出やすいので、そのコマだけ髪を下ろす
-_HAIR_UP_WORDS = {"ponytail", "ponytails", "bun", "buns", "updo", "chignon", "topknot"}
 HAIR_UP_NEGATIVE = "ponytail, high ponytail, hair bun, updo, hair tie"
 # 前屈で床へ垂れる髪(長い髪のキャラだけ。短い髪のキャラに付けるとロングヘアになる)
 HANGING_HAIR = "hair hanging down to floor between hands"
-_LONG_HAIR_WORDS = ("long hair", "very long hair", "absurdly long hair")
 
 
 def has_long_hair(appearance: str | None) -> bool:
     tags = {t.strip().lower() for t in (appearance or "").split(",")}
-    return any(word in tags for word in _LONG_HAIR_WORDS)
+    return any(word in tags for word in vocab.items("collection.long_hair_tags"))
 
 
 def hair_down_appearance(appearance: str | None) -> str | None:
     """容姿からまとめ髪のタグを外し、髪を下ろした容姿にする。まとめ髪のタグが無ければ None(そのまま使う)。"""
     tags = [t.strip() for t in (appearance or "").split(",") if t.strip()]
-    kept = [t for t in tags if not set(t.lower().replace("_", " ").split()) & _HAIR_UP_WORDS]
+    kept = [t for t in tags if not set(t.lower().replace("_", " ").split()) & vocab.words("collection.hair_up_words")]
     if len(kept) == len(tags):
         return None
     return _join(", ".join(kept), "hair down, hair hanging down")

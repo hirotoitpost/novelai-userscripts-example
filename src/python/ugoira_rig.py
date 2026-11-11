@@ -28,6 +28,7 @@ import cv2
 import httpx
 import numpy as np
 from PIL import Image
+from . import vocabulary as vocab
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _POSE_DIR = _PROJECT_ROOT / "data" / "models" / "rtmpose"
@@ -392,8 +393,6 @@ def edit_hair(hair: np.ndarray, region: np.ndarray, mode: str) -> np.ndarray:
 _TORSO_DROP = re.compile(
     r"(wind|hair|bangs|\beyes?\b|face|smile|blush|mouth|looking|head|expression|\bears?\b|lips|eyelashes|tilt|portrait)", re.I
 )
-_TORSO_DROP_EXACT = {"1girl", "1boy", "solo", "upper body", "cowboy shot"}
-_MONO_TAGS = {"monochrome", "greyscale", "grayscale", "screentone", "manga style"}
 TORSO_TAGS = "head out of frame, close-up, torso"
 TORSO_NEGATIVE = "hair, long hair, strands of hair, head, face, neck"
 # 描いた胴体のうち、元が髪だった所に、髪の色がこれより多く残っていたら描き直す
@@ -439,10 +438,10 @@ def torso_request(source: Image.Image, parts: Parts, prompt: str, negative: str)
     big = cv2.resize(filled, (gw, gh), interpolation=cv2.INTER_CUBIC)
     big_hole = cv2.resize(hole.astype(np.uint8) * 255, (gw, gh), interpolation=cv2.INTER_NEAREST)
     tags = [t.strip() for t in (prompt or "").split(",") if t.strip()]
-    kept = [t for t in tags if not _TORSO_DROP.search(t) and t.lower() not in _TORSO_DROP_EXACT]
+    kept = [t for t in tags if not _TORSO_DROP.search(t) and t.lower() not in vocab.words("ugoira.torso_drop_tags")]
     # 絵に色があるのにプロンプトがモノクロのとき(V5 はモノクロにならないことがある)は、モノクロのタグを外す
     if float(cv2.cvtColor(image, cv2.COLOR_RGB2HSV)[..., 1].mean()) > 40:
-        kept = [t for t in kept if t.lower() not in _MONO_TAGS]
+        kept = [t for t in kept if t.lower() not in vocab.words("ugoira.mono_tags")]
     return TorsoRequest(
         top=top,
         hole=hole,

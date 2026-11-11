@@ -385,6 +385,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # タグの分類・整理に使う語彙(vocabulary.py。値は JSON の語の並び)。はじめの値は vocabulary_defaults.json から入れる
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vocabulary (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     # コンテンツガードを緩めるときのパスワード(guard_password.py)。パスワードそのものではなく、塩と scrypt の値だけ
     conn.execute(
         """

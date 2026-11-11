@@ -32,8 +32,8 @@ from PIL import Image  # noqa: E402
 
 import make_reverse_eval as ev  # noqa: E402
 from python.character_sheet import DEFAULT_NEGATIVE  # noqa: E402
+from python import vocabulary  # noqa: E402
 from python.image_tagger import (  # noqa: E402
-    _COUNT_TAGS,
     TagScore,
     build_negative,
     build_prompt,
@@ -134,7 +134,7 @@ def refine_prompt(
             and orig.get(tag, 0.0) < _REFINE_ABSENT
             and tag not in in_prompt
             and tag not in negative_tags
-            and tag not in _COUNT_TAGS
+            and tag not in vocabulary.words("tagger.count_tags")
         ),
         reverse=True,
     )[:_REFINE_MAX_NEGATIVE]

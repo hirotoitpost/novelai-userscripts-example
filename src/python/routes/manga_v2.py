@@ -208,6 +208,7 @@ from ..novelai_image_v5 import (
 )
 from .llm import stream_llm_text, strip_think_tags
 from .story import _MANGA_DIR, _PROJECT_ROOT, _Job, _job_response, _start_job
+from .. import vocabulary as vocab
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
@@ -1345,9 +1346,6 @@ async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: Clie
     return _job_response(_start_job(story_id, "panels", runner))
 
 
-# 後ろ姿のコマの印(全体のタグか、そのキャラの動作のタグに、タグ1つがまるごとこの語であれば後ろ姿。
-# 「peeking from behind door」のような言い回しは数えない)
-_BACK_VIEW_TAGS = {"from behind", "back view", "rear view", "facing away", "back of head"}
 # 強調・抑制の書き方(1.4::タグ:: / -1::タグ::)の外側
 _TAG_WEIGHT = re.compile(r"^-?\d+(\.\d+)?::|::$")
 # 後ろ姿のコマで、後ろ姿の参照が無いキャラの正面の参照を弱める割合(正面の参照に引っ張られてこちらを向くため)
@@ -1365,7 +1363,7 @@ def is_back_view(scene_tags: str, action_tags: str | None = None) -> bool:
         for t in f"{scene_tags or ''},{action_tags or ''}".split(",")
         if t.strip()
     }
-    return bool(plain & _BACK_VIEW_TAGS) and not any(t.startswith(_FACE_SHOWN_PREFIXES) for t in plain)
+    return bool(plain & vocab.words("panel.back_view_tags")) and not any(t.startswith(_FACE_SHOWN_PREFIXES) for t in plain)
 
 
 def _scene_references(

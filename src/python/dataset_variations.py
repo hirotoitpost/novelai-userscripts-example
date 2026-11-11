@@ -19,15 +19,12 @@ import re
 from typing import Any
 
 from . import content_guard
-from .character_sheet import _COUNT_RE, _PERSON_NOUNS, _STYLE_PHRASES, _STYLE_RE, _plain, split_tags
+from .character_sheet import _COUNT_RE, _STYLE_RE, _plain, split_tags
+from . import vocabulary as vocab
 
 AXES = ("framings", "poses", "outfits", "expressions", "locations")
 # キャラシートの項目のうち、キーワードから足せるもの(容姿・標準の体型・普段の服装・画風)
 SHEET_FIELDS = ("appearance", "body", "outfit", "style")
-# 体型とみなす語(大きさだけの語 large / small などは、それだけでは体型にしない)
-_BODY_CORE = {"breasts", "breast", "chest", "slim", "slender", "thin", "skinny", "petite", "curvy", "voluptuous",
-              "plump", "chubby", "fat", "muscular", "toned", "abs", "stomach", "belly", "waist", "hips", "hip",
-              "thighs", "thigh", "tall", "figure", "stature", "athletic", "busty", "pregnant"}
 MAX_VALUE_CHARS = 100
 
 # 強調の書き方: マイナスの重み(-1::tag::)は「出さない」指定なので、タグごと除く。ほかは記号だけ外す
@@ -36,52 +33,15 @@ _WEIGHT = re.compile(r"\d+(?:\.\d+)?::(.*?)::")
 # 角かっこで囲んだ、英語でない見出し(ギャラリーの記録の [表情: scared] など)
 _LABEL = re.compile(r"\[[^\]]*[^\x00-\x7f][^\]]*\]")
 
-# 構図
-_FRAMING_TAGS = {
-    "close-up", "upper body", "lower body", "full body", "cowboy shot", "portrait", "profile", "pov", "dutch angle",
-    "straight-on", "wide shot", "fisheye", "foreshortening", "head out of frame", "feet out of frame", "bust",
-}
 _FRAMING_RE = re.compile(r"(^from (above|below|side|behind|outside)$|\bshot$|\bview$|\bangle$|^pov\b)")
 
-# 表情(語が1つでも入っていれば表情)と、語の組で決まる表情
-_EXPRESSION_WORDS = {
-    "smile", "smiling", "grin", "smirk", "blush", "tears", "crying", "frown", "pout", "expressionless", "serious",
-    "surprised", "angry", "sad", "laughing", "sleepy", "embarrassed", "wink", "happy", "scared", "nervous", "shy",
-    "annoyed", "confused", "worried", "tired", "bored", "excited", "determined", "smug", "drunk", "teary",
-    "sweatdrop", "teeth", "fang",
-}
-_EXPRESSION_PHRASES = {
-    "closed eyes", "half-closed eyes", "one eye closed", "wide-eyed", "open mouth", "closed mouth", "parted lips",
-    "tongue out", "light smile", "evil smile", "sweat", "nose blush", "raised eyebrow", "furrowed brow",
-    "looking away", "looking down", "looking up", "averting eyes", "empty eyes", "heart-shaped pupils", "v-shaped eyebrows",
-}
 # 顔文字のタグ(:d, ;), >_< など)
 _EMOTICON = re.compile(r"^[:;>=xX^][-_^o3dpDP<>()|/\\\s]{0,3}[:;<=xX^]?$")
 
-# 場所・時間帯・天気・背景
-_LOCATION_WORDS = {
-    "indoors", "outdoors", "room", "classroom", "bedroom", "kitchen", "bathroom", "school", "hallway", "rooftop",
-    "library", "street", "road", "alley", "park", "cafe", "restaurant", "shop", "store", "office", "station",
-    "shrine", "temple", "church", "castle", "beach", "ocean", "sea", "pool", "poolside", "river", "lake", "forest",
-    "mountain", "field", "garden", "city", "cityscape", "town", "village", "sky", "night", "day", "sunset",
-    "sunrise", "evening", "morning", "rain", "snow", "background", "stage", "gym", "hospital", "onsen", "desert",
-    "cave", "ruins", "space", "underwater", "festival", "interior", "balcony", "bridge", "stairs", "playground",
-    "courtyard", "scenery", "landscape", "meadow", "countryside", "apartment", "house", "home", "hotel", "bar",
-    "market", "train", "bus", "cloudy", "sunlight", "moonlight", "starry", "autumn", "winter", "spring", "summer",
-}
 
-# 服の語で終わる語(sundress, miniskirt, undershirt, swimwear など。語の一覧に無い合成語を拾う)
-_CLOTHES_ENDINGS = ("dress", "skirt", "shirt", "coat", "suit", "wear", "pants", "socks", "shoes", "boots", "jacket")
 # 場所の語を含むが、場所ではないもの
 _NOT_LOCATION = {"depth of field", "day off"}
 
-# ポーズ・動作(語の一覧に、動作を表す語を足す)
-_POSE_EXTRA = {
-    "lying", "kneeling", "squatting", "jumping", "stretching", "sign", "pose", "salute", "hug", "hugging",
-    "carrying", "pointing", "reaching", "crouching", "dancing", "sleeping", "eating", "drinking", "cooking",
-    "writing", "playing", "back", "stomach", "side", "fours", "seiza", "wariza", "contrapposto", "arched",
-    "bent", "spread", "raised", "outstretched", "selfie", "fighting",
-}
 
 
 def prompt_tags(prompt: str) -> list[str]:
@@ -102,31 +62,30 @@ def axis_of(tag: str) -> str:
     タグの軸: framings / poses / outfits / expressions / locations。キャラシートの側のものは appearance(容姿: 顔・髪・目)、
     body(体型)、style(品質・画風)、取り出さないものは skip(人数)、性的なものは adult、どれか分からないものは other。
     """
-    from .image_tagger import BODY_WORDS, CLOTHES_WORDS, POSE_WORDS, STYLE_TAGS
 
     plain = _plain(tag)
     words = set(plain.replace("(", " ").replace(")", " ").split())
     if not plain or plain == "solo":
         return "skip"
-    if plain in _STYLE_PHRASES or plain in STYLE_TAGS or _STYLE_RE.search(plain):
+    if plain in vocab.words("sheet.style_phrases") or plain in vocab.items("tagger.style_tags") or _STYLE_RE.search(plain):
         return "style"
-    if _COUNT_RE.match(plain) or plain in _PERSON_NOUNS or re.match(r"^(multiple|\d\+?) ?(girls?|boys?|others?)$", plain):
+    if _COUNT_RE.match(plain) or plain in vocab.words("sheet.person_nouns") or re.match(r"^(multiple|\d\+?) ?(girls?|boys?|others?)$", plain):
         return "skip"
     if content_guard.is_sexual(tag):
         return "adult"
-    if plain in _FRAMING_TAGS or _FRAMING_RE.search(plain):
+    if plain in vocab.words("variations.framing_tags") or _FRAMING_RE.search(plain):
         return "framings"
-    if plain in _EXPRESSION_PHRASES or _EMOTICON.match(tag.strip()) or words & _EXPRESSION_WORDS:
+    if plain in vocab.words("variations.expression_phrases") or _EMOTICON.match(tag.strip()) or words & vocab.words("variations.expression_words"):
         return "expressions"
-    if words & CLOTHES_WORDS or any(w.endswith(_CLOTHES_ENDINGS) for w in words):
+    if words & vocab.words("tagger.clothes_words") or any(w.endswith(vocab.items("variations.clothes_endings")) for w in words):
         return "outfits"
-    if words & _LOCATION_WORDS and plain not in _NOT_LOCATION:
+    if words & vocab.words("variations.location_words") and plain not in _NOT_LOCATION:
         return "locations"
-    if words & (POSE_WORDS | _POSE_EXTRA) or re.match(r"^[a-z]+ing\b", plain):
+    if words & (vocab.words("tagger.pose_words") | vocab.words("variations.pose_extra_words")) or re.match(r"^[a-z]+ing\b", plain):
         return "poses"
-    if words & _BODY_CORE and not words & {"hair", "eyes", "eye", "face", "skin"}:
+    if words & vocab.words("variations.body_core_words") and not words & {"hair", "eyes", "eye", "face", "skin"}:
         return "body"
-    if words & BODY_WORDS:
+    if words & vocab.words("tagger.body_words"):
         return "appearance"
     return "other"
 

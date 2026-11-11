@@ -28,6 +28,7 @@ from ..llm_models import (
     StoryDraftRequest,
 )
 from ..usage import llm_http_client
+from .. import vocabulary as vocab
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
@@ -359,7 +360,6 @@ def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
     from ..image_tagger import (
         MODEL_NAME,
         STYLE_THRESHOLD,
-        STYLE_TAGS,
         build_negative,
         build_prompt,
         embedded_prompt,
@@ -383,7 +383,7 @@ def reverse_prompt_tags(req: ReversePromptRequest) -> dict[str, Any]:
         "general_threshold": general,
         "character_threshold": character_threshold,
         "style_threshold": STYLE_THRESHOLD,
-        "style_tags": list(STYLE_TAGS),
+        "style_tags": list(vocab.items("tagger.style_tags")),
     }
     embedded = embedded_prompt(data)
     if embedded is not None:

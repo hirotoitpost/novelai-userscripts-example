@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 
 from .manga_draft import _ask_json, _clean_tags
+from . import vocabulary as vocab
 
 # 描かれているとみなす確率と、点数で判断するのに要る、確かめるタグの数
 _PRESENT = 0.2
@@ -82,9 +83,6 @@ _GAZE_EXEMPT = re.compile(r"\b(looking at viewer|pov|selfie|eye contact with vie
 _UNWANTED = 0.35
 
 
-# 後ろ姿のコマの印(タグ1つがまるごとこの語のとき。「peeking from behind door」のような言い回しは数えない)。
-# looking back(振り向いて顔を見せる)のコマは向きを確かめない
-_BACK_VIEW_TAGS = {"from behind", "back view", "rear view", "facing away", "back of head"}
 # 後ろ姿とみなす確率(2026-11 実機: 後ろ姿のコマは from behind 0.77 以上、正面を向いたコマは 0)
 _FROM_BEHIND = 0.3
 # 人数の重複を確かめないコマ(背景の人・群衆を描くコマと、陽太の手だけが写る一人称のコマ。手が 1boy と判定される)
@@ -105,7 +103,7 @@ def is_back_view(tags: str) -> bool:
     振り向きのタグ(looking back over shoulder など)は無い)。
     """
     plain = _plain_tags(tags)
-    return bool(plain & _BACK_VIEW_TAGS) and not any(t.startswith(("looking back", "looking at viewer")) for t in plain)
+    return bool(plain & vocab.words("panel.back_view_tags")) and not any(t.startswith(("looking back", "looking at viewer")) for t in plain)
 
 
 def cast_counts(appearances: list[str]) -> tuple[int, int]:
@@ -139,13 +137,13 @@ def unwanted_tags(absent: str, removed: list[str], vocabulary: set[str]) -> list
     そのコマに出てはいけないもの(判定モデルで確かめられるものだけ)。シーンの「出てはいけない物」と、登場人物の状態で
     外したタグ(髪を下ろす → シュシュ など)。体型の語(slim など)は、状態で外しても判定が当てにならないので除く。
     """
-    from .character_sheet import BODY_SHAPE_WORDS
+    
 
     tags = [t.lower() for t in _clean_tags(", ".join([absent, *removed])).split(", ") if t]
     return [
         t for t in dict.fromkeys(tags)
         if t in vocabulary and t != _VIEWER and not _SKIP.match(t) and not _PEOPLE.match(t)
-        and not (set(t.split()) & BODY_SHAPE_WORDS)
+        and not (set(t.split()) & vocab.words("sheet.body_shape_words"))
     ]
 
 

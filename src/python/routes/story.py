@@ -129,6 +129,7 @@ from ..guard_password import guard_token
 from ..script_lines import script_names
 from .llm import sse_event, strip_think_tags, stream_llm_text
 from ..db import user_files
+from .. import vocabulary as vocab
 
 ClientDep = Annotated[AsyncNovelAI, Depends(get_client)]
 
@@ -1447,37 +1448,24 @@ _SPEAKER_RE = re.compile(r"[」』]\s*と?([一-龥ぁ-んァ-ヶー]{2,6})(?:�
 _MIN_NAME_OCCURRENCES = 3
 _MAX_NAME_CANDIDATES = 30
 
-# 容姿が書かれている箇所を探すための手がかり。
-_APPEARANCE_KEYWORDS = (
-    "髪", "瞳", "目", "背", "身長", "体型", "スタイル", "服", "着", "制服", "眼鏡", "メガネ",
-    "顔", "肌", "唇", "胸", "帽子", "スカート", "ドレス", "コート", "姿",
-)
 _APPEARANCE_PASSAGE_LIMIT = 3
 _APPEARANCE_PASSAGE_CHARS = 200
 
 
-# 一人称視点の作品では、代名詞がそのまま人物名として返ってくることを実機で確認した
-# (私/彼女/我/我是…が別々のキャラとして登録され、同一人物の容姿も矛盾していた)。
-_PRONOUN_NAMES = {
-    "私", "私は", "わたし", "あたし", "僕", "ぼく", "俺", "おれ", "自分", "我", "我是", "我々",
-    "彼", "彼女", "彼ら", "彼女ら", "あなた", "貴方", "君", "きみ", "お前", "おまえ",
-    "二人", "三人", "皆", "みんな", "全員", "男", "女", "少年", "少女",
-}
-_GROUP_SUFFIXES = ("達", "たち", "ら", "群", "全員")
 _MAX_NAME_LENGTH = 15
 
 
 def _is_usable_character_name(name: str) -> bool:
-    if not name or name in _PRONOUN_NAMES:
+    if not name or name in vocab.items("story.pronoun_names"):
         return False
     # 「私、彼女」のように複数を1つにまとめた文字列や、文になっている説明を弾く。
     if len(name) > _MAX_NAME_LENGTH or any(ch in name for ch in "、。！？,"):
         return False
-    if name.endswith(_GROUP_SUFFIXES):
+    if name.endswith(vocab.items("story.group_suffixes")):
         return False
     # 「私（教師）」のように代名詞に補足を付けた形も、結局は語り手を指していて
     # 別のキャラとして登録すると重複するだけなので弾く。
-    if any(name.startswith(pronoun) for pronoun in _PRONOUN_NAMES):
+    if any(name.startswith(pronoun) for pronoun in vocab.items("story.pronoun_names")):
         return False
     return True
 
@@ -1503,14 +1491,8 @@ def _english_tags_only(tags: str) -> str:
     return ", ".join(kept)
 
 
-# 敬称を外した形。「美香」と「美香さん」、「美琴」と「美琴ちゃん」が別人として
-# 登録されるのを防ぐ(実データで確認)。「先生」のように敬称そのものが呼称になって
-# いる語は、外すと空になるのでそのまま残る。
-_HONORIFIC_SUFFIXES = ("さん", "ちゃん", "くん", "君", "様", "さま", "先輩")
-
-
 def _canonical_name(name: str) -> str:
-    for suffix in _HONORIFIC_SUFFIXES:
+    for suffix in vocab.items("story.honorific_suffixes"):
         if name.endswith(suffix) and len(name) > len(suffix):
             return name[: -len(suffix)]
     return name
@@ -1544,7 +1526,7 @@ def _memory_characters(memory: str) -> dict[str, dict[str, Any]]:
         family, given = match.group("family"), match.group("given")
         reading, description = match.group("reading"), match.group("description")
         name = family + (given or "")
-        if not any(word in description for word in _APPEARANCE_KEYWORDS) or not _is_usable_character_name(name):
+        if not any(word in description for word in vocab.items("story.appearance_keywords")) or not _is_usable_character_name(name):
             continue
         aliases = [name]
         if given:
@@ -1728,7 +1710,7 @@ def _appearance_passages(text: str, aliases: list[str]) -> list[str]:
     passages: list[str] = []
     for sentence in _SENTENCE_BOUNDARY_RE.split(text):
         if any(alias in sentence for alias in aliases) and any(
-            word in sentence for word in _APPEARANCE_KEYWORDS
+            word in sentence for word in vocab.items("story.appearance_keywords")
         ):
             passages.append(sentence.strip()[:_APPEARANCE_PASSAGE_CHARS])
             if len(passages) >= _APPEARANCE_PASSAGE_LIMIT:
@@ -1776,7 +1758,6 @@ async def _describe_appearance(name: str, passages: list[str]) -> str:
     return ""
 
 
-_ANIMAL_WORDS = ("fox", "cat", "dog", "wolf", "rabbit", "bird", "animal", "dragon", "kitsune")
 _PEOPLE_COUNT_RE = re.compile(r"^\d+(?:girls?|boys?|others?)$")
 
 
@@ -1787,7 +1768,7 @@ def _drop_people_count_for_animals(tags: str) -> str:
     動物の語があれば人数タグを落とす。
     """
     items = [t.strip() for t in tags.split(",") if t.strip()]
-    if not any(word in t.lower() for t in items for word in _ANIMAL_WORDS):
+    if not any(word in t.lower() for t in items for word in vocab.items("story.animal_words")):
         return tags
     return ", ".join(t for t in items if not _PEOPLE_COUNT_RE.match(t.lower()))
 

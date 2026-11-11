@@ -25,7 +25,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from PIL import Image  # noqa: E402
 
 import make_reverse_eval as ev  # noqa: E402
-from python.image_tagger import STYLE_TAGS, TagScore, select_tags, split_characters, tag_image  # noqa: E402
+from python import vocabulary  # noqa: E402
+from python.image_tagger import TagScore, select_tags, split_characters, tag_image  # noqa: E402
 
 MANIFEST = ev.OUT_DIR / "manifest.json"
 
@@ -126,10 +127,10 @@ def main() -> None:
         groups = "  ".join(f"{name} {value:.2f}" for name, value in result["groups"].items())
         print(f"  {label}: {groups}")
     people_score(items)
-    # 絵柄のタグの定義が評価用データとそろっているか(STYLE_TAGS に無いものは低いしきい値の対象外)
-    missing = GROUPS["絵柄"] - set(STYLE_TAGS)
+    # 絵柄のタグの定義が評価用データとそろっているか(語彙の tagger.style_tags に無いものは低いしきい値の対象外)
+    missing = GROUPS["絵柄"] - vocabulary.words("tagger.style_tags")
     if missing:
-        print("\n(注: 評価用データの絵柄タグのうち STYLE_TAGS に無いもの:", sorted(missing), ")")
+        print("\n(注: 評価用データの絵柄タグのうち tagger.style_tags に無いもの:", sorted(missing), ")")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from typing import Any
 
 from . import content_guard
 from .character_sheet import minor_tags, split_tags
+from . import vocabulary as vocab
 
 KINDS: dict[str, str] = {"play": "プレイ", "scenario": "シナリオの型"}
 
@@ -51,11 +52,6 @@ DEFAULTS: list[dict[str, str]] = [
 # 参照画像から読み取るタグの確率と、使わないタグ(人物の見た目・絵柄・画面の作り。プレイの描き方だけを取り出す)
 _IMAGE_TAG_PROB = 0.45
 _IMAGE_TAGS_MAX = 20
-_SKIP_WORDS = {
-    "hair", "eyes", "bangs", "sidelocks", "ahoge", "ponytail", "twintails", "braid", "skin", "mole", "freckles",
-    "comic", "monochrome", "greyscale", "text", "speech", "bubble", "censored", "mosaic", "watermark", "signature",
-    "translated", "artist", "username", "solo", "1girl", "1boy", "2girls", "2boys", "multiple", "highres",
-}
 # 判定モデルで未成年の手がかりとみなす確率(minor_guard と同じく、低めに拾って止める側に倒す)
 _IMAGE_MINOR_PROB = 0.35
 
@@ -86,7 +82,7 @@ def image_tags(scores: list[Any]) -> tuple[list[str], list[str]]:
     })
     tags = [
         s.tag for s in sorted(scores, key=lambda s: -s.probability)
-        if s.category == "general" and s.probability >= _IMAGE_TAG_PROB and not (set(s.tag.split()) & _SKIP_WORDS)
+        if s.category == "general" and s.probability >= _IMAGE_TAG_PROB and not (set(s.tag.split()) & vocab.words("adult_patterns.skip_words"))
     ]
     return tags[:_IMAGE_TAGS_MAX], minors
 

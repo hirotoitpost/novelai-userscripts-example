@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+from . import vocabulary as vocab
 
 Box = tuple[float, float, float, float]  # x0, y0, x1, y1(ページのピクセル座標)
 
@@ -438,67 +439,8 @@ def read_page(image: Image.Image, text_boxes: list[Box] | None, face_boxes: list
 
 # ---- 場面・所作 ----
 
-# 構図のタグ(場面として残す)
-_FRAMING = {
-    "close-up",
-    "upper body",
-    "cowboy shot",
-    "full body",
-    "portrait",
-    "from side",
-    "from above",
-    "from below",
-    "from behind",
-    "profile",
-    "dutch angle",
-    "pov",
-}
-# 場面にも所作にも使わないタグ(漫画の画面の作りや、絵柄)
-_SKIP = {
-    "1koma",
-    "2koma",
-    "3koma",
-    "4koma",
-    "segmented comic",
-    "black border",
-    "border",
-    "thought bubble",
-    "spoken ellipsis",
-    "spoken heart",
-    "spoken question mark",
-    "spoken exclamation mark",
-    "spoken interrobang",
-    "spoken sweatdrop",
-    "gradient background",
-    "halftone",
-    "halftone background",
-    "screentone",
-    "dated",
-    "signature",
-    "artist name",
-    "watermark",
-    "page number",
-    "copyright name",
-    "character name",
-    "bag",
-    "school bag",
-    "jewelry",
-}
 # 見た目(髪型・小物)なのに、見た目の語の一覧に無いもの
 _LOOK_EXTRA = re.compile(r"(side up|scrunchie|ahoge|sidelocks|hair between eyes|hair over|fang)")
-# 表情・漫画の記号なのに、人物のタグの一覧に無いもの(所作に入れる)
-_ACTION_EXTRA = {
-    "anger vein",
-    "shaded face",
-    "sideways glance",
-    "flying sweatdrops",
-    "wavy mouth",
-    "nose blush",
-    "turn pale",
-    "trembling",
-    "surprised",
-    "tearing up",
-}
 # ページの終わりの印など、セリフではない文字
 _NOT_SPEECH = re.compile(r"^(おわり|終わり|おしまい|つづく|続く|完|end|fin)[。.!！]*$", re.IGNORECASE)
 # 広告・クレジット・注意書き(単行本の宣伝、無断転載の注意、配信元など)。吹き出しの外に書かれていて、セリフではない
@@ -516,7 +458,7 @@ def describe_panel(crop: Image.Image) -> tuple[list[str], list[str], list[str]]:
     コマの(場面のタグ, 所作のタグ, 写っている人のタグ)。場面は舞台・小物・構図、所作は表情・動作・人物どうしの
     関わり、写っている人は 1girl / 1boy など(だれを描くかを決める手がかり)。
     """
-    from .image_tagger import _COUNT_TAGS, tag_image
+    from .image_tagger import tag_image
     from .manga_similar import _NOT_SETTING, _is_look, _is_person_or_look, _is_safe
 
     scene: list[str] = []
@@ -527,22 +469,22 @@ def describe_panel(crop: Image.Image) -> tuple[list[str], list[str], list[str]]:
         tag = score.tag
         if score.category != "general" or score.probability < _TAG_PROB:
             continue
-        if tag in _FRAMING:
+        if tag in vocab.words("reading.framing_tags"):
             framing.append(tag)
             continue
         if re.match(r"^\d\+?(girls?|boys?|others?)$", tag):
             cast.append(tag)
             continue
         if (
-            tag in _SKIP
-            or tag in _COUNT_TAGS
+            tag in vocab.words("reading.skip_tags")
+            or tag in vocab.items("tagger.count_tags")
             or re.match(r"^(\d\+?|multiple )(girls?|boys?|others?)$", tag)
             or not _is_safe(tag)
             or _is_look(tag)
             or _LOOK_EXTRA.search(tag)
         ):
             continue
-        if _EMOTICON.match(tag) or tag in _ACTION_EXTRA or _is_person_or_look(tag):
+        if _EMOTICON.match(tag) or tag in vocab.words("reading.action_tags") or _is_person_or_look(tag):
             if tag not in _NOT_SETTING:
                 action.append(tag)
         elif tag not in _NOT_SETTING:

@@ -34,6 +34,7 @@ from .models import (
     SamplerLiteral,
     UCPresetLiteral,
 )
+from . import vocabulary as vocab
 
 QUALITY_TAGS = "anime style, masterpiece, best quality"
 NEGATIVE_PROMPT_DEFAULT = (
@@ -64,18 +65,8 @@ def _shuffle_tags(prompt: str) -> str:
     return ", ".join([head, *rest])
 
 
-# シードを固定したまま末尾に追加する微小タグ。光源/雰囲気系のみに絞り、
-# 構図やポーズなど主要タグへの影響を小さく抑える。
-_MICRO_VARIATION_TAGS = [
-    "soft lighting", "warm lighting", "cool lighting", "rim light",
-    "backlighting", "dynamic lighting", "cinematic lighting",
-    "depth of field", "bokeh", "ambient occlusion", "subtle shadow",
-    "high contrast", "low contrast", "glowing",
-]
-
-
 def _pick_micro_variation_tag() -> str:
-    return random.choice(_MICRO_VARIATION_TAGS)
+    return random.choice(vocab.items("dataset.micro_variation_tags"))
 
 
 def _decode_b64(b64: str) -> bytes:

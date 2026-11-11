@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 import numpy as np
 from PIL import Image
+from . import vocabulary as vocab
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 MODEL_NAME = "wd-eva02-large-tagger-v3"
@@ -41,55 +42,9 @@ CHARACTER_THRESHOLD = 0.85
 # 画面でしきい値を下げられるよう、これ以上の確率のタグは候補として返す
 _CANDIDATE_FLOOR = 0.2
 
-# 絵柄・色のタグ。生成し直したときの見た目を大きく左右するのに確率が低めに出る(白黒の漫画のコマで
-# monochrome が 0.3〜0.5)ので、しきい値を下げて拾い、人数の次に置く
-STYLE_TAGS = (
-    "monochrome",
-    "greyscale",
-    "spot color",
-    "partially colored",
-    "limited palette",
-    "sepia",
-    "sketch",
-    "lineart",
-    "screentone",
-    "halftone",
-    "traditional media",
-    "watercolor (medium)",
-    "realistic",
-    "photorealistic",
-    "3d",
-    "pixel art",
-    "chibi",
-    "flat color",
-)
 STYLE_THRESHOLD = 0.25
 
-# 元の画像がコマ割りの漫画でなければ、ネガティブに足す(横長の画像はコマが並んだ絵になりやすい)
-_PANEL_TAGS = ("comic", "multiple views", "4koma", "2koma", "3koma", "panels")
 
-# プロンプトの先頭に置く人数のタグ(NovelAI の書き方)
-_COUNT_TAGS = (
-    "1girl",
-    "2girls",
-    "3girls",
-    "4girls",
-    "5girls",
-    "6+girls",
-    "multiple girls",
-    "1boy",
-    "2boys",
-    "3boys",
-    "4boys",
-    "5boys",
-    "6+boys",
-    "multiple boys",
-    "1other",
-    "2others",
-    "3others",
-    "multiple others",
-    "no humans",
-)
 
 _lock = threading.Lock()
 _session: Any = None
@@ -168,7 +123,6 @@ def tag_image(image: Image.Image) -> list[TagScore]:
 _MONOCHROME_GREY = 0.8
 # 白黒の絵のうち、色のある画素(彩度 0.3 超)がこれ以上あれば一部だけ色付き(spot color)
 _SPOT_COLOR = 0.005
-_MONO_TAGS = ("monochrome", "greyscale", "spot color")
 
 
 def colour_profile(image: Image.Image) -> tuple[float, float]:
@@ -195,14 +149,14 @@ def _add_monochrome(image: Image.Image, result: list[TagScore]) -> list[TagScore
     if grey < _MONOCHROME_GREY:
         return result
     tags = ("monochrome", "greyscale", "spot color") if coloured >= _SPOT_COLOR else ("monochrome", "greyscale")
-    rest = [s for s in result if s.tag not in _MONO_TAGS]
+    rest = [s for s in result if s.tag not in vocab.words("tagger.mono_tags")]
     return [TagScore(tag, 1.0, "general") for tag in tags] + rest
 
 
 def _threshold(score: TagScore, general_threshold: float, character_threshold: float) -> float:
     if score.category == "character":
         return character_threshold
-    if score.tag in STYLE_TAGS:
+    if score.tag in vocab.items("tagger.style_tags"):
         return min(STYLE_THRESHOLD, general_threshold)
     return general_threshold
 
@@ -216,10 +170,7 @@ def _implied(tag: str, others: list[str]) -> bool:
     評価用データ(scripts/make_reverse_eval.py)で、広く外すと apron・sweater・necktie などを
     取りこぼし、服・小物の再現率が 0.87 → 0.50 に落ちた。
     """
-    return any(other.endswith(" " + tag) and other[: -len(tag) - 1] in _SIZE_WORDS for other in others)
-
-
-_SIZE_WORDS = {"large", "huge", "gigantic", "small", "flat", "medium", "big", "long", "short", "thick"}
+    return any(other.endswith(" " + tag) and other[: -len(tag) - 1] in vocab.words("tagger.size_words") for other in others)
 
 
 def select_tags(
@@ -235,11 +186,11 @@ def select_tags(
         s
         for s in scores
         if s.category in ("general", "character")
-        and s.tag not in FRAMING_TAGS
+        and s.tag not in vocab.items("tagger.framing_tags")
         and s.probability >= _threshold(s, general_threshold, character_threshold)
     ]
     tags = [s.tag for s in chosen]
-    chosen = [s for s in chosen if s.tag in _COUNT_TAGS or not _implied(s.tag, tags)]
+    chosen = [s for s in chosen if s.tag in vocab.items("tagger.count_tags") or not _implied(s.tag, tags)]
     framing = _framing(scores)
     if framing is not None:
         # 確率の高い順を保って入れる
@@ -247,16 +198,11 @@ def select_tags(
     return chosen
 
 
-# 構図のタグ。モデルはどれか1つに確率を寄せるが、値は低め(正しい cowboy shot でも 0.2〜0.45)に出る。
-# 評価用データ(目視で直した正解)では、しきい値 0.5 だと構図の当たりは 37 枚中 19 枚、一番確かな
-# 1つを選ぶと 26 枚になった。顔の大きさからも決めてみたが、upper body と cowboy shot は顔の高さ
-# (画像の 0.22〜0.43)が重なって分けられなかった。
-FRAMING_TAGS = ("portrait", "upper body", "cowboy shot", "full body")
 FRAMING_THRESHOLD = 0.2
 
 
 def _framing(scores: list[TagScore]) -> TagScore | None:
-    candidates = [s for s in scores if s.tag in FRAMING_TAGS and s.probability >= FRAMING_THRESHOLD]
+    candidates = [s for s in scores if s.tag in vocab.items("tagger.framing_tags") and s.probability >= FRAMING_THRESHOLD]
     return max(candidates, key=lambda s: s.probability, default=None)
 
 
@@ -271,11 +217,11 @@ def build_prompt(
     exclude はキャラごとのプロンプトに移したタグ(全体には入れない)。
     """
     chosen = [s for s in select_tags(scores, general_threshold, character_threshold) if s.tag not in exclude]
-    counts = [s.tag for s in chosen if s.tag in _COUNT_TAGS]
-    counts.sort(key=_COUNT_TAGS.index)
+    counts = [s.tag for s in chosen if s.tag in vocab.items("tagger.count_tags")]
+    counts.sort(key=vocab.items("tagger.count_tags").index)
     characters = [s.tag for s in chosen if s.category == "character"]
-    styles = [s.tag for s in chosen if s.tag in STYLE_TAGS]
-    others = [s.tag for s in chosen if s.category == "general" and s.tag not in _COUNT_TAGS and s.tag not in STYLE_TAGS]
+    styles = [s.tag for s in chosen if s.tag in vocab.items("tagger.style_tags")]
+    others = [s.tag for s in chosen if s.category == "general" and s.tag not in vocab.items("tagger.count_tags") and s.tag not in vocab.items("tagger.style_tags")]
     return ", ".join(counts + characters + styles + others)
 
 
@@ -286,152 +232,16 @@ _MAX_CHARACTERS = 4
 # 人物ごとのタグにする条件: その人の切り抜きでの確率がこれ以上で、ほかの人より _CHARACTER_MARGIN 以上高い
 _CHARACTER_TAG_THRESHOLD = 0.5
 _CHARACTER_MARGIN = 0.3
-# 人物ごとには分けないタグ(絵全体のこと)
-_SCENE_ONLY = {"solo", "multiple girls", "multiple boys", "male focus", "female focus", "solo focus"}
 
-# 人物のタグにする語(容姿・服・小物・表情・しぐさ)。切り抜きには近くの物や背景も写るので(cup・brick wall など)、
-# これらの語を含むタグだけを人物に付け、ほかは全体に残す
-# 髪・顔・体(その人の容姿)
-BODY_WORDS = {
-    "hair",
-    "bangs",
-    "sidelocks",
-    "ahoge",
-    "ponytail",
-    "twintails",
-    "braid",
-    "bun",
-    "bob",
-    "eyes",
-    "eyebrows",
-    "eyelashes",
-    "skin",
-    "mole",
-    "freckles",
-    "ears",
-    "fang",
-    "teeth",
-    "lips",
-    "beard",
-    "mustache",
-    "facial",
-    "breasts",
-    "muscular",
-}
-# 服・小物(その人の服装)
-CLOTHES_WORDS = {
-    "shirt",
-    "jacket",
-    "coat",
-    "dress",
-    "skirt",
-    "pants",
-    "shorts",
-    "jeans",
-    "kimono",
-    "hakama",
-    "yukata",
-    "obi",
-    "apron",
-    "sweater",
-    "hoodie",
-    "cardigan",
-    "vest",
-    "suit",
-    "necktie",
-    "tie",
-    "bowtie",
-    "collar",
-    "sleeves",
-    "gloves",
-    "socks",
-    "thighhighs",
-    "pantyhose",
-    "boots",
-    "shoes",
-    "sneakers",
-    "scarf",
-    "earrings",
-    "jewelry",
-    "necklace",
-    "choker",
-    "uniform",
-    "clothes",
-    "hat",
-    "headwear",
-    "beret",
-    "cap",
-    "hood",
-    "ribbon",
-    "bow",
-    "hairclip",
-    "hairband",
-    "headband",
-    "headphones",
-    "glasses",
-    "eyewear",
-    "belt",
-    "buttons",
-    "lapels",
-    "frills",
-    "maid",
-    "wa",
-    "turtleneck",
-    "camisole",
-    "blazer",
-    "sailor",
-    "overalls",
-    "bag",
-    "backpack",
-    "watch",
-    "bracelet",
-    "ring",
-    "cape",
-    "cloak",
-    "armor",
-}
-# 表情・しぐさ(場面ごとに変わるもの)
-POSE_WORDS = {
-    "smile",
-    "grin",
-    "blush",
-    "mouth",
-    "tongue",
-    "tears",
-    "crying",
-    "frown",
-    "pout",
-    "expressionless",
-    "serious",
-    "surprised",
-    "closed",
-    "looking",
-    "wink",
-    "hand",
-    "hands",
-    "arm",
-    "arms",
-    "finger",
-    "legs",
-    "sitting",
-    "standing",
-    "walking",
-    "running",
-    "holding",
-    "reading",
-    "waving",
-    "v",
-    "crossed",
-    "head",
-    "tilt",
-    "leaning",
-    "pocket",
-}
-_PERSON_WORDS = BODY_WORDS | CLOTHES_WORDS | POSE_WORDS
+
+def person_words() -> frozenset[str]:
+    """人物のタグにする語(容姿・服・小物・表情・しぐさ。語彙の tagger.body_words / clothes_words / pose_words)。"""
+    return vocab.words("tagger.body_words") | vocab.words("tagger.clothes_words") | vocab.words("tagger.pose_words")
 
 
 def _is_person_tag(tag: str) -> bool:
-    return any(word in _PERSON_WORDS for word in tag.replace("(", " ").replace(")", " ").split())
+    words = person_words()
+    return any(word in words for word in tag.replace("(", " ").replace(")", " ").split())
 
 
 @dataclass
@@ -493,7 +303,7 @@ def split_characters(image: Image.Image) -> list[CharacterGuess]:
         [s.tag for s in person if s.category == "character" and s.probability >= CHARACTER_THRESHOLD]
         for person in scores
     ]
-    skip = set(_COUNT_TAGS) | set(STYLE_TAGS) | set(FRAMING_TAGS) | _SCENE_ONLY
+    skip = set(vocab.items("tagger.count_tags")) | set(vocab.items("tagger.style_tags")) | set(vocab.items("tagger.framing_tags")) | vocab.words("tagger.scene_only_tags")
     assigned: list[list[tuple[float, str]]] = [[] for _ in heads]
     for tag in {t for t in set().union(*per_person) - skip if _is_person_tag(t)}:
         values = [person.get(tag, 0.0) for person in per_person]
@@ -520,7 +330,7 @@ def build_negative(base: str, prompt: str) -> str:
     """
     tags = {t.strip() for t in prompt.split(",")}
     negative = [t.strip() for t in base.split(",") if t.strip()]
-    if not tags & set(_PANEL_TAGS):
+    if not tags & set(vocab.items("tagger.panel_tags")):
         negative += ["multiple views", "comic", "panels", "border"]
     return ", ".join(t for t in dict.fromkeys(negative) if t not in tags)
 

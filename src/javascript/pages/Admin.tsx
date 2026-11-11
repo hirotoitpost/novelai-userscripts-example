@@ -753,6 +753,83 @@ interface Setting {
   default: string | number; value: string | number; overridden: boolean; minimum: number | null; maximum: number | null
 }
 
+interface VocabularyEntry {
+  key: string; group: string; label: string; description: string
+  value: string[]; default: string[]; modified: boolean; updated_at: string | null
+}
+
+/** 語彙(タグの分類・整理に使う語)。1行1語で編集する。コンテンツガードの語はここではなく下のガードにある */
+function VocabularySection() {
+  const [entries, setEntries] = useState<VocabularyEntry[]>([])
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [error, setError] = useState<string | null>(null)
+  const applied = useApplied()
+
+  useEffect(() => {
+    admin<{ entries: VocabularyEntry[] }>('/vocabulary').then(d => setEntries(d.entries)).catch(e => setError(errorText(e)))
+  }, [])
+
+  const save = async (entry: VocabularyEntry, reset: boolean) => {
+    setError(null)
+    try {
+      const updated = reset
+        ? await admin<VocabularyEntry>(`/vocabulary/${entry.key}/reset`, { method: 'POST' })
+        : await admin<VocabularyEntry>(`/vocabulary/${entry.key}`, { method: 'PUT', body: JSON.stringify({ value: drafts[entry.key] }) })
+      setEntries(list => list.map(e => (e.key === updated.key ? updated : e)))
+      setDrafts(({ [entry.key]: _done, ...rest }) => rest)
+      applied({ level: 'immediate', what: `語彙「${entry.label}」` })
+    } catch (e) {
+      setError(`${entry.label}: ${errorText(e)}`)
+    }
+  }
+
+  const groups = [...new Set(entries.map(e => e.group))]
+  return (
+    <section className="adm-section">
+      <h2>語彙</h2>
+      <p className="adm-hint">
+        タグの分類・整理に使う語です(絵柄のタグ・人物の語・構図のタグ・敬称 など)。1行に1語で書きます。値は DB にあり、
+        保存すると次の処理から効きます(再起動は要りません)。「既定に戻す」ではじめの値に戻ります。
+        未成年・性的な内容の判定に使う語は、下のコンテンツガードにあります。
+      </p>
+      {error && <p className="adm-error">{error}</p>}
+      {groups.map(group => {
+        const items = entries.filter(e => e.group === group)
+        const changed = items.filter(e => e.modified).length
+        return (
+          <details key={group} className="adm-preset">
+            <summary>
+              <strong>{group}</strong> <span className="adm-hint">{items.length} 項目{changed > 0 && ` ・ ${changed} 項目を変更`}</span>
+            </summary>
+            {items.map(e => {
+              const current = e.value.join('\n')
+              const draft = drafts[e.key] ?? current
+              const dirty = draft !== current
+              return (
+                <div key={e.key} className="adm-setting">
+                  <label>
+                    <strong>{e.label}</strong>
+                    {e.modified && <span className="adm-tag">変更あり</span>}
+                    <span className="adm-hint">{e.description}</span>
+                    <span className="adm-hint"><code>{e.key}</code> ・ {e.value.length} 語</span>
+                    <textarea rows={Math.min(10, Math.max(3, e.value.length))} spellCheck={false} value={draft}
+                      onChange={ev => setDrafts({ ...drafts, [e.key]: ev.target.value })} />
+                  </label>
+                  <div className="adm-row">
+                    <button type="button" className="adm-primary" disabled={!dirty} onClick={() => void save(e, false)}>保存</button>
+                    {dirty && <button type="button" onClick={() => setDrafts(({ [e.key]: _done, ...rest }) => rest)}>取り消す</button>}
+                    <button type="button" disabled={!e.modified} onClick={() => void save(e, true)}>既定に戻す</button>
+                  </div>
+                </div>
+              )
+            })}
+          </details>
+        )
+      })}
+    </section>
+  )
+}
+
 function DefaultsTab() {
   const [settings, setSettings] = useState<Setting[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -838,6 +915,8 @@ function DefaultsTab() {
           </div>
         ))}
       </section>
+
+      <VocabularySection />
 
       <section className="adm-section">
         <h2>画像のプリセット</h2>
