@@ -35,7 +35,7 @@ class BodyPart:
     label: str
     # 足すタグ(構図を含む)
     tags: str
-    # whole: 全身 / head: 頭頸部 / trunk: 体幹 / upper_limb: 上肢 / lower_limb: 下肢
+    # まとまり(GROUPS の id)。whole: 全身 / head: 頭頸部 / trunk: 体幹 / upper_limb: 上肢 / lower_limb: 下肢 など
     group: str
     # 人体の構造として確かめる点(画面に出す)
     check: str
@@ -61,7 +61,11 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("lower_limb", "下肢"),
     ("rom", "可動域(ヨガ)"),
     ("pregnancy", "妊娠の経過"),
+    ("nipple", "乳首の種類"),
+    ("pregnancy_nipple", "妊娠時の乳首"),
 )
+# 妊娠を描くまとまり(お腹とぶつかる体型のタグを外し、ガードの body_base.pregnancy_negative を足す)
+PREGNANCY_GROUPS = ("pregnancy", "pregnancy_nipple")
 
 _STAND = "full body, standing, arms at sides, expressionless"
 # 全身の部位は、はだしにする(2026-10 実機: 背面でハイヒールを履いた)。服を着せる絵(outfit_prompt)は衣装の靴を使うので、
@@ -257,7 +261,47 @@ def _pregnancy_part(stage: tuple[str, str, str, str, str], view: BodyPart) -> Bo
 PREGNANCY_PARTS: tuple[BodyPart, ...] = tuple(
     _pregnancy_part(stage, next(p for p in PARTS if p.key == view)) for stage in _PREG_STAGES for view in _PREG_VIEWS
 )
-PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS
+
+# 乳首の種類と妊娠時の乳首: 3Dモデルの乳首の部品(モデリング素材)を、種類ごとに乳首の4方向(正面・側面・斜め・下から)で描く
+# (ユーザーの依頼 2026-11-12)。これまでは種類ごとに素体を作り分けていた(しらね・あかねの「通常・陥没」など)が、
+# 部位にしてどのキャラの裸の素体でも描けるようにする。種類のタグは素体の追加タグと同じ重み(2026-11 しらね・あかねで確かめた)。
+# 裸の素体だけ(乳首の部位を引き継ぐ)。妊娠時の乳首は、妊娠の経過と同じく成人キャラだけのまとまり(ガードの
+# body_base.adult_only_groups)に入れ、お腹とぶつかる体型のタグを外す
+_PUFFY = "1.6::puffy nipples::, 1.3::puffy areolae::"
+_INVERTED = "1.6::inverted nipples::"
+_PREGNANT_NIPPLES = "pregnant, large areolae, dark areolae, dark nipples, large nipples"
+_NIPPLE_TYPES = (
+    # (キーの前半, 名前, まとまり, タグ, ネガティブ, 確かめる点)
+    ("puffy", "ぷっくり", "nipple", _PUFFY, "inverted nipples",
+     "乳輪全体がドーム状に盛り上がり、乳首との境目がなだらか。横から見ると乳輪の厚みが分かる"),
+    ("inverted", "陥没", "nipple", _INVERTED, "puffy nipples, erect nipples",
+     "乳首が乳輪の面より奥に入り、中央に横長のくぼみ。乳輪は平らか、わずかに盛り上がる"),
+    ("preg", "ふつう", "pregnancy_nipple", _PREGNANT_NIPPLES, "small areolae, pink nipples",
+     "妊娠で乳輪が広がって色が濃くなり、乳首も大きくなる。乳輪のまわりに小さな粒(モントゴメリー腺)"),
+    ("preg_puffy", "ぷっくり", "pregnancy_nipple", f"{_PUFFY}, {_PREGNANT_NIPPLES}",
+     "inverted nipples, small areolae, pink nipples",
+     "広がって濃くなった乳輪が、ドーム状に盛り上がる"),
+    ("preg_inverted", "陥没", "pregnancy_nipple", f"{_INVERTED}, {_PREGNANT_NIPPLES}",
+     "puffy nipples, erect nipples, small areolae, pink nipples",
+     "広がって濃くなった乳輪の中央に、乳首が奥へ入ったくぼみ"),
+)
+_NIPPLE_VIEWS = ("nipple_front", "nipple_side", "nipple_three_quarter", "nipple_below")
+
+
+def _nipple_part(kind: tuple[str, str, str, str, str, str], view: BodyPart) -> BodyPart:
+    key, label, group, tags, negative, check = kind
+    prefix = "妊娠時の乳首" if group == "pregnancy_nipple" else "乳首"
+    direction = view.label.split("(", 1)[1].rstrip(")")
+    return dataclasses.replace(
+        view, key=f"nipple_{key}_{view.key.removeprefix('nipple_')}", label=f"{prefix}・{label}({direction})",
+        group=group, check=check, tags=join_tags(view.tags, tags), negative=join_tags(view.negative, negative),
+    )
+
+
+NIPPLE_PARTS: tuple[BodyPart, ...] = tuple(
+    _nipple_part(kind, next(p for p in PARTS if p.key == view)) for kind in _NIPPLE_TYPES for view in _NIPPLE_VIEWS
+)
+PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS
 
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
@@ -418,7 +462,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
     )
     if part.rear:
         tags = ", ".join(t for t in split_tags(tags) if not _REAR_HIDDEN_RE.search(t))
-    if part.group == "pregnancy":
+    if part.group in PREGNANCY_GROUPS:
         drop = {_plain_weight(t) for t in split_tags(str(app_settings.get("body_base.pregnant_drop_tags")))}
         tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in drop)
     return tags
@@ -465,7 +509,10 @@ def part_negative(negative_prompt: str, part: BodyPart) -> str:
 
 
 # まとまりごとに足す打ち消し(ガードの項目)。部位の画面で部位のネガティブを書き換えても外れない
-_GROUP_NEGATIVE = {"rom": "body_base.rom_negative", "pregnancy": "body_base.pregnancy_negative"}
+_GROUP_NEGATIVE = {
+    "rom": "body_base.rom_negative",
+    **{group: "body_base.pregnancy_negative" for group in PREGNANCY_GROUPS},
+}
 
 
 def adult_only(part: BodyPart) -> bool:
