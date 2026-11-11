@@ -2,7 +2,8 @@
 コンテンツガードの定義(止めるタグ・取り除くタグ・足すネガティブ・LLM への指示・成人向けの判定の語)。
 
 値はすべて DB(content_guard_rules)に持ち、API(/api/content-guard)と開発管理者のページで編集できる。
-このファイルには値を書かない。はじめの値は content_guard_defaults.json にあり、DB に無い項目だけをそこから入れる
+このファイルには値を書かない。画面で変えられない最低線(成人の年齢・衣装の例外にしない語)は safety_floor から注入し、
+実際に効く値は「最低線 + DB の値」になる。はじめの値は content_guard_defaults.json にあり、DB に無い項目だけをそこから入れる
 (「既定に戻す」もそのファイルの値に戻す)。使う側は get(key) / find(key, text) などで読む。変更は次の呼び出しから
 効く(再起動は要らない)。
 """
@@ -19,6 +20,7 @@ from typing import Any
 
 from . import db
 from .db import get_guard_connection
+from .safety_floor import get_floor, is_adult_age
 
 _DEFAULTS_FILE = Path(__file__).with_name("content_guard_defaults.json")
 _MAX_ITEMS = 500
@@ -190,25 +192,22 @@ def words(key: str) -> frozenset[str]:
 
 # ---- 成人の衣装(制服のコスプレ など) ----
 
-# 衣装の例外にしない語(子どもの体・年齢そのものを表す語)。成人の年齢を入れても、組み合わせで成人を表しても、
-# これに当たるタグは未成年の手がかりのまま(絵が子どもの体になるため)。この固定の語は、開発管理者のページで衣装のタグに
-# 足しても、ガードのパスワードがあっても外せない最低線(画面には「固定」として出す)。足す語はガードの
-# safety.never_costume_tags(パスワードで守る。外すときに要る)
-NEVER_COSTUME_PATTERNS: tuple[str, ...] = (
-    "loli(ta)?", "shota", "child(ren)?", "kids?", "toddler", "bab(y|ies)", "infant", "little (girl|boy)s?",
-    "young (girl|boy)s?", "underage", "minor", "teen(age|ager)?s?", "petite child", "elementary", "kindergarten",
-    "randoseru", "aged down", "jk", "joshi ?kousei", "school ?(girl|boy)s?", "students?", "(high|middle) school",
-)
-_NEVER_COSTUME = re.compile(r"\b(" + "|".join(NEVER_COSTUME_PATTERNS) + r")\b", re.IGNORECASE)
-# 画面に出す固定の語(describe_one の fixed)
-_FIXED = {"safety.never_costume_tags": list(NEVER_COSTUME_PATTERNS)}
+# 衣装の例外にしない語は「最低線(safety_floor から注入。コードにだけあり、画面では変えられない) + ユーザー定義
+# (safety.never_costume_tags。パスワードで守る。外すときに要る)」。最低線は画面に「固定」として出す
+
+
+def _fixed(key: str) -> list[str]:
+    """画面に出す固定の語(describe_one の fixed)。"""
+    if key == "safety.never_costume_tags":
+        return list(get_floor().never_costume_patterns)
+    return []
 
 
 def is_costume(tag: str) -> bool:
     """成人も衣装として着るタグか(safety.adult_costume_tags。子どもの体・年齢・身分を表す語は当たらない)。"""
     return (
         search("safety.adult_costume_tags", tag)
-        and not _NEVER_COSTUME.search(tag or "")
+        and not get_floor().never_costume(tag or "")
         and not search("safety.never_costume_tags", tag)
     )
 
@@ -219,9 +218,8 @@ def adult_marked(tags: str) -> bool:
 
 
 def is_defined_adult(character: dict[str, Any]) -> bool:
-    """年齢(18 歳以上)を入れてある成人キャラか(未成年の定義が無いこと)。"""
-    age = character.get("age")
-    return age is not None and int(age) >= 18 and not character.get("is_minor")
+    """年齢(成人の年齢以上。safety_floor)を入れてある成人キャラか(未成年の定義が無いこと)。"""
+    return is_adult_age(character.get("age")) and not character.get("is_minor")
 
 
 def without_costumes(found: list[str]) -> list[str]:
@@ -417,7 +415,7 @@ def describe_one(key: str) -> dict[str, Any]:
         "choices": [{"value": v, "label": label} for v, label in zip(rule.choices, rule.choice_labels)],
         "updated_at": loaded.updated.get(key),
         # コードにある固定の分(画面では変えられない最低線)
-        "fixed": _FIXED.get(key, []),
+        "fixed": _fixed(key),
     }
 
 

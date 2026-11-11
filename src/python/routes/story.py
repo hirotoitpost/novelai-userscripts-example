@@ -30,6 +30,7 @@ from ..cast import auto_reference, match_existing
 from .. import content_guard
 from ..client import get_client
 from ..content_guard import sanitize_scene_tags
+from ..safety_floor import is_adult_age, is_minor_age
 from ..db import (
     PerUser,
     add_story_scenes,
@@ -2370,9 +2371,6 @@ async def put_character_sheet(
         conn.close()
 
 
-# この年齢から成人として扱う
-ADULT_AGE = 18
-
 
 def _checked_growth(
     conn: Any, character_id: int | None, sheet: dict[str, Any], current: dict[str, Any] | None = None
@@ -2389,8 +2387,8 @@ def _checked_growth(
         sheet["growth_label"] = (sheet["growth_label"] or "").strip() or None
     age = sheet["age"] if "age" in sheet else (current or {}).get("age")
     if age is not None:
-        sheet["is_minor"] = age < ADULT_AGE
-        sheet["is_adult"] = age >= ADULT_AGE
+        sheet["is_minor"] = is_minor_age(age)
+        sheet["is_adult"] = is_adult_age(age)
     base_id = sheet["growth_of"] if "growth_of" in sheet else (current or {}).get("growth_of")
     if base_id is None:
         return sheet

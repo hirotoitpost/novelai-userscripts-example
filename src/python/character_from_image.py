@@ -119,7 +119,8 @@ async def create_from_image(api_key: str, data: bytes) -> dict[str, Any]:
     """画像からキャラを作り、{source, characters} を返す(characters は作ったキャラ)。"""
     from .character_sheet import join_tags, split_prompt
     from .db import get_connection, list_characters, save_character, update_character_sheet
-    from .manga_similar import ADULT_AGE, Person, _is_minor, name_people
+    from .manga_similar import Person, _is_minor, name_people
+    from .safety_floor import is_minor_age
 
     # 判定モデルは数秒かかるので、イベントループを塞がないようにスレッドで
     found = await asyncio.to_thread(read_people, data)
@@ -168,8 +169,8 @@ async def create_from_image(api_key: str, data: bytes) -> dict[str, Any]:
                 fields["negative_tags"] = sheet["negative"]
             age = info.get("age")
             minor_tags = [t for t in _plain_tags(f"{appearance}, {sheet['outfit']}") if _is_minor(t)]
-            if (age is not None and age < ADULT_AGE) or minor_tags:
-                fields.update({"is_minor": 1, "is_adult": 0, "age": age if age is not None and age < ADULT_AGE else None})
+            if is_minor_age(age) or minor_tags:
+                fields.update({"is_minor": 1, "is_adult": 0, "age": age if is_minor_age(age) else None})
             created.append(update_character_sheet(conn, character["id"], fields) or character)
     finally:
         conn.close()
