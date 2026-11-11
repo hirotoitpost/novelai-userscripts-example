@@ -553,8 +553,10 @@ def test_body_parts_can_be_added_and_edited(client: TestClient) -> None:
 
 
 def test_nipple_close_ups_only_for_nude_and_weighted_detail_tags(client: TestClient) -> None:
-    keys = {p.key for p in body_base.PARTS if p.nude_only}
+    keys = {p.key for p in body_base.PARTS if p.nude_only and p.group == "trunk"}
     assert keys == {"nipple_front", "nipple_side", "nipple_three_quarter", "nipple_below"}
+    # 乳首の種類・妊娠時の乳首も、乳首の部位を引き継いで裸の素体だけ
+    assert all(p.nude_only for p in body_base.PARTS if p.group in ("nipple", "pregnancy_nipple"))
     # 強調の書き方でも、裸の素体の形のタグとして通る(性器は相変わらず弾く)
     assert body_base.clean_extra("1.5::inverted nipples::, large breasts", nude=True) == []
     assert body_base.clean_extra("1.5::pussy::", nude=True) == ["pussy"]
@@ -717,3 +719,48 @@ def test_body_base_uses_the_reference_image_by_default() -> None:
     assert req.use_reference is True and req.reference_strength == 0.6
     assert FaceSheetRequest(keys=["front"]).use_reference is False
 
+
+
+def test_nipple_types_and_pregnant_nipples_reuse_the_four_views(client: TestClient) -> None:
+    # 乳首の種類(ぷっくり・陥没)と妊娠時の乳首(ふつう・ぷっくり・陥没) × 乳首の4方向。素体を作り分けずに部位で描く
+    nipple = [p for p in body_base.PARTS if p.group == "nipple"]
+    pregnant = [p for p in body_base.PARTS if p.group == "pregnancy_nipple"]
+    assert len(nipple) == 8 and len(pregnant) == 12
+    puffy = body_base.ITEMS["nipple_puffy_side"]
+    assert "puffy nipples::" in puffy.tags and "from side" in puffy.tags and "inverted nipples" in puffy.negative
+    assert puffy.label == "乳首・ぷっくり(側面)"
+    inverted = body_base.ITEMS["nipple_preg_inverted_below"]
+    assert "inverted nipples::" in inverted.tags and "dark areolae" in inverted.tags and "from below" in inverted.tags
+    assert inverted.label == "妊娠時の乳首・陥没(下から)"
+    # 妊娠時の乳首は成人キャラだけのまとまりで、妊娠の打ち消しが入る。乳首の種類は入らない
+    assert all(body_base.adult_only(p) for p in pregnant) and not any(body_base.adult_only(p) for p in nipple)
+    assert "pussy" in body_base.part_negative("", inverted)
+    assert body_base.part_negative("", puffy) == puffy.negative
+    # 妊娠時の乳首では、お腹とぶつかる体型のタグを外す
+    base = {"kind": "suit", "extra_tags": "slender waist, medium breasts"}
+    assert "slender waist" not in body_base.prompt({"appearance_tags": "1girl"}, base, inverted, {})
+    assert "slender waist" in body_base.prompt({"appearance_tags": "1girl"}, base, puffy, {})
+    groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
+    assert {"id": "nipple", "label": "乳首の種類"} in groups
+    assert {"id": "pregnancy_nipple", "label": "妊娠時の乳首"} in groups
+
+    # 裸の素体の成人キャラで描ける。素体スーツでは描かない
+    adult = _character(client, "nipple_types", is_adult=1, age=25)
+    nude = _base(client, name="裸", kind="nude", skin_tone="fair")
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": nude["id"]})
+    res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                      json={"keys": ["nipple_inverted_front", "nipple_preg_puffy_side"], "auto_check": False})
+    assert res.text.count('"status": "ok"') == 2, res.text
+    suit = _base(client, name="スーツ", kind="suit")
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": suit["id"]})
+    assert client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                       json={"keys": ["nipple_puffy_front"]}).status_code == 422
+
+
+def test_pregnant_nipples_join_the_adult_only_groups_on_existing_dbs() -> None:
+    # 前の既定値(pregnancy だけ)のままの DB は、新しい既定値(妊娠時の乳首も)に入れ替わる
+    from python import content_guard
+
+    content_guard.set_value("body_base.adult_only_groups", ["pregnancy"])
+    content_guard.reset_cache()
+    assert content_guard.words("body_base.adult_only_groups") == {"pregnancy", "pregnancy_nipple"}

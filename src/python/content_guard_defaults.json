@@ -782,11 +782,17 @@
       "key": "body_base.adult_only_groups",
       "group": "素体",
       "label": "成人キャラだけで描く部位のまとまり",
-      "description": "素体の部位のまとまり(id)のうち、素体の種類(素体スーツ・水着素体も)によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描くもの。pregnancy は妊娠の経過。",
+      "description": "素体の部位のまとまり(id)のうち、素体の種類(素体スーツ・水着素体も)によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描くもの。pregnancy は妊娠の経過、pregnancy_nipple は妊娠時の乳首。",
       "kind": "words",
       "match": "exact",
       "value": [
-        "pregnancy"
+        "pregnancy",
+        "pregnancy_nipple"
+      ],
+      "previous": [
+        [
+          "pregnancy"
+        ]
       ]
     },
     {
