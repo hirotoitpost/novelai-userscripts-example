@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from . import vocabulary as vocab
 
 # 描かれているとみなす確率(panel_check._PRESENT と同じ)と、出てはいけない物が描かれているとみなす確率(_UNWANTED と同じ)
 PRESENT = 0.2
@@ -58,17 +59,6 @@ def is_render_tag(tag: str) -> bool:
     return bool(_RENDER.search(tag.lower()))
 
 
-# axis_of で「その他」になるが、種類の分かる語(服・小物・化粧・表情)
-_OUTFIT_WORDS = {
-    "bikini", "swimsuit", "mask", "kanzashi", "ornament", "hairclip", "ribbon", "bow", "necklace", "earrings", "jewelry",
-    "glasses", "eyewear", "hat", "bra", "panties", "lingerie", "yukata", "kimono", "hakama", "apron", "gloves",
-    "thighhighs", "pantyhose", "harness", "belt", "scarf", "necktie", "bag", "naginata", "sword", "katana", "weapon",
-    "umbrella", "scrunchie", "headband", "choker", "towel", "veil", "obi",
-}
-_MAKEUP_WORDS = {"eyeliner", "makeup", "lipstick", "eyeshadow", "mole", "freckles"}
-_EXPRESSION_EXTRA = {"jitome", "flustered", "pout", "smirk", "grin", "tears", "teary", "crying", "frown"}
-
-
 def category_of(tag: str) -> str:
     """タグの種類(CATEGORIES のキー)。塗りのタグは "style"、人数は "skip"。"""
     from .dataset_variations import axis_of
@@ -80,11 +70,11 @@ def category_of(tag: str) -> str:
         return axis
     if axis == "other":
         words = set(tag.lower().replace("(", " ").replace(")", " ").split())
-        if words & _EXPRESSION_EXTRA:
+        if words & vocab.words("accuracy.expression_words"):
             return "expressions"
-        if words & _MAKEUP_WORDS:
+        if words & vocab.words("accuracy.makeup_words"):
             return "appearance"
-        if words & _OUTFIT_WORDS:
+        if words & vocab.words("accuracy.outfit_words"):
             return "outfits"
     return axis if axis in CATEGORIES else "other"
 

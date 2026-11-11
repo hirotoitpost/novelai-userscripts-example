@@ -18,11 +18,10 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+from . import vocabulary as vocab
 
 # タグの確からしさがこれ以上なら「その絵にある」とみなす
 _ON = 0.5
-# 1枚に人が2人以上いるとみなすタグ
-_CROWD_TAGS = ("multiple views", "2girls", "2boys", "multiple girls", "multiple boys", "turnaround", "reference sheet")
 
 
 @dataclass(frozen=True)
@@ -110,7 +109,7 @@ def judge(part: str, tags: dict[str, float], heads: int, pose_problems: list[str
         score -= max(0.0, threshold - p)
         if p < threshold:
             reasons.append(reason)
-    crowd = max((tags.get(t, 0.0) for t in _CROWD_TAGS), default=0.0)
+    crowd = max((tags.get(t, 0.0) for t in vocab.items("body_check.crowd_tags")), default=0.0)
     score -= crowd
     if heads > rule.max_heads or crowd >= 0.4:
         reasons.append("人が2人以上写っている")
@@ -118,7 +117,7 @@ def judge(part: str, tags: dict[str, float], heads: int, pose_problems: list[str
     for problem in pose_problems or []:
         reasons.append(problem)
         score -= 0.5
-    watched = {t for t, _, _ in (*rule.reject, *rule.require)} | set(_CROWD_TAGS)
+    watched = {t for t, _, _ in (*rule.reject, *rule.require)} | set(vocab.items("body_check.crowd_tags"))
     return CheckResult(
         passed=not reasons, score=score, reasons=reasons,
         tags={t: p for t, p in tags.items() if t in watched and p >= 0.1}, heads=heads,

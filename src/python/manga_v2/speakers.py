@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image
 
 from ..script_lines import speaker_before
+from .. import vocabulary as vocab
 
 Box = tuple[float, float, float, float]
 
@@ -72,8 +73,6 @@ def cast_members(characters: list[dict]) -> list[CastMember]:
 
 # 名前の直後に来ると、その人が文の主語だとわかる助詞
 _SUBJECT_PARTICLES = "はがも"
-# 呼びかけ(「ゆら、…」「みおちゃん、…」)。呼ばれた側は話し手ではない
-_VOCATIVE_SUFFIXES = ("ちゃん", "さん", "くん", "君")
 
 
 def _subject_in(narration: str, cast: list[CastMember]) -> int | None:
@@ -95,7 +94,7 @@ def _addressee(line: str, cast: list[CastMember]) -> int | None:
     """
     for member in cast:
         for name in member.names:
-            suffixes = "|".join(_VOCATIVE_SUFFIXES)
+            suffixes = "|".join(vocab.items("speakers.vocative_suffixes"))
             if re.search(
                 rf"(?:^|[。、！？!?　 ]){re.escape(name)}(?:{suffixes})?(?:[、。！!…]|$)",
                 line,

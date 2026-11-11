@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import content_guard
+from . import vocabulary as vocab
 
 # --- バリエーションの既定リスト(UIのチェックボックスの初期値) ---
 
@@ -140,16 +141,7 @@ def blocked_tags(tags: str, extra: list[str] | None = None, *, include_core: boo
     return sorted(found)
 
 
-# 画風・品質のタグ(キャラシートの「画風」に入れる)
-_STYLE_PHRASES = {
-    "masterpiece", "best quality", "very aesthetic", "amazing quality", "high quality", "absurdres", "highres",
-    "no text", "official art", "anime coloring", "anime screencap", "game cg", "illustration", "realistic",
-    "photorealistic", "3d", "pixel art", "chibi", "flat color", "sketch", "lineart", "monochrome", "greyscale",
-    "watercolor (medium)", "traditional media", "screentone", "halftone", "sepia", "limited palette", "spot color",
-}  # fmt: skip
 _STYLE_RE = re.compile(r"(^artist:|\bstyle$|^year \d{4}$|\bcomplexity$|\bquality$)")
-# 人物を表す語(キャラごとのプロンプトの先頭に書く girl / boy など)と、人数のタグ
-_PERSON_NOUNS = {"girl", "boy", "woman", "man", "female", "male", "other"}
 _COUNT_RE = re.compile(r"^\d\+?(girls?|boys?|others?)$")
 # 強調の記号と重み(1.2::tag::、{tag}、[tag]、-tag)を、見分けるときだけ外す
 _WEIGHT_RE = re.compile(r"^-?\d+(\.\d+)?::|::$")
@@ -172,7 +164,6 @@ def split_prompt(prompt: str) -> dict[str, str]:
     には入れない)。タグの文字はそのまま残す(強調の記号や重みも)。語の一覧に無いタグは other になるので、
     画面で確かめて直してもらう前提。
     """
-    from .image_tagger import BODY_WORDS, CLOTHES_WORDS, STYLE_TAGS
 
     parts: dict[str, list[str]] = {"appearance": [], "outfit": [], "style": [], "other": []}
     for tag in split_tags(prompt.replace("\n", ",")):
@@ -180,14 +171,14 @@ def split_prompt(prompt: str) -> dict[str, str]:
         words = set(plain.replace("(", " ").replace(")", " ").split())
         if not plain:
             continue
-        if plain in _STYLE_PHRASES or plain in STYLE_TAGS or _STYLE_RE.search(plain):
+        if plain in vocab.words("sheet.style_phrases") or plain in vocab.items("tagger.style_tags") or _STYLE_RE.search(plain):
             key = "style"
-        elif _COUNT_RE.match(plain) or plain in _PERSON_NOUNS:
+        elif _COUNT_RE.match(plain) or plain in vocab.words("sheet.person_nouns"):
             key = "appearance"
-        elif words & CLOTHES_WORDS:
+        elif words & vocab.words("tagger.clothes_words"):
             # 「hair ribbon」「hair bow」のように髪の語が入っていても、身に着けるものは服装
             key = "outfit"
-        elif words & BODY_WORDS:
+        elif words & vocab.words("tagger.body_words"):
             key = "appearance"
         else:
             key = "other"
@@ -392,35 +383,14 @@ def look_tags(character: dict[str, Any], state: dict[str, Any] | None = None) ->
     return body_tags(character.get("appearance_tags"), state)
 
 
-# 体型のタグに入っている語(体つき・胸・腰など)。顔・髪・目・肌の色は容姿の側に残す
-BODY_SHAPE_WORDS = {
-    "breasts", "breast", "chest", "flat", "slim", "slender", "thin", "skinny", "petite", "curvy", "voluptuous",
-    "plump", "chubby", "fat", "muscular", "toned", "abs", "stomach", "belly", "waist", "hips", "hip", "thighs",
-    "thigh", "tall", "height", "figure", "build", "body", "bodied", "stature", "legs", "shoulders", "ass", "butt",
-    "pregnant", "muscle", "muscles", "athletic", "busty", "huge", "gigantic", "small", "large", "medium",
-}
-# 語は体型のものでも、顔・髪・目のタグ(long hair の long、large eyes の large など)は容姿に残す
-_FACE_WORDS = {"hair", "eyes", "eye", "face", "ears", "ear", "nose", "mouth", "lips", "eyebrows", "eyelashes", "skin", "teeth"}
-
-
 def split_body(appearance: str) -> tuple[str, str]:
     """容姿のタグを(顔・髪・目など, 体型)に分ける。人数のタグ(1girl など)は顔の側に残す。"""
     face: list[str] = []
     body: list[str] = []
     for tag in split_tags(appearance):
         words = set(_plain(tag).replace("(", " ").replace(")", " ").split())
-        (body if words & BODY_SHAPE_WORDS and not words & _FACE_WORDS else face).append(tag)
+        (body if words & vocab.words("sheet.body_shape_words") and not words & vocab.words("sheet.face_words") else face).append(tag)
     return ", ".join(face), ", ".join(body)
-
-
-# 顔だけに効く語(目・まつ毛・頬の赤み など)。後ろ姿のコマでは、これを含む容姿のタグを外す(顔を見せる絵に引っ張られる)。
-# 髪のタグ(hair between eyes など)は後ろからも見えるので残す
-_FACE_ONLY_WORDS = {
-    "face", "eyes", "eye", "eyelashes", "eyebrows", "eyeliner", "eyeshadow", "pupils", "iris", "lips", "lipstick",
-    "mouth", "nose", "blush", "freckles", "jitome", "tsurime", "tareme", "makeup", "expression", "smile", "glasses",
-    # 前髪は後ろからは見えない。残すと正面向きに引っ張られる(blunt bangs で後ろ姿の候補がこちらを向いた)
-    "bangs",
-}
 
 
 def drop_face_tags(appearance: str | None) -> str:
@@ -428,7 +398,7 @@ def drop_face_tags(appearance: str | None) -> str:
     kept = []
     for tag in split_tags(appearance):
         words = set(_plain(tag).replace("(", " ").replace(")", " ").replace("_", " ").split())
-        if words & _FACE_ONLY_WORDS and "hair" not in words:
+        if words & vocab.words("sheet.face_only_words") and "hair" not in words:
             continue
         kept.append(tag)
     return ", ".join(kept)

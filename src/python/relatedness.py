@@ -13,26 +13,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable
+from . import vocabulary as vocab
 
-# どの作品・画像にも付きやすく、似ている手がかりにならないタグ。珍しさ(IDF)でも自然に軽くなるが、
-# 画風・品質の指定は件数が少ないうちは珍しく見えてしまうので、最初から外す。
-_IGNORED_TAGS = {
-    "masterpiece",
-    "best quality",
-    "very aesthetic",
-    "absurdres",
-    "high complexity",
-    "medium complexity",
-    "low complexity",
-    "ultra complexity",
-    "manga style",
-    "monochrome",
-    "greyscale",
-    "screentone",
-    "no text",
-    "highres",
-    "nsfw",
-}
 # 「1.2::tag::」(強調の重み)、{tag} [tag] (tag:1.2) などの書き方を外して、タグの語だけにする
 _WEIGHT_PREFIX_RE = re.compile(r"^-?\d+(\.\d+)?::")
 _BRACKETS_RE = re.compile(r"[{}\[\]()]")
@@ -46,7 +28,7 @@ def normalize_tags(text: str | None) -> set[str]:
             "", _WEIGHT_PREFIX_RE.sub("", raw.strip().lower())
         ).strip()
         tag = _TRAILING_WEIGHT_RE.sub("", tag).rstrip(":").strip()
-        if tag and tag not in _IGNORED_TAGS and len(tag) <= 60:
+        if tag and tag not in vocab.words("relatedness.ignored_tags") and len(tag) <= 60:
             tags.add(tag)
     return tags
 

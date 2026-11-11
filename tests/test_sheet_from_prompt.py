@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from python import db  # noqa: E402
 from python.character_sheet import split_prompt  # noqa: E402
-from python.image_tagger import BODY_WORDS, CLOTHES_WORDS, POSE_WORDS, _PERSON_WORDS, _is_person_tag  # noqa: E402
+from python import vocabulary  # noqa: E402
+from python.image_tagger import _is_person_tag, person_words  # noqa: E402
 from python.routes import story as story_routes  # noqa: E402
 
 
@@ -62,8 +63,9 @@ def test_split_style_and_edge_cases() -> None:
 
 def test_person_words_are_the_same_set_as_before() -> None:
     # 種類ごとに分けただけで、合わせた中身は変えていない(リバースプロンプトの人物の判定に使う)
-    assert _PERSON_WORDS == BODY_WORDS | CLOTHES_WORDS | POSE_WORDS
-    assert not (BODY_WORDS & CLOTHES_WORDS) and not (BODY_WORDS & POSE_WORDS) and not (CLOTHES_WORDS & POSE_WORDS)
+    body, clothes, pose = (vocabulary.words(f"tagger.{k}_words") for k in ("body", "clothes", "pose"))
+    assert person_words() == body | clothes | pose
+    assert not (body & clothes) and not (body & pose) and not (clothes & pose)
     assert _is_person_tag("long hair") and _is_person_tag("school uniform") and _is_person_tag("hand on own cheek")
     assert not _is_person_tag("classroom")
 

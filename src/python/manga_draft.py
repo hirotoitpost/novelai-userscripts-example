@@ -19,6 +19,7 @@ from typing import Any
 from . import content_guard
 from .manga_v2.speakers import cast_members
 from .novelai_text_oa import INSTRUCT_MODEL, stream_chat
+from . import vocabulary as vocab
 
 # 1話=4コマ(起承転結)
 PANELS_PER_EPISODE = 4
@@ -348,7 +349,6 @@ def _clean_tags(tags: str) -> str:
 
 
 _COUNT_TAG_RE = re.compile(r"^(\d+)\+?\s*(girl|boy|other)s?$", re.IGNORECASE)
-_MULTIPLE_TAGS = {"multiple girls", "multiple boys", "multiple others", "solo"}
 
 
 def reconcile_people(tags: str, drawn: int) -> tuple[str, list[str]]:
@@ -359,7 +359,7 @@ def reconcile_people(tags: str, drawn: int) -> tuple[str, list[str]]:
     戻り値は直したタグと、直した内容(画面に出す)。
     """
     items = [t for t in (s.strip() for s in tags.split(",")) if t]
-    counts = [t for t in items if _COUNT_TAG_RE.match(t) or t.lower() in _MULTIPLE_TAGS]
+    counts = [t for t in items if _COUNT_TAG_RE.match(t) or t.lower() in vocab.words("draft.multiple_tags")]
     total = sum(int(m.group(1)) for t in counts if (m := _COUNT_TAG_RE.match(t)))
     has_none = any(t.lower() == "no humans" for t in items)
     notes: list[str] = []

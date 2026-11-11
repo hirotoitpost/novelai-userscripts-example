@@ -37,7 +37,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .. import app_settings, db
+from .. import app_settings, db, vocabulary
 from ..client import app_mode
 from ..db import get_connection, user_files
 from ..sessions import list_audit, require_admin
@@ -884,3 +884,34 @@ async def put_setting(key: str, req: SettingUpdate) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"settings": app_settings.describe()}
+
+
+# ---- 語彙(タグの分類・整理に使う語。vocabulary.py) ----
+
+
+@router.get("/vocabulary")
+async def get_vocabulary() -> dict[str, Any]:
+    return {"entries": vocabulary.describe()}
+
+
+class VocabularyUpdate(BaseModel):
+    # 語の並び(文字列なら1行1語)
+    value: list[str] | str
+
+
+@router.put("/vocabulary/{key}")
+async def put_vocabulary(key: str, req: VocabularyUpdate) -> dict[str, Any]:
+    try:
+        return vocabulary.set_value(key, req.value)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="その語彙はありません。")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/vocabulary/{key}/reset")
+async def reset_vocabulary(key: str) -> dict[str, Any]:
+    try:
+        return vocabulary.reset(key)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="その語彙はありません。")

@@ -15,17 +15,10 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from novelai._utils.nai_meta import extract_image_metadata
+from .. import vocabulary as vocab
 
 router = APIRouter(prefix="/api/batch", tags=["batch"])
 
-# 類似度グループ化から除外する品質系タグ
-_QUALITY_TAGS: frozenset[str] = frozenset({
-    "masterpiece", "best quality", "very aesthetic", "amazing quality",
-    "absurdres", "highres", "ultra-detailed", "ultra detailed",
-    "extremely detailed", "perfect face", "official art", "wallpaper",
-    "8k", "4k", "2k", "illustration", "digital art", "anime", "manga",
-    "newest", "sensitive", "rating: general", "year 2024", "year 2025",
-})
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +40,7 @@ def _extract_prompt(meta: dict) -> str:
 def _meaningful_tags(prompt: str, max_tags: int = 4) -> list[str]:
     result: list[str] = []
     for tag in (t.strip() for t in prompt.split(",")):
-        if tag and tag not in _QUALITY_TAGS and len(tag) > 1:
+        if tag and tag not in vocab.words("batch.quality_tags") and len(tag) > 1:
             result.append(tag)
         if len(result) >= max_tags:
             break
