@@ -813,7 +813,7 @@ def test_urinal_and_stance_parts_are_posture_only_for_adults(client: TestClient)
     # 立ち姿勢は成人キャラだけ。股の打ち消しは可動域と同じ
     stance = [p for p in body_base.PARTS if p.group == "stance"]
     assert {p.key for p in stance} == {"stance_wall_hands", "stance_wall_lean", "stance_wide",
-                                       "stance_pelvis_forward", "stance_pelvis_back"}
+                                       "stance_pelvis_forward", "stance_pelvis_back", "stance_squat"}
     assert all(body_base.adult_only(p) for p in stance) and body_base.ITEMS["stance_wide"].open_legs
     assert "anus" in body_base.part_negative("", body_base.ITEMS["stance_pelvis_back"])
     groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
@@ -859,6 +859,7 @@ def test_parts_far_from_the_reference_pose_scale_the_reference() -> None:
     refs = [CharacterReference(image=b"x", type="character", fidelity=1.0, strength=0.8)]
     assert body_base.ITEMS["stance_pelvis_forward"].reference_scale == 0.0
     assert body_base.ITEMS["stance_pelvis_back"].reference_scale == 0.0
+    assert body_base.ITEMS["stance_squat"].reference_scale == 0.0
     assert body_base.ITEMS["toilet_western_hover"].reference_scale == 1.0
     assert _part_references(refs, body_base.ITEMS["stance_pelvis_forward"]) is None
     assert _part_references(refs, body_base.ITEMS["front"]) is refs

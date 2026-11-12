@@ -422,7 +422,7 @@ TOILET_PARTS = TOILET_PARTS + (
 # 関係を見る資料。性別は決めない。腰を後ろへ引く形などは誘うポーズに寄りやすいので、まとまりは成人キャラだけ
 # (ガードの body_base.adult_only_groups)にし、股の打ち消しは可動域と同じ body_base.rom_negative を使う
 # 参照画像(立ち姿)に引き戻される部位の、参照画像の強さの倍率
-_STANCE_REFERENCE_SCALE = {"stance_pelvis_forward": 0.0, "stance_pelvis_back": 0.0}
+_STANCE_REFERENCE_SCALE = {"stance_pelvis_forward": 0.0, "stance_pelvis_back": 0.0, "stance_squat": 0.0}
 _STANCE_NEGATIVE = "looking back, looking over shoulder, ass focus, bent over, seductive, sexy pose"
 STANCE_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {pose}, {_ROM_FACE}", "stance", check, "portrait",
@@ -476,6 +476,22 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          "on knees, seiza, knees on floor, 1.4::hands on crotch::, 1.3::covering crotch::, hand between legs, 1.3::hands in front::, "
          "hands on belly, "
          "1.3::spread legs::, bowlegged, wide stance, front view", False),
+        # スクワットの理想的なフォーム(ユーザーの依頼 2026-11-12): お尻を後ろへ引いて下ろす。腰を前に出す部位でうまくいった
+        # 文の形の英語で書き、参照画像(立ち姿)は外す(_STANCE_REFERENCE_SCALE)
+        ("stance_squat", "スクワット(側面)",
+         "1.5::bodyweight squat with the hips pushed back and down::, 1.4::thighs parallel to the floor::, "
+         "1.3::sticking the buttocks out behind::, feet shoulder width apart, 1.3::feet flat on floor::, 1.2::heels down::, "
+         "knees bent in line with the toes, 1.3::chest up with a neutral straight back::, torso leaning forward slightly, "
+         # 2026-11-12 実機: 器具のバーを握った・しゃがみが深すぎて体が丸まり、絵の端で切れた。素手で全身が入るようにし、
+         # 器具・深いしゃがみ・かかとの浮きを抑える
+         "1.2::arms extended straight forward::, empty hands, head neutral, looking forward, exercise, "
+         f"1.3::full body::, head to toe, feet visible, {_FROM_SIDE}",
+         "股関節と膝を同時に曲げ、殿部を後ろへ引いて下ろす。大腿は床と平行、膝は爪先の真上か少し前で爪先と同じ向き。"
+         "かかとは床に着いたまま。体幹は前へ傾くが背中はまっすぐ(腰を丸めず、反りすぎない)で、すねと体幹がほぼ平行。"
+         "腕を前へ伸ばして重心を足の真ん中に保つ",
+         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, rounded back, hunched, 1.3::heels raised::, on tiptoes, knees caving in, "
+         "1.4::kneeling::, sitting, 1.4::deep squat::, 1.3::butt on heels::, head tilted back, looking up, hands on crotch, "
+         "1.4::holding::, gym equipment, barbell, bar, machine, railing, cropped, out of frame", False),
         ("stance_pelvis_back", "腰を後ろに引く(側面)",
          # 2026-11-12 実機: 骨盤の前傾・腰の反りを単語で重みを上げても、ふつうの立ち姿とほとんど変わらなかった。
          # arched back は頭まで後ろへ仰け反らせる(ユーザーの指摘)ので外し、腰を前に出す部位でうまくいった
