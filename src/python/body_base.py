@@ -428,10 +428,14 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          "股関節が外転し、大腿は斜めに開く。膝は伸び、内転筋が伸びる。重心は両足の真ん中",
          "", True),
         ("stance_pelvis_forward", "腰を前に出す(側面)",
-         "1.3::standing::, 1.3::hips pushed forward::, posterior pelvic tilt, swayback posture, flat lower back, "
-         f"shoulders behind hips, arms at sides, {_FROM_SIDE}",
-         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。股関節は伸び、肩は腰より後ろに来る",
-         f"{_SIDE_NEGATIVE}, arched back", False),
+         # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。腰が足首より前へ出て、上体が後ろへ倒れる
+         # (側面から見て体がくの字を逆にした弓なり)ことを重み付きで書き、まっすぐな立ち姿をネガティブで抑える
+         "1.3::standing::, 1.5::hips thrust forward::, 1.3::pelvis in front of feet::, 1.3::upper body leaning back::, "
+         "shoulders far behind hips, belly pushed forward, posterior pelvic tilt, swayback posture, flat lower back, "
+         f"knees locked straight, arms hanging at sides, {_FROM_SIDE}",
+         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。股関節は伸び、腰は足首より前へ出て、肩は腰より後ろに来る"
+         "(側面から見て、肩・腰・足首が前へふくらむ弓なり)",
+         f"{_SIDE_NEGATIVE}, arched back, 1.3::standing straight::, upright posture, good posture, leaning forward", False),
         ("stance_pelvis_back", "腰を後ろに引く(側面)",
          "1.3::standing::, 1.2::anterior pelvic tilt::, hips slightly back, lower back curved, chest up, upright torso, "
          f"arms at sides, {_FROM_SIDE}",
