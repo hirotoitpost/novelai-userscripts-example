@@ -54,6 +54,13 @@ class BodyPart:
     # キャラの参照画像の強さに掛ける倍率(0 なら参照画像を使わない)。参照画像は立ち姿なので、立ち姿から大きく離れる
     # 姿勢は参照画像に引き戻される(2026-11-12 実機: 腰を前に出す形は、参照画像を外したときだけ出た)
     reference_scale: float = 1.0
+    # 視点の部位(with_view)の元のまとまり。成人キャラだけ・まとまりのネガティブ・はだしは、元のまとまりで決める
+    base_group: str = ""
+
+    @property
+    def family(self) -> str:
+        """成人キャラだけ・まとまりのネガティブなどを決めるまとまり(視点の部位は元のまとまり)。"""
+        return self.base_group or self.group
 
     @property
     def side(self) -> bool:
@@ -508,6 +515,88 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
 )
 PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STANCE_PARTS
 
+# ポーズの視点(ユーザーの依頼 2026-11-12): 可動域・トイレの体勢・立ち姿勢のポーズを、上・下・正面・背面からも描く。
+# 部位の向きのタグ(側面・斜めなど)とそのネガティブを外し、視点のタグとネガティブに入れ替える。視点ごとのまとまりに入れ、
+# 成人キャラだけ・まとまりのネガティブ・はだしは元のまとまり(base_group)で決める。元の部位と同じ向きの視点は作らない。
+# 下から(ユーザーの指定 2026-11-12)は2つ: 真下(カメラを真上に向けて床の真下から。浮いているポーズも同じ)と、
+# 見上げる(描かれない透明な床に立つ体を、斜め下から見上げる虫視点)。どちらも股を開いていてよい(ユーザーの判断)ので
+# 脚を閉じるタグは入れず、裸の素体でも描く(featureless crotch と打ち消しのネガティブがあっても性器が描かれるが、
+# ユーザーの判断で服ありと同じ扱い)。脚を閉じたポーズは、ほかの視点では脚を大きく開いた(洋式に座る・腰を前に出す)ので、
+# 膝をそろえるタグと、脚を開く・膝立ちのネガティブを足す
+POSE_GROUPS = ("rom", "toilet", "stance")
+# 重み(1.3::tag::)を外す(_WEIGHT_RE はこの後で定義するので、ここで持つ)
+_VIEW_WEIGHT_RE = re.compile(r"^-?\d+(\.\d+)?::|::$")
+VIEWS: tuple[tuple[str, str, str, str], ...] = (
+    # (id, 名前, タグ, ネガティブ)
+    ("above", "上から", "solo, 1.3::from above::, high angle view, looking down at subject", "from below, low angle"),
+    ("below", "真下から",
+     "solo, 1.5::bottom view, camera pointing straight up from directly underneath::, "
+     "1.4::standing on an invisible transparent floor::, 1.4::soles of feet pressed flat on the floor closest to viewer::, "
+     "1.3::extreme foreshortening::, legs receding upward, head small and far away at the top, symmetrical composition",
+     "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass, from front, front view, "
+     "worm's eye view, low angle view, horizon"),
+    ("looking_up", "見上げる",
+     "solo, 1.4::view from directly below::, 1.3::standing on an invisible transparent floor::, "
+     "looking up from beneath the floor, worm's eye view, soles of feet pressed on the invisible floor",
+     "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass"),
+    ("front", "正面", "solo, front view, 1.2::facing viewer::", "from side, profile, side view, from behind, back view"),
+    ("back", "背面", f"{_FROM_BEHIND}, back", _BACK_NEGATIVE),
+)
+_VIEW_GROUPS = tuple((f"pose_{view}", f"ポーズ・{label}") for view, label, _, _ in VIEWS)
+GROUPS = GROUPS + _VIEW_GROUPS
+# 部位の向きのタグ(外して視点のタグに入れ替える)
+_VIEW_WORDS = frozenset({
+    "from side", "profile", "side view", "front view", "facing viewer", "three-quarter view", "from behind", "facing away",
+    "back view", "straight-back", "back of head", "head facing away", "from above", "from below", "solo",
+})
+_VIEW_NEGATIVE_WORDS = frozenset(
+    _VIEW_WEIGHT_RE.sub("", t.strip()).strip().lower() for t in f"{_SIDE_NEGATIVE}, {_BACK_NEGATIVE}".split(",") if t.strip()
+)
+
+
+_CLOSED_LEGS_TAGS = "1.2::knees together::, legs together"
+# 下からの視点(脚を閉じるタグを入れない)
+_FROM_UNDER = ("below", "looking_up")
+_CLOSED_LEGS_NEGATIVE = "1.5::spread legs::, 1.3::legs apart::, knees apart, bowlegged, wide stance, 1.3::kneeling::, on knees"
+
+
+def _strip_words(tags: str, words: frozenset[str]) -> str:
+    return ", ".join(t for t in split_tags(tags) if _VIEW_WEIGHT_RE.sub("", t.strip()).strip().lower() not in words)
+
+
+def _own_view(part: BodyPart) -> str:
+    plain = {_VIEW_WEIGHT_RE.sub("", t).strip().lower() for t in split_tags(part.tags)}
+    if part.rear:
+        return "back"
+    if "front view" in plain:
+        return "front"
+    return ""
+
+
+def view_parts(part: BodyPart) -> list[BodyPart]:
+    """ポーズの部位を、上・下・正面・背面から描く部位(キーは <部位>__<視点>)。ポーズのまとまりでなければ空。"""
+    if part.family not in POSE_GROUPS or part.base_group:
+        return []
+    tags = _strip_words(part.tags, _VIEW_WORDS)
+    negative = _strip_words(part.negative, _VIEW_NEGATIVE_WORDS)
+    label = re.sub(r"\([^()]*\)$", "", part.label)
+    closed = not part.open_legs
+    result = []
+    for view, view_label, view_tags, view_negative in VIEWS:
+        if view == _own_view(part):
+            continue
+        legs = closed and view not in _FROM_UNDER
+        result.append(dataclasses.replace(
+            part, key=f"{part.key}__{view}", label=f"{label}({view_label})", group=f"pose_{view}", base_group=part.group,
+            tags=join_tags(tags, _CLOSED_LEGS_TAGS if legs else "", view_tags),
+            negative=join_tags(negative, _CLOSED_LEGS_NEGATIVE if legs else "", view_negative), rear=view == "back",
+        ))
+    return result
+
+
+VIEW_PARTS: tuple[BodyPart, ...] = tuple(v for part in PARTS for v in view_parts(part))
+PARTS = PARTS + VIEW_PARTS
+
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
 # 素体の背景(絵ごとの違いを部位だけにするため、無地にする)
@@ -567,6 +656,7 @@ def parts(rows: list[dict[str, Any]] | None = None) -> dict[str, BodyPart]:
     上書きでは、裸の素体で描くか・真後ろの部位かは既定のまま。足した部位は裸の素体では描かない。
     """
     result = dict(ITEMS)
+    edited: set[str] = set()
     for row in rows or []:
         fields = {
             "label": row["label"], "tags": row["tags"], "group": row["grp"], "check": row["check_text"],
@@ -574,6 +664,12 @@ def parts(rows: list[dict[str, Any]] | None = None) -> dict[str, BodyPart]:
         }
         builtin = ITEMS.get(row["key"])
         result[row["key"]] = dataclasses.replace(builtin, **fields) if builtin else BodyPart(row["key"], nude=False, **fields)
+        edited.add(row["key"])
+    # 元のポーズを画面で書き換えたら、その視点の部位も作り直す(視点の部位そのものを書き換えていれば、そちらを使う)
+    for key in list(edited):
+        for view in view_parts(result[key]):
+            if view.key not in edited:
+                result[view.key] = view
     return result
 
 
@@ -661,7 +757,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
-        _BARE_FEET if part.group in ("whole", "rom", "pregnancy", "toilet", "stance") else "",
+        _BARE_FEET if part.family in ("whole", "rom", "pregnancy", "toilet", "stance") else "",
         BACKGROUND,
         character.get("style_tags"),
     )
@@ -673,7 +769,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         # ユーザーの指摘)。打ち消しはネガティブに残る。脚を開く部位では股が見えるので外さない
         hidden = {_plain_weight(t) for t in content_guard.words("body_base.side_hidden_tags")}
         tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in hidden)
-    if part.group in PREGNANCY_GROUPS:
+    if part.family in PREGNANCY_GROUPS:
         drop = {_plain_weight(t) for t in split_tags(str(app_settings.get("body_base.pregnant_drop_tags")))}
         tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in drop)
     return tags
@@ -715,7 +811,7 @@ def part_negative(negative_prompt: str, part: BodyPart) -> str:
     if part.open_legs:
         allowed = {_plain_weight(t) for t in content_guard.words("body_base.open_legs_allowed")}
         tags = [t for t in tags if _plain_weight(t) not in allowed]
-    group = _GROUP_NEGATIVE.get(part.group)
+    group = _GROUP_NEGATIVE.get(part.family)
     return join_tags(", ".join(tags), part.negative, content_guard.text(group) if group else "")
 
 
@@ -730,7 +826,7 @@ _GROUP_NEGATIVE = {
 
 def adult_only(part: BodyPart) -> bool:
     """成人キャラだけで描く部位か(まとまりがガードの body_base.adult_only_groups にある。素体の種類によらない)。"""
-    return part.group in content_guard.words("body_base.adult_only_groups")
+    return part.family in content_guard.words("body_base.adult_only_groups")
 
 
 def negative(base: dict[str, Any], part: BodyPart | None = None, *, modest: bool = False) -> str:

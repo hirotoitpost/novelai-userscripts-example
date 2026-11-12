@@ -47,7 +47,8 @@ def test_parts_follow_anatomical_regions() -> None:
     assert len(body_base.ITEMS) == len(body_base.PARTS)  # キーが重ならない
     assert all(p.check for p in body_base.PARTS)
     # 裸の素体では、腹・骨盤・大腿の寄りと、服を着たまま描く小便器の前を描かない(胸のアップは 3D の乳首の部品のために描く)
-    assert {p.key for p in body_base.PARTS if not p.nude} == {"neck_shoulder", "abdomen", "pelvis", "thigh_knee", "toilet_urinal_back"}
+    assert {p.key for p in body_base.PARTS if not p.nude and not p.base_group} == {
+        "neck_shoulder", "abdomen", "pelvis", "thigh_knee", "toilet_urinal_back"}
 
 
 def test_face_tags_drop_body_and_skin() -> None:
@@ -866,3 +867,41 @@ def test_parts_far_from_the_reference_pose_scale_the_reference() -> None:
     half = dataclasses.replace(body_base.ITEMS["front"], reference_scale=0.5)
     assert _part_references(refs, half)[0].strength == 0.4  # type: ignore[index]
     assert refs[0].strength == 0.8
+
+
+def test_pose_parts_are_drawn_from_above_below_front_and_back(client: TestClient) -> None:
+    # 可動域・トイレの体勢・立ち姿勢のポーズは、上・下・正面・背面からも描ける(元の部位と同じ向きは作らない)
+    views = {p.key: p for p in body_base.PARTS if p.base_group}
+    assert {"stance_pelvis_forward__above", "stance_pelvis_forward__below", "stance_pelvis_forward__looking_up",
+            "stance_pelvis_forward__front", "stance_pelvis_forward__back"} <= set(views)
+    assert "toilet_urinal_back__back" not in views and "stance_wide__front" not in views
+    assert not any(k.startswith(("front__", "preg3_", "nipple_")) for k in views)
+    above = views["stance_pelvis_forward__above"]
+    assert above.group == "pose_above" and above.family == "stance" and above.label == "腰を前に出す(上から)"
+    assert "from above::" in above.tags and "from side" not in above.tags and "side view" not in above.tags
+    assert not above.side and above.reference_scale == 0.0
+    back = views["stance_squat__back"]
+    assert back.rear and "from behind::" in back.tags and "looking back::" in back.negative
+    # 成人キャラだけ・まとまりのネガティブ・はだしは元のまとまり
+    assert body_base.adult_only(above) and "pussy" in body_base.part_negative("", above)
+    assert "barefoot" in body_base.prompt({"appearance_tags": "1girl"}, {"kind": "suit"}, above, {})
+    # 下からは透明な床の真下から見上げる(脚を閉じるタグは入れない)。裸の素体でも描く(ユーザーの判断)。
+    # ほかの視点では、脚を閉じたポーズは膝をそろえ、脚を開く形を抑える
+    below = views["stance_pelvis_back__below"]
+    assert below.nude and views["yoga_middle_split__below"].nude and "invisible transparent floor::" in below.tags
+    assert "knees together" not in below.tags and "spread legs" not in below.negative
+    up = views["stance_pelvis_back__looking_up"]
+    assert up.nude and "worm's eye view" in up.tags and "knees together" not in up.tags and "bottom view" in below.tags
+    assert "knees together::" in above.tags and "spread legs::" in above.negative
+    assert "knees together" not in views["yoga_middle_split__above"].tags
+    groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
+    assert {"id": "pose_below", "label": "ポーズ・真下から"} in groups
+    assert {"id": "pose_looking_up", "label": "ポーズ・見上げる"} in groups
+
+
+def test_editing_a_pose_on_the_screen_rebuilds_its_views() -> None:
+    row = {"key": "stance_wide", "label": "足を広く開く", "grp": "stance", "tags": "full body, standing, wide stance, front view",
+           "check_text": "確かめる点", "size": "portrait", "negative": ""}
+    parts = body_base.parts([row])
+    assert parts["stance_wide__above"].tags.startswith("full body, standing, wide stance")
+    assert "stance_wide__front" not in body_base.ITEMS
