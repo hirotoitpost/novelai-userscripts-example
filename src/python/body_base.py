@@ -434,19 +434,21 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          "股関節が外転し、大腿は斜めに開く。膝は伸び、内転筋が伸びる。重心は両足の真ん中",
          "1.3::feet together::, narrow stance, legs together, crossed legs", True),
         ("stance_pelvis_forward", "腰を前に出す(側面)",
-         # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。腰が足首より前へ出て、上体が後ろへ倒れる
-         # (側面から見て体がくの字を逆にした弓なり)ことを重み付きで書き、まっすぐな立ち姿をネガティブで抑える。
-         # ユーザーの依頼でもっと極端に: 手を腰の後ろに当てて上体を大きく後ろへ反らせる(反らせるので arched back は抑えない)
-         "1.3::standing::, 1.6::hips thrust far forward::, 1.4::pelvis far in front of feet::, 1.5::leaning far back::, "
-         "1.3::hands on lower back::, stretching backward, standing back bend, shoulders far behind heels, "
-         # ユーザーの指摘(2026-11-12): 腰を前に出すときは膝を適度に曲げる
-         "belly pushed forward, posterior pelvic tilt, extreme swayback posture, body bowed backward, "
-         f"1.3::knees slightly bent::, soft knees, {_FROM_SIDE}",
-         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。股関節は伸び、腰は足首より前へ出て、肩は腰より後ろに来る。"
-         "膝は適度に曲がり、前へ出た腰の下で体を支える"
-         "(側面から見て、肩・腰・足首が前へふくらむ弓なり)",
-         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, upright posture, good posture, leaning forward, bent over, "
-         "bridge pose, hands on floor, lying, knees locked, hyperextended knees, deep squat", False),
+         # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。腰が足首より前へ出ることを重み付きで書いた。
+         # もっと極端にする試しで反らせるタグ(back bend など)を足したら、頭まで後ろへ仰け反った。ユーザーの提案で、
+         # 腰を前へ・後ろへ寄りかかる・上体を起こす(胸から少し前へ倒す)・しゃがむ(膝を適度に曲げる)の組み合わせにし、
+         # 仰け反りをネガティブで抑える。しゃがむを重み付きにしたら膝立ちになったので、立つ・足裏を床につけるを足し、
+         # しゃがむは重みなしにして、膝立ちを抑える
+         "1.3::standing::, 1.2::feet flat on floor::, 1.6::hips thrust far forward::, 1.4::pelvis far in front of feet::, 1.3::leaning back::, "
+         "1.3::upper body upright::, slight forward bend at chest, head upright, looking forward, "
+         "squatting, half squat, 1.5::knees bent::, bent knees in front of toes, 1.2::hands on lower back::, hands behind back, belly pushed forward, "
+         f"posterior pelvic tilt, swayback posture, {_FROM_SIDE}",
+         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。腰は足首より前へ出て、膝は適度に曲がり、前へ出た腰の下で"
+         "体を支える。上体は後ろへ寄りかかりつつ胸から起こすので、頭は足の上に戻る",
+         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, upright posture, good posture, bent over, "
+         "1.4::head tilted back::, 1.3::looking up::, back bend, arched back, bent backward, leaning far back, "
+         "bridge pose, hands on floor, lying, knees locked, hyperextended knees, deep squat, sitting, 1.4::kneeling::, "
+         "on knees, seiza, knees on floor, hands on crotch, covering crotch, hand between legs, hands in front", False),
         ("stance_pelvis_back", "腰を後ろに引く(側面)",
          # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。骨盤の前傾と腰の反りを重み付きで書き、
          # 殿部が後ろへ出て胸が前へ出る形にする。上体は起こしたまま(前かがみはネガティブで抑える)
