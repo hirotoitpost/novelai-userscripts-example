@@ -422,7 +422,7 @@ TOILET_PARTS = TOILET_PARTS + (
 # 関係を見る資料。性別は決めない。腰を後ろへ引く形などは誘うポーズに寄りやすいので、まとまりは成人キャラだけ
 # (ガードの body_base.adult_only_groups)にし、股の打ち消しは可動域と同じ body_base.rom_negative を使う
 # 参照画像(立ち姿)に引き戻される部位の、参照画像の強さの倍率
-_STANCE_REFERENCE_SCALE = {"stance_pelvis_forward": 0.0}
+_STANCE_REFERENCE_SCALE = {"stance_pelvis_forward": 0.0, "stance_pelvis_back": 0.0}
 _STANCE_NEGATIVE = "looking back, looking over shoulder, ass focus, bent over, seductive, sexy pose"
 STANCE_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {pose}, {_ROM_FACE}", "stance", check, "portrait",
@@ -477,15 +477,17 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          "hands on belly, "
          "1.3::spread legs::, bowlegged, wide stance, front view", False),
         ("stance_pelvis_back", "腰を後ろに引く(側面)",
-         # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。骨盤の前傾と腰の反りを重み付きで書き、
-         # 殿部が後ろへ出て胸が前へ出る形にする。上体は起こしたまま(前かがみはネガティブで抑える)
-         # 重みを上げても差が小さかったので、腰の反り(arched back・swayback)を強く足す
-         "1.3::standing::, 1.6::anterior pelvic tilt::, 1.5::hips pushed far back::, 1.6::arched back::, 1.5::arched lower back::, "
-         "1.3::exaggerated lumbar curve::, buttocks sticking out far behind, chest pushed forward, shoulders back, "
-         "upright torso, knees straight, "
-         f"arms at sides, {_FROM_SIDE}",
-         "骨盤が前へ傾き(前傾)、腰椎の前弯が深くなる。殿部は後ろへ出て、股関節はわずかに曲がる",
-         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, flat lower back, posterior pelvic tilt", False),
+         # 2026-11-12 実機: 骨盤の前傾・腰の反りを単語で重みを上げても、ふつうの立ち姿とほとんど変わらなかった。
+         # arched back は頭まで後ろへ仰け反らせる(ユーザーの指摘)ので外し、腰を前に出す部位でうまくいった
+         # 文の形の英語で書く。参照画像(立ち姿)も外す(_STANCE_REFERENCE_SCALE)
+         "standing, 1.2::feet flat on floor::, 1.5::standing upright with the hips pushed back and the lower back arched::, "
+         "1.4::sticking the buttocks out behind with an anterior pelvic tilt::, 1.3::chest pushed forward::, "
+         "shoulders back, upper body upright, head upright, looking forward, knees straight, arms at sides, "
+         f"{_FROM_SIDE}",
+         "骨盤が前へ傾き(前傾)、腰椎の前弯が深くなる。殿部は後ろへ出て、股関節はわずかに曲がる。上体は起きたまま、"
+         "胸が前へ出る",
+         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, flat lower back, posterior pelvic tilt, 1.4::head tilted back::, "
+         "looking up, bent over, leaning forward, back bend, 1.3::kneeling::, hands on crotch", False),
     )
 )
 PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STANCE_PARTS

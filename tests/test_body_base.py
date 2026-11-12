@@ -858,6 +858,8 @@ def test_parts_far_from_the_reference_pose_scale_the_reference() -> None:
 
     refs = [CharacterReference(image=b"x", type="character", fidelity=1.0, strength=0.8)]
     assert body_base.ITEMS["stance_pelvis_forward"].reference_scale == 0.0
+    assert body_base.ITEMS["stance_pelvis_back"].reference_scale == 0.0
+    assert body_base.ITEMS["toilet_western_hover"].reference_scale == 1.0
     assert _part_references(refs, body_base.ITEMS["stance_pelvis_forward"]) is None
     assert _part_references(refs, body_base.ITEMS["front"]) is refs
     half = dataclasses.replace(body_base.ITEMS["front"], reference_scale=0.5)
