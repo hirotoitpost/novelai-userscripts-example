@@ -393,15 +393,19 @@ TOILET_PARTS: tuple[BodyPart, ...] = tuple(
 # 小便器の前に立つ形(ユーザーの依頼 2026-11-12。性別は決めない: トランスジェンダーや世界観の変わった物語で使う)。
 # 体勢だけで、排泄・股に手をやる形は描かない。服を着たまま描くので、裸の素体では描かない(nude=False)
 TOILET_PARTS = TOILET_PARTS + (
-    BodyPart("toilet_urinal_side", "小便器・前に立つ(側面)",
-             "full body, 1.3::standing at urinal::, facing urinal, wall-mounted urinal, white porcelain urinal, "
-             f"fully clothed, standing upright, feet slightly apart, 1.2::arms at sides::, hands at sides, {_TOILET_FACE}, {_FROM_SIDE}",
+    BodyPart("toilet_urinal_back", "小便器・前に立つ(背面)",
+             # 2026-11-12 実機: 側面では2回とも便器の横に立って反対を向いた(横からだと向きが定まらない)。後ろから、
+             # 壁の小便器に向かって立つ構図にする
+             "full body, 1.4::standing in front of urinal::, 1.4::facing urinal::, 1.3::facing the wall::, "
+             "wall-mounted urinal directly in front of her, close to urinal, white porcelain urinal on wall, tiled wall, "
+             f"fully clothed, standing upright, feet slightly apart, 1.2::arms at sides::, hands at sides, {_FROM_BEHIND}",
              "toilet",
              "便器に向かってまっすぐ立つ。足は腰幅、重心は両足の間。骨盤は立ち、肩の力は抜けて腕は体の横に下りる",
-             "portrait", nude=False,
-             negative=join_tags(_SIDE_NEGATIVE, _BARE_FEET_NEGATIVE,
+             "portrait", nude=False, rear=True,
+             negative=join_tags(_BACK_NEGATIVE, _BARE_FEET_NEGATIVE,
                                 "hands on crotch, hand between legs, holding penis, unzipping, open fly, exposed crotch, "
-                                "pants down, bottomless, nude")),
+                                "pants down, bottomless, nude, 1.3::back to urinal::, facing away from urinal, "
+                                "standing beside urinal, urinal behind")),
 )
 
 # 立ち姿勢: 壁に向かう・壁にもたれる・足を広く開く・骨盤の傾き(ユーザーの依頼 2026-11-12)。立ったときの骨盤と脊柱の
@@ -423,24 +427,36 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          "背中の上部と殿部が壁に当たり、腰は壁から少し離れる(腰椎の前弯)。足は壁から前へ出て、膝はわずかに曲がる",
          "", False),
         ("stance_wide", "足を広く開いて立つ(正面)",
-         "1.3::standing::, 1.3::wide stance::, feet wider than shoulders, legs straight, toes pointing slightly outward, "
-         "arms at sides, front view, facing viewer",
+         # 2026-11-12 実機: 足があまり開かなかった。足の幅を肩幅の倍と書き、脚が三角形を作る形を重み付きで足し、
+         # 狭い立ち方をネガティブで抑える
+         "1.3::standing::, 1.5::wide stance::, 1.4::legs spread wide apart::, feet far apart, feet twice shoulder width, "
+         "legs forming a triangle, legs straight, toes pointing outward, arms at sides, front view, facing viewer",
          "股関節が外転し、大腿は斜めに開く。膝は伸び、内転筋が伸びる。重心は両足の真ん中",
-         "", True),
+         "1.3::feet together::, narrow stance, legs together, crossed legs", True),
         ("stance_pelvis_forward", "腰を前に出す(側面)",
          # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。腰が足首より前へ出て、上体が後ろへ倒れる
-         # (側面から見て体がくの字を逆にした弓なり)ことを重み付きで書き、まっすぐな立ち姿をネガティブで抑える
-         "1.3::standing::, 1.5::hips thrust forward::, 1.3::pelvis in front of feet::, 1.3::upper body leaning back::, "
-         "shoulders far behind hips, belly pushed forward, posterior pelvic tilt, swayback posture, flat lower back, "
-         f"knees locked straight, arms hanging at sides, {_FROM_SIDE}",
-         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。股関節は伸び、腰は足首より前へ出て、肩は腰より後ろに来る"
+         # (側面から見て体がくの字を逆にした弓なり)ことを重み付きで書き、まっすぐな立ち姿をネガティブで抑える。
+         # ユーザーの依頼でもっと極端に: 手を腰の後ろに当てて上体を大きく後ろへ反らせる(反らせるので arched back は抑えない)
+         "1.3::standing::, 1.6::hips thrust far forward::, 1.4::pelvis far in front of feet::, 1.5::leaning far back::, "
+         "1.3::hands on lower back::, stretching backward, standing back bend, shoulders far behind heels, "
+         # ユーザーの指摘(2026-11-12): 腰を前に出すときは膝を適度に曲げる
+         "belly pushed forward, posterior pelvic tilt, extreme swayback posture, body bowed backward, "
+         f"1.3::knees slightly bent::, soft knees, {_FROM_SIDE}",
+         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。股関節は伸び、腰は足首より前へ出て、肩は腰より後ろに来る。"
+         "膝は適度に曲がり、前へ出た腰の下で体を支える"
          "(側面から見て、肩・腰・足首が前へふくらむ弓なり)",
-         f"{_SIDE_NEGATIVE}, arched back, 1.3::standing straight::, upright posture, good posture, leaning forward", False),
+         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, upright posture, good posture, leaning forward, bent over, "
+         "bridge pose, hands on floor, lying, knees locked, hyperextended knees, deep squat", False),
         ("stance_pelvis_back", "腰を後ろに引く(側面)",
-         "1.3::standing::, 1.2::anterior pelvic tilt::, hips slightly back, lower back curved, chest up, upright torso, "
+         # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。骨盤の前傾と腰の反りを重み付きで書き、
+         # 殿部が後ろへ出て胸が前へ出る形にする。上体は起こしたまま(前かがみはネガティブで抑える)
+         # 重みを上げても差が小さかったので、腰の反り(arched back・swayback)を強く足す
+         "1.3::standing::, 1.6::anterior pelvic tilt::, 1.5::hips pushed far back::, 1.6::arched back::, 1.5::arched lower back::, "
+         "1.3::exaggerated lumbar curve::, buttocks sticking out far behind, chest pushed forward, shoulders back, "
+         "upright torso, knees straight, "
          f"arms at sides, {_FROM_SIDE}",
          "骨盤が前へ傾き(前傾)、腰椎の前弯が深くなる。殿部は後ろへ出て、股関節はわずかに曲がる",
-         _SIDE_NEGATIVE, False),
+         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, flat lower back, posterior pelvic tilt", False),
     )
 )
 PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STANCE_PARTS
