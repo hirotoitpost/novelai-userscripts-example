@@ -763,4 +763,39 @@ def test_pregnant_nipples_join_the_adult_only_groups_on_existing_dbs() -> None:
 
     content_guard.set_value("body_base.adult_only_groups", ["pregnancy"])
     content_guard.reset_cache()
-    assert content_guard.words("body_base.adult_only_groups") == {"pregnancy", "pregnancy_nipple"}
+    assert content_guard.words("body_base.adult_only_groups") == {"pregnancy", "pregnancy_nipple", "toilet"}
+
+
+def test_toilet_poses_vary_by_toilet_and_squat_for_adults_only(client: TestClient) -> None:
+    # トイレの体勢: 洋式(座る・前かがみ・踏み台・中腰)と和式(しゃがむ・つま先立ち)を全身で描く。服あり・服なしは素体の種類
+    toilet = [p for p in body_base.PARTS if p.group == "toilet"]
+    assert len(toilet) == 9 and all(p.nude and not p.nude_only and p.open_legs and body_base.adult_only(p) for p in toilet)
+    assert {"toilet_western_front", "toilet_western_footstool", "toilet_western_hover",
+            "toilet_squat_side", "toilet_squat_tiptoe", "toilet_squat_back"} <= {p.key for p in toilet}
+    assert "western toilet" in body_base.ITEMS["toilet_western_lean"].tags
+    assert "squat toilet" in body_base.ITEMS["toilet_squat_tiptoe"].tags and "heels raised" in body_base.ITEMS["toilet_squat_tiptoe"].tags
+    assert body_base.ITEMS["toilet_squat_back"].rear
+    # 排泄は描かない(ガードの body_base.toilet_negative)
+    negative = body_base.part_negative("", body_base.ITEMS["toilet_squat_side"])
+    assert "peeing" in negative and "feces" in negative and "anus" in negative
+    groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
+    assert {"id": "toilet", "label": "トイレの体勢"} in groups
+
+    # 成人キャラは素体スーツ(服あり)でも裸の素体(服なし)でも描ける
+    adult = _character(client, "toilet", is_adult=1, age=25)
+    suit = _base(client, name="スーツ", kind="suit")
+    nude = _base(client, name="裸", kind="nude", skin_tone="fair")
+    for base in (suit, nude):
+        client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": base["id"]})
+        res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                          json={"keys": ["toilet_squat_side"], "auto_check": False})
+        assert res.text.count('"status": "ok"') == 1, res.text
+        prompt, negative = client.calls[-1]  # type: ignore[attr-defined]
+        assert "barefoot" in prompt and "peeing" in negative
+    # 未成年・年齢の分からないキャラには、素体スーツでも描かない
+    for index, sheet in enumerate(({"is_adult": 0}, {"is_minor": 1, "age": 16})):
+        other = _character(client, f"toilet_other{index}", **sheet)
+        client.put(f"/api/lora-dataset/character/{other['id']}/body-base", json={"body_base_id": suit["id"]})
+        res = client.post(f"/api/lora-dataset/character/{other['id']}/body-base",
+                          json={"keys": ["toilet_western_front"], "auto_check": False})
+        assert res.status_code == 403, res.text

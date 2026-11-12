@@ -767,6 +767,14 @@
       "value": "pussy, cameltoe, pubic hair, mosaic censoring, bar censor, censored"
     },
     {
+      "key": "body_base.toilet_negative",
+      "group": "素体",
+      "label": "トイレの体勢の部位のネガティブ",
+      "description": "まとまりが「トイレの体勢」の部位の1枚に足すネガティブ(素体の種類のネガティブと一緒に入る)。描くのは体勢だけなので、排泄(尿・便)を打ち消す。しゃがんで脚を開くので、股・肛門・陰毛・修正も打ち消す。",
+      "kind": "text",
+      "value": "peeing, urination, urine, pee, pee stain, wetting, omorashi, feces, scat, defecation, toilet paper, panties around legs, pants down, pussy, cameltoe, anus, pubic hair, mosaic censoring, bar censor, censored"
+    },
+    {
       "key": "body_base.open_legs_allowed",
       "group": "素体",
       "label": "脚を開くポーズで外すネガティブ",
@@ -782,16 +790,21 @@
       "key": "body_base.adult_only_groups",
       "group": "素体",
       "label": "成人キャラだけで描く部位のまとまり",
-      "description": "素体の部位のまとまり(id)のうち、素体の種類(素体スーツ・水着素体も)によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描くもの。pregnancy は妊娠の経過、pregnancy_nipple は妊娠時の乳首。",
+      "description": "素体の部位のまとまり(id)のうち、素体の種類(素体スーツ・水着素体も)によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描くもの。pregnancy は妊娠の経過、pregnancy_nipple は妊娠時の乳首、toilet はトイレの体勢。",
       "kind": "words",
       "match": "exact",
       "value": [
         "pregnancy",
-        "pregnancy_nipple"
+        "pregnancy_nipple",
+        "toilet"
       ],
       "previous": [
         [
           "pregnancy"
+        ],
+        [
+          "pregnancy",
+          "pregnancy_nipple"
         ]
       ]
     },
