@@ -63,6 +63,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("pregnancy", "妊娠の経過"),
     ("nipple", "乳首の種類"),
     ("pregnancy_nipple", "妊娠時の乳首"),
+    ("toilet", "トイレの体勢"),
 )
 # 妊娠を描くまとまり(お腹とぶつかる体型のタグを外し、ガードの body_base.pregnancy_negative を足す)
 PREGNANCY_GROUPS = ("pregnancy", "pregnancy_nipple")
@@ -301,7 +302,66 @@ def _nipple_part(kind: tuple[str, str, str, str, str, str], view: BodyPart) -> B
 NIPPLE_PARTS: tuple[BodyPart, ...] = tuple(
     _nipple_part(kind, next(p for p in PARTS if p.key == view)) for kind in _NIPPLE_TYPES for view in _NIPPLE_VIEWS
 )
-PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS
+
+# トイレの体勢: 便器の形(洋式・和式)としゃがみ方で変わる姿勢を、可動域と同じく全身で描く(ユーザーの依頼 2026-11-12。
+# 3Dモデルの関節の曲がり方・座ったときの体の形を見るため)。服あり・服なしは素体の種類(素体スーツ・水着素体・裸の素体)で
+# 描き分ける。描くのは体勢だけで、排泄(尿・便)は描かない(ガードの body_base.toilet_negative で打ち消す)。成人キャラだけ
+# (ガードの body_base.adult_only_groups)。便器は白い陶器だけにして、背景は素体の無地のまま
+_TOILET_WESTERN = "1.3::western toilet::, white porcelain toilet, toilet seat, toilet lid up"
+_TOILET_SQUAT = "1.3::squat toilet::, japanese toilet, floor toilet, white porcelain"
+_TOILET_FACE = "expressionless, closed mouth, solo"
+TOILET_PARTS: tuple[BodyPart, ...] = tuple(
+    BodyPart(key, label, f"full body, {toilet}, {pose}, {_HIP}, {_TOILET_FACE}", "toilet", check, "portrait",
+             negative=join_tags(_BARE_FEET_NEGATIVE, negative), rear=rear, open_legs=True)
+    for key, label, toilet, pose, check, negative, rear in (
+        ("toilet_western_front", "洋式・座る(正面)", _TOILET_WESTERN,
+         "1.3::sitting on toilet::, thighs horizontal, knees together, feet flat on floor, hands on knees, back straight, "
+         "front view, facing viewer",
+         "股関節と膝がほぼ直角。大腿の裏は便座の縁に乗り、座面の穴の上に殿部がくる。大腿は座面で横へ広がって見える",
+         "", False),
+        ("toilet_western_side", "洋式・座る(側面)", _TOILET_WESTERN,
+         f"1.3::sitting on toilet::, thighs horizontal, feet flat on floor, hands on knees, back straight, {_FROM_SIDE}",
+         "坐骨で座り、骨盤は立つ。膝は股関節と同じ高さか少し下。殿部は便座の後ろ寄りに沈む",
+         _SIDE_NEGATIVE, False),
+        ("toilet_western_lean", "洋式・前かがみ(側面)", _TOILET_WESTERN,
+         "1.3::sitting on toilet::, 1.2::leaning forward::, elbows on knees, torso bent forward, rounded back, "
+         f"feet flat on floor, {_FROM_SIDE}",
+         "体幹を前へ倒すと股関節の屈曲が深まり、腹が大腿に近づく。腰は丸くなり、骨盤は後ろへ傾く",
+         _SIDE_NEGATIVE, False),
+        ("toilet_western_footstool", "洋式・踏み台(側面)", _TOILET_WESTERN,
+         "1.3::sitting on toilet::, feet on footstool, 1.2::knees above hips::, knees raised, leaning forward slightly, "
+         f"hands on knees, {_FROM_SIDE}",
+         "足を台に乗せると膝が股関節より高くなり、しゃがみに近い深い屈曲になる。大腿と腹の角度が鋭くなる",
+         _SIDE_NEGATIVE, False),
+        ("toilet_western_hover", "洋式・中腰(座らない)", _TOILET_WESTERN,
+         "1.3::half squat::, hovering above toilet seat, not touching seat, knees bent, hips back, torso leaning forward, "
+         f"hands on thighs, {_FROM_SIDE}",
+         "空気椅子の姿勢。膝は90〜110度、殿部は後ろへ引き、体幹を前に倒して重心を足の上に保つ。大腿四頭筋が張る",
+         f"{_SIDE_NEGATIVE}, sitting on toilet seat", False),
+        ("toilet_squat_side", "和式・しゃがむ(側面)", _TOILET_SQUAT,
+         "1.3::squatting::, deep squat over floor toilet, heels on floor, feet flat, knees apart, arms resting on knees, "
+         f"{_FROM_SIDE}",
+         "足裏全体で床に着き、膝は大きく曲がる。殿部はかかとの高さ近くまで下がり、体幹は前へ傾いて重心を足の上に置く。"
+         "足首は深く背屈する",
+         _SIDE_NEGATIVE, False),
+        ("toilet_squat_tiptoe", "和式・つま先立ち(側面)", _TOILET_SQUAT,
+         "1.3::squatting::, squat over floor toilet, 1.2::heels raised::, on tiptoes, on balls of feet, knees apart, "
+         f"arms resting on knees, {_FROM_SIDE}",
+         "足首が硬いとかかとが浮き、母趾球で立つ。殿部はかかとの上に乗り、体幹は起きぎみになる。ふくらはぎが張る",
+         _SIDE_NEGATIVE, False),
+        ("toilet_squat_back", "和式・しゃがむ(背面)", _TOILET_SQUAT,
+         "1.3::squatting::, deep squat over floor toilet, heels on floor, knees apart, arms resting on knees, "
+         f"{_FROM_BEHIND}, back, ass",
+         "金隠しの方を向いてしゃがむので、入口からは背中が見える。殿部は左右に広がり、腰は丸く、肩甲骨が開く",
+         _BACK_NEGATIVE, True),
+        ("toilet_squat_three_quarter", "和式・しゃがむ(斜め)", _TOILET_SQUAT,
+         "1.3::squatting::, deep squat over floor toilet, heels on floor, knees apart, arms resting on knees, "
+         "three-quarter view",
+         "膝と爪先は同じ向きに外へ開く。大腿は体幹の両側に来て、腹と大腿が近づく",
+         "", False),
+    )
+)
+PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS
 
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
@@ -456,7 +516,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
-        _BARE_FEET if part.group in ("whole", "rom", "pregnancy") else "",
+        _BARE_FEET if part.group in ("whole", "rom", "pregnancy", "toilet") else "",
         BACKGROUND,
         character.get("style_tags"),
     )
@@ -512,6 +572,7 @@ def part_negative(negative_prompt: str, part: BodyPart) -> str:
 _GROUP_NEGATIVE = {
     "rom": "body_base.rom_negative",
     **{group: "body_base.pregnancy_negative" for group in PREGNANCY_GROUPS},
+    "toilet": "body_base.toilet_negative",
 }
 
 
