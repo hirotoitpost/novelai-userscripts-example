@@ -64,6 +64,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("nipple", "乳首の種類"),
     ("pregnancy_nipple", "妊娠時の乳首"),
     ("toilet", "トイレの体勢"),
+    ("stance", "立ち姿勢"),
 )
 # 妊娠を描くまとまり(お腹とぶつかる体型のタグを外し、ガードの body_base.pregnancy_negative を足す)
 PREGNANCY_GROUPS = ("pregnancy", "pregnancy_nipple")
@@ -389,7 +390,56 @@ TOILET_PARTS: tuple[BodyPart, ...] = tuple(
          "", False),
     )
 )
-PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS
+# 小便器の前に立つ形(ユーザーの依頼 2026-11-12。性別は決めない: トランスジェンダーや世界観の変わった物語で使う)。
+# 体勢だけで、排泄・股に手をやる形は描かない。服を着たまま描くので、裸の素体では描かない(nude=False)
+TOILET_PARTS = TOILET_PARTS + (
+    BodyPart("toilet_urinal_side", "小便器・前に立つ(側面)",
+             "full body, 1.3::standing at urinal::, facing urinal, wall-mounted urinal, white porcelain urinal, "
+             f"fully clothed, standing upright, feet slightly apart, 1.2::arms at sides::, hands at sides, {_TOILET_FACE}, {_FROM_SIDE}",
+             "toilet",
+             "便器に向かってまっすぐ立つ。足は腰幅、重心は両足の間。骨盤は立ち、肩の力は抜けて腕は体の横に下りる",
+             "portrait", nude=False,
+             negative=join_tags(_SIDE_NEGATIVE, _BARE_FEET_NEGATIVE,
+                                "hands on crotch, hand between legs, holding penis, unzipping, open fly, exposed crotch, "
+                                "pants down, bottomless, nude")),
+)
+
+# 立ち姿勢: 壁に向かう・壁にもたれる・足を広く開く・骨盤の傾き(ユーザーの依頼 2026-11-12)。立ったときの骨盤と脊柱の
+# 関係を見る資料。性別は決めない。腰を後ろへ引く形などは誘うポーズに寄りやすいので、まとまりは成人キャラだけ
+# (ガードの body_base.adult_only_groups)にし、股の打ち消しは可動域と同じ body_base.rom_negative を使う
+_STANCE_NEGATIVE = "looking back, looking over shoulder, ass focus, bent over, seductive, sexy pose"
+STANCE_PARTS: tuple[BodyPart, ...] = tuple(
+    BodyPart(key, label, f"full body, {pose}, {_ROM_FACE}", "stance", check, "portrait",
+             negative=join_tags(_BARE_FEET_NEGATIVE, _STANCE_NEGATIVE, negative), open_legs=open_legs)
+    for key, label, pose, check, negative, open_legs in (
+        ("stance_wall_hands", "壁に両手をつく(側面)",
+         "1.3::standing facing wall::, 1.3::both hands on wall::, palms flat on wall at shoulder height, arms extended, "
+         f"body upright, feet flat on floor, {_FROM_SIDE}",
+         "腕を伸ばして壁を押すと、肩甲骨が前へ回り(外転)、肘は伸びる。体幹はまっすぐで、重心は足の上",
+         f"{_SIDE_NEGATIVE}, hips pushed back, arched back", False),
+        ("stance_wall_lean", "壁にもたれる(斜め)",
+         "1.3::leaning back against wall::, back against wall, shoulders and hips touching wall, feet slightly forward, "
+         "arms at sides, relaxed, three-quarter view",
+         "背中の上部と殿部が壁に当たり、腰は壁から少し離れる(腰椎の前弯)。足は壁から前へ出て、膝はわずかに曲がる",
+         "", False),
+        ("stance_wide", "足を広く開いて立つ(正面)",
+         "1.3::standing::, 1.3::wide stance::, feet wider than shoulders, legs straight, toes pointing slightly outward, "
+         "arms at sides, front view, facing viewer",
+         "股関節が外転し、大腿は斜めに開く。膝は伸び、内転筋が伸びる。重心は両足の真ん中",
+         "", True),
+        ("stance_pelvis_forward", "腰を前に出す(側面)",
+         "1.3::standing::, 1.3::hips pushed forward::, posterior pelvic tilt, swayback posture, flat lower back, "
+         f"shoulders behind hips, arms at sides, {_FROM_SIDE}",
+         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。股関節は伸び、肩は腰より後ろに来る",
+         f"{_SIDE_NEGATIVE}, arched back", False),
+        ("stance_pelvis_back", "腰を後ろに引く(側面)",
+         "1.3::standing::, 1.2::anterior pelvic tilt::, hips slightly back, lower back curved, chest up, upright torso, "
+         f"arms at sides, {_FROM_SIDE}",
+         "骨盤が前へ傾き(前傾)、腰椎の前弯が深くなる。殿部は後ろへ出て、股関節はわずかに曲がる",
+         _SIDE_NEGATIVE, False),
+    )
+)
+PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STANCE_PARTS
 
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
@@ -544,7 +594,7 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
-        _BARE_FEET if part.group in ("whole", "rom", "pregnancy", "toilet") else "",
+        _BARE_FEET if part.group in ("whole", "rom", "pregnancy", "toilet", "stance") else "",
         BACKGROUND,
         character.get("style_tags"),
     )
@@ -601,6 +651,7 @@ _GROUP_NEGATIVE = {
     "rom": "body_base.rom_negative",
     **{group: "body_base.pregnancy_negative" for group in PREGNANCY_GROUPS},
     "toilet": "body_base.toilet_negative",
+    "stance": "body_base.rom_negative",
 }
 
 
