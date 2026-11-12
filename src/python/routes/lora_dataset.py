@@ -1319,6 +1319,15 @@ async def assign_body_base(character_id: int, req: CharacterBodyBaseRequest, roo
     return _body_entries(_load_character(character_id), root_name)
 
 
+
+def _part_references(references: list[CharacterReference] | None, part: body_base.BodyPart) -> list[CharacterReference] | None:
+    """部位ごとの参照画像: 強さに部位の倍率(reference_scale)を掛ける。0 なら参照画像を使わない。"""
+    if not references or part.reference_scale == 1.0:
+        return references
+    if part.reference_scale <= 0:
+        return None
+    return [ref.model_copy(update={"strength": ref.strength * part.reference_scale}) for ref in references]
+
 @router.post("/character/{character_id}/body-base")
 async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, client: ClientDep) -> StreamingResponse:
     """
@@ -1394,7 +1403,8 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
             event: dict[str, Any] = {"current": index, "total": len(parts), "key": part.key, "label": part.label}
             try:
                 # 部位ごとのネガティブ(手を突き出さない など)を足す。脚を開くポーズは「脚を開かない」タグを外す
-                part_cfg = dataclasses.replace(cfg, negative_prompt=body_base.part_negative(cfg.negative_prompt or "", part))
+                part_cfg = dataclasses.replace(cfg, negative_prompt=body_base.part_negative(cfg.negative_prompt or "", part),
+                                               character_references=_part_references(cfg.character_references, part))
                 # 自動チェック: 合わなければシードを変えて描き直し、合う絵が出なければ点数のいちばん高い絵を残す
                 best: tuple[Image.Image, body_check.CheckResult | None] | None = None
                 tries = attempts if req.auto_check else 1

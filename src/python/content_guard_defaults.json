@@ -754,7 +754,7 @@
       "key": "body_base.rom_negative",
       "group": "素体",
       "label": "可動域(ヨガ)の部位のネガティブ",
-      "description": "まとまりが「可動域(ヨガ)」の部位の1枚に足すネガティブ。脚を大きく開くので、股・肛門・陰毛・修正を打ち消す(素体の種類のネガティブと一緒に入る)。",
+      "description": "まとまりが「可動域(ヨガ)」「立ち姿勢」の部位の1枚に足すネガティブ。脚を大きく開くので、股・肛門・陰毛・修正を打ち消す(素体の種類のネガティブと一緒に入る)。",
       "kind": "text",
       "value": "pussy, cameltoe, anus, pubic hair, mosaic censoring, bar censor, censored"
     },
@@ -787,16 +787,33 @@
       ]
     },
     {
+      "key": "body_base.side_hidden_tags",
+      "group": "素体",
+      "label": "真横の部位で外す股のタグ",
+      "description": "真横から描く部位(脚を開くポーズを除く)で、プロンプトから外すタグ。正面からしか見えない股のタグを入れると、股を見せる構図(正面寄り・開脚・膝立ち)に引っ張られる。打ち消しはネガティブに残る。完全一致(重み付きでも当たる)。",
+      "kind": "words",
+      "match": "exact",
+      "value": [
+        "featureless crotch",
+        "pussy",
+        "clitoris",
+        "labia",
+        "cameltoe",
+        "crotch"
+      ]
+    },
+    {
       "key": "body_base.adult_only_groups",
       "group": "素体",
       "label": "成人キャラだけで描く部位のまとまり",
-      "description": "素体の部位のまとまり(id)のうち、素体の種類(素体スーツ・水着素体も)によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描くもの。pregnancy は妊娠の経過、pregnancy_nipple は妊娠時の乳首、toilet はトイレの体勢。",
+      "description": "素体の部位のまとまり(id)のうち、素体の種類(素体スーツ・水着素体も)によらず、裸の素体を当てられる成人キャラ(成人フラグ・18 歳以上の年齢・未成年を示すタグなし)だけで描くもの。pregnancy は妊娠の経過、pregnancy_nipple は妊娠時の乳首、toilet はトイレの体勢、stance は立ち姿勢。",
       "kind": "words",
       "match": "exact",
       "value": [
         "pregnancy",
         "pregnancy_nipple",
-        "toilet"
+        "toilet",
+        "stance"
       ],
       "previous": [
         [
@@ -805,6 +822,11 @@
         [
           "pregnancy",
           "pregnancy_nipple"
+        ],
+        [
+          "pregnancy",
+          "pregnancy_nipple",
+          "toilet"
         ]
       ]
     },

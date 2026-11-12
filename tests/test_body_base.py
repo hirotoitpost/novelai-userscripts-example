@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import sys
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -45,8 +46,8 @@ def test_parts_follow_anatomical_regions() -> None:
     assert {p.group for p in body_base.PARTS} == groups
     assert len(body_base.ITEMS) == len(body_base.PARTS)  # キーが重ならない
     assert all(p.check for p in body_base.PARTS)
-    # 裸の素体では、腹・骨盤・大腿の寄りを描かない(胸のアップは 3D の乳首の部品のために描く)
-    assert {p.key for p in body_base.PARTS if not p.nude} == {"neck_shoulder", "abdomen", "pelvis", "thigh_knee"}
+    # 裸の素体では、腹・骨盤・大腿の寄りと、服を着たまま描く小便器の前を描かない(胸のアップは 3D の乳首の部品のために描く)
+    assert {p.key for p in body_base.PARTS if not p.nude} == {"neck_shoulder", "abdomen", "pelvis", "thigh_knee", "toilet_urinal_back"}
 
 
 def test_face_tags_drop_body_and_skin() -> None:
@@ -763,13 +764,15 @@ def test_pregnant_nipples_join_the_adult_only_groups_on_existing_dbs() -> None:
 
     content_guard.set_value("body_base.adult_only_groups", ["pregnancy"])
     content_guard.reset_cache()
-    assert content_guard.words("body_base.adult_only_groups") == {"pregnancy", "pregnancy_nipple", "toilet"}
+    assert content_guard.words("body_base.adult_only_groups") == {"pregnancy", "pregnancy_nipple", "toilet", "stance"}
 
 
 def test_toilet_poses_vary_by_toilet_and_squat_for_adults_only(client: TestClient) -> None:
     # トイレの体勢: 洋式(座る・前かがみ・踏み台・中腰)と和式(しゃがむ・つま先立ち)を全身で描く。服あり・服なしは素体の種類
-    toilet = [p for p in body_base.PARTS if p.group == "toilet"]
-    assert len(toilet) == 11 and all(p.nude and not p.nude_only and p.open_legs and body_base.adult_only(p) for p in toilet)
+    toilet = [p for p in body_base.PARTS if p.group == "toilet" and p.key != "toilet_urinal_back"]
+    assert len(toilet) == 11 and all(p.nude and not p.nude_only and body_base.adult_only(p) for p in toilet)
+    # 脚を開くのは和式だけ(洋式は脚を閉じて座る)
+    assert all(p.open_legs == p.key.startswith("toilet_squat") for p in toilet)
     assert {"toilet_western_front", "toilet_western_lean_back", "toilet_western_deep", "toilet_western_footstool", "toilet_western_hover",
             "toilet_squat_side", "toilet_squat_tiptoe", "toilet_squat_back"} <= {p.key for p in toilet}
     assert "western toilet" in body_base.ITEMS["toilet_western_lean"].tags
@@ -799,3 +802,64 @@ def test_toilet_poses_vary_by_toilet_and_squat_for_adults_only(client: TestClien
         res = client.post(f"/api/lora-dataset/character/{other['id']}/body-base",
                           json={"keys": ["toilet_western_front"], "auto_check": False})
         assert res.status_code == 403, res.text
+
+
+def test_urinal_and_stance_parts_are_posture_only_for_adults(client: TestClient) -> None:
+    # 小便器の前に立つ形は服を着たまま(裸の素体では描かない)。股に手をやる形・排泄は打ち消す。性別は決めない
+    urinal = body_base.ITEMS["toilet_urinal_back"]
+    assert not urinal.nude and body_base.adult_only(urinal) and "fully clothed" in urinal.tags
+    assert "male" not in urinal.tags.split(", ") and "hands on crotch" in urinal.negative
+    assert "peeing" in body_base.part_negative("", urinal)
+    # 立ち姿勢は成人キャラだけ。股の打ち消しは可動域と同じ
+    stance = [p for p in body_base.PARTS if p.group == "stance"]
+    assert {p.key for p in stance} == {"stance_wall_hands", "stance_wall_lean", "stance_wide",
+                                       "stance_pelvis_forward", "stance_pelvis_back"}
+    assert all(body_base.adult_only(p) for p in stance) and body_base.ITEMS["stance_wide"].open_legs
+    assert "anus" in body_base.part_negative("", body_base.ITEMS["stance_pelvis_back"])
+    groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
+    assert {"id": "stance", "label": "立ち姿勢"} in groups
+
+    adult = _character(client, "stance", is_adult=1, age=25)
+    nude = _base(client, name="裸", kind="nude", skin_tone="fair")
+    client.put(f"/api/lora-dataset/character/{adult['id']}/body-base", json={"body_base_id": nude["id"]})
+    res = client.post(f"/api/lora-dataset/character/{adult['id']}/body-base",
+                      json={"keys": ["toilet_urinal_back"], "auto_check": False})
+    assert res.status_code == 422, res.text
+    suit = _base(client, name="スーツ", kind="suit")
+    minor = _character(client, "stance_minor", is_minor=1, age=16)
+    client.put(f"/api/lora-dataset/character/{minor['id']}/body-base", json={"body_base_id": suit["id"]})
+    res = client.post(f"/api/lora-dataset/character/{minor['id']}/body-base",
+                      json={"keys": ["stance_wall_hands"], "auto_check": False})
+    assert res.status_code == 403, res.text
+
+
+def test_side_parts_with_closed_legs_drop_crotch_tags() -> None:
+    # 真横で脚を閉じた部位は、正面からしか見えない股のタグ(ガードの body_base.side_hidden_tags)を外す。
+    # 脚を開く部位・正面の部位では外さない
+    character = {"appearance_tags": "1girl, black hair"}
+    nude = {"kind": "nude"}
+    stance = body_base.ITEMS["stance_pelvis_forward"]
+    assert stance.side and not stance.open_legs
+    assert "featureless crotch" not in body_base.prompt(character, nude, stance, {})
+    assert "pussy" in body_base.part_negative("", stance)
+    assert "featureless crotch" in body_base.prompt(character, nude, body_base.ITEMS["front"], {})
+    squat = body_base.ITEMS["toilet_squat_side"]
+    assert squat.side and squat.open_legs
+    assert "featureless crotch" in body_base.prompt(character, nude, squat, {})
+    assert body_base.ITEMS["side"].side and not body_base.ITEMS["back"].side
+    assert not body_base.ITEMS["three_quarter"].side
+
+
+def test_parts_far_from_the_reference_pose_scale_the_reference() -> None:
+    # 立ち姿の参照画像に引き戻される部位は、参照画像を弱める(0 なら使わない)
+    from novelai.types import CharacterReference
+
+    from python.routes.lora_dataset import _part_references
+
+    refs = [CharacterReference(image=b"x", type="character", fidelity=1.0, strength=0.8)]
+    assert body_base.ITEMS["stance_pelvis_forward"].reference_scale == 0.0
+    assert _part_references(refs, body_base.ITEMS["stance_pelvis_forward"]) is None
+    assert _part_references(refs, body_base.ITEMS["front"]) is refs
+    half = dataclasses.replace(body_base.ITEMS["front"], reference_scale=0.5)
+    assert _part_references(refs, half)[0].strength == 0.4  # type: ignore[index]
+    assert refs[0].strength == 0.8

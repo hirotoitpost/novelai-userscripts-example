@@ -51,6 +51,14 @@ class BodyPart:
     # 脚を開くポーズ(可動域のヨガ)。素体のネガティブの「脚を開かない」タグ(ガードの body_base.open_legs_allowed)を、
     # この部位だけ外す
     open_legs: bool = False
+    # キャラの参照画像の強さに掛ける倍率(0 なら参照画像を使わない)。参照画像は立ち姿なので、立ち姿から大きく離れる
+    # 姿勢は参照画像に引き戻される(2026-11-12 実機: 腰を前に出す形は、参照画像を外したときだけ出た)
+    reference_scale: float = 1.0
+
+    @property
+    def side(self) -> bool:
+        """真横から描く部位か(タグに from side・side view・profile があり、真後ろでない)。"""
+        return not self.rear and bool(_SIDE_RE.search(self.tags))
 
 
 GROUPS: tuple[tuple[str, str], ...] = (
@@ -64,6 +72,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("nipple", "乳首の種類"),
     ("pregnancy_nipple", "妊娠時の乳首"),
     ("toilet", "トイレの体勢"),
+    ("stance", "立ち姿勢"),
 )
 # 妊娠を描くまとまり(お腹とぶつかる体型のタグを外し、ガードの body_base.pregnancy_negative を足す)
 PREGNANCY_GROUPS = ("pregnancy", "pregnancy_nipple")
@@ -92,6 +101,7 @@ _BACK_NEGATIVE = (
 # 真横。重みなしでは、正面と横の2人並び(設定画)が出た(2026-10-30 実機: スーツ・水着で3回とも)ので、強調の重みを付け、
 # 並びと正面向きをネガティブで抑える
 _FROM_SIDE = "solo, 1.3::from side::, 1.2::profile::, side view"
+_SIDE_RE = re.compile(r"\bfrom side\b|\bside view\b|\bprofile\b", re.IGNORECASE)
 _SIDE_NEGATIVE = (
     "1.4::multiple views::, 1.3::turnaround::, two views, front and side, 2girls, front view, facing viewer, "
     "looking at viewer, from behind"
@@ -312,7 +322,8 @@ _TOILET_SQUAT = "1.3::squat toilet::, japanese toilet, floor toilet, white porce
 _TOILET_FACE = "expressionless, closed mouth, solo"
 TOILET_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {toilet}, {pose}, {_HIP}, {_TOILET_FACE}", "toilet", check, "portrait",
-             negative=join_tags(_BARE_FEET_NEGATIVE, negative), rear=rear, open_legs=True)
+             # 脚を開くのは和式だけ。洋式は脚を閉じて座るので、側面では股のタグを外す(prompt の side)
+             negative=join_tags(_BARE_FEET_NEGATIVE, negative), rear=rear, open_legs=key.startswith("toilet_squat"))
     for key, label, toilet, pose, check, negative, rear in (
         ("toilet_western_front", "洋式・座る(正面)", _TOILET_WESTERN,
          "1.3::sitting on toilet::, thighs horizontal, knees together, feet flat on floor, hands on knees, back straight, "
@@ -389,7 +400,95 @@ TOILET_PARTS: tuple[BodyPart, ...] = tuple(
          "", False),
     )
 )
-PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS
+# 小便器の前に立つ形(ユーザーの依頼 2026-11-12。性別は決めない: トランスジェンダーや世界観の変わった物語で使う)。
+# 体勢だけで、排泄・股に手をやる形は描かない。服を着たまま描くので、裸の素体では描かない(nude=False)
+TOILET_PARTS = TOILET_PARTS + (
+    BodyPart("toilet_urinal_back", "小便器・前に立つ(背面)",
+             # 2026-11-12 実機: 側面では2回とも便器の横に立って反対を向いた(横からだと向きが定まらない)。後ろから、
+             # 壁の小便器に向かって立つ構図にする
+             "full body, 1.4::standing in front of urinal::, 1.4::facing urinal::, 1.3::facing the wall::, "
+             "wall-mounted urinal directly in front of her, close to urinal, white porcelain urinal on wall, tiled wall, "
+             f"fully clothed, standing upright, feet slightly apart, 1.2::arms at sides::, hands at sides, {_FROM_BEHIND}",
+             "toilet",
+             "便器に向かってまっすぐ立つ。足は腰幅、重心は両足の間。骨盤は立ち、肩の力は抜けて腕は体の横に下りる",
+             "portrait", nude=False, rear=True,
+             negative=join_tags(_BACK_NEGATIVE, _BARE_FEET_NEGATIVE,
+                                "hands on crotch, hand between legs, holding penis, unzipping, open fly, exposed crotch, "
+                                "pants down, bottomless, nude, 1.3::back to urinal::, facing away from urinal, "
+                                "standing beside urinal, urinal behind")),
+)
+
+# 立ち姿勢: 壁に向かう・壁にもたれる・足を広く開く・骨盤の傾き(ユーザーの依頼 2026-11-12)。立ったときの骨盤と脊柱の
+# 関係を見る資料。性別は決めない。腰を後ろへ引く形などは誘うポーズに寄りやすいので、まとまりは成人キャラだけ
+# (ガードの body_base.adult_only_groups)にし、股の打ち消しは可動域と同じ body_base.rom_negative を使う
+# 参照画像(立ち姿)に引き戻される部位の、参照画像の強さの倍率
+_STANCE_REFERENCE_SCALE = {"stance_pelvis_forward": 0.0}
+_STANCE_NEGATIVE = "looking back, looking over shoulder, ass focus, bent over, seductive, sexy pose"
+STANCE_PARTS: tuple[BodyPart, ...] = tuple(
+    BodyPart(key, label, f"full body, {pose}, {_ROM_FACE}", "stance", check, "portrait",
+             negative=join_tags(_BARE_FEET_NEGATIVE, _STANCE_NEGATIVE, negative), open_legs=open_legs,
+             reference_scale=_STANCE_REFERENCE_SCALE.get(key, 1.0))
+    for key, label, pose, check, negative, open_legs in (
+        ("stance_wall_hands", "壁に両手をつく(側面)",
+         "1.3::standing facing wall::, 1.3::both hands on wall::, palms flat on wall at shoulder height, arms extended, "
+         f"body upright, feet flat on floor, {_FROM_SIDE}",
+         "腕を伸ばして壁を押すと、肩甲骨が前へ回り(外転)、肘は伸びる。体幹はまっすぐで、重心は足の上",
+         f"{_SIDE_NEGATIVE}, hips pushed back, arched back", False),
+        ("stance_wall_lean", "壁にもたれる(斜め)",
+         "1.3::leaning back against wall::, back against wall, shoulders and hips touching wall, feet slightly forward, "
+         "arms at sides, relaxed, three-quarter view",
+         "背中の上部と殿部が壁に当たり、腰は壁から少し離れる(腰椎の前弯)。足は壁から前へ出て、膝はわずかに曲がる",
+         "", False),
+        ("stance_wide", "足を広く開いて立つ(正面)",
+         # 2026-11-12 実機: 足があまり開かなかった。足の幅を肩幅の倍と書き、脚が三角形を作る形を重み付きで足し、
+         # 狭い立ち方をネガティブで抑える
+         "1.3::standing::, 1.5::wide stance::, 1.4::legs spread wide apart::, feet far apart, feet twice shoulder width, "
+         "legs forming a triangle, legs straight, toes pointing outward, arms at sides, front view, facing viewer",
+         "股関節が外転し、大腿は斜めに開く。膝は伸び、内転筋が伸びる。重心は両足の真ん中",
+         "1.3::feet together::, narrow stance, legs together, crossed legs", True),
+        ("stance_pelvis_forward", "腰を前に出す(側面)",
+         # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。腰が足首より前へ出ることを重み付きで書いた。
+         # もっと極端にする試しで反らせるタグ(back bend など)を足したら、頭まで後ろへ仰け反った。ユーザーの提案で、
+         # 腰を前へ・後ろへ寄りかかる・上体を起こす(胸から少し前へ倒す)・しゃがむ(膝を適度に曲げる)の組み合わせにし、
+         # 仰け反りをネガティブで抑える。しゃがむを重み付きにしたら膝立ちになったので、立つ・足裏を床につけるを足し、
+         # しゃがむは重みなしにして、膝立ちを抑える
+         # ユーザーが調べた英語の言い回し(2026-11-12)を、姿勢の語だけ使う(排尿の語は入れない)
+         # 「standing upright with the hips thrust forward」は立ち姿へ引き戻した(中腰が出ない)ので、中腰の文に置き換える
+         # ユーザーが NovelAI で試した絵(2026-11-12、同じシード)に合わせる: standing を外し、bowlegged pose・knees forward・
+         # hip down・wakeup upperbody を足すと、膝が前へ出て腰が下がった中腰になった。bowlegged pose は、アプリのネガティブと
+         # 合わせると正面向きで脚を大きく開いた形になった(股が見える)ので入れない
+         # standing を外すとアプリのネガティブでは膝立ちになったので、重みなしで戻す
+         "standing, 1.2::feet flat on floor::, 1.5::semi-squat with the hips thrust forward and the upper body upright::, "
+         "1.4::leaning back slightly with the hips pushed forward::, 1.6::hips thrust far forward::, 1.4::pelvis far in front of feet::, 1.3::leaning back::, "
+         "1.3::upper body upright::, slight forward bend at chest, head upright, looking forward, "
+         # ユーザーの指摘(2026-11-12): 腰をもう少し下ろして中腰にし、膝を前へ出す
+         # 立つの重みが中腰を打ち消したので、立つは重みなしにして、中腰と膝の重みを上げる
+         "1.6::half crouch with the hips lowered::, 1.6::knees bent and pushed forward over the toes::, semi-squat, "
+         # 膝立ちを抑えるネガティブを入れたので、squatting に重みを戻し、ネガティブの deep squat を外す
+         "1.3::squatting::, half squat, 1.5::knees bent::, bent knees in front of toes, 1.3::hands on lower back::, 1.4::hands behind back::, elbows back, belly pushed forward, "
+         f"posterior pelvic tilt, swayback posture, knees forward, hip down, wakeup upperbody, {_FROM_SIDE}",
+         "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。腰は足首より前へ出て、膝は適度に曲がり、前へ出た腰の下で"
+         "体を支える。腰を少し下ろした中腰で、膝は爪先より前へ出る。上体は後ろへ寄りかかりつつ胸から起こすので、"
+         "頭は足の上に戻る",
+         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, upright posture, good posture, bent over, "
+         "1.4::head tilted back::, 1.3::looking up::, back bend, arched back, bent backward, leaning far back, "
+         "bridge pose, hands on floor, lying, knees locked, hyperextended knees, sitting, 1.4::kneeling::, "
+         "on knees, seiza, knees on floor, 1.4::hands on crotch::, 1.3::covering crotch::, hand between legs, 1.3::hands in front::, "
+         "hands on belly, "
+         "1.3::spread legs::, bowlegged, wide stance, front view", False),
+        ("stance_pelvis_back", "腰を後ろに引く(側面)",
+         # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。骨盤の前傾と腰の反りを重み付きで書き、
+         # 殿部が後ろへ出て胸が前へ出る形にする。上体は起こしたまま(前かがみはネガティブで抑える)
+         # 重みを上げても差が小さかったので、腰の反り(arched back・swayback)を強く足す
+         "1.3::standing::, 1.6::anterior pelvic tilt::, 1.5::hips pushed far back::, 1.6::arched back::, 1.5::arched lower back::, "
+         "1.3::exaggerated lumbar curve::, buttocks sticking out far behind, chest pushed forward, shoulders back, "
+         "upright torso, knees straight, "
+         f"arms at sides, {_FROM_SIDE}",
+         "骨盤が前へ傾き(前傾)、腰椎の前弯が深くなる。殿部は後ろへ出て、股関節はわずかに曲がる",
+         f"{_SIDE_NEGATIVE}, 1.3::standing straight::, flat lower back, posterior pelvic tilt", False),
+    )
+)
+PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STANCE_PARTS
 
 ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
@@ -544,12 +643,18 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         adult,
         content_guard.text("body_base.nude_tags") if nude else clothes_tags(base, modest=modest),
         part.tags,
-        _BARE_FEET if part.group in ("whole", "rom", "pregnancy", "toilet") else "",
+        _BARE_FEET if part.group in ("whole", "rom", "pregnancy", "toilet", "stance") else "",
         BACKGROUND,
         character.get("style_tags"),
     )
     if part.rear:
         tags = ", ".join(t for t in split_tags(tags) if not _REAR_HIDDEN_RE.search(t))
+    elif part.side and not part.open_legs:
+        # 真横で脚を閉じた部位は、正面からしか見えない股のタグ(ガードの body_base.side_hidden_tags)を外す。
+        # featureless crotch などを入れると、股を見せる構図(正面寄り・開脚・膝立ち)に引っ張られる(2026-11-12 実機、
+        # ユーザーの指摘)。打ち消しはネガティブに残る。脚を開く部位では股が見えるので外さない
+        hidden = {_plain_weight(t) for t in content_guard.words("body_base.side_hidden_tags")}
+        tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in hidden)
     if part.group in PREGNANCY_GROUPS:
         drop = {_plain_weight(t) for t in split_tags(str(app_settings.get("body_base.pregnant_drop_tags")))}
         tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in drop)
@@ -601,6 +706,7 @@ _GROUP_NEGATIVE = {
     "rom": "body_base.rom_negative",
     **{group: "body_base.pregnancy_negative" for group in PREGNANCY_GROUPS},
     "toilet": "body_base.toilet_negative",
+    "stance": "body_base.rom_negative",
 }
 
 
