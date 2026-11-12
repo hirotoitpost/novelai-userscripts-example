@@ -769,8 +769,8 @@ def test_pregnant_nipples_join_the_adult_only_groups_on_existing_dbs() -> None:
 def test_toilet_poses_vary_by_toilet_and_squat_for_adults_only(client: TestClient) -> None:
     # トイレの体勢: 洋式(座る・前かがみ・踏み台・中腰)と和式(しゃがむ・つま先立ち)を全身で描く。服あり・服なしは素体の種類
     toilet = [p for p in body_base.PARTS if p.group == "toilet"]
-    assert len(toilet) == 9 and all(p.nude and not p.nude_only and p.open_legs and body_base.adult_only(p) for p in toilet)
-    assert {"toilet_western_front", "toilet_western_footstool", "toilet_western_hover",
+    assert len(toilet) == 10 and all(p.nude and not p.nude_only and p.open_legs and body_base.adult_only(p) for p in toilet)
+    assert {"toilet_western_front", "toilet_western_lean_back", "toilet_western_footstool", "toilet_western_hover",
             "toilet_squat_side", "toilet_squat_tiptoe", "toilet_squat_back"} <= {p.key for p in toilet}
     assert "western toilet" in body_base.ITEMS["toilet_western_lean"].tags
     assert "squat toilet" in body_base.ITEMS["toilet_squat_tiptoe"].tags and "heels raised" in body_base.ITEMS["toilet_squat_tiptoe"].tags
