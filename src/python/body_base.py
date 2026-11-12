@@ -526,18 +526,24 @@ PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STAN
 POSE_GROUPS = ("rom", "toilet", "stance")
 # 重み(1.3::tag::)を外す(_WEIGHT_RE はこの後で定義するので、ここで持つ)
 _VIEW_WEIGHT_RE = re.compile(r"^-?\d+(\.\d+)?::|::$")
+# 下からの2つは、下半身が中心になるように寄せ(ユーザーの提案 2026-11-13)、正方形で描く。脚を開くポーズは横に広がるので
+# 横長で描く(ユーザーの指定: 場合によっては横長も)。lower body only は顔をのぞかせる
+# face peek とぶつかるので入れない。nipples は裸の素体のタグに入っている(服ありで入れると服が透ける)ので入れない
+# 部位の full body(全身)は下半身の寄りを打ち消した(2026-11-13 実機: 全身が小さく収まった)ので、下からでは外す
+_UNDER_FRAMING = "1.5::focus lower body::, 1.3::lower body::, close-up, underboob, between thighs, face peek"
+_UNDER_DROP = frozenset({"full body", "head to toe", "feet visible"})
 VIEWS: tuple[tuple[str, str, str, str], ...] = (
     # (id, 名前, タグ, ネガティブ)
     ("above", "上から", "solo, 1.3::from above::, high angle view, looking down at subject", "from below, low angle"),
     ("below", "真下から",
      "solo, 1.5::bottom view, camera pointing straight up from directly underneath::, "
      "1.4::standing on an invisible transparent floor::, 1.4::soles of feet pressed flat on the floor closest to viewer::, "
-     "1.3::extreme foreshortening::, legs receding upward, head small and far away at the top, symmetrical composition",
+     f"1.3::extreme foreshortening::, legs receding upward, symmetrical composition, {_UNDER_FRAMING}",
      "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass, from front, front view, "
      "worm's eye view, low angle view, horizon"),
     ("looking_up", "見上げる",
      "solo, 1.4::view from directly below::, 1.3::standing on an invisible transparent floor::, "
-     "looking up from beneath the floor, worm's eye view, soles of feet pressed on the invisible floor",
+     f"looking up from beneath the floor, worm's eye view, soles of feet pressed on the invisible floor, {_UNDER_FRAMING}",
      "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass"),
     ("front", "正面", "solo, front view, 1.2::facing viewer::", "from side, profile, side view, from behind, back view"),
     ("back", "背面", f"{_FROM_BEHIND}, back", _BACK_NEGATIVE),
@@ -588,8 +594,10 @@ def view_parts(part: BodyPart) -> list[BodyPart]:
         legs = closed and view not in _FROM_UNDER
         result.append(dataclasses.replace(
             part, key=f"{part.key}__{view}", label=f"{label}({view_label})", group=f"pose_{view}", base_group=part.group,
-            tags=join_tags(tags, _CLOSED_LEGS_TAGS if legs else "", view_tags),
+            tags=join_tags(_strip_words(tags, _UNDER_DROP) if view in _FROM_UNDER else tags,
+                           _CLOSED_LEGS_TAGS if legs else "", view_tags),
             negative=join_tags(negative, _CLOSED_LEGS_NEGATIVE if legs else "", view_negative), rear=view == "back",
+            size=("landscape" if part.open_legs else "square") if view in _FROM_UNDER else part.size,
         ))
     return result
 
@@ -601,7 +609,7 @@ ITEMS: dict[str, BodyPart] = {part.key: part for part in PARTS}
 
 # 素体の背景(絵ごとの違いを部位だけにするため、無地にする)
 BACKGROUND = "simple background, grey background"
-SIZES = {"square": (1024, 1024), "portrait": (832, 1216)}
+SIZES = {"square": (1024, 1024), "portrait": (832, 1216), "landscape": (1216, 832)}
 # 1枚に同じキャラが何人も並ぶ設定画になりやすいので抑える(face_sheet.NEGATIVE と同じ理由)
 NEGATIVE = "multiple views, character sheet, reference sheet, turnaround, split screen, multiple girls, multiple boys"
 

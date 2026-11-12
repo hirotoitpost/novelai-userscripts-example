@@ -76,7 +76,7 @@ ITEMS: dict[str, FaceItem] = {item.key: item for item in (*ANGLES, *EXPRESSIONS)
 
 # 顔・表情シートの背景(絵ごとの違いを向き・表情だけにするため、無地にする)
 BACKGROUND = "simple background, white background"
-SIZES = {"square": (1024, 1024), "portrait": (832, 1216)}
+SIZES = {"square": (1024, 1024), "portrait": (832, 1216), "landscape": (1216, 832)}
 
 
 GROUPS: tuple[tuple[str, str], ...] = (("angle", "顔の向き・姿勢"), ("expression", "表情"))

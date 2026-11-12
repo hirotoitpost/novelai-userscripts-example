@@ -630,7 +630,7 @@ class SheetItemRequest(BaseModel):
     group: str
     tags: str = Field(min_length=1, max_length=1000)
     negative: str = Field("", max_length=1000)
-    size: Literal["square", "portrait"] = "square"
+    size: Literal["square", "portrait", "landscape"] = "square"
     # 素体だけ: 人体の構造として確かめる点(画面に出す)
     check: str = Field("", max_length=400)
 
