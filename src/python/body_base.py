@@ -440,13 +440,18 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          # 仰け反りをネガティブで抑える。しゃがむを重み付きにしたら膝立ちになったので、立つ・足裏を床につけるを足し、
          # しゃがむは重みなしにして、膝立ちを抑える
          # ユーザーが調べた英語の言い回し(2026-11-12)を、姿勢の語だけ使う(排尿の語は入れない)
-         "1.3::standing::, 1.2::feet flat on floor::, 1.5::standing upright with the hips thrust forward::, "
+         # 「standing upright with the hips thrust forward」は立ち姿へ引き戻した(中腰が出ない)ので、中腰の文に置き換える
+         "standing, 1.2::feet flat on floor::, 1.5::semi-squat with the hips thrust forward and the upper body upright::, "
          "1.4::leaning back slightly with the hips pushed forward::, 1.6::hips thrust far forward::, 1.4::pelvis far in front of feet::, 1.3::leaning back::, "
          "1.3::upper body upright::, slight forward bend at chest, head upright, looking forward, "
+         # ユーザーの指摘(2026-11-12): 腰をもう少し下ろして中腰にし、膝を前へ出す
+         # 立つの重みが中腰を打ち消したので、立つは重みなしにして、中腰と膝の重みを上げる
+         "1.6::half crouch with the hips lowered::, 1.6::knees bent and pushed forward over the toes::, semi-squat, "
          "squatting, half squat, 1.5::knees bent::, bent knees in front of toes, 1.2::hands on lower back::, hands behind back, belly pushed forward, "
          f"posterior pelvic tilt, swayback posture, {_FROM_SIDE}",
          "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。腰は足首より前へ出て、膝は適度に曲がり、前へ出た腰の下で"
-         "体を支える。上体は後ろへ寄りかかりつつ胸から起こすので、頭は足の上に戻る",
+         "体を支える。腰を少し下ろした中腰で、膝は爪先より前へ出る。上体は後ろへ寄りかかりつつ胸から起こすので、"
+         "頭は足の上に戻る",
          f"{_SIDE_NEGATIVE}, 1.3::standing straight::, upright posture, good posture, bent over, "
          "1.4::head tilted back::, 1.3::looking up::, back bend, arched back, bent backward, leaning far back, "
          "bridge pose, hands on floor, lying, knees locked, hyperextended knees, deep squat, sitting, 1.4::kneeling::, "
