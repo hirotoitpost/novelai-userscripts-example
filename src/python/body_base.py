@@ -519,8 +519,8 @@ PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STAN
 # 部位の向きのタグ(側面・斜めなど)とそのネガティブを外し、視点のタグとネガティブに入れ替える。視点ごとのまとまりに入れ、
 # 成人キャラだけ・まとまりのネガティブ・はだしは元のまとまり(base_group)で決める。元の部位と同じ向きの視点は作らない。
 # 下からは、描かれない透明な床に立つ(接する)体を床の真下から見上げる構図(ユーザーの指定 2026-11-12。床に接していない
-# ポーズは、そのまま下から見上げる)。股を開いていてよい(ユーザーの判断)ので、脚を閉じるタグは入れない。ただし裸の素体では
-# 描かない(2026-11-12 実機: featureless crotch と打ち消しのネガティブがあっても、真下からは性器が描かれた)。脚を閉じたポーズは、ほかの視点では脚を大きく開いた(洋式に座る・腰を前に出す)ので、膝をそろえる
+# ポーズは、そのまま下から見上げる)。股を開いていてよい(ユーザーの判断)ので、脚を閉じるタグは入れない。裸の素体でも描く
+# (真下からは featureless crotch と打ち消しのネガティブがあっても性器が描かれるが、ユーザーの判断で服ありと同じ扱い)。脚を閉じたポーズは、ほかの視点では脚を大きく開いた(洋式に座る・腰を前に出す)ので、膝をそろえる
 # タグと、脚を開く・膝立ちのネガティブを足す
 POSE_GROUPS = ("rom", "toilet", "stance")
 # 重み(1.3::tag::)を外す(_WEIGHT_RE はこの後で定義するので、ここで持つ)
@@ -529,9 +529,12 @@ VIEWS: tuple[tuple[str, str, str, str], ...] = (
     # (id, 名前, タグ, ネガティブ)
     ("above", "上から", "solo, 1.3::from above::, high angle view, looking down at subject", "from below, low angle"),
     ("below", "下から",
-     "solo, 1.4::view from directly below::, 1.3::standing on an invisible transparent floor::, "
-     "looking up from beneath the floor, worm's eye view, soles of feet pressed on the invisible floor",
-     "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass"),
+     # 2026-11-12: 斜め下からの虫視点になった。ユーザーの依頼で、カメラを真上に向けた真下からの構図を試す
+     "solo, 1.5::bottom view, camera pointing straight up from directly underneath::, "
+     "1.4::standing on an invisible transparent floor::, 1.4::soles of feet pressed flat on the floor closest to viewer::, "
+     "1.3::extreme foreshortening::, legs receding upward, head small and far away at the top, symmetrical composition",
+     "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass, from front, front view, "
+     "worm's eye view, low angle view, horizon"),
     ("front", "正面", "solo, front view, 1.2::facing viewer::", "from side, profile, side view, from behind, back view"),
     ("back", "背面", f"{_FROM_BEHIND}, back", _BACK_NEGATIVE),
 )
@@ -581,7 +584,6 @@ def view_parts(part: BodyPart) -> list[BodyPart]:
             part, key=f"{part.key}__{view}", label=f"{label}({view_label})", group=f"pose_{view}", base_group=part.group,
             tags=join_tags(tags, _CLOSED_LEGS_TAGS if legs else "", view_tags),
             negative=join_tags(negative, _CLOSED_LEGS_NEGATIVE if legs else "", view_negative), rear=view == "back",
-            nude=part.nude and view != "below",
         ))
     return result
 

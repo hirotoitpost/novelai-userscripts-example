@@ -885,10 +885,10 @@ def test_pose_parts_are_drawn_from_above_below_front_and_back(client: TestClient
     # 成人キャラだけ・まとまりのネガティブ・はだしは元のまとまり
     assert body_base.adult_only(above) and "pussy" in body_base.part_negative("", above)
     assert "barefoot" in body_base.prompt({"appearance_tags": "1girl"}, {"kind": "suit"}, above, {})
-    # 下からは透明な床の真下から見上げる(脚を閉じるタグは入れない)。裸の素体では描かない(真下からは性器が描かれた)。
+    # 下からは透明な床の真下から見上げる(脚を閉じるタグは入れない)。裸の素体でも描く(ユーザーの判断)。
     # ほかの視点では、脚を閉じたポーズは膝をそろえ、脚を開く形を抑える
     below = views["stance_pelvis_back__below"]
-    assert not below.nude and not views["yoga_middle_split__below"].nude and "invisible transparent floor::" in below.tags
+    assert below.nude and views["yoga_middle_split__below"].nude and "invisible transparent floor::" in below.tags
     assert "knees together" not in below.tags and "spread legs" not in below.negative
     assert "knees together::" in above.tags and "spread legs::" in above.negative
     assert "knees together" not in views["yoga_middle_split__above"].tags
