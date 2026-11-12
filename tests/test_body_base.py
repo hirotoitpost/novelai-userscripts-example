@@ -872,8 +872,8 @@ def test_parts_far_from_the_reference_pose_scale_the_reference() -> None:
 def test_pose_parts_are_drawn_from_above_below_front_and_back(client: TestClient) -> None:
     # 可動域・トイレの体勢・立ち姿勢のポーズは、上・下・正面・背面からも描ける(元の部位と同じ向きは作らない)
     views = {p.key: p for p in body_base.PARTS if p.base_group}
-    assert {"stance_pelvis_forward__above", "stance_pelvis_forward__below", "stance_pelvis_forward__front",
-            "stance_pelvis_forward__back"} <= set(views)
+    assert {"stance_pelvis_forward__above", "stance_pelvis_forward__below", "stance_pelvis_forward__looking_up",
+            "stance_pelvis_forward__front", "stance_pelvis_forward__back"} <= set(views)
     assert "toilet_urinal_back__back" not in views and "stance_wide__front" not in views
     assert not any(k.startswith(("front__", "preg3_", "nipple_")) for k in views)
     above = views["stance_pelvis_forward__above"]
@@ -890,10 +890,13 @@ def test_pose_parts_are_drawn_from_above_below_front_and_back(client: TestClient
     below = views["stance_pelvis_back__below"]
     assert below.nude and views["yoga_middle_split__below"].nude and "invisible transparent floor::" in below.tags
     assert "knees together" not in below.tags and "spread legs" not in below.negative
+    up = views["stance_pelvis_back__looking_up"]
+    assert up.nude and "worm's eye view" in up.tags and "knees together" not in up.tags and "bottom view" in below.tags
     assert "knees together::" in above.tags and "spread legs::" in above.negative
     assert "knees together" not in views["yoga_middle_split__above"].tags
     groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
-    assert {"id": "pose_below", "label": "ポーズ・下から"} in groups
+    assert {"id": "pose_below", "label": "ポーズ・真下から"} in groups
+    assert {"id": "pose_looking_up", "label": "ポーズ・見上げる"} in groups
 
 
 def test_editing_a_pose_on_the_screen_rebuilds_its_views() -> None:

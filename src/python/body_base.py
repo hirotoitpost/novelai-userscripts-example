@@ -518,23 +518,27 @@ PARTS = PARTS + ROM_PARTS + PREGNANCY_PARTS + NIPPLE_PARTS + TOILET_PARTS + STAN
 # ポーズの視点(ユーザーの依頼 2026-11-12): 可動域・トイレの体勢・立ち姿勢のポーズを、上・下・正面・背面からも描く。
 # 部位の向きのタグ(側面・斜めなど)とそのネガティブを外し、視点のタグとネガティブに入れ替える。視点ごとのまとまりに入れ、
 # 成人キャラだけ・まとまりのネガティブ・はだしは元のまとまり(base_group)で決める。元の部位と同じ向きの視点は作らない。
-# 下からは、描かれない透明な床に立つ(接する)体を床の真下から見上げる構図(ユーザーの指定 2026-11-12。床に接していない
-# ポーズは、そのまま下から見上げる)。股を開いていてよい(ユーザーの判断)ので、脚を閉じるタグは入れない。裸の素体でも描く
-# (真下からは featureless crotch と打ち消しのネガティブがあっても性器が描かれるが、ユーザーの判断で服ありと同じ扱い)。脚を閉じたポーズは、ほかの視点では脚を大きく開いた(洋式に座る・腰を前に出す)ので、膝をそろえる
-# タグと、脚を開く・膝立ちのネガティブを足す
+# 下から(ユーザーの指定 2026-11-12)は2つ: 真下(カメラを真上に向けて床の真下から。浮いているポーズも同じ)と、
+# 見上げる(描かれない透明な床に立つ体を、斜め下から見上げる虫視点)。どちらも股を開いていてよい(ユーザーの判断)ので
+# 脚を閉じるタグは入れず、裸の素体でも描く(featureless crotch と打ち消しのネガティブがあっても性器が描かれるが、
+# ユーザーの判断で服ありと同じ扱い)。脚を閉じたポーズは、ほかの視点では脚を大きく開いた(洋式に座る・腰を前に出す)ので、
+# 膝をそろえるタグと、脚を開く・膝立ちのネガティブを足す
 POSE_GROUPS = ("rom", "toilet", "stance")
 # 重み(1.3::tag::)を外す(_WEIGHT_RE はこの後で定義するので、ここで持つ)
 _VIEW_WEIGHT_RE = re.compile(r"^-?\d+(\.\d+)?::|::$")
 VIEWS: tuple[tuple[str, str, str, str], ...] = (
     # (id, 名前, タグ, ネガティブ)
     ("above", "上から", "solo, 1.3::from above::, high angle view, looking down at subject", "from below, low angle"),
-    ("below", "下から",
-     # 2026-11-12: 斜め下からの虫視点になった。ユーザーの依頼で、カメラを真上に向けた真下からの構図を試す
+    ("below", "真下から",
      "solo, 1.5::bottom view, camera pointing straight up from directly underneath::, "
      "1.4::standing on an invisible transparent floor::, 1.4::soles of feet pressed flat on the floor closest to viewer::, "
      "1.3::extreme foreshortening::, legs receding upward, head small and far away at the top, symmetrical composition",
      "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass, from front, front view, "
      "worm's eye view, low angle view, horizon"),
+    ("looking_up", "見上げる",
+     "solo, 1.4::view from directly below::, 1.3::standing on an invisible transparent floor::, "
+     "looking up from beneath the floor, worm's eye view, soles of feet pressed on the invisible floor",
+     "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass"),
     ("front", "正面", "solo, front view, 1.2::facing viewer::", "from side, profile, side view, from behind, back view"),
     ("back", "背面", f"{_FROM_BEHIND}, back", _BACK_NEGATIVE),
 )
@@ -551,6 +555,8 @@ _VIEW_NEGATIVE_WORDS = frozenset(
 
 
 _CLOSED_LEGS_TAGS = "1.2::knees together::, legs together"
+# 下からの視点(脚を閉じるタグを入れない)
+_FROM_UNDER = ("below", "looking_up")
 _CLOSED_LEGS_NEGATIVE = "1.5::spread legs::, 1.3::legs apart::, knees apart, bowlegged, wide stance, 1.3::kneeling::, on knees"
 
 
@@ -579,7 +585,7 @@ def view_parts(part: BodyPart) -> list[BodyPart]:
     for view, view_label, view_tags, view_negative in VIEWS:
         if view == _own_view(part):
             continue
-        legs = closed and view != "below"
+        legs = closed and view not in _FROM_UNDER
         result.append(dataclasses.replace(
             part, key=f"{part.key}__{view}", label=f"{label}({view_label})", group=f"pose_{view}", base_group=part.group,
             tags=join_tags(tags, _CLOSED_LEGS_TAGS if legs else "", view_tags),
