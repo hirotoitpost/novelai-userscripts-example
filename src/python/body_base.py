@@ -439,7 +439,9 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          # 腰を前へ・後ろへ寄りかかる・上体を起こす(胸から少し前へ倒す)・しゃがむ(膝を適度に曲げる)の組み合わせにし、
          # 仰け反りをネガティブで抑える。しゃがむを重み付きにしたら膝立ちになったので、立つ・足裏を床につけるを足し、
          # しゃがむは重みなしにして、膝立ちを抑える
-         "1.3::standing::, 1.2::feet flat on floor::, 1.6::hips thrust far forward::, 1.4::pelvis far in front of feet::, 1.3::leaning back::, "
+         # ユーザーが調べた英語の言い回し(2026-11-12)を、姿勢の語だけ使う(排尿の語は入れない)
+         "1.3::standing::, 1.2::feet flat on floor::, 1.5::standing upright with the hips thrust forward::, "
+         "1.4::leaning back slightly with the hips pushed forward::, 1.6::hips thrust far forward::, 1.4::pelvis far in front of feet::, 1.3::leaning back::, "
          "1.3::upper body upright::, slight forward bend at chest, head upright, looking forward, "
          "squatting, half squat, 1.5::knees bent::, bent knees in front of toes, 1.2::hands on lower back::, hands behind back, belly pushed forward, "
          f"posterior pelvic tilt, swayback posture, {_FROM_SIDE}",
