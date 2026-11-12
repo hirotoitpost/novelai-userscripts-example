@@ -447,14 +447,15 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          # ユーザーの指摘(2026-11-12): 腰をもう少し下ろして中腰にし、膝を前へ出す
          # 立つの重みが中腰を打ち消したので、立つは重みなしにして、中腰と膝の重みを上げる
          "1.6::half crouch with the hips lowered::, 1.6::knees bent and pushed forward over the toes::, semi-squat, "
-         "squatting, half squat, 1.5::knees bent::, bent knees in front of toes, 1.2::hands on lower back::, hands behind back, belly pushed forward, "
+         # 膝立ちを抑えるネガティブを入れたので、squatting に重みを戻し、ネガティブの deep squat を外す
+         "1.3::squatting::, half squat, 1.5::knees bent::, bent knees in front of toes, 1.2::hands on lower back::, hands behind back, belly pushed forward, "
          f"posterior pelvic tilt, swayback posture, {_FROM_SIDE}",
          "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。腰は足首より前へ出て、膝は適度に曲がり、前へ出た腰の下で"
          "体を支える。腰を少し下ろした中腰で、膝は爪先より前へ出る。上体は後ろへ寄りかかりつつ胸から起こすので、"
          "頭は足の上に戻る",
          f"{_SIDE_NEGATIVE}, 1.3::standing straight::, upright posture, good posture, bent over, "
          "1.4::head tilted back::, 1.3::looking up::, back bend, arched back, bent backward, leaning far back, "
-         "bridge pose, hands on floor, lying, knees locked, hyperextended knees, deep squat, sitting, 1.4::kneeling::, "
+         "bridge pose, hands on floor, lying, knees locked, hyperextended knees, sitting, 1.4::kneeling::, "
          "on knees, seiza, knees on floor, hands on crotch, covering crotch, hand between legs, hands in front", False),
         ("stance_pelvis_back", "腰を後ろに引く(側面)",
          # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。骨盤の前傾と腰の反りを重み付きで書き、
