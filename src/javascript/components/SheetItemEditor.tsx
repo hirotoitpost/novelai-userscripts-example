@@ -14,7 +14,7 @@ export interface SheetItem {
   group: string
   tags: string
   negative: string
-  size: 'square' | 'portrait'
+  size: 'square' | 'portrait' | 'landscape'
   /** 素体だけ: 人体の構造として確かめる点 */
   check?: string
   /** コードの項目か(false なら足した項目) */
@@ -40,7 +40,7 @@ export default function SheetItemEditor({ sheet, groups, item, group, token, onC
   const [grp, setGrp] = useState(item?.group ?? group ?? groups[0]?.id ?? '')
   const [tags, setTags] = useState(item?.tags ?? '')
   const [negative, setNegative] = useState(item?.negative ?? '')
-  const [size, setSize] = useState<'square' | 'portrait'>(item?.size ?? 'square')
+  const [size, setSize] = useState<'square' | 'portrait' | 'landscape'>(item?.size ?? 'square')
   const [check, setCheck] = useState(item?.check ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -112,9 +112,10 @@ export default function SheetItemEditor({ sheet, groups, item, group, token, onC
         </label>
         <label className="sie-field">
           <span>サイズ</span>
-          <select className="lora-select" value={size} onChange={e => setSize(e.target.value as 'square' | 'portrait')}>
+          <select className="lora-select" value={size} onChange={e => setSize(e.target.value as 'square' | 'portrait' | 'landscape')}>
             <option value="square">正方形(1024×1024)</option>
             <option value="portrait">縦長(832×1216)</option>
+            <option value="landscape">横長(1216×832)</option>
           </select>
         </label>
         {sheet === 'body' && (
