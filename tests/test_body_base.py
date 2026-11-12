@@ -892,6 +892,9 @@ def test_pose_parts_are_drawn_from_above_below_front_and_back(client: TestClient
     assert "knees together" not in below.tags and "spread legs" not in below.negative
     up = views["stance_pelvis_back__looking_up"]
     assert up.nude and "worm's eye view" in up.tags and "knees together" not in up.tags and "bottom view" in below.tags
+    # 下からの2つは下半身が中心で、正方形
+    assert "focus lower body::" in below.tags and "face peek" in up.tags and below.size == up.size == "square"
+    assert above.size == "portrait" and "full body" in above.tags and "full body" not in below.tags
     assert "knees together::" in above.tags and "spread legs::" in above.negative
     assert "knees together" not in views["yoga_middle_split__above"].tags
     groups = client.get("/api/lora-dataset/body-bases/options").json()["groups"]
