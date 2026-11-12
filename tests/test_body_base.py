@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import sys
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -847,3 +848,18 @@ def test_side_parts_with_closed_legs_drop_crotch_tags() -> None:
     assert "featureless crotch" in body_base.prompt(character, nude, squat, {})
     assert body_base.ITEMS["side"].side and not body_base.ITEMS["back"].side
     assert not body_base.ITEMS["three_quarter"].side
+
+
+def test_parts_far_from_the_reference_pose_scale_the_reference() -> None:
+    # 立ち姿の参照画像に引き戻される部位は、参照画像を弱める(0 なら使わない)
+    from novelai.types import CharacterReference
+
+    from python.routes.lora_dataset import _part_references
+
+    refs = [CharacterReference(image=b"x", type="character", fidelity=1.0, strength=0.8)]
+    assert body_base.ITEMS["stance_pelvis_forward"].reference_scale == 0.0
+    assert _part_references(refs, body_base.ITEMS["stance_pelvis_forward"]) is None
+    assert _part_references(refs, body_base.ITEMS["front"]) is refs
+    half = dataclasses.replace(body_base.ITEMS["front"], reference_scale=0.5)
+    assert _part_references(refs, half)[0].strength == 0.4  # type: ignore[index]
+    assert refs[0].strength == 0.8

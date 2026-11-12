@@ -51,6 +51,9 @@ class BodyPart:
     # 脚を開くポーズ(可動域のヨガ)。素体のネガティブの「脚を開かない」タグ(ガードの body_base.open_legs_allowed)を、
     # この部位だけ外す
     open_legs: bool = False
+    # キャラの参照画像の強さに掛ける倍率(0 なら参照画像を使わない)。参照画像は立ち姿なので、立ち姿から大きく離れる
+    # 姿勢は参照画像に引き戻される(2026-11-12 実機: 腰を前に出す形は、参照画像を外したときだけ出た)
+    reference_scale: float = 1.0
 
     @property
     def side(self) -> bool:
@@ -418,10 +421,13 @@ TOILET_PARTS = TOILET_PARTS + (
 # 立ち姿勢: 壁に向かう・壁にもたれる・足を広く開く・骨盤の傾き(ユーザーの依頼 2026-11-12)。立ったときの骨盤と脊柱の
 # 関係を見る資料。性別は決めない。腰を後ろへ引く形などは誘うポーズに寄りやすいので、まとまりは成人キャラだけ
 # (ガードの body_base.adult_only_groups)にし、股の打ち消しは可動域と同じ body_base.rom_negative を使う
+# 参照画像(立ち姿)に引き戻される部位の、参照画像の強さの倍率
+_STANCE_REFERENCE_SCALE = {"stance_pelvis_forward": 0.0}
 _STANCE_NEGATIVE = "looking back, looking over shoulder, ass focus, bent over, seductive, sexy pose"
 STANCE_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {pose}, {_ROM_FACE}", "stance", check, "portrait",
-             negative=join_tags(_BARE_FEET_NEGATIVE, _STANCE_NEGATIVE, negative), open_legs=open_legs)
+             negative=join_tags(_BARE_FEET_NEGATIVE, _STANCE_NEGATIVE, negative), open_legs=open_legs,
+             reference_scale=_STANCE_REFERENCE_SCALE.get(key, 1.0))
     for key, label, pose, check, negative, open_legs in (
         ("stance_wall_hands", "壁に両手をつく(側面)",
          "1.3::standing facing wall::, 1.3::both hands on wall::, palms flat on wall at shoulder height, arms extended, "
@@ -459,7 +465,7 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          # 立つの重みが中腰を打ち消したので、立つは重みなしにして、中腰と膝の重みを上げる
          "1.6::half crouch with the hips lowered::, 1.6::knees bent and pushed forward over the toes::, semi-squat, "
          # 膝立ちを抑えるネガティブを入れたので、squatting に重みを戻し、ネガティブの deep squat を外す
-         "1.3::squatting::, half squat, 1.5::knees bent::, bent knees in front of toes, 1.2::hands on lower back::, hands behind back, belly pushed forward, "
+         "1.3::squatting::, half squat, 1.5::knees bent::, bent knees in front of toes, 1.3::hands on lower back::, 1.4::hands behind back::, elbows back, belly pushed forward, "
          f"posterior pelvic tilt, swayback posture, knees forward, hip down, wakeup upperbody, {_FROM_SIDE}",
          "骨盤が後ろへ傾き(後傾)、腰椎の前弯が平らになる。腰は足首より前へ出て、膝は適度に曲がり、前へ出た腰の下で"
          "体を支える。腰を少し下ろした中腰で、膝は爪先より前へ出る。上体は後ろへ寄りかかりつつ胸から起こすので、"
@@ -467,7 +473,8 @@ STANCE_PARTS: tuple[BodyPart, ...] = tuple(
          f"{_SIDE_NEGATIVE}, 1.3::standing straight::, upright posture, good posture, bent over, "
          "1.4::head tilted back::, 1.3::looking up::, back bend, arched back, bent backward, leaning far back, "
          "bridge pose, hands on floor, lying, knees locked, hyperextended knees, sitting, 1.4::kneeling::, "
-         "on knees, seiza, knees on floor, hands on crotch, covering crotch, hand between legs, hands in front, "
+         "on knees, seiza, knees on floor, 1.4::hands on crotch::, 1.3::covering crotch::, hand between legs, 1.3::hands in front::, "
+         "hands on belly, "
          "1.3::spread legs::, bowlegged, wide stance, front view", False),
         ("stance_pelvis_back", "腰を後ろに引く(側面)",
          # 2026-11-12 実機: ふつうの立ち姿とほとんど変わらなかった。骨盤の前傾と腰の反りを重み付きで書き、
