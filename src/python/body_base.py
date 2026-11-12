@@ -320,12 +320,8 @@ TOILET_PARTS: tuple[BodyPart, ...] = tuple(
          "股関節と膝がほぼ直角。大腿の裏は便座の縁に乗り、座面の穴の上に殿部がくる。大腿は座面で横へ広がって見える",
          "", False),
         ("toilet_western_side", "洋式・座る(側面)", _TOILET_WESTERN,
-         # ユーザーの判断(2026-11-12): もたれる部位の試しで出た「背すじを伸ばし、足を少し前へ出し、手を便座の縁につく」
-         # 絵が、ふつうの座り方にふさわしい。その形に合わせる
-         "1.3::sitting on toilet::, buttocks on toilet seat, back straight, upright, legs slightly extended forward, "
-         f"feet flat on floor, hands resting on edge of toilet seat, relaxed, {_FROM_SIDE}",
-         "坐骨で座り、骨盤は立つ。膝は股関節と同じ高さか少し下で、足は膝より少し前。殿部は便座の後ろ寄りに沈み、"
-         "手は便座の縁で体を支える",
+         f"1.3::sitting on toilet::, thighs horizontal, feet flat on floor, hands on knees, back straight, {_FROM_SIDE}",
+         "坐骨で座り、骨盤は立つ。膝は股関節と同じ高さか少し下。殿部は便座の後ろ寄りに沈む",
          _SIDE_NEGATIVE, False),
         ("toilet_western_lean", "洋式・前かがみ(側面)", _TOILET_WESTERN,
          "1.3::sitting on toilet::, 1.2::leaning forward::, elbows on knees, torso bent forward, rounded back, "
