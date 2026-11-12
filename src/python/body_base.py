@@ -329,15 +329,25 @@ TOILET_PARTS: tuple[BodyPart, ...] = tuple(
          "体幹を前へ倒すと股関節の屈曲が深まり、腹が大腿に近づく。腰は丸くなり、骨盤は後ろへ傾く",
          _SIDE_NEGATIVE, False),
         ("toilet_western_footstool", "洋式・踏み台(側面)", _TOILET_WESTERN,
-         "1.3::sitting on toilet::, feet on footstool, 1.2::knees above hips::, knees raised, leaning forward slightly, "
-         f"hands on knees, {_FROM_SIDE}",
+         # 2026-11-12 実機: 台が描かれず、便座の上にしゃがむ・横向きに膝を抱える絵になった。台を物として書き、
+         # 殿部が便座に乗ることを強め、便座に足を乗せる・膝を抱えるのをネガティブで抑える
+         "1.4::sitting on toilet::, buttocks on toilet seat, 1.4::small step stool::, low wooden stool on floor in front of toilet, "
+         "1.3::both feet on step stool::, 1.2::knees above hips::, thighs angled upward, leaning forward slightly, hands on knees, "
+         f"facing forward, {_FROM_SIDE}",
          "足を台に乗せると膝が股関節より高くなり、しゃがみに近い深い屈曲になる。大腿と腹の角度が鋭くなる",
-         _SIDE_NEGATIVE, False),
+         f"{_SIDE_NEGATIVE}, squatting on toilet seat, feet on toilet seat, standing on toilet, hugging knees, knees to chest, "
+         "sitting sideways, feet on floor", False),
         ("toilet_western_hover", "洋式・中腰(座らない)", _TOILET_WESTERN,
-         "1.3::half squat::, hovering above toilet seat, not touching seat, knees bent, hips back, torso leaning forward, "
-         f"hands on thighs, {_FROM_SIDE}",
+         # 2026-11-12 実機: 便器の横に立って前かがみになった。膝の深い曲げと、殿部が便座のすぐ上にあることを強め、
+         # 立ち姿・脚を伸ばした前屈をネガティブで抑える。立ち姿を抑えるだけでは便座の上に乗ってしゃがんだので、
+         # 足は便器の前の床に置かせ、便座に乗るのも抑える
+         "1.4::half squat::, 1.3::semi-squat::, wall sit pose, 1.3::deep knee bend::, thighs nearly horizontal, "
+         "1.3::feet flat on floor in front of toilet::, 1.2::buttocks just above toilet seat::, small gap between buttocks and seat, "
+         f"back to toilet, toilet behind her, hips back, torso leaning forward, hands on thighs, {_FROM_SIDE}",
          "空気椅子の姿勢。膝は90〜110度、殿部は後ろへ引き、体幹を前に倒して重心を足の上に保つ。大腿四頭筋が張る",
-         f"{_SIDE_NEGATIVE}, sitting on toilet seat", False),
+         f"{_SIDE_NEGATIVE}, sitting on toilet seat, buttocks on seat, 1.3::standing::, straight legs, bent over, "
+         "standing beside toilet, standing forward bend, 1.3::squatting on toilet::, feet on toilet seat, standing on toilet, "
+         "crouching on toilet", False),
         ("toilet_squat_side", "和式・しゃがむ(側面)", _TOILET_SQUAT,
          "1.3::squatting::, deep squat over floor toilet, heels on floor, feet flat, knees apart, arms resting on knees, "
          f"{_FROM_SIDE}",
