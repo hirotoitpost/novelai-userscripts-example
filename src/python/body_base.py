@@ -323,11 +323,29 @@ TOILET_PARTS: tuple[BodyPart, ...] = tuple(
          f"1.3::sitting on toilet::, thighs horizontal, feet flat on floor, hands on knees, back straight, {_FROM_SIDE}",
          "坐骨で座り、骨盤は立つ。膝は股関節と同じ高さか少し下。殿部は便座の後ろ寄りに沈む",
          _SIDE_NEGATIVE, False),
+        # ユーザーの判断(2026-11-12): もたれる部位の1回目の試しで出た「殿部を便座の奥まで乗せ、背すじを伸ばし、
+        # 足を前へ出して手を便座の縁につく」絵を、別の部位にする
+        ("toilet_western_deep", "洋式・深く座る(側面)", _TOILET_WESTERN,
+         "1.3::sitting on toilet::, 1.2::sitting deep on toilet seat::, buttocks at back of seat, back straight, upright, "
+         f"legs extended forward, feet flat on floor, hands resting on edge of toilet seat, relaxed, {_FROM_SIDE}",
+         "殿部を便座の奥まで入れると、大腿の裏全体が座面に乗り、膝は股関節よりやや下がる。足は膝より前へ出て、"
+         "股関節の角度は 100〜110 度に開く。手は便座の縁で体を支える",
+         f"{_SIDE_NEGATIVE}, leaning forward, elbows on knees, squatting on toilet, feet on toilet seat, legs up", False),
         ("toilet_western_lean", "洋式・前かがみ(側面)", _TOILET_WESTERN,
          "1.3::sitting on toilet::, 1.2::leaning forward::, elbows on knees, torso bent forward, rounded back, "
          f"feet flat on floor, {_FROM_SIDE}",
          "体幹を前へ倒すと股関節の屈曲が深まり、腹が大腿に近づく。腰は丸くなり、骨盤は後ろへ傾く",
          _SIDE_NEGATIVE, False),
+        ("toilet_western_lean_back", "洋式・もたれて座る(斜め)", _TOILET_WESTERN,
+         # 2026-11-12 実機: 側面で「もたれる」を重み付きで書いても背中が起きたまま(2回)、裸の素体では脚を上げた。
+         # 横からの便器の形に座り姿勢が引っ張られるので斜めから描き、ずり落ちて肩と頭がタンクに当たる形にする
+         "1.3::sitting on toilet::, 1.4::slumped back against toilet tank::, 1.3::shoulders and head resting on toilet tank::, "
+         "head tilted back, looking up, 1.2::reclining on toilet::, hips slid forward to edge of seat, lazy posture, "
+         "legs extended forward, feet flat on floor, arms hanging at sides, three-quarter view",
+         "体幹を後ろへ倒すと股関節の屈曲は浅くなり(100〜120度)、骨盤は後ろへ傾いて仙骨で座る。腰は丸く、"
+         "肩と頭がタンクに当たる。膝は伸び気味で、足は前へ出る",
+         "leaning forward, elbows on knees, squatting on toilet, feet on toilet seat, 1.3::back straight::, sitting upright, "
+         "upright posture, legs up, raised legs, knees up", False),
         ("toilet_western_footstool", "洋式・踏み台(側面)", _TOILET_WESTERN,
          # 2026-11-12 実機: 台が描かれず、便座の上にしゃがむ・横向きに膝を抱える絵になった。台を物として書き、
          # 殿部が便座に乗ることを強め、便座に足を乗せる・膝を抱えるのをネガティブで抑える
