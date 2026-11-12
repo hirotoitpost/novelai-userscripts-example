@@ -787,6 +787,22 @@
       ]
     },
     {
+      "key": "body_base.side_hidden_tags",
+      "group": "素体",
+      "label": "真横の部位で外す股のタグ",
+      "description": "真横から描く部位(脚を開くポーズを除く)で、プロンプトから外すタグ。正面からしか見えない股のタグを入れると、股を見せる構図(正面寄り・開脚・膝立ち)に引っ張られる。打ち消しはネガティブに残る。完全一致(重み付きでも当たる)。",
+      "kind": "words",
+      "match": "exact",
+      "value": [
+        "featureless crotch",
+        "pussy",
+        "clitoris",
+        "labia",
+        "cameltoe",
+        "crotch"
+      ]
+    },
+    {
       "key": "body_base.adult_only_groups",
       "group": "素体",
       "label": "成人キャラだけで描く部位のまとまり",

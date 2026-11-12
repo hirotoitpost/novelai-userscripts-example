@@ -52,6 +52,11 @@ class BodyPart:
     # この部位だけ外す
     open_legs: bool = False
 
+    @property
+    def side(self) -> bool:
+        """真横から描く部位か(タグに from side・side view・profile があり、真後ろでない)。"""
+        return not self.rear and bool(_SIDE_RE.search(self.tags))
+
 
 GROUPS: tuple[tuple[str, str], ...] = (
     ("whole", "全身"),
@@ -93,6 +98,7 @@ _BACK_NEGATIVE = (
 # 真横。重みなしでは、正面と横の2人並び(設定画)が出た(2026-10-30 実機: スーツ・水着で3回とも)ので、強調の重みを付け、
 # 並びと正面向きをネガティブで抑える
 _FROM_SIDE = "solo, 1.3::from side::, 1.2::profile::, side view"
+_SIDE_RE = re.compile(r"\bfrom side\b|\bside view\b|\bprofile\b", re.IGNORECASE)
 _SIDE_NEGATIVE = (
     "1.4::multiple views::, 1.3::turnaround::, two views, front and side, 2girls, front view, facing viewer, "
     "looking at viewer, from behind"
@@ -313,7 +319,8 @@ _TOILET_SQUAT = "1.3::squat toilet::, japanese toilet, floor toilet, white porce
 _TOILET_FACE = "expressionless, closed mouth, solo"
 TOILET_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {toilet}, {pose}, {_HIP}, {_TOILET_FACE}", "toilet", check, "portrait",
-             negative=join_tags(_BARE_FEET_NEGATIVE, negative), rear=rear, open_legs=True)
+             # 脚を開くのは和式だけ。洋式は脚を閉じて座るので、側面では股のタグを外す(prompt の side)
+             negative=join_tags(_BARE_FEET_NEGATIVE, negative), rear=rear, open_legs=key.startswith("toilet_squat"))
     for key, label, toilet, pose, check, negative, rear in (
         ("toilet_western_front", "洋式・座る(正面)", _TOILET_WESTERN,
          "1.3::sitting on toilet::, thighs horizontal, knees together, feet flat on floor, hands on knees, back straight, "
@@ -635,6 +642,12 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
     )
     if part.rear:
         tags = ", ".join(t for t in split_tags(tags) if not _REAR_HIDDEN_RE.search(t))
+    elif part.side and not part.open_legs:
+        # 真横で脚を閉じた部位は、正面からしか見えない股のタグ(ガードの body_base.side_hidden_tags)を外す。
+        # featureless crotch などを入れると、股を見せる構図(正面寄り・開脚・膝立ち)に引っ張られる(2026-11-12 実機、
+        # ユーザーの指摘)。打ち消しはネガティブに残る。脚を開く部位では股が見えるので外さない
+        hidden = {_plain_weight(t) for t in content_guard.words("body_base.side_hidden_tags")}
+        tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in hidden)
     if part.group in PREGNANCY_GROUPS:
         drop = {_plain_weight(t) for t in split_tags(str(app_settings.get("body_base.pregnant_drop_tags")))}
         tags = ", ".join(t for t in split_tags(tags) if _plain_weight(t) not in drop)

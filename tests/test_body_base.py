@@ -769,7 +769,9 @@ def test_pregnant_nipples_join_the_adult_only_groups_on_existing_dbs() -> None:
 def test_toilet_poses_vary_by_toilet_and_squat_for_adults_only(client: TestClient) -> None:
     # トイレの体勢: 洋式(座る・前かがみ・踏み台・中腰)と和式(しゃがむ・つま先立ち)を全身で描く。服あり・服なしは素体の種類
     toilet = [p for p in body_base.PARTS if p.group == "toilet" and p.key != "toilet_urinal_back"]
-    assert len(toilet) == 11 and all(p.nude and not p.nude_only and p.open_legs and body_base.adult_only(p) for p in toilet)
+    assert len(toilet) == 11 and all(p.nude and not p.nude_only and body_base.adult_only(p) for p in toilet)
+    # 脚を開くのは和式だけ(洋式は脚を閉じて座る)
+    assert all(p.open_legs == p.key.startswith("toilet_squat") for p in toilet)
     assert {"toilet_western_front", "toilet_western_lean_back", "toilet_western_deep", "toilet_western_footstool", "toilet_western_hover",
             "toilet_squat_side", "toilet_squat_tiptoe", "toilet_squat_back"} <= {p.key for p in toilet}
     assert "western toilet" in body_base.ITEMS["toilet_western_lean"].tags
@@ -828,3 +830,20 @@ def test_urinal_and_stance_parts_are_posture_only_for_adults(client: TestClient)
     res = client.post(f"/api/lora-dataset/character/{minor['id']}/body-base",
                       json={"keys": ["stance_wall_hands"], "auto_check": False})
     assert res.status_code == 403, res.text
+
+
+def test_side_parts_with_closed_legs_drop_crotch_tags() -> None:
+    # 真横で脚を閉じた部位は、正面からしか見えない股のタグ(ガードの body_base.side_hidden_tags)を外す。
+    # 脚を開く部位・正面の部位では外さない
+    character = {"appearance_tags": "1girl, black hair"}
+    nude = {"kind": "nude"}
+    stance = body_base.ITEMS["stance_pelvis_forward"]
+    assert stance.side and not stance.open_legs
+    assert "featureless crotch" not in body_base.prompt(character, nude, stance, {})
+    assert "pussy" in body_base.part_negative("", stance)
+    assert "featureless crotch" in body_base.prompt(character, nude, body_base.ITEMS["front"], {})
+    squat = body_base.ITEMS["toilet_squat_side"]
+    assert squat.side and squat.open_legs
+    assert "featureless crotch" in body_base.prompt(character, nude, squat, {})
+    assert body_base.ITEMS["side"].side and not body_base.ITEMS["back"].side
+    assert not body_base.ITEMS["three_quarter"].side
