@@ -911,3 +911,15 @@ def test_editing_a_pose_on_the_screen_rebuilds_its_views() -> None:
     parts = body_base.parts([row])
     assert parts["stance_wide__above"].tags.startswith("full body, standing, wide stance")
     assert "stance_wide__front" not in body_base.ITEMS
+
+
+def test_seated_forward_bend_sits_and_has_every_view() -> None:
+    """座位体前屈: 床に座って脚を前へ伸ばす(立位前屈とは別)。上下・前後の視点違いも付く。"""
+    parts = {p.key: p for p in body_base.PARTS}
+    seated = parts["yoga_seated_forward_bend"]
+    assert seated.group == "rom" and seated.nude
+    assert "sitting on floor" in seated.tags and "standing forward bend" not in seated.tags
+    assert "standing forward bend" in seated.negative
+    for view in ("above", "below", "looking_up", "front", "back"):
+        part = parts[f"yoga_seated_forward_bend__{view}"]
+        assert part.family == "rom" and "seated forward bend" in part.tags
