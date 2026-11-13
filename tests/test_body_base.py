@@ -919,7 +919,9 @@ def test_seated_forward_bend_sits_and_has_every_view() -> None:
     seated = parts["yoga_seated_forward_bend"]
     assert seated.group == "rom" and seated.nude
     assert "sitting on floor" in seated.tags and "standing forward bend" not in seated.tags
-    assert "standing forward bend" in seated.negative
+    assert "standing forward bend" in seated.negative and "outstretched legs" in seated.tags
+    # 立ち姿の参照画像に引っ張られないよう、参照画像は外す
+    assert seated.reference_scale == 0.0
     for view in ("above", "below", "looking_up", "front", "back"):
         part = parts[f"yoga_seated_forward_bend__{view}"]
         assert part.family == "rom" and "seated forward bend" in part.tags

@@ -205,9 +205,12 @@ _ROM_FACE = "expressionless, closed mouth"
 # 股・肛門・修正の打ち消しは、ガードの body_base.rom_negative(part_negative でまとまりごとに足す)。
 # 脚を開かせないタグ(裸の素体のガード body_base.nude_negative の spread legs)は、open_legs の部位では外す
 # (外すタグはガードの body_base.open_legs_allowed)
+# 参照画像(立ち姿)に引っ張られて形が崩れるポーズは、参照画像を外す(座位体前屈は膝を抱える座り方になった)
+_ROM_REFERENCE_SCALE = {"yoga_seated_forward_bend": 0.0}
 ROM_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {pose}, {_HIP}, {_ROM_FACE}", "rom", check,
-             negative=join_tags(_BARE_FEET_NEGATIVE, negative), open_legs=True)
+             negative=join_tags(_BARE_FEET_NEGATIVE, negative), open_legs=True,
+             reference_scale=_ROM_REFERENCE_SCALE.get(key, 1.0))
     for key, label, pose, check, negative in (
         ("yoga_front_split", "前後開脚(屈曲・伸展)",
          "1.4::front split::, hanumanasana, splits, front leg extended forward, back leg extended backward, both legs straight, "
@@ -239,11 +242,13 @@ ROM_PARTS: tuple[BodyPart, ...] = tuple(
          "骨盤ごと前へ倒れる(腰だけ曲げない)。坐骨が上を向き、殿溝が伸びる", ""),
         # 座位体前屈(ユーザーの依頼 2026-11-13)。視点違い(上下・前後)は view_parts で付く
         ("yoga_seated_forward_bend", "座位体前屈(屈曲)",
-         "1.4::seated forward bend::, paschimottanasana, sitting on floor, 1.3::legs extended straight forward::, legs together, "
-         "knees straight, toes pointing up, torso folded forward over thighs, chest toward knees, arms reaching forward, "
-         "hands holding feet, head down, from side, side view",
+         "1.4::seated forward bend::, paschimottanasana, 1.3::stretching::, sitting on floor, 1.5::outstretched legs::, "
+         "1.4::legs straight out in front, flat on the floor::, 1.3::knees locked straight::, legs together, toes pointing up, "
+         "1.4::bent over forward from the hips::, upper body folded over the straight legs, chest close to the thighs, "
+         "arms reaching forward, reaching for feet, hands touching toes, head down, from side, side view",
          "坐骨で座り、骨盤ごと前へ倒れる。膝裏(ハムストリングス)が伸び、腹が大腿に近づく",
-         "standing, standing forward bend, kneeling, lying, legs apart, bent knees"),
+         "standing, standing forward bend, kneeling, lying, legs apart, 1.4::bent knees::, 1.3::knees up::, knees to chest, "
+         "hugging own legs, hugging knees, fetal position, squatting"),
         ("yoga_bridge", "ブリッジ(伸展)",
          "1.4::glute bridge::, bridge pose, lying on back, shoulders and head on floor, knees bent at right angle, "
          "feet flat on floor, hips lifted, straight line from knees to shoulders, arms on floor, from side, side view",
