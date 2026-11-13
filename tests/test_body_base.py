@@ -911,3 +911,27 @@ def test_editing_a_pose_on_the_screen_rebuilds_its_views() -> None:
     parts = body_base.parts([row])
     assert parts["stance_wide__above"].tags.startswith("full body, standing, wide stance")
     assert "stance_wide__front" not in body_base.ITEMS
+
+
+def test_seated_forward_bend_sits_and_has_every_view() -> None:
+    """座位体前屈: 床に座って脚を前へ伸ばす(立位前屈とは別)。上下・前後の視点違いも付く。"""
+    parts = {p.key: p for p in body_base.PARTS}
+    seated = parts["yoga_seated_forward_bend"]
+    assert seated.group == "rom" and seated.nude
+    assert "sitting on floor" in seated.tags and "standing forward bend" not in seated.tags
+    assert "standing forward bend" in seated.negative and "outstretched legs" in seated.tags
+    # 立ち姿の参照画像に引っ張られないよう、参照画像は外す
+    assert seated.reference_scale == 0.0
+    for view in ("above", "below", "looking_up", "front", "back"):
+        part = parts[f"yoga_seated_forward_bend__{view}"]
+        assert part.family == "rom" and "seated forward bend" in part.tags
+
+
+def test_floor_seated_poses_sit_on_the_invisible_floor_from_below() -> None:
+    """床に座るポーズの下からの視点は、透明な床に立つ代わりに座る(お尻と脚の裏を押し付ける)。立つポーズはそのまま。"""
+    for key in ("yoga_seated_forward_bend", "yoga_butterfly", "yoga_middle_split"):
+        for view in ("below", "looking_up"):
+            tags = body_base.ITEMS[f"{key}__{view}"].tags
+            assert "sitting on an invisible transparent floor" in tags and "standing on an invisible" not in tags
+            assert "soles of feet pressed" not in tags
+    assert "standing on an invisible transparent floor" in body_base.ITEMS["yoga_forward_bend__below"].tags

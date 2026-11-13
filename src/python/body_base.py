@@ -205,9 +205,12 @@ _ROM_FACE = "expressionless, closed mouth"
 # 股・肛門・修正の打ち消しは、ガードの body_base.rom_negative(part_negative でまとまりごとに足す)。
 # 脚を開かせないタグ(裸の素体のガード body_base.nude_negative の spread legs)は、open_legs の部位では外す
 # (外すタグはガードの body_base.open_legs_allowed)
+# 参照画像(立ち姿)に引っ張られて形が崩れるポーズは、参照画像を外す(座位体前屈は膝を抱える座り方になった)
+_ROM_REFERENCE_SCALE = {"yoga_seated_forward_bend": 0.0}
 ROM_PARTS: tuple[BodyPart, ...] = tuple(
     BodyPart(key, label, f"full body, {pose}, {_HIP}, {_ROM_FACE}", "rom", check,
-             negative=join_tags(_BARE_FEET_NEGATIVE, negative), open_legs=True)
+             negative=join_tags(_BARE_FEET_NEGATIVE, negative), open_legs=True,
+             reference_scale=_ROM_REFERENCE_SCALE.get(key, 1.0))
     for key, label, pose, check, negative in (
         ("yoga_front_split", "前後開脚(屈曲・伸展)",
          "1.4::front split::, hanumanasana, splits, front leg extended forward, back leg extended backward, both legs straight, "
@@ -237,6 +240,15 @@ ROM_PARTS: tuple[BodyPart, ...] = tuple(
          "1.4::standing forward bend::, uttanasana, bent over, torso against legs, legs straight, legs together, "
          "palms flat on floor, head down, from side, side view",
          "骨盤ごと前へ倒れる(腰だけ曲げない)。坐骨が上を向き、殿溝が伸びる", ""),
+        # 座位体前屈(ユーザーの依頼 2026-11-13)。視点違い(上下・前後)は view_parts で付く
+        ("yoga_seated_forward_bend", "座位体前屈(屈曲)",
+         "1.4::seated forward bend::, paschimottanasana, 1.3::stretching::, sitting on floor, 1.5::outstretched legs::, "
+         "1.4::legs straight out in front, flat on the floor::, 1.3::knees locked straight::, legs together, toes pointing up, "
+         "1.4::bent over forward from the hips::, upper body folded over the straight legs, chest close to the thighs, "
+         "arms reaching forward, reaching for feet, hands touching toes, head down, from side, side view",
+         "坐骨で座り、骨盤ごと前へ倒れる。膝裏(ハムストリングス)が伸び、腹が大腿に近づく",
+         "standing, standing forward bend, kneeling, lying, legs apart, 1.4::bent knees::, 1.3::knees up::, knees to chest, "
+         "hugging own legs, hugging knees, fetal position, squatting"),
         ("yoga_bridge", "ブリッジ(伸展)",
          "1.4::glute bridge::, bridge pose, lying on back, shoulders and head on floor, knees bent at right angle, "
          "feet flat on floor, hips lifted, straight line from knees to shoulders, arms on floor, from side, side view",
@@ -532,18 +544,31 @@ _VIEW_WEIGHT_RE = re.compile(r"^-?\d+(\.\d+)?::|::$")
 # 部位の full body(全身)は下半身の寄りを打ち消した(2026-11-13 実機: 全身が小さく収まった)ので、下からでは外す
 _UNDER_FRAMING = "1.5::focus lower body::, 1.3::lower body::, close-up, underboob, between thighs, face peek"
 _UNDER_DROP = frozenset({"full body", "head to toe", "feet visible"})
+# 床に座るポーズ(座位体前屈・左右開脚・合蹠。ユーザーの依頼 2026-11-13: 見えない床の上で、下からも)は、下からの2つで
+# 「透明な床に立つ・足裏を押し付ける」を「透明な床に座る・お尻と脚の裏を押し付ける」に入れ替える
+_UNDER_STANDING = (
+    "1.4::standing on an invisible transparent floor::, 1.4::soles of feet pressed flat on the floor closest to viewer::",
+    "1.3::standing on an invisible transparent floor::",
+    "soles of feet pressed on the invisible floor",
+)
+_UNDER_SITTING = (
+    "1.4::sitting on an invisible transparent floor::, "
+    "1.4::buttocks and backs of the legs pressed flat on the floor closest to viewer::",
+    "1.3::sitting on an invisible transparent floor::",
+    "buttocks and backs of the legs pressed on the invisible floor",
+)
+_SITTING_ON_FLOOR = "sitting on floor"
 VIEWS: tuple[tuple[str, str, str, str], ...] = (
     # (id, 名前, タグ, ネガティブ)
     ("above", "上から", "solo, 1.3::from above::, high angle view, looking down at subject", "from below, low angle"),
     ("below", "真下から",
      "solo, 1.5::bottom view, camera pointing straight up from directly underneath::, "
-     "1.4::standing on an invisible transparent floor::, 1.4::soles of feet pressed flat on the floor closest to viewer::, "
-     f"1.3::extreme foreshortening::, legs receding upward, symmetrical composition, {_UNDER_FRAMING}",
+     f"{_UNDER_STANDING[0]}, 1.3::extreme foreshortening::, legs receding upward, symmetrical composition, {_UNDER_FRAMING}",
      "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass, from front, front view, "
      "worm's eye view, low angle view, horizon"),
     ("looking_up", "見上げる",
-     "solo, 1.4::view from directly below::, 1.3::standing on an invisible transparent floor::, "
-     f"looking up from beneath the floor, worm's eye view, soles of feet pressed on the invisible floor, {_UNDER_FRAMING}",
+     f"solo, 1.4::view from directly below::, {_UNDER_STANDING[1]}, "
+     f"looking up from beneath the floor, worm's eye view, {_UNDER_STANDING[2]}, {_UNDER_FRAMING}",
      "from above, high angle, visible floor, floor tiles, glass texture, reflection, ground, grass"),
     ("front", "正面", "solo, front view, 1.2::facing viewer::", "from side, profile, side view, from behind, back view"),
     ("back", "背面", f"{_FROM_BEHIND}, back", _BACK_NEGATIVE),
@@ -579,6 +604,19 @@ def _own_view(part: BodyPart) -> str:
     return ""
 
 
+def _seated_on_floor(part: BodyPart) -> bool:
+    return any(_VIEW_WEIGHT_RE.sub("", t).strip().lower() == _SITTING_ON_FLOOR for t in split_tags(part.tags))
+
+
+def _under_tags(view_tags: str, seated: bool) -> str:
+    """下からの視点のタグ。床に座るポーズは、透明な床に立つ代わりに座る。"""
+    if not seated:
+        return view_tags
+    for standing, sitting in zip(_UNDER_STANDING, _UNDER_SITTING):
+        view_tags = view_tags.replace(standing, sitting)
+    return view_tags
+
+
 def view_parts(part: BodyPart) -> list[BodyPart]:
     """ポーズの部位を、上・下・正面・背面から描く部位(キーは <部位>__<視点>)。ポーズのまとまりでなければ空。"""
     if part.family not in POSE_GROUPS or part.base_group:
@@ -587,6 +625,7 @@ def view_parts(part: BodyPart) -> list[BodyPart]:
     negative = _strip_words(part.negative, _VIEW_NEGATIVE_WORDS)
     label = re.sub(r"\([^()]*\)$", "", part.label)
     closed = not part.open_legs
+    seated = _seated_on_floor(part)
     result = []
     for view, view_label, view_tags, view_negative in VIEWS:
         if view == _own_view(part):
@@ -595,7 +634,8 @@ def view_parts(part: BodyPart) -> list[BodyPart]:
         result.append(dataclasses.replace(
             part, key=f"{part.key}__{view}", label=f"{label}({view_label})", group=f"pose_{view}", base_group=part.group,
             tags=join_tags(_strip_words(tags, _UNDER_DROP) if view in _FROM_UNDER else tags,
-                           _CLOSED_LEGS_TAGS if legs else "", view_tags),
+                           _CLOSED_LEGS_TAGS if legs else "",
+                           _under_tags(view_tags, seated) if view in _FROM_UNDER else view_tags),
             negative=join_tags(negative, _CLOSED_LEGS_NEGATIVE if legs else "", view_negative), rear=view == "back",
             size=("landscape" if part.open_legs else "square") if view in _FROM_UNDER else part.size,
         ))
