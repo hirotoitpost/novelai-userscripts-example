@@ -240,14 +240,14 @@ ROM_PARTS: tuple[BodyPart, ...] = tuple(
          "1.4::standing forward bend::, uttanasana, bent over, torso against legs, legs straight, legs together, "
          "palms flat on floor, head down, from side, side view",
          "骨盤ごと前へ倒れる(腰だけ曲げない)。坐骨が上を向き、殿溝が伸びる", ""),
-        # 座位体前屈(ユーザーの依頼 2026-11-13)。視点違い(上下・前後)は view_parts で付く
+        # 座位体前屈(ユーザーの依頼 2026-11-13)。脚は肩幅くらいに自然に開く(ユーザーの指定)。視点違い(上下・前後)は view_parts で付く
         ("yoga_seated_forward_bend", "座位体前屈(屈曲)",
          "1.4::seated forward bend::, paschimottanasana, 1.3::stretching::, sitting on floor, 1.5::outstretched legs::, "
-         "1.4::legs straight out in front, flat on the floor::, 1.3::knees locked straight::, legs together, toes pointing up, "
+         "1.4::legs straight out in front, flat on the floor::, 1.3::knees locked straight::, 1.3::legs slightly apart, feet about shoulder width apart::, relaxed natural stance, toes pointing up, "
          "1.4::bent over forward from the hips::, upper body folded over the straight legs, chest close to the thighs, "
          "arms reaching forward, reaching for feet, hands touching toes, head down, from side, side view",
          "坐骨で座り、骨盤ごと前へ倒れる。膝裏(ハムストリングス)が伸び、腹が大腿に近づく",
-         "standing, standing forward bend, kneeling, lying, legs apart, 1.4::bent knees::, 1.3::knees up::, knees to chest, "
+         "standing, standing forward bend, kneeling, lying, legs together, 1.3::wide spread legs::, straddle split, middle split, 1.4::bent knees::, 1.3::knees up::, knees to chest, "
          "hugging own legs, hugging knees, fetal position, squatting"),
         ("yoga_bridge", "ブリッジ(伸展)",
          "1.4::glute bridge::, bridge pose, lying on back, shoulders and head on floor, knees bent at right angle, "
