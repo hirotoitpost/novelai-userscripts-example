@@ -925,3 +925,13 @@ def test_seated_forward_bend_sits_and_has_every_view() -> None:
     for view in ("above", "below", "looking_up", "front", "back"):
         part = parts[f"yoga_seated_forward_bend__{view}"]
         assert part.family == "rom" and "seated forward bend" in part.tags
+
+
+def test_floor_seated_poses_sit_on_the_invisible_floor_from_below() -> None:
+    """床に座るポーズの下からの視点は、透明な床に立つ代わりに座る(お尻と脚の裏を押し付ける)。立つポーズはそのまま。"""
+    for key in ("yoga_seated_forward_bend", "yoga_butterfly", "yoga_middle_split"):
+        for view in ("below", "looking_up"):
+            tags = body_base.ITEMS[f"{key}__{view}"].tags
+            assert "sitting on an invisible transparent floor" in tags and "standing on an invisible" not in tags
+            assert "soles of feet pressed" not in tags
+    assert "standing on an invisible transparent floor" in body_base.ITEMS["yoga_forward_bend__below"].tags
