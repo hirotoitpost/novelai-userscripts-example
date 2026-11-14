@@ -33,6 +33,7 @@ import Writer from './pages/Writer'
 import { TaskTray } from './components/TaskStatus'
 import NoticeBell from './components/NoticeBell'
 import AssistantPanel from './components/AssistantPanel'
+import ShortcutHelp from './components/ShortcutHelp'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -179,6 +180,8 @@ export default function App() {
         <NoticeBell />
         {/* 作業アシスタント(次の操作・ヘルプ。右端から開く) */}
         <AssistantPanel />
+        {/* キーボードショートカット(? で一覧、/ で検索欄、F で全画面) */}
+        <ShortcutHelp />
       </BrowserRouter>
     </AuthProvider>
   )
