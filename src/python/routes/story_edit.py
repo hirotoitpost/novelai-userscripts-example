@@ -38,7 +38,7 @@ from ..db import (
     set_scene_characters,
 )
 from ..models import StoryEditRequest, StoryEditScene, StorySaveAsRequest
-from ..manga_v2.layout import TEMPLATES
+from ..manga_v2.layout import TEMPLATES, needs_redraw
 from .manga_v2 import _PANEL_DIR, _PROJECT_ROOT, _lettering, _scene_speakers, panel_size_kinds
 from .story import _check_adult_only
 
@@ -273,15 +273,20 @@ def _resized(
     conn: sqlite3.Connection, story_id: int, story: dict[str, Any], req: StoryEditRequest, pages: list[int]
 ) -> list[bool]:
     """
-    編集した並びのシーンごとに、生成サイズ(決めたもの、無ければ入る枠の形から)が今と変わるか。
-    変わるコマの絵は描き直し待ちにする(縦長の絵を横長の枠に入れると大きく切れるため)。
+    編集した並びのシーンごとに、生成サイズ(決めたもの、無ければ入る枠の形から)が今と変わり、
+    しかも今の絵がその新しい形に合わないか。そのコマの絵は描き直し待ちにする(縦長の絵を横長の枠に入れると大きく切れるため)。
+    コマを足す・消すと最後のページの枠の形が行き来するが、絵が新しい枠に合っていれば描き直しは要らない。
     """
     before_sizes = _sizes(
         conn, story_id, bool(story.get("custom_pages")), [(s["page_index"], s.get("panel_size")) for s in story["scenes"]]
     )
     before = {s["id"]: size for s, size in zip(story["scenes"], before_sizes)}
     after = _sizes(conn, story_id, req.custom_pages, [(page, s.panel_size) for page, s in zip(pages, req.scenes)])
-    return [s.id is not None and s.id in before and before[s.id] != size for s, size in zip(req.scenes, after)]
+    images = {p["scene_id"]: (p["width"], p["height"]) for p in list_manga_panels(conn, story_id)}
+    return [
+        s.id is not None and s.id in before and needs_redraw(images.get(s.id), before[s.id], size)
+        for s, size in zip(req.scenes, after)
+    ]
 
 
 def _write_cast(conn: sqlite3.Connection, scene_id: int, scene: StoryEditScene) -> None:

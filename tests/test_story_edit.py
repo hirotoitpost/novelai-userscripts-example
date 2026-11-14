@@ -219,6 +219,44 @@ def test_panel_size_follows_the_slot_and_can_be_chosen(client: TestClient) -> No
     ]}).json()["stale_panels"] == 0
 
 
+def test_reflow_keeps_panels_whose_image_fits_the_new_slot(client: TestClient) -> None:
+    s = _story(client.root)  # type: ignore[attr-defined]
+    # 3コマのページは「横長+縦長2つ」。シーン0の絵は縦長(832×1216)で、横長の枠に入っている
+    data = _edited(client, s["id"])
+    assert [sc["auto_size"] for sc in data["scenes"]] == ["landscape", "portrait", "portrait"]
+    body = _body(data)
+    # 先頭にシーンを足すと4コマのページ(全部縦長)になる。シーン0の枠は横長→縦長に変わるが、
+    # 絵はもともと縦長で新しい枠に合うので、描き直し待ちにしない(コマを足すたびに印が付いていた)
+    body["scenes"].insert(0, {"text": "", "prompt_tags": "gate", "characters": [], "page_index": 0})
+    res = client.put(f"/api/story/{s['id']}/edit", json=body)
+    assert res.status_code == 200, res.text
+    assert res.json()["stale_panels"] == 0
+    data = _edited(client, s["id"])
+    assert [sc["auto_size"] for sc in data["scenes"]] == ["portrait"] * 4
+    assert all(sc["panel"] is None or sc["panel"]["stale"] is False for sc in data["scenes"])
+    # 足したシーンと廊下を消すと2コマのページ(横長2つ)になる。縦長の絵は横長の枠に合わないので描き直し待ち
+    body = _body(data)
+    body["scenes"] = [body["scenes"][1], body["scenes"][3]]
+    res = client.put(f"/api/story/{s['id']}/edit", json=body)
+    assert res.status_code == 200, res.text
+    assert res.json()["stale_panels"] == 2
+    assert [sc["auto_size"] for sc in _edited(client, s["id"])["scenes"]] == ["landscape", "landscape"]
+
+
+def test_needs_redraw_only_when_the_image_misses_the_new_slot() -> None:
+    from python.manga_v2.layout import image_size_kind, needs_redraw
+
+    assert image_size_kind(832, 1216) == "portrait" and image_size_kind(1216, 832) == "landscape"
+    assert image_size_kind(1024, 1024) == "square"
+    # 枠の形が変わらなければ描き直さない
+    assert needs_redraw((832, 1216), "landscape", "landscape") is False
+    # 変わっても、絵が新しい枠に合っていれば描き直さない
+    assert needs_redraw((832, 1216), "landscape", "portrait") is False
+    # 新しい枠に合わない絵・大きさの分からない絵は描き直し待ち
+    assert needs_redraw((832, 1216), "portrait", "landscape") is True
+    assert needs_redraw(None, "portrait", "landscape") is True
+
+
 def test_panel_size_kind_picks_the_nearest_free_size() -> None:
     from python.manga_v2.layout import PANEL_SIZES, panel_size_kind
 
