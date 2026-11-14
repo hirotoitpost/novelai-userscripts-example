@@ -1,0 +1,83 @@
+/* ヘルプ(Help.tsx)。読みやすさ優先で幅を絞る */
+.help-root {
+  min-height: 100vh;
+  background: #0f0f1a;
+  color: #e8e8f0;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.help-header {
+  max-width: 760px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.help-header h1 { font-size: 1.35rem; margin: 0; }
+.help-back {
+  border: 1px solid #3a3a5c;
+  border-radius: 8px;
+  background: none;
+  color: #e8e8f0;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.help-search {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto 16px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #3a3a5c;
+  border-radius: 8px;
+  background: #181830;
+  color: #e8e8f0;
+  font-size: 15px;
+}
+.help-group, .help-article, .help-missing {
+  max-width: 760px;
+  margin: 0 auto 16px;
+}
+.help-group {
+  padding: 12px 16px;
+  border: 1px solid #2c2c48;
+  border-radius: 12px;
+  background: #15152a;
+}
+.help-group h2 { font-size: 1.05rem; margin: 0 0 8px; }
+.help-group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.help-group li p { margin: 2px 0 0; color: #a8a8c4; font-size: 13px; }
+.help-root a { color: #a993ff; }
+
+.help-article {
+  padding: 16px 20px;
+  border: 1px solid #2c2c48;
+  border-radius: 12px;
+  background: #15152a;
+  line-height: 1.75;
+}
+.help-feature { margin: 0 0 4px; color: #9a9ab8; font-size: 13px; }
+.help-article h3 { font-size: 1.1rem; margin: 1.4em 0 0.4em; padding-bottom: 4px; border-bottom: 1px solid #2c2c48; }
+.help-article h4 { font-size: 1rem; margin: 1.2em 0 0.3em; }
+.help-article ol, .help-article ul { padding-left: 1.4em; }
+.help-article li { margin: 0.25em 0; }
+.help-article code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #24244a;
+  font-size: 0.9em;
+}
+.help-note {
+  margin: 1em 0;
+  padding: 10px 14px;
+  border-left: 4px solid #7c5cff;
+  border-radius: 6px;
+  background: #1f1f3a;
+}
+.help-media { margin: 1em 0; }
+.help-media img, .help-media video { max-width: 100%; border-radius: 8px; border: 1px solid #2c2c48; }
+.help-media figcaption { color: #9a9ab8; font-size: 13px; }
+.help-related { margin-top: 1.5em; }
+.help-related ul { padding-left: 1.2em; }

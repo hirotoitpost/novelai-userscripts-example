@@ -6,6 +6,7 @@ import ContentGuardRules from '../components/ContentGuardRules'
 import GuardProfiles from '../components/GuardProfiles'
 import GuardSafety from '../components/GuardSafety'
 import DataBackup from '../components/DataBackup'
+import HelpLink from '../components/HelpLink'
 import CleanupCategory from '../components/CleanupCategory'
 import { formatDuration } from '../components/TaskStatus'
 import type { ImagePreset } from '../api'
@@ -683,7 +684,7 @@ function OpsTab() {
 
       <section className="adm-section" id="storage">
         <div className="adm-row">
-          <h2>保存領域</h2>
+          <h2>保存領域<HelpLink slug="storage" /></h2>
           <button type="button" onClick={() => void storage.refresh()}>測り直す</button>
         </div>
         {storage.error && <p className="adm-error">{storage.error}</p>}

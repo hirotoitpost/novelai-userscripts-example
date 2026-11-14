@@ -24,6 +24,7 @@ import CharacterDataset from './pages/CharacterDataset'
 import Characters from './pages/Characters'
 import Chunks from './pages/Chunks'
 import Admin from './pages/Admin'
+import Help from './pages/Help'
 import DbStatus from './pages/DbStatus'
 import Selection from './pages/Selection'
 import Story from './pages/Story'
@@ -152,6 +153,14 @@ function AppRoutes() {
       <Route
         path="/guard-inspect"
         element={<ProtectedRoute><GuardInspect /></ProtectedRoute>}
+      />
+      <Route
+        path="/help"
+        element={<ProtectedRoute><Help /></ProtectedRoute>}
+      />
+      <Route
+        path="/help/:slug"
+        element={<ProtectedRoute><Help /></ProtectedRoute>}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

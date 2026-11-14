@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { findArticle } from '../help'
 import './NoticeBell.css'
 
 /**
@@ -126,6 +127,11 @@ export default function NoticeBell() {
                 <div className="nb-actions">
                   {notice.link && (
                     <button type="button" className="nb-primary" onClick={() => go(notice)}>{notice.link_label || '開く'}</button>
+                  )}
+                  {notice.help && findArticle(notice.help) && (
+                    <button type="button" className="nb-text" onClick={() => { setOpen(false); navigate(`/help/${notice.help}`) }}>
+                      ヘルプ
+                    </button>
                   )}
                   <select aria-label="あとで知らせる" value="" disabled={busy}
                     onChange={e => {
