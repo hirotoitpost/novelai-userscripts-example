@@ -19,25 +19,41 @@ router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 _ADMIN_PAGES = {"admin"}
 
 
+def _is_admin(request: Request) -> bool:
+    """LAN の中の管理者か(開発管理者のページと同じ条件)。"""
+    from ..sessions import require_admin
+    from .admin import require_lan
+
+    try:
+        require_lan(request)
+        require_admin(request)
+    except HTTPException:
+        return False
+    return True
+
+
 def _visible_page(request: Request, page: str) -> str:
     """管理者だけの案内は、LAN の中の管理者にだけ出す(それ以外は、そのほかのページの案内)。"""
-    if page in _ADMIN_PAGES:
-        from ..sessions import require_admin
-        from .admin import require_lan
-
-        try:
-            require_lan(request)
-            require_admin(request)
-        except HTTPException:
-            return ""
+    if page in _ADMIN_PAGES and not _is_admin(request):
+        return ""
     return page
 
 
+def _params(request: Request, page: str, story_id: int, character_id: int) -> dict[str, str]:
+    return {
+        "page": page,
+        "story_id": str(story_id),
+        "character_id": str(character_id),
+        # ホームの案内に、バックアップ(サーバー全体)を入れてよいか
+        "is_admin": "1" if _is_admin(request) else "0",
+    }
+
+
 @router.get("/guide")
-async def get_guide(request: Request, page: str = "", story_id: int = 0) -> dict[str, Any]:
-    """今のページ(と開いている物語)の「次の操作」。"""
+async def get_guide(request: Request, page: str = "", story_id: int = 0, character_id: int = 0) -> dict[str, Any]:
+    """今のページ(と開いている物語・キャラ)の「次の操作」。"""
     page = _visible_page(request, page)
-    return await asyncio.to_thread(assistant.guide, page, {"page": page, "story_id": str(story_id)})
+    return await asyncio.to_thread(assistant.guide, page, _params(request, page, story_id, character_id))
 
 
 class ChatRequest(BaseModel):
@@ -45,6 +61,7 @@ class ChatRequest(BaseModel):
     history: list[help_route.ChatTurn] = Field(default_factory=list, max_length=12)
     page: str = Field("", max_length=50)
     story_id: int = 0
+    character_id: int = 0
     engine: Literal["default", "auto", "ollama", "novelai"] = "default"
 
 
@@ -52,7 +69,7 @@ class ChatRequest(BaseModel):
 async def post_chat(req: ChatRequest, request: Request, authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
     """汎用のチャット(読むだけ)。今のページの状況とヘルプの記事を渡して、文章モデルに答えさせる。"""
     page = _visible_page(request, req.page)
-    guide_data = await asyncio.to_thread(assistant.guide, page, {"page": page, "story_id": str(req.story_id)})
+    guide_data = await asyncio.to_thread(assistant.guide, page, _params(request, page, req.story_id, req.character_id))
     articles = help_chat.pick(req.message, help_chat.load_articles(), guide_data.get("help") or None, limit=2)
     api_key = await help_route.novelai_key(authorization)
     engine = help_chat.choose_engine(req.engine, app_settings.get("assistant.chat_model"), bool(api_key))

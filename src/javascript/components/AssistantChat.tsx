@@ -31,9 +31,10 @@ function loadTurns(): Turn[] {
   }
 }
 
-export default function AssistantChat({ page, storyId, onNavigate }: {
+export default function AssistantChat({ page, storyId, characterId, onNavigate }: {
   page: string
   storyId: number
+  characterId: number
   onNavigate: (href: string) => void
 }) {
   const { token } = useAuth()
@@ -67,7 +68,7 @@ export default function AssistantChat({ page, storyId, onNavigate }: {
     setTurns(list => [...list, { role: 'user', content: text }])
     try {
       const res = await apiFetch<{ answer: string; engine: string }>(token, '/api/assistant/chat', {
-        message: text, history, page, story_id: storyId, engine,
+        message: text, history, page, story_id: storyId, character_id: characterId, engine,
       })
       setTurns(list => [...list, { role: 'assistant', content: res.answer, engine: res.engine }])
       setFresh(res.answer)

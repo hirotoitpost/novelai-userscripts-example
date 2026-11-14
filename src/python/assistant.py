@@ -254,13 +254,163 @@ def _admin_guide(params: dict[str, str]) -> Guide:
     return Guide(title="バックアップ", summary=f"次は「{todo[0].label}」です。" if todo else "バックアップは順調です。", steps=steps, help="backup")
 
 
+# ---- キャラ ----
+
+
+def _character_images_link(character_id: int, anchor: str = "") -> str:
+    return f"/character-images?character={character_id}" + (f"#{anchor}" if anchor else "")
+
+
+@guide_for("characters")
+def _characters_guide(params: dict[str, str]) -> Guide:
+    conn = get_connection()
+    try:
+        characters = db.list_characters(conn)
+    finally:
+        conn.close()
+    if not characters:
+        return Guide(title="キャラ一覧", summary="まだキャラがいません。", help="characters", steps=[
+            Step("none", "キャラを作る", "todo", "物語の「登場人物を抽出」や、データセットのキャラシートから作れます。", "/story", "物語 → 漫画へ", "characters"),
+        ])
+    steps = [Step("count", "キャラ", "info", f"{len(characters)} 人います。「参照画像: なし」で、参照画像の無いキャラだけを出せます。")]
+    no_ref = [c for c in characters if not c.get("reference_image_path")]
+    if no_ref:
+        names = "、".join(c["name"] for c in no_ref[:8]) + (f" ほか {len(no_ref) - 8} 人" if len(no_ref) > 8 else "")
+        # 抽出で作られた端役のキャラも多いので、急ぎの「注意」ではなく「参考」にする
+        steps.append(Step("references", "参照画像を決める", "info",
+                          f"参照画像の無いキャラ: {names}。漫画のキャラ参照や、見た目をそろえるのに使います。",
+                          _character_images_link(no_ref[0]["id"]), f"{no_ref[0]['name']} の画像へ", "character-images"))
+    else:
+        steps.append(Step("references", "参照画像を決める", "done", "全員に参照画像があります。"))
+    with_ref = [c for c in characters if c.get("reference_image_path")]
+    no_back = [c for c in with_ref if not c.get("back_reference_image_path")]
+    if with_ref and no_back:
+        steps.append(Step("back", "後ろ姿の参照", "info",
+                          f"後ろ姿の参照が無いキャラが {len(no_back)} 人います。後ろ姿のコマを描くときだけ要ります(無ければ正面の参照を弱めて使います)。",
+                          "", "", "manga-characters"))
+    todo = [s for s in steps if s.status in ("todo", "warn")]
+    summary = f"次は「{todo[0].label}」です。" if todo else (
+        f"参照画像の無いキャラが {len(no_ref)} 人います。漫画に出すキャラから決めてください。" if no_ref else "キャラの準備はそろっています。")
+    return Guide(title="キャラ一覧", summary=summary,
+                 steps=steps, help="characters")
+
+
+@guide_for("character-images")
+def _character_images_guide(params: dict[str, str]) -> Guide:
+    from . import character_images
+
+    character_id = int(params.get("character_id") or 0)
+    if character_id <= 0:
+        return Guide(title="生成した画像", summary="上でキャラを選ぶと、そのキャラの画像と次の操作を案内します。", help="character-images", steps=[
+            Step("choose", "キャラを選ぶ", "todo", "上の「キャラを選ぶ」から選んでください。", "", "", "character-images"),
+        ])
+    conn = get_connection()
+    try:
+        character = db.get_character(conn, character_id)
+    finally:
+        conn.close()
+    if character is None:
+        return Guide(title="キャラが見つかりません", summary="キャラを選び直してください。", help="character-images")
+    items = character_images.collect(character)
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["kind"]] = counts.get(item["kind"], 0) + 1
+    steps: list[Step] = []
+    if character.get("reference_image_path"):
+        steps.append(Step("reference", "参照画像", "done", "決まっています。ほかの画像を拡大して「参照画像にする」で選び直せます。", "", "", "character-images"))
+    elif items:
+        steps.append(Step("reference", "参照画像を決める", "todo",
+                          f"まだありません。下の画像({len(items)} 枚)を押して拡大し、「参照画像にする」を押してください。",
+                          "", "", "character-images"))
+    else:
+        steps.append(Step("reference", "参照画像を決める", "todo",
+                          "まだ画像がありません。物語の「登場人物をそろえる(参照画像も)」で候補を作るか、画像生成で作ってこのキャラに関連付けてください。",
+                          "/story", "物語 → 漫画へ", "manga-characters"))
+    if character.get("reference_image_path") and not character.get("back_reference_image_path"):
+        steps.append(Step("back", "後ろ姿の参照", "info", "ありません。後ろ姿のコマを描くときだけ要ります。漫画 v2 の「キャラ参照」で、コマの絵から選べます。",
+                          "", "", "manga-characters"))
+    summary_kinds = "・".join(f"{character_images.KINDS.get(k, k)} {n}" for k, n in counts.items())
+    if summary_kinds:
+        steps.append(Step("images", "画像", "info", f"{summary_kinds} 枚。種類のボタンで絞り込めます。"))
+    candidates = counts.get("candidate", 0)
+    if character.get("reference_image_path") and candidates:
+        steps.append(Step("cleanup", "使わない候補を片付ける", "info",
+                          f"参照画像の候補が {candidates} 枚あります。もう使わなければ「古い画像の整理」でごみ箱へ移せます(30日は戻せます)。",
+                          _character_images_link(character_id, "image-cleanup"), "古い画像の整理へ", "character-images"))
+    todo = [s for s in steps if s.status in ("todo", "warn")]
+    return Guide(title=f"{character['name']} の画像", summary=f"次は「{todo[0].label}」です。" if todo else "参照画像は決まっています。",
+                 steps=steps, help="character-images")
+
+
+# ---- ホーム(全体の案内) ----
+
+
+def _stories_in_progress(limit: int = 3) -> list[dict[str, Any]]:
+    """やりかけの漫画(コマが残っている・まだ合成していない)。新しい物語から。"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.title, s.premise, s.final_image_path,
+                   (SELECT COUNT(*) FROM story_scenes x WHERE x.story_id = s.id) AS scenes,
+                   (SELECT COUNT(DISTINCT p.scene_id) FROM manga_panels p WHERE p.story_id = s.id) AS drawn
+            FROM stories s ORDER BY s.id DESC LIMIT 40
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    found = []
+    for row in rows:
+        if not row["scenes"] or not row["drawn"]:
+            continue
+        if row["drawn"] < row["scenes"] or not row["final_image_path"]:
+            found.append(dict(row))
+        if len(found) >= limit:
+            break
+    return found
+
+
+@guide_for("home")
+def _home_guide(params: dict[str, str]) -> Guide:
+    steps: list[Step] = []
+    for story in _stories_in_progress():
+        title = story["title"] or (story["premise"] or "").splitlines()[0][:24] or f"物語 {story['id']}"
+        left = story["scenes"] - story["drawn"]
+        detail = f"未生成 {left} コマ(全 {story['scenes']} コマ)。" if left else "コマは全部あります。まだページを合成していません。"
+        steps.append(Step(f"story:{story['id']}", f"漫画の続き: {title}", "todo", detail,
+                          _story_link(story["id"], "manga-v2"), "続きを開く", "manga"))
+    conn = get_connection()
+    try:
+        no_ref = [c for c in db.list_characters(conn) if not c.get("reference_image_path")]
+    finally:
+        conn.close()
+    if no_ref:
+        steps.append(Step("characters", "参照画像の無いキャラ", "info", f"{len(no_ref)} 人います。", "/characters", "キャラ一覧へ", "characters"))
+    if params.get("is_admin") == "1":
+        from . import notices
+
+        backup_steps = [st for st in _admin_guide(params).steps if st.status in ("todo", "warn")]
+        warnings = [n for n in notices.collect() if n.level != "info"]
+        if backup_steps:
+            first = backup_steps[0]
+            steps.append(Step("backup", f"バックアップ: {first.label}", "warn", first.detail, first.action, first.action_label, first.help))
+        elif warnings:
+            steps.append(Step("notices", "お知らせ", "warn", f"対応が要るお知らせが {len(warnings)} 件あります(右下のベル)。", "", "", "notices"))
+        else:
+            steps.append(Step("backup", "バックアップ", "done", "順調です。", "/admin?tab=ops#data-backup", "バックアップの欄へ", "backup"))
+    todo = [s for s in steps if s.status in ("todo", "warn")]
+    return Guide(title="ホーム", summary=f"やりかけの作業が {len(todo)} つあります。" if todo else "やりかけの作業はありません。",
+                 steps=steps, help="assistant")
+
+
 # ---- そのほかのページ ----
 
 PAGE_HELP = {
-    "characters": ("キャラ一覧", "manga-characters"),
-    "character-images": ("キャラの生成した画像", "storage"),
-    "help": ("ヘルプ", "notices"),
-    "home": ("ホーム", "manga"),
+    "help": ("ヘルプ", "assistant"),
+    "gallery": ("ギャラリー", "character-images"),
+    "generate": ("画像生成", "character-images"),
+    "bookshelf": ("本棚", "manga-compose"),
+    "trash": ("ごみ箱", "storage"),
 }
 
 
@@ -268,8 +418,9 @@ def _default_guide(params: dict[str, str]) -> Guide:
     page = params.get("page", "")
     name, slug = PAGE_HELP.get(page, ("このページ", ""))
     steps = [
+        Step("home", "やりかけの作業を見る", "info", "ホームで、続きの漫画や参照画像の無いキャラなどをまとめて案内します。", "/", "ホームへ", "assistant"),
         Step("manga", "漫画を作る・続きを描く", "info", "物語を開くと、進み具合と次の一手を案内します。", "/story", "物語 → 漫画へ", "manga"),
-        Step("backup", "バックアップの様子を見る", "info", "写し先・前回のバックアップ・空きの見込みを案内します。", "/admin?tab=ops#data-backup", "バックアップの欄へ", "backup"),
+        Step("characters", "キャラを整える", "info", "参照画像の無いキャラなどを案内します。", "/characters", "キャラ一覧へ", "characters"),
     ]
     return Guide(title=name, summary="このページの案内はまだありません。よく使う作業から選べます。", steps=steps, help=slug)
 

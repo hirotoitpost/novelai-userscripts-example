@@ -1,3 +1,4 @@
+import HelpLink from '../components/HelpLink'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import BackButton, { backState } from '../components/BackButton'
@@ -261,7 +262,7 @@ export default function Characters() {
     <div className="chars-root">
       <header className="chars-header">
         <BackButton className="chars-back" />
-        <h1>キャラ一覧</h1>
+        <h1>キャラ一覧<HelpLink slug="characters" /></h1>
         <span className="chars-count">
           {loading ? '読み込み中…' : `${shown.length} / ${characters.length} 人`}
           {folded > 0 && `(成長段階 ${folded} 件をたたんでいます)`}
