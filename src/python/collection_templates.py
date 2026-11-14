@@ -276,6 +276,10 @@ WET = "wet skin, water droplets, glistening skin"
 NO_FOAM = "foam, bubbles, soap suds"
 # 四つんばいで膝が浮いて、立って脚を開く絵になるのを打ち消す(下からの視点 from below でも起きる)
 KNEES_DOWN_NEGATIVE = "standing, straight legs, bent over, standing split"
+# 参照画像(服を着たキャラシート)の服の色が肌に移り、肌が赤・橙・黒の一色になる絵を打ち消す(物語301 2026-11-14)
+SKIN_NEGATIVE = "red skin, orange skin, black skin, colored skin, uneven skin color, bodysuit, latex"
+# 見出しの寝室が、瓶・本の散らかった部屋にならないように("messy bed" で部屋ごと散らかった)
+CLUTTER_NEGATIVE = "clutter, messy room, bottles, books, trash, papers on floor"
 
 
 @dataclass(frozen=True)
@@ -307,6 +311,8 @@ class NudeSet:
     hair_down: bool = False
     wet: bool = False
     negative: str = ""
+    # 見出しの風景のコマだけのネガティブ
+    heading_negative: str = ""
 
 
 NUDE_SETS = (
@@ -343,7 +349,7 @@ NUDE_SETS = (
             NudePose("all_fours_front", "四つんばい(正面から這い寄る)",
                      "all fours, crawling towards viewer, on hands and knees, hanging breasts, seductive smile, "
                      "looking at viewer", "full body, from front", "そっちまで、行っちゃうよ？", outfit="featureless breasts",
-                     negative="red skin, pink skin, uneven skin color"),
+                     negative="pink skin"),
             NudePose("all_fours_back", "四つんばい(後ろ姿・振り返る)",
                      "all fours, on hands and knees, from behind, ass, arched back, looking back over shoulder, "
                      "teasing smile, blush", "full body, from behind", "後ろからも、撮るの？",
@@ -366,7 +372,7 @@ NUDE_SETS = (
         ),
     ),
     NudeSet(
-        "朝のベッド", "bedroom, white bed sheets, morning, sunlight through curtains", "messy bed",
+        "朝のベッド", "bedroom, white bed sheets, morning, sunlight through curtains", "unmade bed, tidy bedroom",
         (
             NudePose("bed_stomach", "うつぶせの寝起き",
                      "lying on stomach, on bed, chin on arms, sleepy smile, half-closed eyes, looking at viewer",
@@ -381,7 +387,7 @@ NUDE_SETS = (
                      "lying on back, on bed, one arm over chest, legs together, knees bent to side, hair spread out, "
                      "dreamy smile, looking at viewer", "full body, from above", "二度寝、しちゃおっかな"),
         ),
-        hair_down=True,
+        hair_down=True, heading_negative=CLUTTER_NEGATIVE,
     ),
     NudeSet(
         "窓辺の光", "large window, sheer white curtains, sunlight, light rays",
@@ -451,7 +457,7 @@ def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) ->
     if not plan:
         raise ValueError("撮影場所・ポーズが1つもありません。")
     art = "art nude, fine art photography, gravure, photoshoot"
-    base_negative = _join(content_guard.text("collection.nude_negative"), HAND_NEGATIVE)
+    base_negative = _join(content_guard.text("collection.nude_negative"), HAND_NEGATIVE, SKIN_NEGATIVE)
     ids = [int(c["id"]) for c in characters]
     names = "・".join(str(c["name"]) for c in characters)
     group = "solo" if len(ids) == 1 else "standing side by side"
@@ -470,7 +476,7 @@ def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) ->
     ))
     for nude_set, poses in plan:
         scenes.append(_scene(_join(nude_set.stage, nude_set.scenery, "no humans, scenery", options.style_tags), [], {}, {},
-                             base_negative, narration=nude_set.name))
+                             _join(base_negative, nude_set.heading_negative), narration=nude_set.name))
         for pose in poses:
             for i, cid in enumerate(ids):
                 negative = _join(
