@@ -1,3 +1,4 @@
+import HelpLink from '../components/HelpLink'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import FullscreenViewer from '../components/FullscreenViewer'
@@ -5,6 +6,7 @@ import ImagePreview from '../components/ImagePreview'
 import RegionRedrawTool from '../components/RegionRedrawTool'
 import WholeEnhance from '../components/WholeEnhance'
 import { useAuth } from '../context/AuthContext'
+import { refreshAssistant, useAssistantContext } from '../assistantContext'
 import { prepareGenerateFromImage } from '../generateFromImage'
 import { API_ORIGIN, fileUrl, formatDate, getJson, readErrorDetail, thumbUrl } from '../library'
 import './Publications.css'
@@ -77,6 +79,8 @@ export default function CharacterImages() {
   const [sending, setSending] = useState(false)
   const [params, setParams] = useSearchParams()
   const characterId = Number(params.get('character')) || null
+  // 作業アシスタントに、選んでいるキャラを伝える
+  useAssistantContext({ characterId })
   const [characters, setCharacters] = useState<Character[]>([])
   const [data, setData] = useState<ImagesResponse | null>(null)
   const [kindFilter, setKindFilter] = useState<string>('all')
@@ -109,6 +113,8 @@ export default function CharacterImages() {
     try {
       setData(await getJson<ImagesResponse>(`/api/character-images/${characterId}`))
       setError(null)
+      // 参照画像を選び直した・片付けたあとは、作業アシスタントの案内も読み直す
+      refreshAssistant()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -248,7 +254,7 @@ export default function CharacterImages() {
     <div className="pub-root">
       <header className="pub-header">
         <button type="button" className="pub-link" onClick={() => navigate('/characters')}>← キャラ一覧</button>
-        <h1>生成した画像</h1>
+        <h1>生成した画像<HelpLink slug="character-images" /></h1>
         <select
           className="cimg-select"
           value={characterId ?? ''}
@@ -311,7 +317,7 @@ export default function CharacterImages() {
         {characterId === null && <p className="pub-hint">上でキャラを選ぶと、そのキャラの画像が並びます。下の整理は、キャラを選ばなくても全体に使えます。</p>}
 
         <section className="cimg-section cimg-cleanup">
-          <h2>古い画像の整理</h2>
+          <h2 id="image-cleanup">古い画像の整理</h2>
           <p className="pub-hint">
             選んだ種類のうち、指定した日数より前の画像を探して、ごみ箱へ移します(30日のあいだは元に戻せます。ディスクが空くのは、ごみ箱から消したときです)。
             いまの参照画像・いまのコマ・ブックマークした生成履歴は片付けません。

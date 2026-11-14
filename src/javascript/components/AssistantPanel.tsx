@@ -91,6 +91,7 @@ export default function AssistantPanel() {
   const spokenNext = useRef<string | null | undefined>(undefined)
   const page = pageOf(location.pathname)
   const storyId = context.storyId ?? 0
+  const characterId = context.characterId ?? 0
   const visible = isAuthenticated && location.pathname !== '/login'
 
   // 広い画面では、ページを左に寄せて横に並べる
@@ -103,12 +104,12 @@ export default function AssistantPanel() {
   const load = useCallback(async () => {
     if (!token) return
     try {
-      setGuide(await apiFetch<Guide>(token, `/api/assistant/guide?page=${encodeURIComponent(page)}&story_id=${storyId}`))
+      setGuide(await apiFetch<Guide>(token, `/api/assistant/guide?page=${encodeURIComponent(page)}&story_id=${storyId}&character_id=${characterId}`))
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [token, page, storyId])
+  }, [token, page, storyId, characterId])
 
   useEffect(() => {
     if (!visible || !open || tab !== 'guide') return
@@ -134,7 +135,8 @@ export default function AssistantPanel() {
     const url = new URL(link, window.location.origin)
     const samePage = url.pathname === location.pathname
     const sameStory = !url.searchParams.get('story') || Number(url.searchParams.get('story')) === storyId
-    if (samePage && sameStory) {
+    const sameCharacter = !url.searchParams.get('character') || Number(url.searchParams.get('character')) === characterId
+    if (samePage && sameStory && sameCharacter) {
       scrollToAnchor(url.hash.slice(1))
     } else {
       navigate(`${url.pathname}${url.search}${url.hash}`)
@@ -214,7 +216,7 @@ export default function AssistantPanel() {
             )}
           </>
         )}
-        {tab === 'chat' && <AssistantChat page={page} storyId={storyId} onNavigate={go} />}
+        {tab === 'chat' && <AssistantChat page={page} storyId={storyId} characterId={characterId} onNavigate={go} />}
         {tab === 'help' && <HelpChat current={guide?.help || undefined} />}
       </div>
     </aside>

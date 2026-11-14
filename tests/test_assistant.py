@@ -121,7 +121,69 @@ def test_backup_guide(root: Path, tmp_path: Path) -> None:
 
 def test_other_pages_get_a_default_guide(root: Path) -> None:
     guide = assistant.guide("gallery", {"page": "gallery"})
-    assert guide["next"] is None and {s["key"] for s in guide["steps"]} == {"manga", "backup"}
+    assert guide["next"] is None and {s["key"] for s in guide["steps"]} == {"home", "manga", "characters"}
+    assert guide["help"] == "character-images"
+
+
+def _character(name: str, reference: str | None = None) -> dict:
+    conn = db.get_connection()
+    try:
+        character = db.save_character(conn, name, "1girl")
+        if reference:
+            conn.execute("UPDATE characters SET reference_image_path = ? WHERE id = ?", (reference, character["id"]))
+            conn.commit()
+        return db.get_character(conn, character["id"])
+    finally:
+        conn.close()
+
+
+def test_characters_guide(root: Path) -> None:
+    assert assistant.guide("characters", {"page": "characters"})["next"] == "none"
+    mio = _character("みお")
+    _character("ゆら", "outputs/manga/refs/char2_aa.png")
+    steps = _steps(assistant.guide("characters", {"page": "characters"}))
+    assert steps["references"]["status"] == "info" and "みお" in steps["references"]["detail"]
+    assert steps["references"]["action"] == f"/character-images?character={mio['id']}"
+    assert "1 人" in steps["back"]["detail"]
+
+
+def test_character_images_guide(root: Path) -> None:
+    assert assistant.guide("character-images", {"page": "character-images"})["next"] == "choose"
+    mio = _character("みお")
+    guide = assistant.guide("character-images", {"page": "character-images", "character_id": str(mio["id"])})
+    assert guide["title"] == "みお の画像" and guide["next"] == "reference"
+    assert "まだ画像がありません" in _steps(guide)["reference"]["detail"]
+    # 候補があり、参照画像も決まった → 候補の片付けを案内
+    candidates = root / "outputs" / "manga" / "refs" / "candidates"
+    candidates.mkdir(parents=True)
+    for i in range(2):
+        (candidates / f"char{mio['id']}_{i}_ab{i}.png").write_bytes(b"png")
+    conn = db.get_connection()
+    try:
+        conn.execute("UPDATE characters SET reference_image_path = ? WHERE id = ?",
+                     (f"outputs/manga/refs/candidates/char{mio['id']}_0_ab0.png", mio["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+    steps = _steps(assistant.guide("character-images", {"page": "character-images", "character_id": str(mio["id"])}))
+    assert steps["reference"]["status"] == "done"
+    assert steps["cleanup"]["action"].endswith("#image-cleanup") and "2 枚" in steps["cleanup"]["detail"]
+
+
+def test_home_guide(root: Path, tmp_path: Path) -> None:
+    story_id, scenes = _story(3)
+    conn = db.get_connection()
+    try:
+        db.upsert_manga_panel(conn, story_id, scenes[0], "outputs/manga/v2/p.png", 1, 832, 1216)
+    finally:
+        conn.close()
+    _character("みお")
+    guide = assistant.guide("home", {"page": "home", "is_admin": "0"})
+    steps = _steps(guide)
+    assert guide["next"] == f"story:{story_id}" and "未生成 2 コマ" in steps[f"story:{story_id}"]["detail"]
+    assert "characters" in steps and "backup" not in steps  # 管理者でなければバックアップは出さない
+    steps = _steps(assistant.guide("home", {"page": "home", "is_admin": "1"}))
+    assert steps["backup"]["status"] == "warn"  # 写し先が未設定
 
 
 def test_api_hides_admin_guide_outside_lan(root: Path) -> None:

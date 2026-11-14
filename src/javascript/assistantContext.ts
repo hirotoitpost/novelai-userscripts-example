@@ -8,6 +8,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 
 export interface AssistantContext {
   storyId?: number | null
+  characterId?: number | null
 }
 
 let current: AssistantContext = {}
