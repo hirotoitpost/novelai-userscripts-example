@@ -467,6 +467,18 @@ FACE_DIZZY = "1.3::rolling eyes::, dizzy, blush, open mouth"
 CROTCH_NEGATIVE = "red mark, vulva, slit, cleft of venus, crotch seam"
 # お尻を後ろに突き出す(全身で、足先まで)
 HIPS_BACK = "bent forward, pushing hips back, arched back, ass, from behind, looking back over shoulder"
+# がに股スクワット・I字バランス(視点違いで何コマか使うので、ポーズだけを定数に。視点は各コマで足す)
+SUMO_SQUAT = (
+    "1.3::sumo squat::, plie squat, wide stance, feet apart, toes pointing outward, 1.2::knees bent outward::, "
+    "hands on knees, straight back, morning exercise"
+)
+# 正面下からだと、下腹に口のようなピンクの印が出た(物語303)
+SQUAT_NEGATIVE = f"{CROTCH_NEGATIVE}, {NUDE_CROP_NEGATIVE}, kneeling, sitting, pink mark, mouth on body, mark on belly"
+I_BALANCE = (
+    "1.4::standing split::, i-balance, one leg raised straight up, holding raised leg with hand, "
+    "standing on one leg, flexible, ballet pose"
+)
+BALANCE_NEGATIVE = f"{CROTCH_NEGATIVE}, {NUDE_CROP_NEGATIVE}, lying, sitting"
 
 # 旅する素肌(2つ目のヌード写真集。物語302・303 で試作 2026-11-14)
 NUDE2_SETS = (
@@ -496,10 +508,25 @@ NUDE2_SETS = (
               "cowboy shot, from above", "……なに、じっと見て"),
             # がに股スクワット(ユーザーの依頼): 足を大きく開き、膝を外へ向けて腰を落とす。正面から
             NudePose("washitsu_squat", "がに股スクワット(朝のストレッチ)",
-              "1.3::sumo squat::, plie squat, wide stance, feet apart, toes pointing outward, 1.2::knees bent outward::, "
-              "hands on knees, straight back, morning exercise, determined, puffed cheeks, blush",
+              f"{SUMO_SQUAT}, determined, puffed cheeks, blush",
               f"{WHOLE_BODY}, from front", "ん〜っ、効く……！", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
-              negative=f"{CROTCH_NEGATIVE}, {NUDE_CROP_NEGATIVE}, kneeling, sitting"),
+              negative=SQUAT_NEGATIVE),
+            # がに股スクワットを視点違いで(ユーザーの依頼 2026-11-14): 正面下から・背面・背面下から・側面
+            NudePose("washitsu_squat_front_low", "がに股スクワット(正面下から)",
+              f"{SUMO_SQUAT}, determined, blush, looking down at viewer",
+              f"{WHOLE_BODY}, from front, {NUDE_LOW_ANGLE}", "し、下から撮らないで……！",
+              outfit=f"barefoot, {FEATURELESS}", open_legs=True, negative=SQUAT_NEGATIVE),
+            NudePose("washitsu_squat_back", "がに股スクワット(背面)",
+              f"{SUMO_SQUAT}, from behind, facing away, back, ass", f"{WHOLE_BODY}, from behind",
+              "背中から見ると、どう？", outfit="barefoot, bare back, ass, featureless crotch", open_legs=True,
+              face_away=True, negative=SQUAT_NEGATIVE),
+            NudePose("washitsu_squat_back_low", "がに股スクワット(背面下から)",
+              f"{SUMO_SQUAT}, from behind, facing away, back, ass", f"{WHOLE_BODY}, from behind, {NUDE_LOW_ANGLE}",
+              "そ、そこから撮るの……？", outfit="barefoot, bare back, ass, featureless crotch", open_legs=True,
+              face_away=True, negative=SQUAT_NEGATIVE),
+            NudePose("washitsu_squat_side", "がに股スクワット(側面)",
+              f"{SUMO_SQUAT}, from side, profile, determined, blush", f"{WHOLE_BODY}, from side",
+              "フォーム、きれいでしょ", outfit=f"barefoot, {FEATURELESS}", open_legs=True, negative=SQUAT_NEGATIVE),
         ),
     ),
     # 2. 森の泉: 岩・石段・滝。下からの構図を多めに(岩の上でしゃがむ・石段でしゃがむ・仁王立ち)
@@ -559,11 +586,23 @@ NUDE2_SETS = (
               f"paint on body, paint on hands, holding paintbrush, kneeling on floor, {FACE_EXCITED}",
               "cowboy shot, from above", "えへ、汚れちゃった！", outfit=f"paint smears on skin, {FEATURELESS}"),
             # I字バランス(ユーザーの依頼): 片脚で立ち、もう片方の脚を真上へ上げて手で支える。横から
-            NudePose("atelier_i_balance", "I字バランス",
-              "1.4::standing split::, i-balance, one leg raised straight up, holding raised leg with hand, "
-              "standing on one leg, flexible, ballet pose, from side, proud smile, looking at viewer",
+            NudePose("atelier_i_balance", "I字バランス(側面)",
+              f"{I_BALANCE}, from side, proud smile, looking at viewer",
               f"{WHOLE_BODY}, from side", "体のやわらかさ、自信あるの", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
-              negative=f"{CROTCH_NEGATIVE}, {NUDE_CROP_NEGATIVE}, lying, sitting"),
+              negative=BALANCE_NEGATIVE),
+            # I字バランスを視点違いで(ユーザーの依頼 2026-11-14): 正面下から・背面・背面下から(側面は上)
+            NudePose("atelier_i_balance_front_low", "I字バランス(正面下から)",
+              f"{I_BALANCE}, from front, proud smile, looking down at viewer",
+              f"{WHOLE_BODY}, from front, {NUDE_LOW_ANGLE}", "見上げると、迫力あるでしょ",
+              outfit=f"barefoot, {FEATURELESS}", open_legs=True, negative=BALANCE_NEGATIVE),
+            NudePose("atelier_i_balance_back", "I字バランス(背面)",
+              f"{I_BALANCE}, from behind, facing away, back, ass", f"{WHOLE_BODY}, from behind",
+              "後ろ姿も、バレリーナ", outfit="barefoot, bare back, ass, featureless crotch", open_legs=True,
+              face_away=True, negative=BALANCE_NEGATIVE),
+            NudePose("atelier_i_balance_back_low", "I字バランス(背面下から)",
+              f"{I_BALANCE}, from behind, facing away, back, ass", f"{WHOLE_BODY}, from behind, {NUDE_LOW_ANGLE}",
+              "……ぐらぐらしてきた", outfit="barefoot, bare back, ass, featureless crotch", open_legs=True,
+              face_away=True, negative=BALANCE_NEGATIVE),
         ),
     ),
     # 4. 夜景のペントハウス: 窓・ソファ。ガラスに映る姿・ほろ酔いで目が回る・仁王立ち(下から)
