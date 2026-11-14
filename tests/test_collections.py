@@ -161,6 +161,11 @@ def test_api_makes_a_story_only_with_adult_characters(client: TestClient) -> Non
     assert client.post("/api/collections", json={"kind": "tease_swimsuit", "character_ids": [minor]}).status_code == 422
 
 
+def solo_scenes(scenes: list[dict]) -> list[dict]:
+    """最初と最後のみんなのコマ・見出しの風景のコマを除いた、一人ずつのコマ。"""
+    return [s for s in scenes[1:-1] if s["character_ids"]]
+
+
 def test_nude_photobook_sets_poses_and_content_line() -> None:
     from python.collection_templates import NUDE_SETS
 
@@ -178,6 +183,16 @@ def test_nude_photobook_sets_poses_and_content_line() -> None:
         assert "explicit" not in s["prompt_tags"]
         # 参照画像の服の色が肌に移る(赤・橙・黒の一色の肌)のを打ち消す
         assert "orange skin" in negative and "black skin" in negative
+    # 腹筋の割れを抑え、なめらかなお腹にする(キャラシートの体型は外せないので)
+    for s in solo_scenes(scenes):
+        cid = s["character_ids"][0]
+        assert "1.3::abs::" in s["negative_prompt"] and "smooth stomach" in s["character_outfits"][cid]
+    # 下半身の影を打ち消し、肌を均一に明るく。逆光・シルエットのコマは影がわざと付くので足さない
+    for s in solo_scenes(scenes):
+        backlit = "silhouette" in s["prompt_tags"] or "backlighting" in s["prompt_tags"]
+        assert ("even lighting" in s["prompt_tags"]) is not backlit
+        assert ("shaded legs" in s["negative_prompt"]) is not backlit
+    assert any("silhouette" in s["prompt_tags"] for s in solo_scenes(scenes))
     # 寝室の見出しは散らかった部屋にしない
     bed_heading = next(s for s in scenes if s["narration"] == "朝のベッド")
     assert "messy bed" not in bed_heading["prompt_tags"] and "clutter" in bed_heading["negative_prompt"]
