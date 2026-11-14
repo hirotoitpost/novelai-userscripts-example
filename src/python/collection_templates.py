@@ -278,6 +278,13 @@ NO_FOAM = "foam, bubbles, soap suds"
 KNEES_DOWN_NEGATIVE = "standing, straight legs, bent over, standing split"
 # 参照画像(服を着たキャラシート)の服の色が肌に移り、肌が赤・橙・黒の一色になる絵を打ち消す(物語301 2026-11-14)
 SKIN_NEGATIVE = "red skin, orange skin, black skin, colored skin, uneven skin color, bodysuit, latex"
+# キャラシートの体型(athletic・toned)は場面で外せないので、腹筋が強く割れる絵を打ち消し、なめらかなお腹を足す
+# (しらね・あかね 物語301 2026-11-14。体型はキャラシートのまま、腹筋の割れだけを抑える)
+SOFT_BELLY = "smooth stomach, soft skin"
+ABS_NEGATIVE = "1.3::abs::, six pack, defined abs, muscle definition, ribs"
+# 下半身に濃い影が付きがち(物語301)。肌を均一に明るく描かせる。逆光・シルエットのコマには付けない
+EVEN_LIGHT = "even lighting, evenly lit skin"
+SHADOW_NEGATIVE = "dark shadow on lower body, shaded legs, dark legs, heavy shadow, gradient skin"
 # 見出しの寝室が、瓶・本の散らかった部屋にならないように("messy bed" で部屋ごと散らかった)
 CLUTTER_NEGATIVE = "clutter, messy room, bottles, books, trash, papers on floor"
 
@@ -463,30 +470,37 @@ def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) ->
     group = "solo" if len(ids) == 1 else "standing side by side"
 
     def outfit(*parts: str) -> str:
-        return _join(body, NUDE_BODY, *parts)
+        return _join(body, NUDE_BODY, SOFT_BELLY, *parts)
+
+    def light(tags: str) -> tuple[str, str]:
+        """(作画タグに足す明るさ, ネガティブに足す影の打ち消し)。逆光・シルエットのコマは影がわざと付くので足さない。"""
+        backlit = "silhouette" in tags or "backlighting" in tags
+        return ("", "") if backlit else (EVEN_LIGHT, SHADOW_NEGATIVE)
 
     scenes: list[dict[str, Any]] = []
     studio = plan[0][0]
     scenes.append(_scene(
-        _join(studio.stage, group, "upper body", art, options.style_tags), ids,
+        _join(studio.stage, group, "upper body", art, EVEN_LIGHT, options.style_tags), ids,
         {cid: "arms crossed over chest, covering breasts, shy smile, blush, looking at viewer" for cid in ids},
         {cid: outfit("featureless breasts") for cid in ids},
-        _join(base_negative, "spread legs", NUDE_CLOTHES_NEGATIVE),
+        _join(base_negative, "spread legs", NUDE_CLOTHES_NEGATIVE, ABS_NEGATIVE, SHADOW_NEGATIVE),
         narration=f"{names} {KINDS['nude']}",
     ))
     for nude_set, poses in plan:
         scenes.append(_scene(_join(nude_set.stage, nude_set.scenery, "no humans, scenery", options.style_tags), [], {}, {},
                              _join(base_negative, nude_set.heading_negative), narration=nude_set.name))
         for pose in poses:
+            tags = _join(nude_set.stage, "solo", pose.framing, art, options.style_tags)
+            bright, shadow = light(tags)
             for i, cid in enumerate(ids):
                 negative = _join(
-                    base_negative, nude_set.negative, pose.negative,
+                    base_negative, nude_set.negative, pose.negative, ABS_NEGATIVE, shadow,
                     "" if pose.open_legs else "spread legs",
                     "" if pose.prop else NUDE_CLOTHES_NEGATIVE,
                     FACE_AWAY_NEGATIVE if pose.face_away else "",
                 )
                 scene = _scene(
-                    _join(nude_set.stage, "solo", pose.framing, art, options.style_tags), [cid], {cid: pose.action},
+                    _join(tags, bright), [cid], {cid: pose.action},
                     {cid: outfit(WET if nude_set.wet else "", pose.outfit)}, negative,
                     narration=f"{nude_set.name}　{characters[i]['name']}",
                     line=(cid, pose.line) if options.lines else None,
