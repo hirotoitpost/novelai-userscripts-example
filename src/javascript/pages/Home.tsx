@@ -242,6 +242,19 @@ export default function Home() {
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
 
+          <div
+            className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/help')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/help')}
+          >
+            <div className="home-card-icon">❓</div>
+            <h2>ヘルプ</h2>
+            <p>機能ごとの手順の説明(バックアップの写し先を足す・外す、戻す、保存領域の片付け、お知らせ など)。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
           {/* multi では管理者だけ(サーバーも管理者以外は断る) */}
           {isAdmin && <div
             className="home-card home-card--available home-card--link"

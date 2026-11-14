@@ -1,5 +1,6 @@
 import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useCallback, useEffect, useState } from 'react'
+import HelpLink from './HelpLink'
 
 /**
  * 画像・作品データのバックアップ(管理ページの「操作とデータ」。/api/admin/data-backup)。
@@ -192,7 +193,7 @@ export default function DataBackup() {
   const active = state?.disks.filter(d => d.available && !d.retiring).length ?? 0
   return (
     <section className="adm-section" id="data-backup">
-      <h2>画像・作品データのバックアップ</h2>
+      <h2>画像・作品データのバックアップ<HelpLink slug="backup" /></h2>
       <p className="adm-hint">
         DB(物語・キャラ・設定・履歴)と、生成画像・漫画のコマとページ・取り込んだ作品・素材・出版物・ごみ箱を、指定したフォルダ
         (外付けドライブなど)に写します。2回目からは、増えた・変わったファイルだけを写します。モデル・フォント・評価データ
@@ -234,6 +235,9 @@ export default function DataBackup() {
       </table>
       <div className="adm-row">
         <button type="button" onClick={() => setDisks(list => [...list, { ...NEW_DISK }])}>写し先を足す</button>
+        <HelpLink slug="backup-add-disk" label="足し方" />
+        <HelpLink slug="backup-remove-disk" label="外し方" />
+        <HelpLink slug="backup-threshold" label="残す空きとは" />
         <label>置く数
           <select value={copies} onChange={e => setCopies(Number(e.target.value))} style={{ marginLeft: '0.3rem' }}>
             <option value={1}>1 か所(容量優先)</option>
