@@ -38,7 +38,9 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { keys: ['F', 'Esc'], label: '全画面を終える(ズーム中の Esc は、ズームを戻す)' },
       { keys: ['J', 'L'], label: '前 / 次(本棚の漫画は J が前のページ、L が次のページ)' },
-      { keys: ['←', '→'], label: '左 / 右の画像(漫画は ← が次のページ)' },
+      { keys: ['←', '→'], label: '左 / 右の画像(漫画は ← が次のページ)。ズーム中は範囲を動かす' },
+      { keys: ['↑', '↓'], label: 'ズーム中: 範囲を上 / 下へ動かす' },
+      { keys: ['Shift + 矢印'], label: 'ズーム中: 範囲を大きく動かす' },
       { keys: ['+', '-'], label: 'ズームする / 戻す' },
       { keys: ['0'], label: 'ズームを戻す' },
     ],

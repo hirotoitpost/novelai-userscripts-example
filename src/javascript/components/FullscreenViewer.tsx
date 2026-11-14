@@ -58,6 +58,16 @@ const TAP_SLOP = 10
 /** 2回のタップがこの時間内ならダブルタップ(ズームの切り替え) */
 const DOUBLE_TAP_MS = 260
 const MIN_SCALE = 1
+/** ズーム中に矢印キーで動かす量(画面の幅・高さに対する割合)。Shift を押しながらだと大きく動かす */
+const PAN_STEP = 1 / 8
+const PAN_STEP_LARGE = 1 / 2
+/** 矢印キー → 見たい向き(x: 右が +、y: 下が +) */
+const PAN_KEYS: Record<string, [number, number]> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+}
 const MAX_SCALE = 5
 const DOUBLE_TAP_SCALE = 2.5
 /** 惰性: 指を離す直前のこの時間の動きから速さを決める */
@@ -280,6 +290,15 @@ export default function FullscreenViewer({
         // ズーム中はまずズームを戻す
         if (viewRef.current.scale > MIN_SCALE) applyView(FIT)
         else onClose()
+      } else if (viewRef.current.scale > MIN_SCALE && e.key in PAN_KEYS) {
+        // ズーム中は、矢印キーで見ている範囲を動かす(Shift で大きく)。→ で右側が見えるよう、絵は左へ動かす
+        const [dx, dy] = PAN_KEYS[e.key]
+        const ratio = e.shiftKey ? PAN_STEP_LARGE : PAN_STEP
+        const width = rootRef.current?.clientWidth ?? window.innerWidth
+        const height = rootRef.current?.clientHeight ?? window.innerHeight
+        const view = viewRef.current
+        applyView(clamp({ ...view, x: view.x - dx * width * ratio, y: view.y - dy * height * ratio }))
+        showControls()
       } else if (e.key === 'ArrowLeft') left?.()
       else if (e.key === 'ArrowRight') right?.()
       // YouTube と同じく J / L で前後、F で全画面を終える(漫画でも J は前のページ、L は次のページ)
@@ -294,7 +313,7 @@ export default function FullscreenViewer({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [left, right, onPrev, onNext, onClose, zoomAt, applyView])
+  }, [left, right, onPrev, onNext, onClose, zoomAt, applyView, clamp, showControls])
 
   // ホイールでズーム(ページのスクロールにしないよう passive: false で受ける)
   useEffect(() => {
