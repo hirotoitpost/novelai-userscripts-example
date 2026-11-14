@@ -222,7 +222,7 @@ _CANDIDATE_DIR = _REFERENCE_DIR / "candidates"
 # コマを描いたときに NovelAI へ送ったキャラ参照の写し(1024x1536 に整えたもの。中身のハッシュで名前を付けて使い回す)。
 # 利用者のフォルダからの相対パス。
 # キャラシートの参照画像をあとで差し替えても、ギャラリーから同じ絵を描き直せるように残す
-_USED_REFERENCE_DIR = (_REFERENCE_DIR / "used").relative_to(_PROJECT_ROOT)
+_USED_REFERENCE_DIR = Path("outputs") / "manga" / "refs" / "used"
 
 
 def save_used_reference(image_b64: str, root: Path) -> str:
