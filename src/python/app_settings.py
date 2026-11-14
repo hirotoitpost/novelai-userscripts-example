@@ -23,11 +23,13 @@ class Setting:
     group: str
     label: str
     description: str
-    # "text"(タグなどの文字列)| "int" | "float"
+    # "text"(タグなどの文字列)| "int" | "float" | "choice"(choices のどれか)
     kind: str
     default: Any
     minimum: float | None = None
     maximum: float | None = None
+    # kind="choice" の選択肢: (値, 画面に出す名前)
+    choices: tuple[tuple[str, str], ...] = ()
 
 
 SETTINGS: tuple[Setting, ...] = (
@@ -179,6 +181,21 @@ SETTINGS: tuple[Setting, ...] = (
         "text",
         "",
     ),
+    Setting(
+        "help.chat_model",
+        "ヘルプのチャット",
+        "答え方",
+        "ヘルプのチャットの答え方。画面でも聞くたびに選べる(これはその既定)。文章モデルは記事に無いことを言うことがあるので、"
+        "既定は記事をそのまま出す「記事の抜き出し」。",
+        "choice",
+        "excerpt",
+        choices=(
+            ("excerpt", "記事の抜き出し(文章モデルを使わない。費用なし・作り話をしない)"),
+            ("ollama", "Ollama(この PC。費用なし。.env の VLLM_BASE_URL)"),
+            ("novelai", "NovelAI(GLM-4.6。文章生成の残量を使う)"),
+            ("auto", "自動(NovelAI のトークンがあれば NovelAI、無ければ Ollama)"),
+        ),
+    ),
 )
 
 _BY_KEY = {s.key: s for s in SETTINGS}
@@ -218,6 +235,11 @@ def get(key: str) -> Any:
 
 def coerce(setting: Setting, value: Any) -> Any:
     """画面から来た値を、その設定の型と範囲に合わせる。合わなければ ValueError。"""
+    if setting.kind == "choice":
+        text = str(value)
+        if text not in {key for key, _ in setting.choices}:
+            raise ValueError("選択肢のどれかにしてください")
+        return text
     if setting.kind == "text":
         text = str(value).strip()
         if not text:
@@ -271,6 +293,7 @@ def describe() -> list[dict[str, Any]]:
             "overridden": s.key in values,
             "minimum": s.minimum,
             "maximum": s.maximum,
+            "choices": [{"value": key, "label": label} for key, label in s.choices],
         }
         for s in SETTINGS
     ]

@@ -155,6 +155,7 @@ async def stream_llm_text(
     request: Request | None = None,
     max_tokens: int = 1024,
     json_schema: dict[str, Any] | None = None,
+    temperature: float | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     _stream_text と同じテキストLLM(通常はOllama)から、内容のデルタを逐次yieldする。
@@ -166,10 +167,14 @@ async def stream_llm_text(
     出力だけをサンプリングさせる。ローカルの小型LLMは指示した自由形式のフォーマット
     (見出し記法や番号付け)に従わないことが多く実機で複数回確認したため、機械的に
     パースする必要がある呼び出しは自由形式のプロンプト整形ではなくこちらを使う。
+
+    temperature: 省くとモデルの既定(Ollama は 0.8、vLLM は 0.7)。記事どおりに答えさせたいとき(ヘルプのチャット)は低くする。
     """
     if is_ollama_text():
         ollama_base = _ollama_base(get_text_base_url())
         options: dict[str, Any] = {"num_predict": max_tokens}
+        if temperature is not None:
+            options["temperature"] = temperature
         if json_schema is None:
             # デフォルトのrepeat_penalty(1.1)だと同じ文を丸ごと繰り返すことが実機で
             # 頻発したため、やや強めに設定する。ただしJSON Schema制約下では、必要な
@@ -205,7 +210,8 @@ async def stream_llm_text(
     client = get_text_client()
     typed = cast(list[ChatCompletionMessageParam], messages)
     stream = await client.chat.completions.create(
-        model=get_text_model(), messages=typed, stream=True, max_tokens=max_tokens, temperature=0.7
+        model=get_text_model(), messages=typed, stream=True, max_tokens=max_tokens,
+        temperature=0.7 if temperature is None else temperature,
     )
     async for chunk in stream:
         if request is not None and await request.is_disconnected():

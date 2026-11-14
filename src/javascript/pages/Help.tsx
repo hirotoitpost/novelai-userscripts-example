@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import HelpChat from '../components/HelpChat'
 import HelpMarkdown from '../components/HelpMarkdown'
 import { HELP_ARTICLES, findArticle, groupByFeature } from '../help'
 import './Help.css'
@@ -73,6 +74,8 @@ export default function Help() {
           ))}
         </>
       )}
+
+      {(article || !slug) && <HelpChat current={article?.slug} />}
     </div>
   )
 }

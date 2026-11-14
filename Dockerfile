@@ -5,10 +5,14 @@
 FROM node:22.11.0-slim AS web
 WORKDIR /app
 COPY package.json package-lock.json ./
+# playwright(開発用。ヘルプの動画を録る)のブラウザは、イメージには要らない
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci --no-audit --no-fund
 COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
 COPY public ./public
 COPY src/javascript ./src/javascript
+# ヘルプの記事(画面が読み込む)
+COPY src/help ./src/help
 RUN npm run build
 
 # ---- バックエンド ----
@@ -32,6 +36,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY src/python ./src/python
+# ヘルプの記事(ヘルプのチャットが読む)
+COPY src/help ./src/help
 COPY scripts ./scripts
 COPY README.md ./
 COPY --from=web /app/dist ./dist

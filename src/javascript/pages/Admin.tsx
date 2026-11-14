@@ -760,8 +760,9 @@ function OpsTab() {
 // ════════ 既定値・プリセット・ガード ════════
 
 interface Setting {
-  key: string; group: string; label: string; description: string; kind: 'text' | 'int' | 'float'
+  key: string; group: string; label: string; description: string; kind: 'text' | 'int' | 'float' | 'choice'
   default: string | number; value: string | number; overridden: boolean; minimum: number | null; maximum: number | null
+  choices?: { value: string; label: string }[]
 }
 
 interface VocabularyEntry {
@@ -908,7 +909,11 @@ function DefaultsTab() {
                     <strong>{s.label}</strong>
                     {s.overridden && <span className="adm-tag">変更あり</span>}
                     <span className="adm-hint">{s.description}</span>
-                    {s.kind === 'text'
+                    {s.kind === 'choice'
+                      ? <select value={draft} onChange={e => setDrafts({ ...drafts, [s.key]: e.target.value })}>
+                          {(s.choices ?? []).map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                        </select>
+                      : s.kind === 'text'
                       ? <textarea rows={2} value={draft} onChange={e => setDrafts({ ...drafts, [s.key]: e.target.value })} />
                       : <input type="number" value={draft} step={s.kind === 'int' ? 1 : 0.05}
                           min={s.minimum ?? undefined} max={s.maximum ?? undefined}
@@ -916,9 +921,9 @@ function DefaultsTab() {
                   </label>
                   <div className="adm-row">
                     <button type="button" className="adm-primary" disabled={!dirty}
-                      onClick={() => void saveSetting(s.key, s.kind === 'text' ? draft : Number(draft))}>保存</button>
+                      onClick={() => void saveSetting(s.key, s.kind === 'text' || s.kind === 'choice' ? draft : Number(draft))}>保存</button>
                     <button type="button" disabled={!s.overridden} onClick={() => void saveSetting(s.key, null)}>既定に戻す</button>
-                    {s.overridden && <span className="adm-hint">既定: {String(s.default)}</span>}
+                    {s.overridden && <span className="adm-hint">既定: {s.choices?.find(c => c.value === s.default)?.label ?? String(s.default)}</span>}
                   </div>
                 </div>
               )
