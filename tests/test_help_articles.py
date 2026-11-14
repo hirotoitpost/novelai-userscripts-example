@@ -51,3 +51,10 @@ def test_notices_point_to_existing_articles() -> None:
     assert slugs
     missing = slugs - set(articles)
     assert not missing, f"お知らせが指す記事がありません: {missing}"
+
+
+def test_media_in_articles_exist() -> None:
+    # 記事の ![説明](/help-media/...) は public/ に置いたもの(scripts/help_media/make_media.py で録る)
+    for slug, text in _articles().items():
+        for src in re.findall(r"!\[[^\]]*\]\((/[^)\s]+)\)", text):
+            assert (_ROOT / "public" / src.lstrip("/")).is_file(), f"{slug}: {src} がありません"

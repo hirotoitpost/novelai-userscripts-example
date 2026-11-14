@@ -94,6 +94,9 @@ function DiskStatus({ disk }: { disk: DiskState | undefined }) {
       {disk.objects != null && (
         <div className="adm-hint">前の回のとき: 中身 {disk.objects.toLocaleString()} 個 ・ {bytes(disk.bytes ?? 0)}</div>
       )}
+      {disk.retiring && disk.pending == null && (
+        <div className="adm-error">まだ確かめていません。「今すぐバックアップ」を取ると、ここにしか無い中身をほかの写し先へ写します。</div>
+      )}
       {disk.retiring && disk.pending != null && (
         <div className={disk.pending ? 'adm-error' : 'adm-hint'}>
           {disk.pending

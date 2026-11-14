@@ -41,7 +41,8 @@ function media(alt: string, src: string, key: string): ReactNode {
   if (/\.(mp4|webm)$/i.test(src)) {
     return (
       <figure key={key} className="help-media">
-        <video src={src} controls muted loop playsInline preload="metadata" aria-label={alt} />
+        {/* GIF のように、音なしで繰り返し流す(止めたいときは操作欄で) */}
+        <video src={src} controls muted loop autoPlay playsInline preload="metadata" aria-label={alt} />
         {alt && <figcaption>{alt}</figcaption>}
       </figure>
     )

@@ -68,6 +68,11 @@ _CHUNK = 1 << 20
 _disk_usage = shutil.disk_usage
 
 
+def _device_of(path: Path) -> int:
+    """そのフォルダのあるドライブの番号(同じドライブか見分ける。テストとヘルプの見本の環境で差し替える)。"""
+    return os.stat(path).st_dev
+
+
 def _is_db(rel: str) -> bool:
     return rel == DB_NAME or _USER_DB.fullmatch(rel) is not None
 
@@ -573,8 +578,9 @@ def _repair(lives: list[_Live], copies: int, report: Progress) -> dict[str, Any]
             "copies": copies,
             "short": short,
             "missing": missing,
-            # 外す準備の写し先: ここにしか無い(ほかで target か所にそろっていない)中身の数。0 なら外せる
-            "pending": sum(1 for d in mine if len(_holders(lives, d)) < target) if live.disk.retiring else 0,
+            # 外す準備の写し先: ここにしか無い(ほかで target か所にそろっていない)中身の数。0 なら外せる。
+            # 外す準備でないときは数えていない(None)。0 にすると、あとで外す準備にした直後(まだ写していない)に「外せます」と出てしまう
+            "pending": sum(1 for d in mine if len(_holders(lives, d)) < target) if live.disk.retiring else None,
         })
         try:
             _write_disk_json(live.store, info)
@@ -723,7 +729,7 @@ def disk_states(settings: Settings) -> list[dict[str, Any]]:
     devices: dict[int, int] = {}
     for live in lives:
         try:
-            dev = os.stat(live.store).st_dev
+            dev = _device_of(live.store)
         except OSError:
             continue
         devices[dev] = devices.get(dev, 0) + 1
@@ -736,7 +742,7 @@ def disk_states(settings: Settings) -> list[dict[str, Any]]:
             reserve = _reserve(disk, usage.total)
             info = _read_disk_json(live.store)
             try:
-                shared = devices.get(os.stat(live.store).st_dev, 0) > 1
+                shared = devices.get(_device_of(live.store), 0) > 1
             except OSError:
                 shared = False
             row.update({
