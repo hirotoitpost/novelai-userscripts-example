@@ -176,6 +176,11 @@ def test_nude_photobook_sets_poses_and_content_line() -> None:
         # 乳首・性器はどのコマも打ち消し、湯気・モザイクで隠さない。explicit は足さない
         assert all(word in negative for word in ("nipples", "pussy", "genitals", "anus", "loli", "steam", "mosaic censoring"))
         assert "explicit" not in s["prompt_tags"]
+        # 参照画像の服の色が肌に移る(赤・橙・黒の一色の肌)のを打ち消す
+        assert "orange skin" in negative and "black skin" in negative
+    # 寝室の見出しは散らかった部屋にしない
+    bed_heading = next(s for s in scenes if s["narration"] == "朝のベッド")
+    assert "messy bed" not in bed_heading["prompt_tags"] and "clutter" in bed_heading["negative_prompt"]
     solo = [s for s in scenes[1:-1] if s["character_ids"]]
     for s in solo:
         outfit = s["character_outfits"][s["character_ids"][0]]
