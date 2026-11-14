@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 
 
 class CollectionRequest(BaseModel):
-    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude"]
+    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2"]
     character_ids: list[int] = Field(min_length=1, max_length=4)
     title: Optional[str] = Field(None, max_length=200)
     # 体つき: sheet(キャラシートのまま)/ slender / curvy。省略時はコレクションが slender、からかいが curvy、ヌードが sheet
