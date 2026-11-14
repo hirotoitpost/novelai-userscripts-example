@@ -8,6 +8,7 @@ import MangaV2SfxFonts from './MangaV2SfxFonts'
 import MangaV2Stamps from './MangaV2Stamps'
 import NegativeEditor from './NegativeEditor'
 import GrowthPicker from './GrowthPicker'
+import HelpLink from './HelpLink'
 import OverlayEditor from './OverlayEditor'
 import PageLayoutEditor from './PageLayoutEditor'
 
@@ -633,7 +634,7 @@ export default function MangaV2Studio({
       </details>
 
       <details className="story-characters-block" open={useReference}>
-        <summary>キャラ参照(登場人物の見た目をコマ間で揃える)</summary>
+        <summary>キャラ参照(登場人物の見た目をコマ間で揃える)<HelpLink slug="manga-characters" /></summary>
         <label className="mv2-check">
           <input type="checkbox" checked={useReference} disabled={busy}
             onChange={e => setUseReference(e.target.checked)} />
@@ -786,6 +787,8 @@ export default function MangaV2Studio({
         <button type="button" onClick={compose} disabled={busy || panels.length === 0}>
           ページを合成
         </button>
+        <HelpLink slug="manga-panels" label="描き方" />
+        <HelpLink slug="manga-compose" label="仕上げ方" />
       </div>
 
       {overlayScene && panelByScene.get(overlayScene.id) && (
@@ -1013,7 +1016,7 @@ export default function MangaV2Studio({
 
       {panels.length > 0 && (
         <div className="mv2-download">
-          <h4>ダウンロード</h4>
+          <h4>ダウンロード<HelpLink slug="manga-compose" /></h4>
           <div className="story-row">
             <span>形式</span>
             {(['pdf', 'zip'] as const).map(format => (
