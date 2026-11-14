@@ -114,7 +114,7 @@ def test_choice_setting(fresh_db: None) -> None:
 def test_novelai_without_token_is_not_401() -> None:
     # 401 だと画面がログアウトしてしまう
     with pytest.raises(HTTPException) as caught:
-        asyncio.run(help_route._answer("novelai", [], None))
+        asyncio.run(help_route.ask_model("novelai", [], None))
     assert caught.value.status_code == 422
 
 
@@ -128,8 +128,8 @@ def test_api(fresh_db: None, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_key(authorization: str | None) -> str | None:
         return "token" if authorization else None
 
-    monkeypatch.setattr(help_route, "_answer", fake_answer)
-    monkeypatch.setattr(help_route, "_novelai_key", fake_key)
+    monkeypatch.setattr(help_route, "ask_model", fake_answer)
+    monkeypatch.setattr(help_route, "novelai_key", fake_key)
     app = FastAPI()
     app.include_router(help_route.router)
     client = TestClient(app)

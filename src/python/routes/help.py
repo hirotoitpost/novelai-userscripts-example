@@ -27,7 +27,7 @@ class ChatRequest(BaseModel):
     engine: Literal["default", "excerpt", "auto", "ollama", "novelai"] = "default"
 
 
-async def _novelai_key(authorization: str | None) -> str | None:
+async def novelai_key(authorization: str | None) -> str | None:
     """NovelAI のトークン(画面のログイン。無ければ .env)。無ければ None。"""
     try:
         generator = get_client(authorization)
@@ -40,7 +40,7 @@ async def _novelai_key(authorization: str | None) -> str | None:
         await generator.aclose()
 
 
-async def _answer(engine: str, messages: list[dict[str, str]], api_key: str | None) -> str:
+async def ask_model(engine: str, messages: list[dict[str, str]], api_key: str | None) -> str:
     if engine == "novelai":
         from ..novelai_text_oa import stream_chat
 
@@ -63,7 +63,7 @@ async def get_engines(authorization: Annotated[str | None, Header()] = None) -> 
     return {
         "default": app_settings.get("help.chat_model"),
         "ollama_ready": bool(get_text_base_url()),
-        "novelai_ready": bool(await _novelai_key(authorization)),
+        "novelai_ready": bool(await novelai_key(authorization)),
     }
 
 
@@ -71,7 +71,7 @@ async def get_engines(authorization: Annotated[str | None, Header()] = None) -> 
 async def post_chat(req: ChatRequest, authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
     articles = help_chat.load_articles()
     picked = help_chat.pick(req.question, articles, req.current)
-    api_key = await _novelai_key(authorization)
+    api_key = await novelai_key(authorization)
     engine = help_chat.choose_engine(req.engine, app_settings.get("help.chat_model"), bool(api_key))
     if engine == "excerpt":
         return {
@@ -81,7 +81,7 @@ async def post_chat(req: ChatRequest, authorization: Annotated[str | None, Heade
         }
     messages = help_chat.build_messages(req.question, [t.model_dump() for t in req.history], picked)
     try:
-        answer = await _answer(engine, messages, api_key)
+        answer = await ask_model(engine, messages, api_key)
     except HTTPException as exc:
         if engine == "ollama" and exc.status_code == 503:
             raise HTTPException(status_code=503, detail="Ollama が設定されていません(.env の VLLM_BASE_URL)。NovelAI を選んでください。") from exc

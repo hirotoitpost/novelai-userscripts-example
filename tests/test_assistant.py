@@ -131,3 +131,38 @@ def test_api_hides_admin_guide_outside_lan(root: Path) -> None:
     assert inside.get("/api/assistant/guide?page=admin").json()["next"] == "disks"
     outside = TestClient(app, base_url="http://example.com", client=("8.8.8.8", 50000))
     assert outside.get("/api/assistant/guide?page=admin").json()["title"] == "このページ"
+
+
+def test_chat_passes_the_page_state_and_never_claims_to_operate(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python import app_settings
+    from python.routes import help as help_route
+
+    app_settings.reset_cache()
+    story_id, _ = _story(2)
+    calls: list[tuple[str, list[dict[str, str]]]] = []
+
+    async def fake_answer(engine: str, messages: list[dict[str, str]], api_key: str | None) -> str:
+        calls.append((engine, messages))
+        return "<think>x</think>1. [シーン一覧へ](/story?story=1#scene-list) 移ります。"
+
+    async def fake_key(authorization: str | None) -> str | None:
+        return "token" if authorization else None
+
+    monkeypatch.setattr(help_route, "ask_model", fake_answer)
+    monkeypatch.setattr(help_route, "novelai_key", fake_key)
+    app = FastAPI()
+    app.include_router(assistant_route.router)
+    client = TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 50000))
+
+    res = client.post("/api/assistant/chat", json={"message": "次は何をすればいい?", "page": "story", "story_id": story_id},
+                      headers={"Authorization": "Bearer x"}).json()
+    assert res["engine"] == "novelai" and res["answer"].startswith("1. [シーン一覧へ]")
+    system = calls[-1][1][0]["content"]
+    assert "操作できません" in system and "# 今の画面の状況" in system
+    assert "[これから] 登場人物を割り当てる" in system and "← 次はこれ" in system
+    assert f"(/story?story={story_id}#scene-list)" in system
+    # トークンが無ければ Ollama(自動)
+    res = client.post("/api/assistant/chat", json={"message": "こんにちは"}).json()
+    assert res["engine"] == "ollama"
+    assert client.get("/api/assistant/chat/engines").json()["default"] == "auto"
+    app_settings.reset_cache()

@@ -272,3 +272,40 @@ def _default_guide(params: dict[str, str]) -> Guide:
         Step("backup", "バックアップの様子を見る", "info", "写し先・前回のバックアップ・空きの見込みを案内します。", "/admin?tab=ops#data-backup", "バックアップの欄へ", "backup"),
     ]
     return Guide(title=name, summary="このページの案内はまだありません。よく使う作業から選べます。", steps=steps, help=slug)
+
+
+# ---- チャット(読むだけ。今のページの状況とヘルプの記事を渡して答えさせる) ----
+
+CHAT_SYSTEM = (
+    "あなたは、このアプリ(NovelAI の画像生成・漫画・物語・キャラ・バックアップのツール)の作業アシスタントです。\n"
+    "日本語だけで、短く、具体的に答えてください。手順は番号付きにしてください。\n"
+    "あなたはアプリを操作できません。操作は利用者が行います。「〜しておきました」のように、自分がやったように言わないでください。\n"
+    "下の「今の画面の状況」と「ヘルプの記事」を元に答えてください。ボタンや欄の名前は、そこに書いてある名前を一字も変えずに使ってください。\n"
+    "そこに無いアプリの機能・ボタン・手順を作らないでください。分からないときは「分かりません」と言い、近いヘルプの記事を挙げてください。\n"
+    "移ってほしい場所や記事は [名前](/リンク) の形で示してください(リンクは状況と記事にあるものだけ)。\n"
+    "プロンプトの書き方や物語の相談のような、アプリの操作でない質問には、ふつうに答えてかまいません。"
+)
+
+
+def guide_text(data: dict[str, Any]) -> str:
+    """案内(guide の戻り値)を、文章モデルに渡す文に。"""
+    label = {"done": "済み", "todo": "これから", "warn": "注意", "info": "参考"}
+    lines = [f"ページ: {data['title']}", data.get("summary") or ""]
+    for step in data["steps"]:
+        mark = " ← 次はこれ" if data.get("next") == step["key"] else ""
+        link = f"(移る先: [{step['action_label']}]({step['action']}))" if step.get("action") and step.get("action_label") else ""
+        lines.append(f"- [{label[step['status']]}] {step['label']}: {step['detail']}{link}{mark}")
+    return "\n".join(line for line in lines if line)
+
+
+def chat_messages(question: str, history: list[dict[str, str]], guide_data: dict[str, Any], articles: list[Any]) -> list[dict[str, str]]:
+    from .help_chat import build_messages
+
+    # ヘルプのチャットと同じ形で記事と履歴を入れ、先頭の指示だけ作業アシスタントのものにする
+    messages = build_messages(question, history, articles)
+    context = messages[0]["content"].split("# ヘルプの記事", 1)[1] if "# ヘルプの記事" in messages[0]["content"] else ""
+    messages[0] = {
+        "role": "system",
+        "content": f"{CHAT_SYSTEM}\n\n# 今の画面の状況\n\n{guide_text(guide_data)}\n\n# ヘルプの記事{context}",
+    }
+    return messages
