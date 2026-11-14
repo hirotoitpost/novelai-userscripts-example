@@ -378,6 +378,9 @@ def test_retiring_disk_is_emptied_onto_others(app_root: Path, tmp_path: Path) ->
     backup.run_backup(settings)
     settings = backup.Settings(disks=[*settings.disks, backup.register_disk(backup.Disk(str(tmp_path / "d3")))])
     settings.disks[0].retiring = True
+    # 外す準備にしただけ(まだ取っていない)では「外せます」(0)にしない
+    states = {Path(d["path"]).name: d for d in backup.disk_states(settings)}
+    assert states["d1"]["pending"] is None
     time.sleep(1.1)
     taken = backup.run_backup(settings)
     assert taken["short"] == 0

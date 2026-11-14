@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 import threading
 import time
@@ -302,12 +301,12 @@ def backup_notices() -> list[Notice]:
 
     # 写し先がアプリと同じドライブ(ドライブが壊れると、元のデータとその写し先を一緒に失う)
     try:
-        app_dev = os.stat(_PROJECT_ROOT).st_dev
+        app_dev = backup._device_of(_PROJECT_ROOT)
     except OSError:
         app_dev = None
     for live in lives:
         try:
-            same = app_dev is not None and os.stat(live.store).st_dev == app_dev
+            same = app_dev is not None and backup._device_of(live.store) == app_dev
         except OSError:
             same = False
         if same:
