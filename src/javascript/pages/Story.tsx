@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BackButton from '../components/BackButton'
 import HelpLink from '../components/HelpLink'
+import { refreshAssistant, useAssistantContext } from '../assistantContext'
 import { SESSION_TOKEN, useAuth } from '../context/AuthContext'
 import { decodeStoryDocument } from '../novelaiDocument'
 import MangaImageSettings, {
@@ -252,6 +253,8 @@ export default function Story() {
 
   const [history, setHistory] = useState<StorySummary[]>([])
   const [story, setStory] = useState<StoryData | null>(null)
+  // 作業アシスタントに、開いている物語を伝える
+  useAssistantContext({ storyId: story?.id ?? null })
   const [mangaPages, setMangaPages] = useState<MangaPage[]>([])
   const [pageStats, setPageStats] = useState<PageStats[]>([])
   // v1: V5にコマ割り込みのページを描かせる / v2: コマごとに描かせ、コマ割り・吹き出しは自前
@@ -371,6 +374,8 @@ export default function Story() {
       }
     } finally {
       abortRef.current = null
+      // 作業アシスタントの「次の操作」を読み直させる
+      refreshAssistant()
     }
   }
 
@@ -1068,7 +1073,7 @@ export default function Story() {
 
         {story && (
           <section className="story-section">
-            <h2>シーン一覧<HelpLink slug="manga" label="漫画づくりの流れ" /></h2>
+            <h2 id="scene-list">シーン一覧<HelpLink slug="manga" label="漫画づくりの流れ" /></h2>
             {!isUnsplitImport && story.scenes.length > 0 && (
               <div className="story-actions">
                 <button type="button" disabled={busy} onClick={() => setEditing(true)}

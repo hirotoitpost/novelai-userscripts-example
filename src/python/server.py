@@ -49,6 +49,7 @@ from .routes.user import router as user_router
 from .routes.works import router as works_router
 from .routes.writer import router as writer_router
 from .routes.help import router as help_router
+from .routes.assistant import router as assistant_router
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _env_path = _PROJECT_ROOT / ".env"
@@ -160,6 +161,7 @@ app.include_router(collections_router)
 app.include_router(user_router)
 app.include_router(writer_router)
 app.include_router(help_router)
+app.include_router(assistant_router)
 
 # LAN 用の認証局の証明書(scripts/make_lan_cert.py)。スマホにインストールすると、この PC のサーバーを
 # https で警告なしに開け、ホーム画面へのインストール(PWA)や通知が使える。秘密鍵(ca.key)は出さない
