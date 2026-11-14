@@ -726,8 +726,17 @@ async def delete_backup(name: str) -> dict[str, Any]:
 # ---- 画像・作品データのバックアップ(backup.py。写し先は管理ページで指定する) ----
 
 
+class DataBackupDisk(BaseModel):
+    path: str = Field(..., max_length=1000)
+    id: str = Field("", max_length=64)
+    reserve_gb: float = Field(50.0, ge=0, le=100_000)
+    reserve_percent: float = Field(10.0, ge=0, le=90)
+    retiring: bool = False
+
+
 class DataBackupSettings(BaseModel):
-    destination: str = Field("", max_length=1000)
+    disks: list[DataBackupDisk] = Field(default_factory=list, max_length=32)
+    copies: int = Field(2, ge=1, le=3)
     include_datasets: bool = False
     auto: bool = True
 
@@ -735,21 +744,17 @@ class DataBackupSettings(BaseModel):
 def _data_backup_state() -> dict[str, Any]:
     from .. import backup
 
-    settings = backup.load_settings()
-    snapshots: list[dict[str, Any]] = []
-    error = None
-    if settings.destination:
-        try:
-            snapshots = backup.snapshots(backup.check_destination(settings.destination))
-        except ValueError as exc:
-            error = str(exc)
+    # 進み具合は先に読む(あとで読むと、様子を読んでいるあいだに終わった回を「終わった」と見せ、様子は前のままになる)
     job = backup.job()
+    job_state = {k: getattr(job, k) for k in ("kind", "status", "message", "done", "total", "result", "started_at", "finished_at")}
+    settings = backup.load_settings()
     return {
-        "settings": settings.__dict__,
+        "settings": settings.to_dict(),
         "keep": backup.KEEP,
-        "snapshots": snapshots,
-        "destination_error": error,
-        "job": {k: getattr(job, k) for k in ("kind", "status", "message", "done", "total", "result", "started_at", "finished_at")},
+        "disks": backup.disk_states(settings),
+        "health": backup.health(settings),
+        "snapshots": backup.all_snapshots(settings),
+        "job": job_state,
     }
 
 
@@ -758,16 +763,34 @@ async def get_data_backup() -> dict[str, Any]:
     return await asyncio.to_thread(_data_backup_state)
 
 
+def _register_disks(req: DataBackupSettings) -> list[Any]:
+    """写し先を確かめて、ディスクの印(id)を付ける。つながっていない写し先は、前に登録した印があればそのまま残す。"""
+    from .. import backup
+
+    disks = []
+    for item in req.disks:
+        disk = backup.Disk(item.path.strip(), item.id, item.reserve_gb, item.reserve_percent, item.retiring)
+        if not disk.path:
+            continue
+        try:
+            disk = backup.register_disk(disk)
+        except ValueError as exc:
+            if not disk.id:
+                raise HTTPException(status_code=422, detail=f"{disk.path}: {exc}")
+        disks.append(disk)
+    paths = [d.path.rstrip("\\/").lower() for d in disks]
+    ids = [d.id for d in disks if d.id]
+    if len(set(paths)) != len(paths) or len(set(ids)) != len(ids):
+        raise HTTPException(status_code=422, detail="同じ写し先が2回入っています。")
+    return disks
+
+
 @router.put("/data-backup/settings")
 async def put_data_backup_settings(req: DataBackupSettings) -> dict[str, Any]:
     from .. import backup
 
-    if req.destination.strip():
-        try:
-            backup.check_destination(req.destination)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-    backup.save_settings(backup.Settings(req.destination.strip(), req.include_datasets, req.auto))
+    disks = await asyncio.to_thread(_register_disks, req)
+    backup.save_settings(backup.Settings(disks, req.copies, req.include_datasets, req.auto))
     return await asyncio.to_thread(_data_backup_state)
 
 
@@ -776,7 +799,7 @@ async def post_data_backup_run() -> dict[str, Any]:
     from .. import backup
 
     settings = backup.load_settings()
-    if not settings.destination:
+    if not settings.disks:
         raise HTTPException(status_code=422, detail="先に写し先のフォルダを指定してください。")
     try:
         backup.start("backup", lambda progress: backup.run_backup(settings, reason="手動", progress=progress))
@@ -790,7 +813,7 @@ async def post_data_backup_restore(name: str) -> dict[str, Any]:
     from .. import backup
 
     settings = backup.load_settings()
-    if not settings.destination:
+    if not settings.disks:
         raise HTTPException(status_code=422, detail="写し先のフォルダが指定されていません。")
     try:
         backup.start("restore", lambda progress: backup.restore(settings, name, progress=progress))
