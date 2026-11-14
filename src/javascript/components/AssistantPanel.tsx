@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { useCurrentAssistantContext } from '../assistantContext'
@@ -7,6 +7,8 @@ import { useLocalStorage } from '../hooks/useLocalStorage'
 import AssistantChat from './AssistantChat'
 import HelpChat from './HelpChat'
 import HelpLink from './HelpLink'
+import { SpeakButton, VoiceSettingsBox } from './VoiceControls'
+import { speak, useVoiceSettings } from '../voice'
 import './AssistantPanel.css'
 
 /**
@@ -84,6 +86,9 @@ export default function AssistantPanel() {
   const [guide, setGuide] = useState<Guide | null>(null)
   const [error, setError] = useState<string | null>(null)
   const docked = useDocked()
+  const [voiceOpen, setVoiceOpen] = useState(false)
+  const [voice] = useVoiceSettings()
+  const spokenNext = useRef<string | null | undefined>(undefined)
   const page = pageOf(location.pathname)
   const storyId = context.storyId ?? 0
   const visible = isAuthenticated && location.pathname !== '/login'
@@ -111,6 +116,17 @@ export default function AssistantPanel() {
     const id = window.setInterval(() => void load(), POLL_MS)
     return () => window.clearInterval(id)
   }, [visible, open, tab, load, version])
+
+  // 「次はこれ」が変わったら読み上げる(自動で読む設定のとき。開いた最初の案内は読まない)
+  const nextStep = guide?.steps.find(step => step.key === guide.next) ?? null
+  const guideSpeech = guide ? `${guide.summary}${nextStep ? ` ${nextStep.detail}` : ''}` : ''
+  useEffect(() => {
+    if (!guide) return
+    const key = `${page}:${storyId}:${guide.next}`
+    if (spokenNext.current !== undefined && spokenNext.current !== key && voice.autoRead && open) void speak(token, guideSpeech)
+    spokenNext.current = key
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guide?.next, page, storyId])
 
   if (!visible) return null
 
@@ -147,8 +163,11 @@ export default function AssistantPanel() {
           <button type="button" role="tab" aria-selected={tab === 'help'} className={tab === 'help' ? 'as-tab as-tab--on' : 'as-tab'}
             onClick={() => setTab('help')}>ヘルプ</button>
         </div>
+        <button type="button" className={voiceOpen ? 'as-voice-toggle as-voice-toggle--on' : 'as-voice-toggle'}
+          onClick={() => setVoiceOpen(v => !v)} aria-label="音声の設定" title="音声の設定(読み上げ・声・速さ)">🔊</button>
         <button type="button" className="as-close" onClick={() => setOpen(false)} aria-label="閉じる">×</button>
       </div>
+      {voiceOpen && <VoiceSettingsBox />}
 
       <div className="as-body">
         {tab === 'guide' && (
@@ -161,7 +180,11 @@ export default function AssistantPanel() {
                   {guide.title}
                   {guide.help && <HelpLink slug={guide.help} />}
                 </div>
-                {guide.summary && <p className="as-summary">{guide.summary}</p>}
+                {guide.summary && (
+                  <p className="as-summary">
+                    {guide.summary} <SpeakButton text={guideSpeech} label="次の操作を読む" />
+                  </p>
+                )}
                 <ol className="as-steps">
                   {guide.steps.map(step => (
                     <li key={step.key} className={`as-step as-step--${step.status}${guide.next === step.key ? ' as-step--next' : ''}`}>

@@ -4,6 +4,7 @@ import { apiFetch } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import HelpMarkdown from './HelpMarkdown'
+import { MicButton, SpeakButton, useAutoRead } from './VoiceControls'
 import './HelpChat.css'
 
 /**
@@ -37,6 +38,8 @@ export default function HelpChat({ current }: { current?: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const end = useRef<HTMLDivElement>(null)
+  const [fresh, setFresh] = useState<string | null>(null)
+  useAutoRead(fresh)
 
   useEffect(() => {
     if (!token) return
@@ -44,8 +47,8 @@ export default function HelpChat({ current }: { current?: string }) {
   }, [token])
   useEffect(() => { end.current?.scrollIntoView({ block: 'nearest' }) }, [turns, busy])
 
-  const ask = async () => {
-    const text = question.trim()
+  const ask = async (spoken?: string) => {
+    const text = (spoken ?? question).trim()
     if (!text || !token || busy) return
     setBusy(true)
     setError(null)
@@ -57,6 +60,7 @@ export default function HelpChat({ current }: { current?: string }) {
         token, '/api/help/chat', { question: text, history, current, engine },
       )
       setTurns(list => [...list, { role: 'assistant', content: res.answer, sources: res.sources, engine: res.engine }])
+      setFresh(res.answer)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setQuestion(text)
@@ -93,6 +97,7 @@ export default function HelpChat({ current }: { current?: string }) {
               {turn.role === 'user' ? <p>{turn.content}</p> : <HelpMarkdown source={turn.content} />}
               {turn.sources && turn.sources.length > 0 && (
                 <div className="help-chat-sources">
+                  <SpeakButton text={turn.content} />
                   参考にした記事: {turn.sources.map((s, i) => (
                     <span key={s.slug}>{i > 0 && '、'}<Link to={`/help/${s.slug}`}>{s.title}</Link></span>
                   ))}
@@ -114,6 +119,7 @@ export default function HelpChat({ current }: { current?: string }) {
           onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void ask() } }} />
         <div className="help-chat-actions">
           <button type="submit" className="help-chat-send" disabled={busy || !question.trim()}>{busy ? '考えています…' : '聞く'}</button>
+          <MicButton disabled={busy} onInterim={setQuestion} onFinal={text => { setQuestion(text); void ask(text) }} />
           {turns.length > 0 && <button type="button" className="help-chat-clear" disabled={busy} onClick={() => { setTurns([]); setError(null) }}>最初から</button>}
         </div>
       </form>

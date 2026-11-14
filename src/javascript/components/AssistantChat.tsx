@@ -3,6 +3,7 @@ import { apiFetch } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import HelpMarkdown from './HelpMarkdown'
+import { MicButton, SpeakButton, useAutoRead } from './VoiceControls'
 import './HelpChat.css'
 
 /**
@@ -43,6 +44,9 @@ export default function AssistantChat({ page, storyId, onNavigate }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const end = useRef<HTMLDivElement>(null)
+  // この画面で受け取ったばかりの答え(自動で読む。開き直したときの古い答えは読まない)
+  const [fresh, setFresh] = useState<string | null>(null)
+  useAutoRead(fresh)
 
   useEffect(() => {
     if (!token) return
@@ -53,8 +57,8 @@ export default function AssistantChat({ page, storyId, onNavigate }: {
     end.current?.scrollIntoView({ block: 'nearest' })
   }, [turns, busy])
 
-  const send = async () => {
-    const text = message.trim()
+  const send = async (spoken?: string) => {
+    const text = (spoken ?? message).trim()
     if (!text || !token || busy) return
     setBusy(true)
     setError(null)
@@ -66,6 +70,7 @@ export default function AssistantChat({ page, storyId, onNavigate }: {
         message: text, history, page, story_id: storyId, engine,
       })
       setTurns(list => [...list, { role: 'assistant', content: res.answer, engine: res.engine }])
+      setFresh(res.answer)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setMessage(text)
@@ -97,7 +102,12 @@ export default function AssistantChat({ page, storyId, onNavigate }: {
           {turns.map((turn, index) => (
             <div key={index} className={`help-chat-turn help-chat-turn--${turn.role}`}>
               {turn.role === 'user' ? <p>{turn.content}</p> : <HelpMarkdown source={turn.content} onNavigate={onNavigate} />}
-              {turn.engine && <div className="help-chat-sources">({ENGINE_LABEL[turn.engine] ?? turn.engine})</div>}
+              {turn.role === 'assistant' && (
+                <div className="help-chat-sources">
+                  <SpeakButton text={turn.content} />
+                  {turn.engine && <span>({ENGINE_LABEL[turn.engine] ?? turn.engine})</span>}
+                </div>
+              )}
             </div>
           ))}
           {busy && <div className="help-chat-turn help-chat-turn--assistant help-chat-wait">考えています…</div>}
@@ -113,6 +123,7 @@ export default function AssistantChat({ page, storyId, onNavigate }: {
           onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void send() } }} />
         <div className="help-chat-actions">
           <button type="submit" className="help-chat-send" disabled={busy || !message.trim()}>{busy ? '考えています…' : '送る'}</button>
+          <MicButton disabled={busy} onInterim={setMessage} onFinal={text => { setMessage(text); void send(text) }} />
           {turns.length > 0 && <button type="button" className="help-chat-clear" disabled={busy} onClick={() => { setTurns([]); setError(null) }}>最初から</button>}
         </div>
       </form>

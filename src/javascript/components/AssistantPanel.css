@@ -60,8 +60,10 @@ html.assistant-docked .nb-panel { right: calc(var(--as-width) + 16px); }
   padding: 10px 12px;
   border-bottom: 1px solid #2c2c48;
 }
-.as-head strong { white-space: nowrap; }
-.as-tabs { display: flex; gap: 4px; flex: 1; }
+.as-head { flex-wrap: wrap; }
+.as-head strong { white-space: nowrap; flex: 1; }
+/* タブは見出しの下の段に(3つ並ぶと見出しの横では狭い) */
+.as-tabs { display: flex; gap: 4px; order: 3; flex-basis: 100%; }
 .as-tab {
   border: 1px solid #3a3a5c;
   border-radius: 14px;
@@ -70,6 +72,7 @@ html.assistant-docked .nb-panel { right: calc(var(--as-width) + 16px); }
   color: #cfcfe0;
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
 }
 .as-tab--on { background: #7c5cff; border-color: #7c5cff; color: #fff; }
 .as-close { border: none; background: none; color: #b8b8d0; font-size: 22px; cursor: pointer; line-height: 1; }
@@ -130,3 +133,24 @@ html.assistant-docked .nb-panel { right: calc(var(--as-width) + 16px); }
 }
 /* パネルの中のヘルプのチャット(幅いっぱい) */
 .as-body .help-chat { margin: 0; border: none; padding: 0; background: none; max-width: none; }
+
+/* 音声(VoiceControls.tsx) */
+.as-voice-toggle { border: 1px solid #3a3a5c; border-radius: 14px; padding: 2px 8px; background: none; cursor: pointer; font-size: 14px; }
+.as-voice-toggle--on { background: #2a2350; border-color: #7c5cff; }
+.as-voice { padding: 10px 12px; border-bottom: 1px solid #2c2c48; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.as-voice-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.as-voice select { background: #181830; color: #e8e8f0; border: 1px solid #3a3a5c; border-radius: 6px; padding: 3px 6px; max-width: 220px; }
+.as-voice .as-muted { margin: 0; font-size: 12px; }
+.as-speak, .as-mic {
+  border: 1px solid #3a3a5c;
+  border-radius: 6px;
+  padding: 2px 8px;
+  background: none;
+  color: #cfcfe0;
+  cursor: pointer;
+  font-size: 12px;
+  margin-right: 6px;
+}
+.as-mic { padding: 8px 12px; font-size: 13px; }
+.as-mic--on { border-color: #ff6b6b; color: #ff8a8a; }
+.as-mic:disabled { opacity: 0.45; cursor: default; }
