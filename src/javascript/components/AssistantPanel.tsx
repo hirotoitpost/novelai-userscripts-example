@@ -4,6 +4,7 @@ import { apiFetch } from '../api'
 import { useCurrentAssistantContext } from '../assistantContext'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import AssistantChat from './AssistantChat'
 import HelpChat from './HelpChat'
 import HelpLink from './HelpLink'
 import './AssistantPanel.css'
@@ -11,6 +12,7 @@ import './AssistantPanel.css'
 /**
  * 作業アシスタント(どのページでも右端から開く。広い画面では横に並べ、狭い画面では下から出す)。
  * 「次の操作」: 今のページと作業の状態から、やることと次の一手を出す(/api/assistant/guide。読むだけ)。
+ * 「チャット」: 今のページの状況とヘルプの記事を渡して、文章モデルと話す(AssistantChat。読むだけ)。
  * 「ヘルプ」: ヘルプのチャット(今のページに合う記事を優先)。
  * 押すとその場所へ移るだけで、操作(生成・設定の変更)はしない。押すのは利用者。
  */
@@ -33,7 +35,7 @@ interface Guide {
   next: string | null
 }
 
-type Tab = 'guide' | 'help'
+type Tab = 'guide' | 'chat' | 'help'
 
 const POLL_MS = 20000
 const DOCK_QUERY = '(min-width: 1100px)'
@@ -140,6 +142,8 @@ export default function AssistantPanel() {
         <div className="as-tabs" role="tablist">
           <button type="button" role="tab" aria-selected={tab === 'guide'} className={tab === 'guide' ? 'as-tab as-tab--on' : 'as-tab'}
             onClick={() => setTab('guide')}>次の操作</button>
+          <button type="button" role="tab" aria-selected={tab === 'chat'} className={tab === 'chat' ? 'as-tab as-tab--on' : 'as-tab'}
+            onClick={() => setTab('chat')}>チャット</button>
           <button type="button" role="tab" aria-selected={tab === 'help'} className={tab === 'help' ? 'as-tab as-tab--on' : 'as-tab'}
             onClick={() => setTab('help')}>ヘルプ</button>
         </div>
@@ -187,6 +191,7 @@ export default function AssistantPanel() {
             )}
           </>
         )}
+        {tab === 'chat' && <AssistantChat page={page} storyId={storyId} onNavigate={go} />}
         {tab === 'help' && <HelpChat current={guide?.help || undefined} />}
       </div>
     </aside>

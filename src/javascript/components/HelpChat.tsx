@@ -4,6 +4,7 @@ import { apiFetch } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import HelpMarkdown from './HelpMarkdown'
+import './HelpChat.css'
 
 /**
  * ヘルプのチャット(ヘルプのページの下。/api/help/chat)。ヘルプの記事だけを元に答える。

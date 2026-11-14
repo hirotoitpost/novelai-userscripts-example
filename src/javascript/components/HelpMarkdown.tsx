@@ -7,7 +7,9 @@ import { Link } from 'react-router-dom'
  * ![説明](画像・GIF・動画の場所)、**太字**、`コード`、[文字](リンク)。/ で始まるリンクはアプリの中を移る。
  */
 
-function inline(text: string, keyBase: string): ReactNode[] {
+type Navigate = ((href: string) => void) | undefined
+
+function inline(text: string, keyBase: string, navigate?: Navigate): ReactNode[] {
   const nodes: ReactNode[] = []
   const pattern = /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)\s]+)\))/g
   let last = 0
@@ -17,14 +19,17 @@ function inline(text: string, keyBase: string): ReactNode[] {
     if (match.index > last) nodes.push(text.slice(last, match.index))
     const key = `${keyBase}-${index++}`
     if (match[2] !== undefined) {
-      nodes.push(<strong key={key}>{inline(match[2], key)}</strong>)
+      nodes.push(<strong key={key}>{inline(match[2], key, navigate)}</strong>)
     } else if (match[4] !== undefined) {
       nodes.push(<code key={key}>{match[4]}</code>)
     } else {
       const label = match[6]
       const href = match[7]
       nodes.push(href.startsWith('/')
-        ? <Link key={key} to={href}>{label}</Link>
+        ? navigate
+          // 作業アシスタントの中: その欄までスクロールもする移り方を使う
+          ? <a key={key} href={href} onClick={e => { e.preventDefault(); navigate(href) }}>{label}</a>
+          : <Link key={key} to={href}>{label}</Link>
         : /^https?:\/\//.test(href)
           ? <a key={key} href={href} target="_blank" rel="noreferrer">{label}</a>
           : <Fragment key={key}>{label}</Fragment>)
@@ -60,7 +65,8 @@ interface ListItem {
   children: string[]
 }
 
-export default function HelpMarkdown({ source }: { source: string }) {
+export default function HelpMarkdown({ source, onNavigate }: { source: string; onNavigate?: (href: string) => void }) {
+  const nav = onNavigate
   const lines = source.replace(/\r\n/g, '\n').split('\n')
   const blocks: ReactNode[] = []
   let i = 0
@@ -75,7 +81,7 @@ export default function HelpMarkdown({ source }: { source: string }) {
     const heading = /^(#{1,3})\s+(.*)$/.exec(line)
     if (heading) {
       const level = heading[1].length
-      const content = inline(heading[2], key)
+      const content = inline(heading[2], key, nav)
       blocks.push(level === 1 ? <h2 key={key}>{content}</h2> : level === 2 ? <h3 key={key}>{content}</h3> : <h4 key={key}>{content}</h4>)
       i++
       continue
@@ -89,7 +95,7 @@ export default function HelpMarkdown({ source }: { source: string }) {
     if (line.startsWith('>')) {
       const quoted: string[] = []
       while (i < lines.length && lines[i].startsWith('>')) quoted.push(lines[i++].replace(/^>\s?/, ''))
-      blocks.push(<aside key={key} className="help-note">{inline(quoted.join(' '), key)}</aside>)
+      blocks.push(<aside key={key} className="help-note">{inline(quoted.join(' '), key, nav)}</aside>)
       continue
     }
     const ordered = /^\d+\.\s+/.test(line)
@@ -108,9 +114,9 @@ export default function HelpMarkdown({ source }: { source: string }) {
       }
       const content = items.map((item, index) => (
         <li key={`${key}-${index}`}>
-          {inline(item.text, `${key}-${index}`)}
+          {inline(item.text, `${key}-${index}`, nav)}
           {item.children.length > 0 && (
-            <ul>{item.children.map((child, c) => <li key={c}>{inline(child, `${key}-${index}-${c}`)}</li>)}</ul>
+            <ul>{item.children.map((child, c) => <li key={c}>{inline(child, `${key}-${index}-${c}`, nav)}</li>)}</ul>
           )}
         </li>
       ))
@@ -121,7 +127,7 @@ export default function HelpMarkdown({ source }: { source: string }) {
     while (
       i < lines.length && lines[i].trim() && !/^(#{1,3}\s|>|-\s|\d+\.\s|!\[)/.test(lines[i])
     ) paragraph.push(lines[i++])
-    blocks.push(<p key={key}>{inline(paragraph.join(' '), key)}</p>)
+    blocks.push(<p key={key}>{inline(paragraph.join(' '), key, nav)}</p>)
   }
   return <>{blocks}</>
 }

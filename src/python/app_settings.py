@@ -196,6 +196,20 @@ SETTINGS: tuple[Setting, ...] = (
             ("auto", "自動(NovelAI のトークンがあれば NovelAI、無ければ Ollama)"),
         ),
     ),
+    Setting(
+        "assistant.chat_model",
+        "作業アシスタント",
+        "チャットの文章モデル",
+        "作業アシスタントの「チャット」で答える文章モデル。今のページの状況とヘルプの記事を渡して答えさせる(操作はしない)。"
+        "画面でも聞くたびに選べる(これはその既定)。",
+        "choice",
+        "auto",
+        choices=(
+            ("auto", "自動(NovelAI のトークンがあれば NovelAI、無ければ Ollama)"),
+            ("novelai", "NovelAI(GLM-4.6。文章生成の残量を使う)"),
+            ("ollama", "Ollama(この PC。費用なし。小さいモデルは記事に無いことを言いやすい)"),
+        ),
+    ),
 )
 
 _BY_KEY = {s.key: s for s in SETTINGS}

@@ -1,0 +1,37 @@
+/* ヘルプのチャット(HelpChat.tsx)と、作業アシスタントのチャット(AssistantChat.tsx)。どのページでも使うので、部品と一緒に読み込む */
+.help-chat {
+  max-width: 760px;
+  margin: 0 auto 24px;
+  padding: 14px 18px;
+  border: 1px solid #3a3a5c;
+  border-radius: 12px;
+  background: #15152a;
+}
+.help-chat-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+.help-chat-head h2 { font-size: 1.05rem; margin: 0; }
+.help-chat-head label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: #b8b8d0; }
+.help-chat select, .help-chat textarea {
+  background: #181830;
+  color: #e8e8f0;
+  border: 1px solid #3a3a5c;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+}
+.help-chat-hint { margin: 6px 0 10px; color: #9a9ab8; font-size: 13px; }
+.help-chat-log { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; max-height: 60vh; overflow-y: auto; }
+.help-chat-turn { padding: 8px 12px; border-radius: 10px; line-height: 1.7; }
+.help-chat-turn p { margin: 0.3em 0; }
+.help-chat-turn ol, .help-chat-turn ul { padding-left: 1.4em; margin: 0.3em 0; }
+.help-chat-turn--user { align-self: flex-end; max-width: 85%; background: #2a2350; }
+.help-chat-turn--assistant { background: #1f1f3a; border: 1px solid #2c2c48; }
+.help-chat-wait { color: #b8b8d0; }
+.help-chat-sources { margin-top: 6px; font-size: 12px; color: #9a9ab8; }
+.help-chat-engine { margin-left: 6px; }
+.help-chat-error { color: #ff8a8a; }
+.help-chat-form { display: flex; flex-direction: column; gap: 6px; }
+.help-chat-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.help-chat-actions { display: flex; gap: 8px; }
+.help-chat-send { border: none; border-radius: 8px; padding: 8px 18px; background: #7c5cff; color: #fff; cursor: pointer; }
+.help-chat-send:disabled { opacity: 0.5; cursor: default; }
+.help-chat-clear { border: 1px solid #3a3a5c; border-radius: 8px; padding: 8px 12px; background: none; color: #cfcfe0; cursor: pointer; }
