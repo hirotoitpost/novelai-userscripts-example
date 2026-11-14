@@ -266,6 +266,22 @@ def panel_size_kind(rect: Rect) -> str:
     return "square"
 
 
+def image_size_kind(width: int, height: int) -> str:
+    """描いた絵の大きさの種類(portrait / landscape / square)。"""
+    return panel_size_kind((0, 0, width, height))
+
+
+def needs_redraw(image: tuple[int, int] | None, before: str | None, after: str) -> bool:
+    """
+    コマ割りが変わってコマの絵を描き直し待ちにするか。枠の形が変わり、しかも今の絵がその新しい形に合わないときだけ。
+    コマを足す・消すと最後のページのコマ数が変わり、枠の形が行き来する(grid4 の2コマのページは横長)。
+    縦長の枠のために描いた絵が、いったん横長の枠を通って縦長の枠に戻っても、描き直しは要らない。
+    """
+    if before == after:
+        return False
+    return image is None or image_size_kind(*image) != after
+
+
 # ---- 分割の木で表すコマ割り(パターンの生成・ドラッグでの大きさの調整) ----
 #
 # コマ割りを「領域を縦(段)か横(列)に分ける」の入れ子で表す。葉 "panel" が1コマ。

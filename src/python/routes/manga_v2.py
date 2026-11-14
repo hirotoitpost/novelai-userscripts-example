@@ -126,6 +126,7 @@ from ..manga_v2.layout import (
     aspect_mismatch,
     layout_patterns,
     layout_size,
+    needs_redraw,
     normalize_gaps,
     normalize_style,
     normalize_tree,
@@ -2280,7 +2281,11 @@ def _save_page_layouts(story_id: int, template: str, layouts: list[Any] | None) 
         set_manga_v2_page_layouts(conn, story_id, layouts)
         after = panel_size_kinds(story, template, layouts or [])
         sized = {s["id"] for s in story["scenes"] if s.get("panel_size")}
-        resized = [scene_id for scene_id, kind in after.items() if scene_id not in sized and before.get(scene_id) != kind]
+        images = {p["scene_id"]: (p["width"], p["height"]) for p in list_manga_panels(conn, story_id)}
+        resized = [
+            scene_id for scene_id, kind in after.items()
+            if scene_id not in sized and needs_redraw(images.get(scene_id), before.get(scene_id), kind)
+        ]
         stale = 0
         for scene_id in resized:
             stale += conn.execute("UPDATE manga_panels SET stale = 1 WHERE scene_id = ?", (scene_id,)).rowcount
