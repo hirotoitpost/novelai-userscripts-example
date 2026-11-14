@@ -6,6 +6,15 @@ export function fileUrl(path: string, download = false): string {
   return `${API_ORIGIN}/api/library/file?path=${encodeURIComponent(path)}${download ? '&download=true' : ''}`
 }
 
+/**
+ * fetch() で画像の中身を読むとき用の URL(画面と同じ配信元。開発中は Vite の中継を通す。apiFetch と同じ道)。
+ * スマホ(LAN の別の端末)からは、:8000 へ直接の fetch が「Failed to fetch」になることがある(<img> は読める)。
+ * ビルドした画面をバックエンドが配るときは fileUrl と同じ場所になる。
+ */
+export function fileFetchUrl(path: string): string {
+  return `/api/library/file?path=${encodeURIComponent(path)}`
+}
+
 /** 一覧用の縮小画像(WebP)。width はサーバーで 240/360/480/720 のいずれかに丸める。 */
 export function thumbUrl(path: string, width = 360): string {
   return `${API_ORIGIN}/api/library/thumb?path=${encodeURIComponent(path)}&w=${width}`
