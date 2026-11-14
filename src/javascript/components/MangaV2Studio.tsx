@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
@@ -188,9 +188,9 @@ export default function MangaV2Studio({
   const [overwriteSfx, setOverwriteSfx] = useState(false)
   // 描き文字の自動選択で成人向け素材のスタンプも使うか(既定は使わない)
   const [includeAdult, setIncludeAdult] = useLocalStorage('nai_manga_v2_include_adult', false)
-  // 対象のシーン範囲(表示は1始まり)。既定は1ページ分。
+  // 対象のシーン範囲(表示は1始まり)。既定はその漫画の全シーン。
   const [sceneFrom, setSceneFrom] = useState(1)
-  const [sceneTo, setSceneTo] = useState(4)
+  const [sceneTo, setSceneTo] = useState(Math.max(1, scenes.length))
   // 効果音の編集中の値(scene_id → 入力文字列)
   const [ugoiraProjects, setUgoiraProjects] = useState<UgoiraProject[]>([])
   const [ugoiraLinks, setUgoiraLinks] = useState<UgoiraLink[]>([])
@@ -248,6 +248,23 @@ export default function MangaV2Studio({
     if (saved.monochrome !== undefined) setColor(!saved.monochrome)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storyId])
+
+  // 物語を開いたら、対象の範囲を全シーンにする。シーンが増減したときは、
+  // 終わりが全シーンのままだったときだけ新しい全シーンに合わせる(自分で狭めた範囲は保つ)。
+  const rangeStory = useRef(storyId)
+  const rangeCount = useRef(scenes.length)
+  useEffect(() => {
+    const count = scenes.length
+    if (rangeStory.current !== storyId) {
+      rangeStory.current = storyId
+      setSceneFrom(1)
+      setSceneTo(Math.max(1, count))
+    } else if (count !== rangeCount.current) {
+      const prev = rangeCount.current
+      setSceneTo(to => (to >= prev || prev === 0 ? Math.max(1, count) : to))
+    }
+    rangeCount.current = count
+  }, [storyId, scenes.length])
 
   // 物語を読み直したら、保存済みの効果音を入力欄に反映する(編集途中のものは保たない)
   useEffect(() => {
