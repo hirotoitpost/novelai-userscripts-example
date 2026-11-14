@@ -187,6 +187,11 @@ def test_nude_photobook_sets_poses_and_content_line() -> None:
     for s in solo_scenes(scenes):
         cid = s["character_ids"][0]
         assert "1.3::abs::" in s["negative_prompt"] and "smooth stomach" in s["character_outfits"][cid]
+    # 滑らかでハリのあるツヤ肌(キャラシートに shiny skin が無いキャラもマットにしない)。最後のタオルのコマも
+    for s in scenes:
+        for outfit in s["character_outfits"].values():
+            assert "shiny skin" in outfit and "firm skin" in outfit
+        assert "matte skin" in s["negative_prompt"]
     # 下半身の影を打ち消し、肌を均一に明るく。逆光・シルエットのコマは影がわざと付くので足さない
     for s in solo_scenes(scenes):
         backlit = "silhouette" in s["prompt_tags"] or "backlighting" in s["prompt_tags"]
