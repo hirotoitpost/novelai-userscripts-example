@@ -291,3 +291,25 @@ def test_catalog_lists_nude2_sets_and_poses_by_kind(client: TestClient) -> None:
     adult = _character("しらね", 22)
     res = client.post("/api/collections", json={"kind": "nude2", "character_ids": [adult], "themes": ["夜明けの砂丘"]})
     assert res.status_code == 200, res.text
+
+
+def test_nude2_squat_and_balance_from_every_angle() -> None:
+    keys = {
+        "washitsu_squat": "from front", "washitsu_squat_front_low": "from below", "washitsu_squat_back": "from behind",
+        "washitsu_squat_back_low": "from below", "washitsu_squat_side": "from side",
+        "atelier_i_balance": "from side", "atelier_i_balance_front_low": "from below",
+        "atelier_i_balance_back": "from behind", "atelier_i_balance_back_low": "from below",
+    }
+    scenes = solo_scenes(build_collection(PAIR[:1], CollectionOptions(kind="nude2", poses=list(keys)))["scenes"])
+    assert len(scenes) == len(keys)
+    for s, view in zip(scenes, keys.values()):
+        action = s["character_actions"][1]
+        assert "sumo squat" in action or "standing split" in action
+        assert view in s["prompt_tags"]
+        # 脚を開くポーズ: 股の赤い印・筋を打ち消し、背面は振り向かない
+        assert "cleft of venus" in s["negative_prompt"] and "spread legs" not in s["negative_prompt"]
+        if "facing away" in action:
+            assert "looking back" in s["negative_prompt"] and "from behind" in s["prompt_tags"]
+    # 背面下からは、背面かつ下から
+    back_low = [s for s in scenes if "from behind" in s["prompt_tags"] and "from below" in s["prompt_tags"]]
+    assert len(back_low) == 2
