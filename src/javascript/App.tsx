@@ -32,6 +32,7 @@ import StoryLibrary from './pages/StoryLibrary'
 import Writer from './pages/Writer'
 import { TaskTray } from './components/TaskStatus'
 import NoticeBell from './components/NoticeBell'
+import AssistantPanel from './components/AssistantPanel'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -176,6 +177,8 @@ export default function App() {
         <TaskTray />
         {/* 作業が要ること(バックアップの写し先の空き など。管理者だけ) */}
         <NoticeBell />
+        {/* 作業アシスタント(次の操作・ヘルプ。右端から開く) */}
+        <AssistantPanel />
       </BrowserRouter>
     </AuthProvider>
   )

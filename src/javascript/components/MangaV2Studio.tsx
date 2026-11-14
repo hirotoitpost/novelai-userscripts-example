@@ -541,7 +541,7 @@ export default function MangaV2Studio({
   }
 
   return (
-    <div className="mv2">
+    <div className="mv2" id="manga-v2">
       <div className="story-settings">
         <div className="story-row">
           <label>
