@@ -816,6 +816,10 @@ def start(kind: str, work: Callable[[Progress], dict[str, Any]]) -> Job:
             current.message = str(exc)
         finally:
             current.finished_at = datetime.now(timezone.utc).isoformat()
+            # お知らせ(空きの見込み・失敗)を出し直す
+            from . import notices
+
+            notices.invalidate()
 
     current.thread = threading.Thread(target=runner, name=f"backup-{kind}", daemon=True)
     current.thread.start()

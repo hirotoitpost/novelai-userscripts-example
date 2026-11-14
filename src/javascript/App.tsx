@@ -30,6 +30,7 @@ import Story from './pages/Story'
 import StoryLibrary from './pages/StoryLibrary'
 import Writer from './pages/Writer'
 import { TaskTray } from './components/TaskStatus'
+import NoticeBell from './components/NoticeBell'
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const { isAuthenticated } = useAuth()
@@ -164,6 +165,8 @@ export default function App() {
         <AppRoutes />
         {/* ほかのページで始めた処理の状況(どのページにいても出す) */}
         <TaskTray />
+        {/* 作業が要ること(バックアップの写し先の空き など。管理者だけ) */}
+        <NoticeBell />
       </BrowserRouter>
     </AuthProvider>
   )

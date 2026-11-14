@@ -791,6 +791,9 @@ async def put_data_backup_settings(req: DataBackupSettings) -> dict[str, Any]:
 
     disks = await asyncio.to_thread(_register_disks, req)
     backup.save_settings(backup.Settings(disks, req.copies, req.include_datasets, req.auto))
+    from .. import notices
+
+    notices.invalidate()
     return await asyncio.to_thread(_data_backup_state)
 
 
@@ -938,3 +941,47 @@ async def reset_vocabulary(key: str) -> dict[str, Any]:
         return vocabulary.reset(key)
     except KeyError:
         raise HTTPException(status_code=404, detail="その語彙はありません。")
+
+
+# ---- お知らせ(notices.py。画面右下のベル) ----
+
+
+class NoticeSnooze(BaseModel):
+    key: str = Field(..., max_length=300)
+    days: float = Field(..., gt=0, le=365)
+
+
+class NoticeDismiss(BaseModel):
+    key: str = Field(..., max_length=300)
+    fingerprint: str = Field(..., max_length=64)
+
+
+@router.get("/notices")
+async def get_notices(refresh: bool = False) -> dict[str, Any]:
+    from .. import notices
+
+    return await asyncio.to_thread(notices.listing, refresh)
+
+
+@router.post("/notices/snooze")
+async def post_notice_snooze(req: NoticeSnooze) -> dict[str, Any]:
+    from .. import notices
+
+    notices.snooze(req.key, req.days)
+    return await asyncio.to_thread(notices.listing)
+
+
+@router.post("/notices/dismiss")
+async def post_notice_dismiss(req: NoticeDismiss) -> dict[str, Any]:
+    from .. import notices
+
+    notices.dismiss(req.key, req.fingerprint)
+    return await asyncio.to_thread(notices.listing)
+
+
+@router.post("/notices/restore")
+async def post_notice_restore() -> dict[str, Any]:
+    from .. import notices
+
+    notices.restore_all()
+    return await asyncio.to_thread(notices.listing)

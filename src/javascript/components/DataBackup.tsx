@@ -191,7 +191,7 @@ export default function DataBackup() {
   const health = state?.health
   const active = state?.disks.filter(d => d.available && !d.retiring).length ?? 0
   return (
-    <section className="adm-section">
+    <section className="adm-section" id="data-backup">
       <h2>画像・作品データのバックアップ</h2>
       <p className="adm-hint">
         DB(物語・キャラ・設定・履歴)と、生成画像・漫画のコマとページ・取り込んだ作品・素材・出版物・ごみ箱を、指定したフォルダ

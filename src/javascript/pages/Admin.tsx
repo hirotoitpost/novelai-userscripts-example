@@ -1,6 +1,6 @@
 import { BACKEND_ORIGIN } from '../backendOrigin'
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import ContentGuardRules from '../components/ContentGuardRules'
 import GuardProfiles from '../components/GuardProfiles'
@@ -156,6 +156,16 @@ export default function Admin() {
   const navigate = useNavigate()
   const [tab, setTab] = useLocalStorage<Tab>('nai_admin_tab', 'status')
   const [applied, setApplied] = useState<Applied | null>(null)
+  // お知らせの「開く」(/admin?tab=ops#data-backup): そのタブを開き、その欄までスクロールする
+  const location = useLocation()
+  useEffect(() => {
+    const wanted = new URLSearchParams(location.search).get('tab')
+    if (wanted && TABS.some(t => t.id === wanted)) setTab(wanted as Tab)
+    const anchor = location.hash.slice(1)
+    if (!anchor) return
+    const id = window.setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300)
+    return () => window.clearTimeout(id)
+  }, [location.search, location.hash, setTab])
 
   return (
     <AppliedContext.Provider value={setApplied}>
@@ -671,7 +681,7 @@ function OpsTab() {
         </div>
       </section>
 
-      <section className="adm-section">
+      <section className="adm-section" id="storage">
         <div className="adm-row">
           <h2>保存領域</h2>
           <button type="button" onClick={() => void storage.refresh()}>測り直す</button>
