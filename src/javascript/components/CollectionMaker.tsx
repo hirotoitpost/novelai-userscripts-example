@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Character } from './StoryCharacters'
 
 /**
- * 下着・水着のコレクション/からかいコレクションを、好きなキャラで物語にする(/api/collections)。
+ * 下着・水着のコレクション/からかいコレクション/ヌード写真集を、好きなキャラで物語にする(/api/collections)。
  * テーマ(衣装)とポーズの組み合わせで台本を作るだけなので、できた物語は編集画面でセリフ・タグを直してから描ける。
  * 成人キャラ(年齢を入れた 18 歳以上)だけを選べる。
  */
@@ -11,6 +11,8 @@ interface Catalog {
   kinds: { id: string; label: string }[]
   themes: Record<string, string[]>
   poses: { key: string; label: string; wedgie: boolean }[]
+  /** ヌード写真集のポーズ(撮影場所 set ごと) */
+  nude_poses?: { key: string; label: string; set: string }[]
   bodies: { id: string; label: string }[]
 }
 
@@ -53,13 +55,20 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   }, [apiOrigin])
 
   const tease = kind.startsWith('tease')
+  const nude = kind === 'nude'
   const themeNames = catalog?.themes[kind] ?? []
   const adults = characters.filter(isAdult)
   const pickedThemes = themeNames.filter(t => themes.size === 0 || themes.has(t))
   const pickedPoses = (catalog?.poses ?? []).filter(p => poses.size === 0 || poses.has(p.key))
-  // コマ数の目安: みんなのコマ2枚 + (からかい: ポーズ×人数 / コレクション: テーマ×(見出し+人数×正面・背面))
+  const nudePoses = (catalog?.nude_poses ?? []).filter(p => themes.size === 0 || themes.has(p.set))
+  const pickedNude = nudePoses.filter(p => poses.size === 0 || poses.has(p.key))
+  const nudeSets = new Set(pickedNude.map(p => p.set)).size
+  // コマ数の目安: みんなのコマ2枚 + (からかい: ポーズ×人数 / ヌード: 場所の見出し+ポーズ×人数 /
+  // コレクション: テーマ×(見出し+人数×正面・背面))
   const panels = cast.length === 0 ? 0
-    : 2 + (tease ? pickedPoses.length * cast.length : pickedThemes.length * (1 + cast.length * 2))
+    : 2 + (tease ? pickedPoses.length * cast.length
+      : nude ? nudeSets + pickedNude.length * cast.length
+        : pickedThemes.length * (1 + cast.length * 2))
 
   function toggle(set: Set<string>, value: string, update: (next: Set<string>) => void) {
     const next = new Set(set)
@@ -77,7 +86,8 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind, character_ids: cast, title: title.trim() || null, body: body || null, style_tags: styleTags,
-          explicit, lines, themes: [...themes].filter(t => themeNames.includes(t)), poses: tease ? [...poses] : [],
+          explicit, lines, themes: [...themes].filter(t => themeNames.includes(t)),
+          poses: tease || nude ? [...poses] : [],
         }),
       })
       if (!res.ok) throw new Error(await errorDetail(res))
@@ -97,14 +107,14 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
       <div className="story-row">
         <label>
           種類
-          <select value={kind} disabled={off} onChange={e => { setKind(e.target.value); setThemes(new Set()) }}>
+          <select value={kind} disabled={off} onChange={e => { setKind(e.target.value); setThemes(new Set()); setPoses(new Set()) }}>
             {catalog.kinds.map(k => <option key={k.id} value={k.id}>{k.label}</option>)}
           </select>
         </label>
         <label>
           体つき
           <select value={body} disabled={off} onChange={e => setBody(e.target.value)}>
-            <option value="">おまかせ({tease ? 'むっちり' : 'すらっと'})</option>
+            <option value="">おまかせ({tease ? 'むっちり' : nude ? 'キャラシートのまま' : 'すらっと'})</option>
             {catalog.bodies.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
           </select>
         </label>
@@ -128,7 +138,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
       </fieldset>
 
       <fieldset className="collection-maker-group">
-        <legend>テーマ(衣装。何も選ばなければ全部)</legend>
+        <legend>{nude ? '撮影場所(何も選ばなければ全部)' : 'テーマ(衣装。何も選ばなければ全部)'}</legend>
         {themeNames.map(t => (
           <label key={t} className="collection-maker-check">
             <input type="checkbox" checked={themes.has(t)} disabled={off} onChange={() => toggle(themes, t, setThemes)} />
@@ -149,6 +159,18 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
         </fieldset>
       )}
 
+      {nude && (
+        <fieldset className="collection-maker-group">
+          <legend>ポーズ(乳首・性器は描きません。キャラ全員がそれぞれ演じます。何も選ばなければ全部)</legend>
+          {nudePoses.map(p => (
+            <label key={p.key} className="collection-maker-check">
+              <input type="checkbox" checked={poses.has(p.key)} disabled={off} onChange={() => toggle(poses, p.key, setPoses)} />
+              {p.set}: {p.label}
+            </label>
+          ))}
+        </fieldset>
+      )}
+
       <div className="story-row">
         <label className="collection-maker-wide">
           画風のタグ(任意。全コマの作画タグに足します)
@@ -157,10 +179,10 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
         </label>
       </div>
       <div className="story-row">
-        <label className="collection-maker-check">
+        {!nude && <label className="collection-maker-check">
           <input type="checkbox" checked={explicit} disabled={off} onChange={e => setExplicit(e.target.checked)} />
           explicit を足す(食い込み・肌の柔らかさが出ます。乳首・性器などはネガティブで打ち消します)
-        </label>
+        </label>}
         <label className="collection-maker-check">
           <input type="checkbox" checked={lines} disabled={off} onChange={e => setLines(e.target.checked)} />
           ひとことセリフを入れる(あとで編集画面で直せます)

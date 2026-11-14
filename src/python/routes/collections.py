@@ -1,5 +1,5 @@
 """
-下着・水着のコレクションと、からかいコレクションを、好きなキャラで作る(collection_templates.py の台本を
+下着・水着のコレクションと、からかいコレクション・ヌード写真集を、好きなキャラで作る(collection_templates.py の台本を
 /api/story/scripted と同じ手順で物語にする)。成人キャラ(年齢を入れた 18 歳以上)だけで作れる。
 """
 
@@ -20,10 +20,10 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 
 
 class CollectionRequest(BaseModel):
-    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit"]
+    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude"]
     character_ids: list[int] = Field(min_length=1, max_length=4)
     title: Optional[str] = Field(None, max_length=200)
-    # 体つき: sheet(キャラシートのまま)/ slender / curvy。省略時はコレクションが slender、からかいが curvy
+    # 体つき: sheet(キャラシートのまま)/ slender / curvy。省略時はコレクションが slender、からかいが curvy、ヌードが sheet
     body: Optional[Literal["sheet", "slender", "curvy"]] = None
     style_tags: str = Field("", max_length=1000)
     explicit: bool = True

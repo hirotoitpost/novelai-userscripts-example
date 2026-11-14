@@ -837,6 +837,14 @@
       "description": "下着・水着のコレクションとからかいコレクションの、どのコマにも入れるネガティブ(乳首・乳輪・性器・cameltoe など)。",
       "kind": "text",
       "value": "nipples, areolae, nipple outline, covered nipples, pussy, genitals, pubic hair, anus, cameltoe, crotch focus, spread legs, see-through panties, child, loli, multiple views"
+    },
+    {
+      "key": "collection.nude_negative",
+      "group": "コレクション",
+      "label": "ヌード写真集で描いてはいけないもの",
+      "description": "ヌード写真集の、どのコマにも入れるネガティブ(乳首・乳輪・性器など)。乳首・性器は描かず(featureless)、湯気・モザイクで隠さない。脚を開くポーズ(M字など)以外は、テンプレートが spread legs も足す。",
+      "kind": "text",
+      "value": "nipples, areolae, nipple outline, pussy, genitals, clitoris, labia, cameltoe, pubic hair, anus, nsfw, child, loli, multiple views, steam, fog, mist, censored, mosaic censoring, bar censor"
     }
   ]
 }

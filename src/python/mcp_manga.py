@@ -537,10 +537,13 @@ def register_manga_tools(mcp: MCPServer) -> None:
         lines: bool = True,
     ) -> dict[str, Any]:
         """
-        下着・水着のコレクション/からかいコレクションの漫画(物語)を、選んだ成人キャラで作る。絵は manga_generate_panels。
-        kind: lingerie(下着)/ swimsuit(水着)/ tease_lingerie(からかい下着)/ tease_swimsuit(からかい水着)
-        body: sheet(キャラシートのまま)/ slender / curvy(省略時はコレクションが slender、からかいが curvy)
-        poses: からかいのポーズのキー(省略で全部。キャラ全員がそれぞれ演じる)/ themes: テーマの名前(省略で全部)
+        下着・水着のコレクション/からかいコレクション/ヌード写真集の漫画(物語)を、選んだ成人キャラで作る。
+        絵は manga_generate_panels。
+        kind: lingerie(下着)/ swimsuit(水着)/ tease_lingerie(からかい下着)/ tease_swimsuit(からかい水着)/
+              nude(ヌード写真集。乳首・性器は描かない featureless。撮影場所ごとにポーズを演じる。explicit は足さない)
+        body: sheet(キャラシートのまま)/ slender / curvy(省略時はコレクションが slender、からかいが curvy、ヌードが sheet)
+        poses: からかいのポーズのキー、nude ならヌードのポーズのキー(nude_poses)。省略で全部。キャラ全員がそれぞれ演じる
+        themes: テーマの名前(nude なら撮影場所の名前。省略で全部)
         style_tags: 全コマの作画タグに足す画風。種類・テーマ・ポーズの一覧は manga_collection_catalog。
         """
         req = {
@@ -552,7 +555,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
 
     @mcp.tool()
     async def manga_collection_catalog() -> dict[str, Any]:
-        """manga_create_collection で選べる種類・テーマ・からかいのポーズ(キー)・体つきの一覧。"""
+        """manga_create_collection で選べる種類・テーマ・からかいのポーズ(キー)・ヌードのポーズ(nude_poses)・体つきの一覧。"""
         return await _call("GET", "/api/collections")
 
     @mcp.tool()
