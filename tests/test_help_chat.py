@@ -69,6 +69,10 @@ def test_messages_contain_only_picked_articles_and_recent_history() -> None:
     ("ベルを消したい", "notices", "隠す"),
     ("写し先を外す手順は?", "backup-remove-disk", "手順"),
     ("戻すとファイルは消えますか", "backup-restore", "戻すときの動き"),
+    ("漫画の作り方を教えて", "manga", "全体の流れ"),
+    ("コマを描き直したい", "manga-panels", "1コマだけ描き直す"),
+    ("吹き出しの位置を変えたい", "manga-compose", "位置を整える"),
+    ("登場人物を抽出すると何が起きる?", "manga-characters", "抽出の注意"),
 ])
 def test_excerpt_quotes_the_right_section(question: str, article: str, section: str) -> None:
     answer = help_chat.excerpt(question, help_chat.pick(question, help_chat.load_articles()))

@@ -2,6 +2,7 @@ import { BACKEND_ORIGIN } from '../backendOrigin'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BackButton from '../components/BackButton'
+import HelpLink from '../components/HelpLink'
 import { SESSION_TOKEN, useAuth } from '../context/AuthContext'
 import { decodeStoryDocument } from '../novelaiDocument'
 import MangaImageSettings, {
@@ -769,7 +770,7 @@ export default function Story() {
         <button type="button" className="story-back" onClick={() => navigate('/story-library')}>
           📚 物語を読む
         </button>
-        <h1>物語 → 挿絵 → 漫画</h1>
+        <h1>物語 → 挿絵 → 漫画<HelpLink slug="manga" /></h1>
         <p className="story-intro">
           前提からOllamaでシーン分割ドラフトを作り、各シーンをNovelAI公式(Kayra)に書き継がせ、
           NovelAI Diffusion V5でページごとにコマ割り済みの挿絵を生成し、最後に1枚の漫画へまとめます。
@@ -1067,7 +1068,7 @@ export default function Story() {
 
         {story && (
           <section className="story-section">
-            <h2>シーン一覧</h2>
+            <h2>シーン一覧<HelpLink slug="manga" label="漫画づくりの流れ" /></h2>
             {!isUnsplitImport && story.scenes.length > 0 && (
               <div className="story-actions">
                 <button type="button" disabled={busy} onClick={() => setEditing(true)}

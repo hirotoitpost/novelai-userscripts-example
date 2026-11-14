@@ -72,6 +72,9 @@ SYNONYMS: dict[str, str] = {
     "通知": "お知らせ ベル",
     "ディスク": "写し先",
     "ドライブ": "写し先 ディスク",
+    "作り方": "流れ 手順",
+    "作る": "流れ",
+    "やり方": "流れ 手順",
 }
 
 
@@ -170,7 +173,8 @@ def excerpt(question: str, articles: list[Article]) -> str:
         return "ヘルプには書いてありません。[ヘルプの一覧](/help) から探してください。"
     article = articles[0]
     wanted = _grams(expand(question))
-    sections = _sections(article.body)
+    # 「関連する記事」のようにリンクを並べただけの節は、答えにしない
+    sections = [sec for sec in _sections(article.body) if "関連" not in sec[0]] or _sections(article.body)
     # 言い換えの言葉(隠す・足す など)がそのまま見出しにあれば、文字の重なりより重く見る
     words = [w for key, ws in SYNONYMS.items() if key in question for w in ws.split()]
 

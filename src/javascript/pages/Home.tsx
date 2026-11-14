@@ -251,7 +251,7 @@ export default function Home() {
           >
             <div className="home-card-icon">❓</div>
             <h2>ヘルプ</h2>
-            <p>機能ごとの手順の説明(バックアップの写し先を足す・外す、戻す、保存領域の片付け、お知らせ など)。</p>
+            <p>機能ごとの手順の説明(漫画づくりの流れ、バックアップの写し先を足す・外す、保存領域の片付け、お知らせ など)と、記事を元に答えるチャット。</p>
             <span className="home-card-badge home-card-badge--open">開く →</span>
           </div>
 
