@@ -281,6 +281,10 @@ SKIN_NEGATIVE = "red skin, orange skin, black skin, colored skin, uneven skin co
 # キャラシートの体型(athletic・toned)は場面で外せないので、腹筋が強く割れる絵を打ち消し、なめらかなお腹を足す
 # (しらね・あかね 物語301 2026-11-14。体型はキャラシートのまま、腹筋の割れだけを抑える)
 SOFT_BELLY = "smooth stomach, soft skin"
+# 肌の質感: 滑らかでハリのあるツヤ肌。体つき sheet(既定)では shiny skin が入らず、キャラシートの画風に
+# shiny skin が無いキャラ(しらね・あかね)はマットな肌になった(物語301 2026-11-14)
+SKIN_FINISH = "shiny skin, glossy skin, smooth skin, firm skin"
+MATTE_NEGATIVE = "matte skin, dry skin, rough skin"
 ABS_NEGATIVE = "1.3::abs::, six pack, defined abs, muscle definition, ribs"
 # 下半身に濃い影が付きがち(物語301)。肌を均一に明るく描かせる。逆光・シルエットのコマには付けない
 EVEN_LIGHT = "even lighting, evenly lit skin"
@@ -464,13 +468,13 @@ def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) ->
     if not plan:
         raise ValueError("撮影場所・ポーズが1つもありません。")
     art = "art nude, fine art photography, gravure, photoshoot"
-    base_negative = _join(content_guard.text("collection.nude_negative"), HAND_NEGATIVE, SKIN_NEGATIVE)
+    base_negative = _join(content_guard.text("collection.nude_negative"), HAND_NEGATIVE, SKIN_NEGATIVE, MATTE_NEGATIVE)
     ids = [int(c["id"]) for c in characters]
     names = "・".join(str(c["name"]) for c in characters)
     group = "solo" if len(ids) == 1 else "standing side by side"
 
     def outfit(*parts: str) -> str:
-        return _join(body, NUDE_BODY, SOFT_BELLY, *parts)
+        return _join(body, NUDE_BODY, SKIN_FINISH, SOFT_BELLY, *parts)
 
     def light(tags: str) -> tuple[str, str]:
         """(作画タグに足す明るさ, ネガティブに足す影の打ち消し)。逆光・シルエットのコマは影がわざと付くので足さない。"""
@@ -513,7 +517,7 @@ def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) ->
     scenes.append(_scene(
         _join(last.stage, group, "upper body", art, options.style_tags), ids,
         {cid: "wrapped in white bath towel, holding towel, wink, peace sign, smile, looking at viewer" for cid in ids},
-        {cid: _join(body, "white bath towel, towel wrap, bare shoulders, wet skin") for cid in ids},
+        {cid: _join(body, SKIN_FINISH, "white bath towel, towel wrap, bare shoulders, wet skin") for cid in ids},
         _join(base_negative, "spread legs"),
         narration=f"{KINDS['nude']}、おしまい。",
     ))
