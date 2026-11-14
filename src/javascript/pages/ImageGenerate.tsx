@@ -13,7 +13,7 @@ import {
   ImagePreset, ImagePresetSettings, CharacterSheetPrompt, isAuthExpired, notifyAuthExpired, CharacterPromptInput,
   MetadataGenerationSettings, GENERATE_FROM_IMAGE_KEY, CharacterReferenceInput, GalleryImageReferences,
 } from '../api'
-import { fileUrl } from '../library'
+import { fileFetchUrl } from '../library'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
 import { insertTag } from '../tagInsert'
 import ImageCropDialog from '../components/ImageCropDialog'
@@ -46,7 +46,7 @@ function readAsDataUrl(blob: Blob): Promise<string> {
 
 /** ギャラリーの画像(利用者のフォルダからの相対パス)を data URL にする。 */
 async function pathToDataUrl(path: string): Promise<string> {
-  const res = await fetch(fileUrl(path), { cache: 'no-store' })
+  const res = await fetch(fileFetchUrl(path), { cache: 'no-store' })
   if (!res.ok) throw new Error(`画像を読み込めませんでした(HTTP ${res.status})`)
   return readAsDataUrl(await res.blob())
 }

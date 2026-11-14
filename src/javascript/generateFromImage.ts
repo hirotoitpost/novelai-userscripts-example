@@ -1,6 +1,6 @@
 import { apiFetch, GENERATE_FROM_IMAGE_KEY } from './api'
 import type { GalleryImageReferences, MetadataGenerationSettings } from './api'
-import { fileUrl } from './library'
+import { fileFetchUrl } from './library'
 
 /** 似た画像を作る元の画像(ギャラリーの画像、キャラの生成した画像のページの画像) */
 export interface SourceImage {
@@ -27,8 +27,8 @@ export async function prepareGenerateFromImage(
 ): Promise<void> {
   let settings: MetadataGenerationSettings
   try {
-    // 表示用に読み込み済みの画像(別オリジンの <img>)はキャッシュから使えないので、読み直す
-    const res = await fetch(fileUrl(image.path), { cache: 'no-store' })
+    // 表示用に読み込み済みの画像(別オリジンの <img>)はキャッシュから使えないので、同じ配信元から読み直す
+    const res = await fetch(fileFetchUrl(image.path), { cache: 'no-store' })
     if (!res.ok) throw new Error(`画像を読み込めませんでした(HTTP ${res.status})`)
     const blob = await res.blob()
     const data = await new Promise<string>((resolve, reject) => {
