@@ -1,13 +1,15 @@
 """
-下着・水着のコレクションと、からかいコレクションの漫画を、好きなキャラで作るためのテンプレート。
+下着・水着のコレクションと、からかいコレクション・ヌード写真集の漫画を、好きなキャラで作るためのテンプレート。
 
 テーマ(衣装)とポーズを組み合わせて、台本(1シーン=1コマ。routes/story.py の /api/story/scripted と同じ形)を作る。
 - コレクション: テーマごとに、キャラが一人ずつ立ちポーズで登場する(見出しの風景のコマ付き)。
 - からかいコレクション: 選んだポーズを、キャラ全員がそれぞれ1コマずつ演じる(衣装はテーマを順に回す)。
   食い込み(wedgie)のポーズは、自分で引き上げてからかう場面としてだけ使う。
+- ヌード写真集: 撮影場所(スタジオ・朝のベッド・窓辺・バスタブ・夕暮れのヴィラ)ごとに、見出しの風景のコマと、
+  その場所のポーズをキャラ全員がそれぞれ演じる(夜宮すみれの写真集 物語299 から作った。2026-11-14)。
 
-描いてはいけないもの(乳首・乳輪・性器・cameltoe など)はネガティブで必ず打ち消す。成人キャラ専用(年齢を入れた
-18 歳以上のキャラだけ。呼び出し側で確かめる)。
+描いてはいけないもの(乳首・乳輪・性器・cameltoe など)はネガティブで必ず打ち消す。ヌードは乳首・性器を描かない
+featureless の絵で、湯気・モザイクで隠さない。成人キャラ専用(年齢を入れた 18 歳以上のキャラだけ。呼び出し側で確かめる)。
 """
 
 from __future__ import annotations
@@ -18,13 +20,14 @@ from typing import Any, Literal
 from . import content_guard
 from . import vocabulary as vocab
 
-Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit"]
+Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude"]
 
 KINDS: dict[str, str] = {
     "lingerie": "下着コレクション",
     "swimsuit": "水着コレクション",
     "tease_lingerie": "からかい下着コレクション",
     "tease_swimsuit": "からかい水着コレクション",
+    "nude": "ヌード写真集",
 }
 
 # 場所(作画タグ)
@@ -257,6 +260,248 @@ def _scene(
     }
 
 
+# ---- ヌード写真集 ----
+#
+# 乳首・性器は描かない(featureless)。湯気・泡・モザイクでは隠さず、腕・ポーズ・角度・シーツ・カーテン・花びらで自然に隠す。
+# 描いてはいけないものは、コンテンツガードの collection.nude_negative(どのコマにも入れる)。
+# 脚を開くポーズ(M字・四つんばいの後ろ姿)以外は、spread legs も打ち消す。
+# 股の付け根の線(鼠径部)は正しい体の線で、性器ではない(ユーザーの判断 2026-11-14)。
+
+NUDE_BODY = "nude, completely nude, adult proportions"
+FEATURELESS = "featureless breasts, featureless crotch"
+# シーツ・カーテン・タオルを使わないコマで、服・水着を打ち消す
+NUDE_CLOTHES_NEGATIVE = "clothes, swimsuit, bikini, underwear, towel, tan lines"
+# 濡れた肌のコマ(水の中・湯船)で、泡・湯気で隠す絵にしない
+WET = "wet skin, water droplets, glistening skin"
+NO_FOAM = "foam, bubbles, soap suds"
+# 四つんばいで膝が浮いて、立って脚を開く絵になるのを打ち消す(下からの視点 from below でも起きる)
+KNEES_DOWN_NEGATIVE = "standing, straight legs, bent over, standing split"
+
+
+@dataclass(frozen=True)
+class NudePose:
+    key: str
+    label: str
+    action: str
+    framing: str
+    line: str
+    # 場面の服装に足すもの(featureless・濡れた肌・小物)。容姿・体つきはキャラシートのまま
+    outfit: str = FEATURELESS
+    # 脚を開くポーズ(spread legs を打ち消さない)
+    open_legs: bool = False
+    # 顔を見せない後ろ姿
+    face_away: bool = False
+    # シーツ・カーテン・タオルなど、体に掛ける小物がある(服・タオルを打ち消さない)
+    prop: bool = False
+    negative: str = ""
+
+
+@dataclass(frozen=True)
+class NudeSet:
+    name: str
+    # 撮影場所(このセットの全コマの作画タグ)と、見出しの風景のコマに足すもの
+    stage: str
+    scenery: str
+    poses: tuple[NudePose, ...]
+    # この場所で髪を下ろす(まとめ髪のキャラだけ。寝起きのベッド)
+    hair_down: bool = False
+    wet: bool = False
+    negative: str = ""
+
+
+NUDE_SETS = (
+    NudeSet(
+        "スタジオ", "white background, simple background, photo studio, soft lighting",
+        "white backdrop, softbox lights, camera on tripod",
+        (
+            NudePose("studio_stand", "立ち(腕で胸を隠す)",
+                     "standing, front view, one arm across chest, hand on own thigh, smug smile, blush, looking at viewer",
+                     "cowboy shot", "……脱いじゃった"),
+            NudePose("studio_back", "後ろ姿(振り返る)",
+                     "from behind, back, looking back over shoulder, smile, hands behind head", "cowboy shot, from behind",
+                     "背中のライン、自信あるんだ", outfit="bare back, ass"),
+            NudePose("studio_knees", "膝を抱えて座る",
+                     "sitting on floor, hugging own knees, knees together, head tilt, alluring smile, looking at viewer",
+                     "full body", "こういうの、好き？", outfit="featureless breasts"),
+            NudePose("studio_lying", "横寝(肘をつく)",
+                     "lying on side, propped up on elbow, legs together, knees slightly bent, smile, looking at viewer",
+                     "full body, from side", "……カメラマンさん、目が真剣"),
+            NudePose("squat", "しゃがみ",
+                     "squatting, front view, arms resting on knees, hands between knees, head tilt, shy smile, blush, "
+                     "looking at viewer", "full body", "このポーズ、ちょっと恥ずかしいな", outfit=f"barefoot, {FEATURELESS}",
+                     open_legs=True, negative="kneeling, seiza"),
+            NudePose("m_legs", "M字",
+                     "sitting on floor, m legs, knees up, leaning back, hands on floor behind, smug smile, blush, "
+                     "looking at viewer", "full body", "……大胆すぎ？", outfit=f"barefoot, {FEATURELESS}", open_legs=True),
+            NudePose("m_legs_wide", "M字(大きく開く)",
+                     "sitting on floor, 1.4::m legs::, 1.3::knees apart::, wide spread knees, knees up, feet on floor, "
+                     "leaning back, hands on floor behind, seductive smile, blush, looking at viewer", "full body",
+                     "……もっと、開いちゃう", outfit="barefoot, featureless breasts, 1.3::featureless crotch::", open_legs=True),
+            NudePose("all_fours_side", "四つんばい(横から)",
+                     "all fours, on hands and knees, from side, arched back, looking at viewer, playful smile",
+                     "full body, from side", "にゃーん、なんて", outfit=f"barefoot, {FEATURELESS}"),
+            NudePose("all_fours_front", "四つんばい(正面から這い寄る)",
+                     "all fours, crawling towards viewer, on hands and knees, hanging breasts, seductive smile, "
+                     "looking at viewer", "full body, from front", "そっちまで、行っちゃうよ？", outfit="featureless breasts",
+                     negative="red skin, pink skin, uneven skin color"),
+            NudePose("all_fours_back", "四つんばい(後ろ姿・振り返る)",
+                     "all fours, on hands and knees, from behind, ass, arched back, looking back over shoulder, "
+                     "teasing smile, blush", "full body, from behind", "後ろからも、撮るの？",
+                     outfit="barefoot, soles, featureless crotch", open_legs=True),
+            # 振り向かず後頭部だけ、膝を開いて床につく。真後ろから(ユーザーが目標にした絵 2026-11-14)
+            NudePose("all_fours_away", "四つんばい(後ろ姿・顔なし)",
+                     "1.4::all fours::, on hands and knees, 1.3::knees on floor::, shins on floor, from behind, "
+                     "1.3::facing away::, back of head, head facing forward, 1.2::knees apart::, arched back, ass, soles",
+                     "full body, from behind, directly behind, symmetrical", "……ちゃんと、撮れてる？",
+                     outfit="barefoot, 1.3::featureless crotch::", open_legs=True, face_away=True,
+                     negative=f"{KNEES_DOWN_NEGATIVE}, profile"),
+            # 同じポーズを腰の高さ・腰を手前に寄せて(からかいの「四つんばい(背面・顔なし)」の視点)
+            NudePose("all_fours_hips", "四つんばい(腰の高さから)",
+                     "1.4::all fours::, on hands and knees, 1.3::knees on floor::, shins on floor, from behind, "
+                     "1.3::facing away::, back of head, head facing forward, 1.2::knees apart::, arched back, ass, soles",
+                     "full body, from behind, directly behind, symmetrical, 1.3::straight-on::, camera at hip level, "
+                     "1.3::ass focus::, hips close to viewer, foreshortening", "……顔、見えないでしょ",
+                     outfit="barefoot, 1.3::featureless crotch::", open_legs=True, face_away=True,
+                     negative=f"{KNEES_DOWN_NEGATIVE}, profile"),
+        ),
+    ),
+    NudeSet(
+        "朝のベッド", "bedroom, white bed sheets, morning, sunlight through curtains", "messy bed",
+        (
+            NudePose("bed_stomach", "うつぶせの寝起き",
+                     "lying on stomach, on bed, chin on arms, sleepy smile, half-closed eyes, looking at viewer",
+                     "upper body, from above", "おはよ……まだ眠い", outfit="bare back, bare shoulders"),
+            NudePose("bed_sheet", "シーツを胸に抱える",
+                     "sitting on bed, holding white sheet to chest, sheet around waist, bare shoulders, smile, "
+                     "looking at viewer", "cowboy shot", "シーツ、借りてもいい？", outfit="naked sheet, white sheet, featureless breasts", prop=True),
+            NudePose("bed_stretch", "背中で伸び",
+                     "from behind, back, sitting on bed, arms raised, stretching, facing away", "cowboy shot, from behind",
+                     "……のびーっ", outfit="bare back", face_away=True),
+            NudePose("bed_back", "仰向けで二度寝",
+                     "lying on back, on bed, one arm over chest, legs together, knees bent to side, hair spread out, "
+                     "dreamy smile, looking at viewer", "full body, from above", "二度寝、しちゃおっかな"),
+        ),
+        hair_down=True,
+    ),
+    NudeSet(
+        "窓辺の光", "large window, sheer white curtains, sunlight, light rays",
+        "wooden floor, potted plant",
+        (
+            NudePose("window_side", "窓辺の横顔(逆光)",
+                     "standing by window, from side, hand on window frame, eyes closed, serene smile",
+                     "cowboy shot, from side, backlighting, rim light", "光、あったかい"),
+            NudePose("window_curtain", "カーテンを体に巻く",
+                     "wrapped in sheer curtain, holding curtain to body, peeking, playful smile, looking at viewer",
+                     "cowboy shot, backlighting, silhouette", "カーテン越しなら、平気",
+                     outfit="sheer curtain, see-through curtain over body, featureless breasts", prop=True),
+            NudePose("window_sill", "窓枠に座る後ろ姿",
+                     "from behind, back, sitting on windowsill, facing away, looking outside, hand in hair",
+                     "full body, from behind", "このまま、ずっと撮られててもいいかも", outfit="bare back", face_away=True),
+        ),
+    ),
+    NudeSet(
+        "花びらのバスタブ", "white clawfoot bathtub, rose petals floating on water, candles, bathroom",
+        "tiles, window",
+        (
+            NudePose("bath_edge", "縁にもたれる",
+                     "in bathtub, partially submerged, arms resting on bathtub edge, chin on arms, happy smile, "
+                     "looking at viewer", "upper body", "バラのお風呂、一回やってみたかったの", outfit="bare shoulders"),
+            NudePose("bath_leg", "脚を上げる",
+                     "in bathtub, leaning back, one leg raised out of water, pointed toes, alluring smile, looking at viewer",
+                     "full body, from side", "脚、きれいに撮ってね", outfit="featureless breasts"),
+            NudePose("bath_rise", "湯船から立ち上がる",
+                     "standing in bathtub, rising from water, arm across chest, rose petals stuck on skin, giggle, "
+                     "looking at viewer", "cowboy shot", "花びら、くっついちゃった", outfit=f"rose petals on body, {FEATURELESS}"),
+        ),
+        wet=True, negative=NO_FOAM,
+    ),
+    NudeSet(
+        "夕暮れのヴィラ", "private villa, ocean view, sunset, orange sky, golden hour",
+        "infinity pool, palm trees, wooden deck",
+        (
+            NudePose("villa_pool", "プールで腕を組む",
+                     "standing in pool, waist-deep water, arms crossed over chest, smug smile, looking at viewer",
+                     "cowboy shot, infinity pool", "貸し切りだから、誰も見てないよ", outfit=f"{WET}, featureless breasts",
+                     negative=NO_FOAM),
+            NudePose("villa_sunset", "夕日の後ろ姿",
+                     "from behind, back, sitting on pool edge, facing away, looking at sunset, hands on edge",
+                     "full body, from behind, infinity pool edge, silhouette", "夕日、きれい……", outfit="bare back, wet skin",
+                     face_away=True),
+            NudePose("villa_lounger", "デッキチェアに横たわる",
+                     "lying on sun lounger, on side, legs together, crossed ankles, one arm over chest, head resting on hand, "
+                     "seductive smile, half-closed eyes, looking at viewer", "full body, from side, wooden deck, sun lounger",
+                     "……最後の一枚、とびきりのやつ"),
+        ),
+    ),
+)
+NUDE_POSES_BY_KEY = {p.key: p for s in NUDE_SETS for p in s.poses}
+
+
+def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) -> dict[str, Any]:
+    """ヌード写真集の台本。撮影場所ごとに、見出しの風景のコマと、場所のポーズをキャラ全員がそれぞれ演じる。"""
+    body = BODIES.get(options.body or "sheet")
+    if body is None:
+        raise ValueError(f"体つきは {', '.join(BODIES)} のどれかにしてください。")
+    sets = [s for s in NUDE_SETS if not options.themes or s.name in options.themes]
+    picked = set(options.poses) & set(NUDE_POSES_BY_KEY)
+    if options.poses and not picked:
+        raise ValueError("ポーズが1つもありません。")
+    plan = [(s, [p for p in s.poses if not picked or p.key in picked]) for s in sets]
+    plan = [(s, poses) for s, poses in plan if poses]
+    if not plan:
+        raise ValueError("撮影場所・ポーズが1つもありません。")
+    art = "art nude, fine art photography, gravure, photoshoot"
+    base_negative = _join(content_guard.text("collection.nude_negative"), HAND_NEGATIVE)
+    ids = [int(c["id"]) for c in characters]
+    names = "・".join(str(c["name"]) for c in characters)
+    group = "solo" if len(ids) == 1 else "standing side by side"
+
+    def outfit(*parts: str) -> str:
+        return _join(body, NUDE_BODY, *parts)
+
+    scenes: list[dict[str, Any]] = []
+    studio = plan[0][0]
+    scenes.append(_scene(
+        _join(studio.stage, group, "upper body", art, options.style_tags), ids,
+        {cid: "arms crossed over chest, covering breasts, shy smile, blush, looking at viewer" for cid in ids},
+        {cid: outfit("featureless breasts") for cid in ids},
+        _join(base_negative, "spread legs", NUDE_CLOTHES_NEGATIVE),
+        narration=f"{names} {KINDS['nude']}",
+    ))
+    for nude_set, poses in plan:
+        scenes.append(_scene(_join(nude_set.stage, nude_set.scenery, "no humans, scenery", options.style_tags), [], {}, {},
+                             base_negative, narration=nude_set.name))
+        for pose in poses:
+            for i, cid in enumerate(ids):
+                negative = _join(
+                    base_negative, nude_set.negative, pose.negative,
+                    "" if pose.open_legs else "spread legs",
+                    "" if pose.prop else NUDE_CLOTHES_NEGATIVE,
+                    FACE_AWAY_NEGATIVE if pose.face_away else "",
+                )
+                scene = _scene(
+                    _join(nude_set.stage, "solo", pose.framing, art, options.style_tags), [cid], {cid: pose.action},
+                    {cid: outfit(WET if nude_set.wet else "", pose.outfit)}, negative,
+                    narration=f"{nude_set.name}　{characters[i]['name']}",
+                    line=(cid, pose.line) if options.lines else None,
+                )
+                hair_down = hair_down_appearance(characters[i].get("appearance_tags")) if nude_set.hair_down else None
+                if hair_down:
+                    scene["character_appearances"] = {cid: _join(hair_down, "messy hair")}
+                scenes.append(scene)
+    last = plan[-1][0]
+    scenes.append(_scene(
+        _join(last.stage, group, "upper body", art, options.style_tags), ids,
+        {cid: "wrapped in white bath towel, holding towel, wink, peace sign, smile, looking at viewer" for cid in ids},
+        {cid: _join(body, "white bath towel, towel wrap, bare shoulders, wet skin") for cid in ids},
+        _join(base_negative, "spread legs"),
+        narration=f"{KINDS['nude']}、おしまい。",
+    ))
+    title = options.title or f"{names} {KINDS['nude']}"
+    places = "・".join(s.name for s, _ in plan)
+    return {"title": title, "premise": f"{names}が、{places}で、素肌のままの写真集を撮る。", "scenes": scenes}
+
+
 def build_collection(characters: list[dict[str, Any]], options: CollectionOptions) -> dict[str, Any]:
     """
     キャラ(id・name の辞書。1人以上)とオプションから、台本({title, premise, scenes})を作る。
@@ -265,6 +510,8 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
     if not characters:
         raise ValueError("キャラを1人以上選んでください。")
     kind = options.kind
+    if kind == "nude":
+        return _build_nude(characters, options)
     tease = kind.startswith("tease")
     body = BODIES.get(options.body or ("curvy" if tease else "slender"))
     if body is None:
@@ -352,11 +599,12 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
 
 
 def catalog() -> dict[str, Any]:
-    """画面・MCP に出す一覧(種類・テーマ・からかいのポーズ・体つき)。"""
+    """画面・MCP に出す一覧(種類・テーマ・からかいのポーズ・ヌード写真集の撮影場所とポーズ・体つき)。"""
     return {
         "kinds": [{"id": k, "label": v} for k, v in KINDS.items()],
-        "themes": {k: [t.name for t in v] for k, v in THEMES.items()},
+        "themes": {**{k: [t.name for t in v] for k, v in THEMES.items()}, "nude": [s.name for s in NUDE_SETS]},
         "poses": [{"key": p.key, "label": p.label, "wedgie": p.wedgie} for p in TEASE_POSES],
+        "nude_poses": [{"key": p.key, "label": p.label, "set": s.name} for s in NUDE_SETS for p in s.poses],
         "bodies": [{"id": "sheet", "label": "キャラシートのまま"}, {"id": "slender", "label": "すらっと(食い込み)"},
                    {"id": "curvy", "label": "むっちり(食い込み)"}],
     }

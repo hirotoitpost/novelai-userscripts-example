@@ -159,3 +159,69 @@ def test_api_makes_a_story_only_with_adult_characters(client: TestClient) -> Non
     assert res.status_code == 422 and "だれか" in res.json()["detail"]
     minor = _character("こども", 12)
     assert client.post("/api/collections", json={"kind": "tease_swimsuit", "character_ids": [minor]}).status_code == 422
+
+
+def test_nude_photobook_sets_poses_and_content_line() -> None:
+    from python.collection_templates import NUDE_SETS
+
+    script = build_collection(PAIR, CollectionOptions(kind="nude"))
+    scenes = script["scenes"]
+    n_poses = sum(len(s.poses) for s in NUDE_SETS)
+    # みんな + 場所ごとの見出し + ポーズ × 2人 + みんな
+    assert len(scenes) == 2 + len(NUDE_SETS) + n_poses * 2
+    assert script["title"] == "しらね・あかね ヌード写真集"
+    ScriptedStoryRequest(title=script["title"], scenes=scenes)
+    for s in scenes:
+        negative = s["negative_prompt"]
+        # 乳首・性器はどのコマも打ち消し、湯気・モザイクで隠さない。explicit は足さない
+        assert all(word in negative for word in ("nipples", "pussy", "genitals", "anus", "loli", "steam", "mosaic censoring"))
+        assert "explicit" not in s["prompt_tags"]
+    solo = [s for s in scenes[1:-1] if s["character_ids"]]
+    for s in solo:
+        outfit = s["character_outfits"][s["character_ids"][0]]
+        assert "completely nude" in outfit
+        # 前を向くコマは featureless、後ろ姿は背中
+        assert "featureless" in outfit or "bare back" in outfit or "bare shoulders" in outfit
+    # 脚を開くポーズだけ spread legs を打ち消さない
+    def pose(label: str) -> dict:
+        return next(s for s in solo if s["character_ids"] == [1] and label in s["character_actions"][1])
+    assert "spread legs" not in pose("m legs")["negative_prompt"]
+    assert "spread legs" in pose("hugging own knees")["negative_prompt"]
+    # 顔なしの四つんばいは振り向きを打ち消し、膝が浮く絵も打ち消す
+    away = pose("back of head")
+    assert "looking back" in away["negative_prompt"] and "straight legs" in away["negative_prompt"]
+    # 小物(シーツ)のコマはタオル・服を打ち消さない。ほかは打ち消す
+    assert "towel" not in pose("holding white sheet")["negative_prompt"]
+    assert "towel" in pose("hugging own knees")["negative_prompt"]
+    # バスタブは濡れた肌で、泡を打ち消す
+    bath = pose("one leg raised out of water")
+    assert "wet skin" in bath["character_outfits"][1] and "foam" in bath["negative_prompt"]
+
+
+def test_nude_photobook_options_and_hair_down_in_bed() -> None:
+    yura = {"id": 5, "name": "ゆら", "appearance_tags": "1girl, pink hair, long hair, high ponytail, blue eyes"}
+    scenes = build_collection([yura], CollectionOptions(
+        kind="nude", themes=["スタジオ", "朝のベッド"], poses=["m_legs", "all_fours_away", "bed_back"], lines=False))["scenes"]
+    # みんな + 見出し(スタジオ) + M字・四つんばい + 見出し(ベッド) + 二度寝 + みんな
+    assert len(scenes) == 7 and all(not s["dialogue"] for s in scenes)
+    assert [s["narration"] for s in scenes if not s["character_ids"]] == ["スタジオ", "朝のベッド"]
+    # ベッドではまとめ髪を下ろす。ほかの場所はキャラシートの容姿のまま
+    bed = scenes[5]
+    assert bed["character_appearances"][5] == "1girl, pink hair, long hair, blue eyes, hair down, hair hanging down, messy hair"
+    assert sum("character_appearances" in s for s in scenes) == 1
+    with pytest.raises(ValueError):
+        build_collection([yura], CollectionOptions(kind="nude", poses=["bent_over"]))
+    with pytest.raises(ValueError):
+        build_collection([yura], CollectionOptions(kind="nude", themes=["スタジオ"], poses=["bed_back"]))
+
+
+def test_api_makes_nude_photobook_only_with_adults(client: TestClient) -> None:
+    catalog = client.get("/api/collections").json()
+    assert {"id": "nude", "label": "ヌード写真集"} in catalog["kinds"]
+    assert catalog["themes"]["nude"][0] == "スタジオ" and catalog["nude_poses"][0]["set"] == "スタジオ"
+    adult = _character("しらね", 22)
+    res = client.post("/api/collections", json={"kind": "nude", "character_ids": [adult], "themes": ["窓辺の光"]})
+    assert res.status_code == 200, res.text
+    assert res.json()["n_scenes"] == 2 + 1 + 3
+    minor = _character("こども", 12)
+    assert client.post("/api/collections", json={"kind": "nude", "character_ids": [minor]}).status_code == 422
