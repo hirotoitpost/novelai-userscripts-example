@@ -22,6 +22,7 @@ import WorkRelations, { Author } from '../components/WorkRelations'
 import FullscreenViewer from '../components/FullscreenViewer'
 import { WorkExportButton, WorkImport } from '../components/WorkTransfer'
 import './Bookshelf.css'
+import { isShortcutKey, keyIs } from '../shortcuts'
 
 interface Book {
   id: number
@@ -629,14 +630,20 @@ function Reader({
     // 全画面のときは、全画面の表示がキーを受ける(Esc で本棚まで閉じないように)
     if (fullscreen) return
     function onKey(e: KeyboardEvent) {
+      if (!isShortcutKey(e)) return
       if (e.key === 'Escape') onClose()
       if (tab !== 'manga') return
-      if (e.key === 'ArrowLeft') goTo(page + 1)
-      else if (e.key === 'ArrowRight') goTo(page - 1)
+      // J は前のページ、L は次のページ(YouTube の戻る・進むに合わせる)
+      if (e.key === 'ArrowLeft' || keyIs(e, 'l')) goTo(page + 1)
+      else if (e.key === 'ArrowRight' || keyIs(e, 'j')) goTo(page - 1)
+      else if (e.key === 'Home') goTo(0)
+      else if (e.key === 'End') goTo(pageCount - 1)
+      else return
+      e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [tab, page, goTo, onClose, fullscreen])
+  }, [tab, page, pageCount, goTo, onClose, fullscreen])
 
   // 次のページを先に読み込んでおく
   useEffect(() => {
@@ -881,7 +888,7 @@ function Reader({
                   onChange={e => goTo(Number(e.target.value))} aria-label="ページ" />
                 <button type="button" onClick={() => goTo(page - 1)} disabled={page === 0}>前 ›</button>
                 <span className="reader-pageno">{page + 1} / {pageCount}</span>
-                <button type="button" onClick={() => setFullscreen(true)}>⛶ 全画面</button>
+                <button type="button" data-shortcut="fullscreen" onClick={() => setFullscreen(true)}>⛶ 全画面</button>
               </div>
               {fullscreen && (
                 <FullscreenViewer

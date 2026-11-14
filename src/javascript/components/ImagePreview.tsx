@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from 'react'
 import './ImagePreview.css'
+import { isShortcutKey, keyIs } from '../shortcuts'
 
 export interface PreviewImage {
   src: string
@@ -27,9 +28,10 @@ export default function ImagePreview({ images, index, onIndexChange, actions }: 
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
+      if (!isShortcutKey(e)) return
       if (e.key === 'Escape') onIndexChange(null)
-      else if (e.key === 'ArrowLeft') onIndexChange((index + images.length - 1) % images.length)
-      else if (e.key === 'ArrowRight') onIndexChange((index + 1) % images.length)
+      else if (e.key === 'ArrowLeft' || keyIs(e, 'j')) onIndexChange((index + images.length - 1) % images.length)
+      else if (e.key === 'ArrowRight' || keyIs(e, 'l')) onIndexChange((index + 1) % images.length)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

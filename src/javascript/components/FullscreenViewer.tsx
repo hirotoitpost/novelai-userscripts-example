@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './FullscreenViewer.css'
+import { isShortcutKey, keyIs } from '../shortcuts'
 
 interface Props {
   src: string
@@ -271,6 +272,7 @@ export default function FullscreenViewer({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!isShortcutKey(e)) return
       const root = rootRef.current?.getBoundingClientRect()
       const cx = root ? root.left + root.width / 2 : 0
       const cy = root ? root.top + root.height / 2 : 0
@@ -280,6 +282,10 @@ export default function FullscreenViewer({
         else onClose()
       } else if (e.key === 'ArrowLeft') left?.()
       else if (e.key === 'ArrowRight') right?.()
+      // YouTube と同じく J / L で前後、F で全画面を終える(漫画でも J は前のページ、L は次のページ)
+      else if (keyIs(e, 'j')) onPrev?.()
+      else if (keyIs(e, 'l')) onNext?.()
+      else if (keyIs(e, 'f')) onClose()
       else if (e.key === '+' || e.key === '=') zoomAt(viewRef.current.scale * 1.5, cx, cy)
       else if (e.key === '-') zoomAt(viewRef.current.scale / 1.5, cx, cy)
       else if (e.key === '0') applyView(FIT)
@@ -288,7 +294,7 @@ export default function FullscreenViewer({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [left, right, onClose, zoomAt, applyView])
+  }, [left, right, onPrev, onNext, onClose, zoomAt, applyView])
 
   // ホイールでズーム(ページのスクロールにしないよう passive: false で受ける)
   useEffect(() => {

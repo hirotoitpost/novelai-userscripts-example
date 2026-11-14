@@ -409,6 +409,7 @@ export default function CharacterImages() {
             <button
               type="button"
               className="ipv-btn"
+              data-shortcut="fullscreen"
               onClick={() => {
                 // 拡大表示の矢印キー・Esc と重ならないよう、拡大表示を閉じてから全画面にする
                 setPreview(null)

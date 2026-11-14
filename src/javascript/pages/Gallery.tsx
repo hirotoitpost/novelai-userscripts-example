@@ -26,6 +26,7 @@ import GalleryMangaDialog, { GALLERY_MANGA_MAX } from '../components/GalleryMang
 import type { GalleryMangaJob } from '../components/GalleryMangaDialog'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './Gallery.css'
+import { isShortcutKey, keyIs } from '../shortcuts'
 
 type Source = 'generate' | 'panel' | 'illustration' | 'dataset'
 
@@ -254,8 +255,9 @@ export default function Gallery() {
     // 全画面のときは、全画面の表示がキーを受ける
     if (viewing === null || fullscreen) return
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'ArrowRight') step(1)
-      else if (e.key === 'ArrowLeft') step(-1)
+      if (!isShortcutKey(e)) return
+      if (e.key === 'ArrowRight' || keyIs(e, 'l')) step(1)
+      else if (e.key === 'ArrowLeft' || keyIs(e, 'j')) step(-1)
       else if (e.key === 'Escape') setViewing(null)
     }
     window.addEventListener('keydown', onKey)
@@ -678,6 +680,7 @@ export default function Gallery() {
             <button
               type="button"
               className="gallery-viewer-full"
+              data-shortcut="fullscreen"
               onClick={() => setFullscreen(true)}
               disabled={blurs(current) && !revealed.has(current.key)}
               title={blurs(current) && !revealed.has(current.key) ? '成人向けの画像は、表示してから全画面にできます' : undefined}
