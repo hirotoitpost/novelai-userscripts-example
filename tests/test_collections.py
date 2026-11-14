@@ -250,3 +250,44 @@ def test_api_makes_nude_photobook_only_with_adults(client: TestClient) -> None:
     assert res.json()["n_scenes"] == 2 + 1 + 3
     minor = _character("こども", 12)
     assert client.post("/api/collections", json={"kind": "nude", "character_ids": [minor]}).status_code == 422
+
+
+def test_nude2_travel_photobook_has_low_angles_hips_back_and_expressions() -> None:
+    from python.collection_templates import NUDE2_SETS
+
+    script = build_collection(PAIR[:1], CollectionOptions(kind="nude2"))
+    scenes = script["scenes"]
+    assert script["title"] == "しらね ヌード写真集 〜旅する素肌〜"
+    assert [s.name for s in NUDE2_SETS] == ["和室の朝", "森の泉", "アトリエ", "夜景のペントハウス", "夜明けの砂丘"]
+    assert len(scenes) == 2 + len(NUDE2_SETS) + sum(len(s.poses) for s in NUDE2_SETS)
+    ScriptedStoryRequest(title=script["title"], scenes=scenes)
+    solo = solo_scenes(scenes)
+    actions = [s["character_actions"][1] for s in solo]
+    # 下からの構図・お尻を突き出す・がに股スクワット・I字バランス・いろいろな表情
+    assert sum("from below" in s["prompt_tags"] for s in solo) >= 5
+    assert sum("pushing hips back" in a for a in actions) >= 4
+    assert any("sumo squat" in a for a in actions) and any("standing split" in a for a in actions)
+    for face in ("embarrassed", "excited", "upturned eyes", "rolling eyes"):
+        assert any(face in a for a in actions), face
+    # 1冊目と同じ線引き: 乳首・性器を打ち消し、ツヤ肌。脚を開くポーズは股の赤い印・筋も打ち消す
+    for s in solo:
+        assert "nipples" in s["negative_prompt"] and "genitals" in s["negative_prompt"]
+        assert "shiny skin" in s["character_outfits"][1]
+        if "spread legs" not in s["negative_prompt"]:
+            assert "cleft of venus" in s["negative_prompt"] or "pushing hips back" in s["character_actions"][1]
+    # 種類ごとのポーズだけ選べる
+    with pytest.raises(ValueError):
+        build_collection(PAIR[:1], CollectionOptions(kind="nude2", poses=["studio_stand"]))
+    one = build_collection(PAIR[:1], CollectionOptions(kind="nude2", poses=["atelier_i_balance"]))["scenes"]
+    assert len(one) == 4 and one[1]["narration"] == "アトリエ"
+
+
+def test_catalog_lists_nude2_sets_and_poses_by_kind(client: TestClient) -> None:
+    catalog = client.get("/api/collections").json()
+    assert {"id": "nude2", "label": "ヌード写真集 〜旅する素肌〜"} in catalog["kinds"]
+    assert catalog["themes"]["nude2"][0] == "和室の朝"
+    kinds = {p["key"]: p["kind"] for p in catalog["nude_poses"]}
+    assert kinds["studio_stand"] == "nude" and kinds["washitsu_squat"] == "nude2"
+    adult = _character("しらね", 22)
+    res = client.post("/api/collections", json={"kind": "nude2", "character_ids": [adult], "themes": ["夜明けの砂丘"]})
+    assert res.status_code == 200, res.text

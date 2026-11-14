@@ -12,7 +12,7 @@ interface Catalog {
   themes: Record<string, string[]>
   poses: { key: string; label: string; wedgie: boolean }[]
   /** ヌード写真集のポーズ(撮影場所 set ごと) */
-  nude_poses?: { key: string; label: string; set: string }[]
+  nude_poses?: { key: string; label: string; set: string; kind?: string }[]
   bodies: { id: string; label: string }[]
 }
 
@@ -55,12 +55,12 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   }, [apiOrigin])
 
   const tease = kind.startsWith('tease')
-  const nude = kind === 'nude'
+  const nude = kind.startsWith('nude')
   const themeNames = catalog?.themes[kind] ?? []
   const adults = characters.filter(isAdult)
   const pickedThemes = themeNames.filter(t => themes.size === 0 || themes.has(t))
   const pickedPoses = (catalog?.poses ?? []).filter(p => poses.size === 0 || poses.has(p.key))
-  const nudePoses = (catalog?.nude_poses ?? []).filter(p => themes.size === 0 || themes.has(p.set))
+  const nudePoses = (catalog?.nude_poses ?? []).filter(p => (p.kind ?? 'nude') === kind && (themes.size === 0 || themes.has(p.set)))
   const pickedNude = nudePoses.filter(p => poses.size === 0 || poses.has(p.key))
   const nudeSets = new Set(pickedNude.map(p => p.set)).size
   // コマ数の目安: みんなのコマ2枚 + (からかい: ポーズ×人数 / ヌード: 場所の見出し+ポーズ×人数 /

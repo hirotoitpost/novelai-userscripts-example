@@ -7,6 +7,8 @@
   食い込み(wedgie)のポーズは、自分で引き上げてからかう場面としてだけ使う。
 - ヌード写真集: 撮影場所(スタジオ・朝のベッド・窓辺・バスタブ・夕暮れのヴィラ)ごとに、見出しの風景のコマと、
   その場所のポーズをキャラ全員がそれぞれ演じる(夜宮すみれの写真集 物語299 から作った。2026-11-14)。
+- ヌード写真集 〜旅する素肌〜(nude2): 和室・森の泉・アトリエ・夜景のペントハウス・夜明けの砂丘で、下からの構図・
+  お尻を突き出すポーズ・いろいろな表情を多めにした2つ目のパターン(物語302・303 で試作)。
 
 描いてはいけないもの(乳首・乳輪・性器・cameltoe など)はネガティブで必ず打ち消す。ヌードは乳首・性器を描かない
 featureless の絵で、湯気・モザイクで隠さない。成人キャラ専用(年齢を入れた 18 歳以上のキャラだけ。呼び出し側で確かめる)。
@@ -20,7 +22,7 @@ from typing import Any, Literal
 from . import content_guard
 from . import vocabulary as vocab
 
-Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude"]
+Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2"]
 
 KINDS: dict[str, str] = {
     "lingerie": "下着コレクション",
@@ -28,6 +30,7 @@ KINDS: dict[str, str] = {
     "tease_lingerie": "からかい下着コレクション",
     "tease_swimsuit": "からかい水着コレクション",
     "nude": "ヌード写真集",
+    "nude2": "ヌード写真集 〜旅する素肌〜",
 }
 
 # 場所(作画タグ)
@@ -451,16 +454,188 @@ NUDE_SETS = (
         ),
     ),
 )
-NUDE_POSES_BY_KEY = {p.key: p for s in NUDE_SETS for p in s.poses}
+NUDE_LOW_ANGLE = "1.3::from below::, low angle, worm's-eye view"
+NUDE_CROP_NEGATIVE = "feet out of frame, cropped legs"
+# 表情(笑顔のほか、恥ずかしがる・興奮・上目遣い・目が回る を散らす)
+FACE_SMILE = "smile, looking at viewer"
+FACE_SHY = "embarrassed, blush, flustered, averting eyes, wavy mouth"
+FACE_EXCITED = "excited, sparkling eyes, open mouth, wide smile, blush"
+FACE_UPTURNED = "upturned eyes, looking up at viewer, pout, blush"
+# ぐるぐる目は @_@ / spiral eyes では出なかった(物語303)。rolling eyes で表す(ユーザーの指定)
+FACE_DIZZY = "1.3::rolling eyes::, dizzy, blush, open mouth"
+# 脚を開くポーズ・下からの構図で、股に赤い印・筋が出るのを打ち消す(物語303)
+CROTCH_NEGATIVE = "red mark, vulva, slit, cleft of venus, crotch seam"
+# お尻を後ろに突き出す(全身で、足先まで)
+HIPS_BACK = "bent forward, pushing hips back, arched back, ass, from behind, looking back over shoulder"
+
+# 旅する素肌(2つ目のヌード写真集。物語302・303 で試作 2026-11-14)
+NUDE2_SETS = (
+    # 1. 和室(旅館の朝): 障子の光・畳・布団。真上から・低い位置から・後ろ姿の正座・お尻を突き出す
+    NudeSet(
+        "和室の朝", "japanese room, tatami, shoji, soft morning light through shoji",
+        "futon, low table, folded yukata, hanging scroll",
+        (
+            NudePose("washitsu_above", "畳に寝転ぶ(真上から)",
+              f"lying on back, on tatami, arms above head, one knee bent, hair spread out, {FACE_SMILE}",
+              "full body, from above, bird's-eye view", "畳の匂い、好きなんだ"),
+            NudePose("washitsu_seiza", "正座の後ろ姿",
+              "seiza, sitting on tatami, from behind, back, facing away, hands on lap, straight back",
+              "full body, from behind", "……背筋、のびる", outfit="bare back", face_away=True),
+            NudePose("washitsu_yukata", "浴衣を肩から落とす(恥ずかしがる)",
+              f"yukata slipping off shoulders, holding yukata to chest, looking back over shoulder, {FACE_SHY}",
+              "cowboy shot, from behind", "や、やっぱり恥ずかしい……", outfit="open yukata, off shoulder, bare back",
+              prop=True),
+            NudePose("washitsu_hips", "布団の前でお尻を突き出す",
+              f"standing, hands on knees, {HIPS_BACK}, playful smile, blush", f"{WHOLE_BODY}, from behind",
+              "……見てる？", outfit="bare back, ass, barefoot", negative=NUDE_CROP_NEGATIVE),
+            NudePose("washitsu_futon", "布団でうつぶせ(興奮)",
+              f"lying on stomach, on futon, legs up, feet up, crossed ankles, chin on hands, {FACE_EXCITED}",
+              "full body, from side, low angle", "朝ごはん、楽しみ！", outfit="bare back, ass"),
+            NudePose("washitsu_upturned", "膝をついて見上げる(上目遣い)",
+              f"kneeling on tatami, hands on thighs, leaning forward, {FACE_UPTURNED}",
+              "cowboy shot, from above", "……なに、じっと見て"),
+            # がに股スクワット(ユーザーの依頼): 足を大きく開き、膝を外へ向けて腰を落とす。正面から
+            NudePose("washitsu_squat", "がに股スクワット(朝のストレッチ)",
+              "1.3::sumo squat::, plie squat, wide stance, feet apart, toes pointing outward, 1.2::knees bent outward::, "
+              "hands on knees, straight back, morning exercise, determined, puffed cheeks, blush",
+              f"{WHOLE_BODY}, from front", "ん〜っ、効く……！", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
+              negative=f"{CROTCH_NEGATIVE}, {NUDE_CROP_NEGATIVE}, kneeling, sitting"),
+        ),
+    ),
+    # 2. 森の泉: 岩・石段・滝。下からの構図を多めに(岩の上でしゃがむ・石段でしゃがむ・仁王立ち)
+    NudeSet(
+        "森の泉", "forest, spring, clear water, mossy rocks, dappled sunlight, nature",
+        "small waterfall, ferns, mossy stone steps, sunbeams",
+        (
+            NudePose("spring_rock_squat", "岩の上でしゃがむ(下から)",
+              f"squatting on rock, heels up, knees apart, arms resting on knees, leaning forward, {FACE_UPTURNED}",
+              f"full body, {NUDE_LOW_ANGLE}", "そこから見えてる？", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
+              negative=f"{CROTCH_NEGATIVE}, kneeling, seiza"),
+            NudePose("spring_stairs_squat", "石段でしゃがむ(下から)",
+              f"squatting on stone steps, mossy stone stairs, knees together, hands on cheeks, elbows on knees, {FACE_SMILE}",
+              f"full body, {NUDE_LOW_ANGLE}", "ちょっと休憩", outfit=f"barefoot, {FEATURELESS}",
+              negative=f"{CROTCH_NEGATIVE}, kneeling, seiza"),
+            NudePose("spring_akimbo", "岩の上で仁王立ち(下から)",
+              "standing on rock, hands on hips, legs apart, feet apart, confident, smug, grin, looking down at viewer, wind",
+              f"full body, {NUDE_LOW_ANGLE}", "どう、この眺め！", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
+              negative=CROTCH_NEGATIVE),
+            NudePose("spring_wide", "泉の真ん中に立つ(遠景)",
+              "standing in spring, knee-deep water, arms spread, looking up at sky",
+              "very wide shot, scenery, small figure, from behind", "……誰もいない", outfit="bare back, wet skin",
+              face_away=True),
+            NudePose("spring_waterfall", "滝に打たれる(興奮)",
+              f"standing under waterfall, water splashing, arms raised, {FACE_EXCITED}",
+              "cowboy shot, from front", "つめたーい！でも最高！",
+              outfit=f"{WET}, featureless breasts", negative=NO_FOAM),
+            NudePose("spring_hips", "岩に手をついてお尻を突き出す",
+              f"hands on rock, {HIPS_BACK}, wet hair, teasing smile", f"{WHOLE_BODY}, from behind, low angle",
+              "後ろ、気をつけてね", outfit=f"{WET}, ass, barefoot", negative=NUDE_CROP_NEGATIVE),
+        ),
+        wet=True,
+    ),
+    # 3. アトリエ(画家のモデル): 寝椅子・布・イーゼル。寄り・俯瞰・下から・お尻を突き出す
+    NudeSet(
+        "アトリエ", "art studio, atelier, easel, canvas, paint, north light, wooden floor",
+        "draped cloth, plaster bust, paintbrushes",
+        (
+            NudePose("atelier_chaise", "寝椅子に横たわる(古典的なポーズ)",
+              "reclining on chaise longue, on side, head on hand, legs together, classical pose, serene expression, "
+              "looking at viewer", "full body, from side", "動かないで、って言われても"),
+            NudePose("atelier_cloth", "布を纏って立つ(下から)",
+              "standing, draped in white cloth, cloth over one shoulder, cloth around hips, statue pose, proud expression",
+              f"full body, {NUDE_LOW_ANGLE}", "女神さま、みたい？", outfit="white cloth draped over body, featureless breasts",
+              prop=True),
+            NudePose("atelier_back_close", "背中のアップ",
+              "from behind, back, shoulder blades, hair pulled over one shoulder, nape, looking slightly to the side",
+              "upper body, close-up, from behind", "背中、描いてるの？", outfit="bare back, bare shoulders",
+              face_away=True),
+            NudePose("atelier_easel_hips", "イーゼルにもたれてお尻を突き出す",
+              f"leaning on easel, {HIPS_BACK}, smug smile", f"{WHOLE_BODY}, from behind", "このポーズ、描きにくい？",
+              outfit="bare back, ass, barefoot", negative=NUDE_CROP_NEGATIVE),
+            NudePose("atelier_shy", "顔を覆って恥ずかしがる",
+              f"sitting on stool, knees together, covering face with hands, peeking through fingers, {FACE_SHY}",
+              "full body, from front", "そんなに見られたら、無理……", outfit=f"barefoot, {FEATURELESS}"),
+            NudePose("atelier_paint", "絵の具で遊ぶ(興奮)",
+              f"paint on body, paint on hands, holding paintbrush, kneeling on floor, {FACE_EXCITED}",
+              "cowboy shot, from above", "えへ、汚れちゃった！", outfit=f"paint smears on skin, {FEATURELESS}"),
+            # I字バランス(ユーザーの依頼): 片脚で立ち、もう片方の脚を真上へ上げて手で支える。横から
+            NudePose("atelier_i_balance", "I字バランス",
+              "1.4::standing split::, i-balance, one leg raised straight up, holding raised leg with hand, "
+              "standing on one leg, flexible, ballet pose, from side, proud smile, looking at viewer",
+              f"{WHOLE_BODY}, from side", "体のやわらかさ、自信あるの", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
+              negative=f"{CROTCH_NEGATIVE}, {NUDE_CROP_NEGATIVE}, lying, sitting"),
+        ),
+    ),
+    # 4. 夜景のペントハウス: 窓・ソファ。ガラスに映る姿・ほろ酔いで目が回る・仁王立ち(下から)
+    NudeSet(
+        "夜景のペントハウス", "penthouse, night, floor-to-ceiling window, city lights, cityscape, dim lighting",
+        "leather sofa, wine glass, city skyline",
+        (
+            NudePose("penthouse_window_hips", "窓に手をついてお尻を突き出す(夜景)",
+              f"hands on window glass, {HIPS_BACK}, smile", f"{WHOLE_BODY}, from behind, city lights",
+              "夜景、独り占め", outfit="bare back, ass, barefoot", negative=NUDE_CROP_NEGATIVE),
+            NudePose("penthouse_reflection", "ガラスに映る姿",
+              "standing by window, reflection in window glass, arm across chest, looking at own reflection, faint smile",
+              "cowboy shot, from side, reflection", "……こっちの私も、悪くない"),
+            NudePose("penthouse_dizzy", "ほろ酔いで目が回る",
+              f"lying on sofa, on back, one arm over head, one leg bent, holding wine glass, {FACE_DIZZY}",
+              "full body, from above", "ワイン、まわってきた〜……"),
+            NudePose("penthouse_akimbo", "窓の前で仁王立ち(下から)",
+              "standing in front of window, hands on hips, legs apart, confident grin, looking down at viewer, city lights",
+              f"full body, {NUDE_LOW_ANGLE}", "この街、ぜんぶ私のもの！", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
+              negative=CROTCH_NEGATIVE),
+            NudePose("penthouse_neon", "街の光の縁取り",
+              "standing, from side, profile, arms raised, stretching, city lights behind",
+              "cowboy shot, from side, rim light, backlighting", "ネオン、きれいだね"),
+            NudePose("penthouse_floor", "床に座って振り返る(上目遣い)",
+              f"sitting on floor, legs tucked to side, from behind, looking back over shoulder, hand in hair, {FACE_UPTURNED}",
+              "full body, from behind, from above", "まだ、帰らないよ？", outfit="bare back"),
+        ),
+    ),
+    # 5. 夜明けの砂丘: 風・稜線。遠景・逆光・下から・寝そべり
+    NudeSet(
+        "夜明けの砂丘", "sand dunes, desert, dawn, pastel sky, soft wind, sand ripples",
+        "wind-swept sand, horizon, morning star",
+        (
+            NudePose("dune_walk", "砂の稜線を歩く(遠景)",
+              "walking on dune ridge, from behind, hair blowing in wind, footprints in sand",
+              "very wide shot, scenery, small figure, from behind", "どこまで、続いてるんだろ", outfit="bare back",
+              face_away=True),
+            NudePose("dune_ridge_squat", "稜線でしゃがむ(下から)",
+              f"squatting on dune ridge, heels up, knees apart, hands on knees, hair blowing in wind, {FACE_SMILE}",
+              f"full body, {NUDE_LOW_ANGLE}, sky", "砂丘のてっぺん！", outfit=f"barefoot, {FEATURELESS}", open_legs=True,
+              negative=f"{CROTCH_NEGATIVE}, kneeling, seiza"),
+            NudePose("dune_lie", "砂に寝そべる",
+              f"lying on stomach, on sand, propped on elbows, legs together, chin on hand, {FACE_SMILE}",
+              "full body, from front, low angle", "砂、あったかい", outfit="sand on skin, bare back"),
+            NudePose("dune_dizzy", "砂に足を取られて目が回る",
+              f"sitting on sand, fallen down, legs out, hands behind, {FACE_DIZZY}",
+              "full body, from front", "うぅ、ころんだ……", outfit=f"sand on skin, {FEATURELESS}"),
+            NudePose("dune_kneel", "膝立ちで朝日を浴びる(逆光)",
+              "kneeling on sand, arms raised to sky, from behind, facing sunrise, back",
+              "full body, from behind, backlighting, silhouette, sunrise", "……おはよう、世界", outfit="bare back",
+              face_away=True),
+            NudePose("dune_sit", "膝を抱えて地平線を見る",
+              "sitting on sand, hugging knees, chin on knees, looking at horizon, from side, peaceful",
+              "full body, from side", "このまま、時間が止まればいいのに", outfit="featureless breasts"),
+        ),
+    ),
+)
+# ヌード写真集の種類 → 撮影場所の並び
+NUDE_KINDS = {"nude": NUDE_SETS, "nude2": NUDE2_SETS}
+NUDE_POSES_BY_KEY = {p.key: p for sets in NUDE_KINDS.values() for s in sets for p in s.poses}
 
 
 def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) -> dict[str, Any]:
-    """ヌード写真集の台本。撮影場所ごとに、見出しの風景のコマと、場所のポーズをキャラ全員がそれぞれ演じる。"""
+    """ヌード写真集の台本(種類 nude / nude2 の撮影場所)。撮影場所ごとに、見出しの風景のコマと、場所のポーズを
+    キャラ全員がそれぞれ演じる。"""
+    label = KINDS[options.kind]
     body = BODIES.get(options.body or "sheet")
     if body is None:
         raise ValueError(f"体つきは {', '.join(BODIES)} のどれかにしてください。")
-    sets = [s for s in NUDE_SETS if not options.themes or s.name in options.themes]
-    picked = set(options.poses) & set(NUDE_POSES_BY_KEY)
+    all_sets = NUDE_KINDS[options.kind]
+    sets = [s for s in all_sets if not options.themes or s.name in options.themes]
+    picked = set(options.poses) & {p.key for s in all_sets for p in s.poses}
     if options.poses and not picked:
         raise ValueError("ポーズが1つもありません。")
     plan = [(s, [p for p in s.poses if not picked or p.key in picked]) for s in sets]
@@ -488,7 +663,7 @@ def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) ->
         {cid: "arms crossed over chest, covering breasts, shy smile, blush, looking at viewer" for cid in ids},
         {cid: outfit("featureless breasts") for cid in ids},
         _join(base_negative, "spread legs", NUDE_CLOTHES_NEGATIVE, ABS_NEGATIVE, SHADOW_NEGATIVE),
-        narration=f"{names} {KINDS['nude']}",
+        narration=f"{names} {label}",
     ))
     for nude_set, poses in plan:
         scenes.append(_scene(_join(nude_set.stage, nude_set.scenery, "no humans, scenery", options.style_tags), [], {}, {},
@@ -519,9 +694,9 @@ def _build_nude(characters: list[dict[str, Any]], options: CollectionOptions) ->
         {cid: "wrapped in white bath towel, holding towel, wink, peace sign, smile, looking at viewer" for cid in ids},
         {cid: _join(body, SKIN_FINISH, "white bath towel, towel wrap, bare shoulders, wet skin") for cid in ids},
         _join(base_negative, "spread legs"),
-        narration=f"{KINDS['nude']}、おしまい。",
+        narration=f"{label}、おしまい。",
     ))
-    title = options.title or f"{names} {KINDS['nude']}"
+    title = options.title or f"{names} {label}"
     places = "・".join(s.name for s, _ in plan)
     return {"title": title, "premise": f"{names}が、{places}で、素肌のままの写真集を撮る。", "scenes": scenes}
 
@@ -534,7 +709,7 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
     if not characters:
         raise ValueError("キャラを1人以上選んでください。")
     kind = options.kind
-    if kind == "nude":
+    if kind in NUDE_KINDS:
         return _build_nude(characters, options)
     tease = kind.startswith("tease")
     body = BODIES.get(options.body or ("curvy" if tease else "slender"))
@@ -626,9 +801,11 @@ def catalog() -> dict[str, Any]:
     """画面・MCP に出す一覧(種類・テーマ・からかいのポーズ・ヌード写真集の撮影場所とポーズ・体つき)。"""
     return {
         "kinds": [{"id": k, "label": v} for k, v in KINDS.items()],
-        "themes": {**{k: [t.name for t in v] for k, v in THEMES.items()}, "nude": [s.name for s in NUDE_SETS]},
+        "themes": {**{k: [t.name for t in v] for k, v in THEMES.items()},
+                   **{k: [s.name for s in sets] for k, sets in NUDE_KINDS.items()}},
         "poses": [{"key": p.key, "label": p.label, "wedgie": p.wedgie} for p in TEASE_POSES],
-        "nude_poses": [{"key": p.key, "label": p.label, "set": s.name} for s in NUDE_SETS for p in s.poses],
+        "nude_poses": [{"key": p.key, "label": p.label, "set": s.name, "kind": kind}
+                       for kind, sets in NUDE_KINDS.items() for s in sets for p in s.poses],
         "bodies": [{"id": "sheet", "label": "キャラシートのまま"}, {"id": "slender", "label": "すらっと(食い込み)"},
                    {"id": "curvy", "label": "むっちり(食い込み)"}],
     }
