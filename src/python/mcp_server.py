@@ -25,11 +25,12 @@ from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ImageContent, TextContent
 from novelai import AsyncNovelAI
-from novelai.types import GenerateImageParams
+from novelai.types import CharacterReference, GenerateImageParams
 
 from . import mcp_identity
 from .db import user_files
 from .mcp_manga import register_manga_tools
+from .mcp_reference import character_reference
 from .db import (
     create_custom_chunk,
     find_conflicts,
@@ -192,12 +193,22 @@ async def generate_image_tool(
     seed: int | None = None,
     chunk_ids: list[str] | None = None,
     based_on: int | None = None,
+    reference_character_id: int | None = None,
+    reference_strength: float = 0.7,
+    reference_fidelity: float = 1.0,
+    reference_type: str = "character",
 ) -> list[TextContent | ImageContent]:
     """
     実際にNovelAIへ画像を生成させ、生成履歴に記録して画像を返す。
     chunk_ids: この生成に使ったチャンクIDがあれば渡す(履歴の追跡用、無くても生成は可能)。
     based_on: 既存の履歴エントリを元にした再生成の場合、その履歴IDを渡すと系譜を辿れる。
+    reference_character_id: キャラシートの ID を渡すと、そのキャラの参照画像をキャラ参照(Character Reference)
+    として使い、顔・髪を揃える(V4.5 だけ。Anlas が増える)。生成した画像はそのキャラの画像にも並ぶ。
+    reference_strength / reference_fidelity: 参照の強さと忠実度(0〜1)。強いほど顔が参照に近くなるが、
+    参照画像の絵柄にも引っ張られる。絵柄を寄せたいときは 0.5 / 0.6 くらいに下げる。
+    reference_type: "character"(顔・髪だけ)か "character&style"(参照の絵柄も寄せる)。
     """
+    reference = character_reference(reference_character_id, reference_type, reference_fidelity, reference_strength)
     client = _get_novelai_client()
     try:
         kwargs: dict[str, Any] = {
@@ -213,6 +224,11 @@ async def generate_image_tool(
         }
         if seed is not None:
             kwargs["seed"] = seed
+        if reference is not None:
+            kwargs["character_references"] = [
+                CharacterReference(image=reference.image, type=reference.type, fidelity=reference.fidelity,
+                                   strength=reference.strength)
+            ]
         params = GenerateImageParams(**kwargs)
         images = await client.image.generate(params)
     finally:
@@ -243,7 +259,9 @@ async def generate_image_tool(
             seed=seed,
             chunk_ids=chunk_ids or [],
             image_paths=image_paths,
+            character_references=[reference.record(_HISTORY_DIR)] if reference else None,
             based_on_id=based_on,
+            character_id=reference_character_id,
         )
     finally:
         conn.close()
