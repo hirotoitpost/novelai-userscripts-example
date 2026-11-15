@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { Link } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
@@ -111,7 +111,14 @@ interface Props {
   /** シーン(効果音)や完成画像が変わったので物語を読み直す。 */
   onChanged: () => Promise<void> | void
   fileUrl: (path: string) => string
+  /** 「このシーンを直す」: 物語の編集画面を、このシーンの位置で開く */
+  onEditScene?: (sceneId: number) => void
+  /** 物語の編集画面から1コマを描き直すための入口(シーンの番号は0始まり)。いまの画像設定・参照の設定で描く */
+  redrawRef?: MutableRefObject<RedrawScene | null>
 }
+
+/** 1コマを描き直す(シーンの番号は0始まり)。終わるまで待つ */
+export type RedrawScene = (sceneIndex: number) => Promise<void>
 
 type DownloadFormat = 'pdf' | 'zip'
 type DownloadContent = 'pages' | 'pages_clean' | 'panels' | 'panels_clean'
@@ -155,6 +162,7 @@ async function readErrorDetail(res: Response): Promise<string> {
 
 export default function MangaV2Studio({
   apiOrigin, storyId, scenes, savedComposeSettings, imageSettings, token, busy, runTask, pollJob, onChanged, fileUrl,
+  onEditScene, redrawRef,
 }: Props) {
   const [fonts, setFonts] = useState<FontOption[]>([])
   const [templates, setTemplates] = useState<TemplateOption[]>([])
@@ -327,14 +335,18 @@ export default function MangaV2Studio({
   }
 
   function redrawPanel(scene: MangaV2Scene) {
+    return redrawScene(scene.scene_index)
+  }
+
+  function redrawScene(sceneIndex: number) {
     const seed = Math.floor(Math.random() * 4294967296)
-    return runTask(`シーン${scene.scene_index + 1}の描き直し`, async signal => {
+    return runTask(`シーン${sceneIndex + 1}の描き直し`, async signal => {
       try {
         await startJob(
           'panels',
           {
-            scene_from: scene.scene_index,
-            scene_to: scene.scene_index,
+            scene_from: sceneIndex,
+            scene_to: sceneIndex,
             template,
             skip_existing: false,
             color,
@@ -349,6 +361,13 @@ export default function MangaV2Studio({
       }
     })
   }
+
+  // 物語の編集画面から描き直せるように、いまの設定で描く関数を渡しておく(設定が変わるたびに差し替える)
+  useEffect(() => {
+    if (!redrawRef) return
+    redrawRef.current = redrawScene
+    return () => { redrawRef.current = null }
+  })
 
   function suggestSfx() {
     return runTask('効果音のAI提案', async signal => {
@@ -906,6 +925,12 @@ export default function MangaV2Studio({
                   <button type="button" onClick={() => redrawPanel(scene)} disabled={busy}>
                     {panel ? '描き直す' : '描く'}
                   </button>
+                  {onEditScene && (
+                    <button type="button" className="story-secondary" disabled={busy} onClick={() => onEditScene(scene.id)}
+                      title="物語の編集画面を、このシーンの位置で開きます(作画タグ・登場人物・セリフを直して、その場で描き直せます)">
+                      ✎ このシーンを直す
+                    </button>
+                  )}
                   {panel && (
                     <button type="button" className="story-secondary" disabled={busy} onClick={() => setOverlayScene(scene)}
                       title="読める文字(命名書・手紙など)や、別のコマの絵(写真)を、四隅を決めてこのコマに貼ります">

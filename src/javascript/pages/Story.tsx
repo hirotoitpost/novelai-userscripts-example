@@ -16,7 +16,7 @@ import SceneDirection from '../components/SceneDirection'
 import StoryEditor from '../components/StoryEditor'
 import CollectionMaker from '../components/CollectionMaker'
 import type { DatasetState, Situation } from '../components/DatasetScenes'
-import MangaV2Studio, { MangaV2ComposeSettings } from '../components/MangaV2Studio'
+import MangaV2Studio, { MangaV2ComposeSettings, type RedrawScene } from '../components/MangaV2Studio'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { JOB_KIND_LABELS, TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import NotificationToggle from '../components/NotificationToggle'
@@ -441,6 +441,10 @@ export default function Story() {
 
   // 編集画面(コマ割り・セリフ・タグをまとめて直し、上書き保存/別名保存する)
   const [editing, setEditing] = useState(false)
+  // 編集画面を開いたときに移るシーン(漫画の欄の「このシーンを直す」)
+  const [editFocus, setEditFocus] = useState<number | null>(null)
+  // 漫画v2の1コマの描き直し(編集画面の「保存して描き直す」で使う)
+  const redrawRef = useRef<RedrawScene | null>(null)
 
   function createDraft() {
     return runTask('シーン分割ドラフトの作成(Ollama)', async signal => {
@@ -1076,7 +1080,7 @@ export default function Story() {
             <h2 id="scene-list">シーン一覧<HelpLink slug="manga" label="漫画づくりの流れ" /></h2>
             {!isUnsplitImport && story.scenes.length > 0 && (
               <div className="story-actions">
-                <button type="button" disabled={busy} onClick={() => setEditing(true)}
+                <button type="button" disabled={busy} onClick={() => { setEditFocus(null); setEditing(true) }}
                   title="コマ割り(並べ替え・追加・削除・ページの区切り)・セリフ・タグ・登場人物をまとめて直し、上書き保存か別名保存します">
                   編集(コマ割り・セリフ・タグ)
                 </button>
@@ -1089,6 +1093,11 @@ export default function Story() {
                 characters={allCharacters}
                 states={datasetStates}
                 fileUrl={mangaFileUrl}
+                focusSceneId={editFocus}
+                taskBusy={busy}
+                onRedraw={isWritten && mangaMode === 'v2'
+                  ? async index => { await redrawRef.current?.(index) }
+                  : undefined}
                 onClose={() => setEditing(false)}
                 onSaved={id => {
                   loadHistory()
@@ -1262,6 +1271,8 @@ export default function Story() {
                 pollJob={signal => pollJob(story.id, signal)}
                 onChanged={() => loadStory(story.id)}
                 fileUrl={mangaFileUrl}
+                onEditScene={sceneId => { setEditFocus(sceneId); setEditing(true) }}
+                redrawRef={redrawRef}
               />
             )}
 
