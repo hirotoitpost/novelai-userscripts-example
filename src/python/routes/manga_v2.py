@@ -167,6 +167,7 @@ from ..models import (
     MangaV2FlowReviewRequest,
     MangaV2ComposeRequest,
     MangaV2OmakeRequest,
+    MangaV2OmakeSelectRequest,
     MangaV2RedrawStatesRequest,
     PanelRedrawStateRequest,
     MangaV2MakeRequest,
@@ -2369,9 +2370,10 @@ async def reset_page_layout(story_id: int, template: str = "grid4") -> dict[str,
 # おまけ絵の置き場所(利用者のフォルダの outputs/manga の下。ギャラリーの配信の対象)
 _OMAKE_DIR = _MANGA_DIR / "omake"
 # 登場キャラをデフォルメしたチビキャラが、ニコニコしていて周りにハートが2〜3個漂う絵(2026-11 ユーザーの希望)
+# chibi に重みが無いと、キャラの容姿タグに負けて普通の頭身になる(2026-11 実機)
 OMAKE_TAGS = (
-    "chibi, super deformed, full body, smile, happy, closed eyes smile, ^_^, blush stickers, "
-    "1.2::floating hearts::, three hearts, pink hearts around, cute, white background, simple background"
+    "1.6::chibi::, 1.4::super deformed::, 1.3::big head, small body, short limbs::, full body, smile, happy, "
+    "blush stickers, 1.2::floating hearts::, three hearts, pink hearts around, cute, white background, simple background"
 )
 OMAKE_NEGATIVE = "text, speech bubble, frame, border, panel, comic, multiple views, realistic, 3d, sad, crying"
 _OMAKE_MAX_CHARACTERS = 4
@@ -2470,6 +2472,41 @@ async def make_omake(story_id: int, req: MangaV2OmakeRequest, client: ClientDep)
             _REFERENCE_MODEL, f"{width}x{height}", 27, 7.0, seed, [], [omake["image_path"]],
         )
         omake["history_id"] = history["id"]
+        set_manga_v2_omake(conn, story_id, omake)
+    finally:
+        conn.close()
+    return omake
+
+
+@router.get("/{story_id}/omake/candidates")
+async def list_omake_candidates(story_id: int) -> list[dict[str, Any]]:
+    """この物語で作ったおまけ絵(作り直す前のものも。新しい順)。PUT .../omake の gallery_key で選び直せる。"""
+    files = sorted(_OMAKE_DIR.glob(f"story{story_id}_omake_*.png"), key=lambda f: f.stat().st_mtime, reverse=True)
+    result = []
+    for file in files:
+        path = file.relative_to(_PROJECT_ROOT).as_posix()
+        result.append({"gallery_key": f"file:{path}", "image_path": path})
+    return result
+
+
+@router.put("/{story_id}/omake")
+async def select_omake(story_id: int, req: MangaV2OmakeSelectRequest) -> dict[str, Any]:
+    """
+    ギャラリーにある絵(キー。作り直す前のおまけ絵なら GET .../omake/candidates の gallery_key)をおまけ絵にする。
+    絵はそのまま使う(写さない)。
+    """
+    from .library import find_image
+
+    item = find_image(req.gallery_key)
+    if item is None:
+        raise HTTPException(status_code=404, detail="その画像が見つかりません。")
+    omake: dict[str, Any] = {"image_path": item.path, "seed": item.seed, "gallery_key": item.key}
+    if item.key.startswith("history:"):
+        omake["history_id"] = int(item.key.split(":")[1])
+    conn = get_connection()
+    try:
+        if get_story(conn, story_id) is None:
+            raise HTTPException(status_code=404, detail="物語が見つかりません。")
         set_manga_v2_omake(conn, story_id, omake)
     finally:
         conn.close()

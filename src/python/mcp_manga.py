@@ -984,6 +984,22 @@ def register_manga_tools(mcp: MCPServer) -> None:
         ]
 
     @mcp.tool()
+    async def manga_set_omake(story_id: int, gallery_key: str | None = None, number: int | None = None) -> dict[str, Any]:
+        """
+        既にある絵をおまけ絵にする(作り直す前のおまけ絵に戻す など)。number はこの物語で作ったおまけ絵の新しい順の
+        番号(1始まり。number も gallery_key も省くと一覧を返すだけ)、gallery_key はギャラリーの画像のキー
+        (history:{履歴ID}:{n} など)。置くには manga_compose / manga_finish で last_page="omake" にする。
+        """
+        candidates = await _call("GET", f"/api/manga-v2/{story_id}/omake/candidates")
+        if gallery_key is None and number is None:
+            return {"candidates": [{"number": i + 1, **c} for i, c in enumerate(candidates)]}
+        if gallery_key is None:
+            if not 1 <= int(number or 0) <= len(candidates):
+                raise ValueError(f"おまけ絵は {len(candidates)} 枚です")
+            gallery_key = candidates[int(number or 1) - 1]["gallery_key"]
+        return await _call("PUT", f"/api/manga-v2/{story_id}/omake", {"gallery_key": gallery_key})
+
+    @mcp.tool()
     async def manga_set_page_layouts(story_id: int, import_id: int | None) -> dict[str, Any]:
         """
         取り込んだ作品(作品の取り込みページ / /api/manga-import)のページごとのコマ割りを、この物語のコマ割りにする。

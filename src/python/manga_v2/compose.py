@@ -1141,7 +1141,22 @@ def _draw_extra(page: Image.Image, rect: Rect, path: Any) -> None:
         image = src.convert("RGB")
     # 余白いっぱいだと窮屈なので、範囲の9割に収める
     image = ImageOps.contain(image, (max(1, int((x1 - x0) * 0.9)), max(1, int((y1 - y0) * 0.9))), Image.Resampling.LANCZOS)
+    image = _blend_into(image, page.getpixel((x0, y0)))
     page.paste(image, (x0 + (x1 - x0 - image.width) // 2, y0 + (y1 - y0 - image.height) // 2))
+
+
+# 生成した絵の白い地はうっすら灰色・黄色がかることがあり、ページの地との間に四角い境目が見える(2026-11 実機)。
+# これより明るい(各色がこの値以上の)画素は、ページの地の色にする
+_NEAR_WHITE = 225
+
+
+def _blend_into(image: Image.Image, background: Any) -> Image.Image:
+    """白に近い地の画素をページの地の色にそろえ、境目を消す(人物の白い服などは、白に近くても線で囲まれているので目立たない)。"""
+    rgb = np.asarray(image).copy()
+    near = (rgb >= _NEAR_WHITE).all(axis=2)
+    color = background if isinstance(background, tuple) else (background,) * 3
+    rgb[near] = color[:3]
+    return Image.fromarray(rgb)
 
 
 def _intersection(a: Rect, b: Rect) -> Rect | None:

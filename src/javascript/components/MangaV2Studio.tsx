@@ -195,6 +195,8 @@ export default function MangaV2Studio({
   // 最後のページのコマが足りないときの扱いと、置くおまけ絵(物語ごと)
   const [lastPage, setLastPage] = useLocalStorage<LastPageMode>('nai_manga_v2_last_page', 'fill')
   const [omake, setOmake] = useState<Omake | null>(null)
+  // この物語で作ったおまけ絵(作り直す前のものも。選び直せる)
+  const [omakeCandidates, setOmakeCandidates] = useState<{ gallery_key: string; image_path: string }[]>([])
   const [omakeTags, setOmakeTags] = useState('')
   // 文字の大きさの全体の倍率(%)。コマの大きさ・叫び/小声による自動調整に、さらに掛ける
   const [textScale, setTextScale] = useLocalStorage('nai_manga_v2_text_scale', 100)
@@ -273,15 +275,38 @@ export default function MangaV2Studio({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storyId])
 
-  // 物語を開いたら、その物語のおまけ絵を読む
-  useEffect(() => {
-    setOmake(null)
+  function loadOmake() {
     fetch(`${apiOrigin}/api/manga-v2/${storyId}/omake`, { headers: authHeaders })
       .then(res => (res.ok ? res.json() : null))
       .then((data: Omake | null) => setOmake(data))
       .catch(() => setOmake(null))
+    fetch(`${apiOrigin}/api/manga-v2/${storyId}/omake/candidates`, { headers: authHeaders })
+      .then(res => (res.ok ? res.json() : []))
+      .then(setOmakeCandidates)
+      .catch(() => setOmakeCandidates([]))
+  }
+
+  // 物語を開いたら、その物語のおまけ絵を読む
+  useEffect(() => {
+    setOmake(null)
+    setOmakeCandidates([])
+    loadOmake()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiOrigin, storyId])
+
+  /** 作り直す前のおまけ絵などを、おまけ絵に選び直す */
+  async function selectOmake(galleryKey: string) {
+    const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/omake`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ gallery_key: galleryKey }),
+    })
+    if (!res.ok) {
+      alert(await readErrorDetail(res))
+      return
+    }
+    setOmake(await res.json())
+  }
 
   // 物語を開いたら、対象の範囲を全シーンにする。シーンが増減したときは、
   // 終わりが全シーンのままだったときだけ新しい全シーンに合わせる(自分で狭めた範囲は保つ)。
@@ -407,6 +432,7 @@ export default function MangaV2Studio({
       if (!res.ok) throw new Error(await readErrorDetail(res))
       setOmake(await res.json())
       setLastPage('omake')
+      loadOmake()
     })
   }
 
@@ -710,6 +736,18 @@ export default function MangaV2Studio({
               {omake ? 'おまけ絵を作り直す' : 'おまけ絵を作る'}
             </button>
             <span className="story-muted">登場キャラのチビキャラがニコニコして、周りにハートが漂う絵です(Anlas を使います)。</span>
+          </div>
+        )}
+        {lastPage === 'omake' && omakeCandidates.length > 1 && (
+          <div className="story-row">
+            <span className="story-muted">前に作ったおまけ絵から選ぶ:</span>
+            {omakeCandidates.map(c => (
+              <button key={c.gallery_key} type="button" disabled={busy || omake?.image_path === c.image_path}
+                title={omake?.image_path === c.image_path ? '使っているおまけ絵' : 'これをおまけ絵にする'}
+                onClick={() => void selectOmake(c.gallery_key)}>
+                <img className="mv2-ref-thumb mv2-ref-thumb--small" src={fileUrl(c.image_path)} alt="おまけ絵の候補" />
+              </button>
+            ))}
           </div>
         )}
         <div className="story-row">
