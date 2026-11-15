@@ -18,6 +18,7 @@ import MangaDraft from './pages/MangaDraft'
 import MangaImport from './pages/MangaImport'
 import BodyBaseSettings from './pages/BodyBaseSettings'
 import WardrobeSettings from './pages/WardrobeSettings'
+import StyleSets from './pages/StyleSets'
 import CharacterImages from './pages/CharacterImages'
 import AdultPatterns from './pages/AdultPatterns'
 import CharacterDataset from './pages/CharacterDataset'
@@ -83,6 +84,10 @@ function AppRoutes() {
       <Route
         path="/wardrobe-settings"
         element={<ProtectedRoute><WardrobeSettings /></ProtectedRoute>}
+      />
+      <Route
+        path="/style-sets"
+        element={<ProtectedRoute><StyleSets /></ProtectedRoute>}
       />
       <Route
         path="/adult-patterns"

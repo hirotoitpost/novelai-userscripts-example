@@ -105,6 +105,21 @@ export interface CharacterSheetPrompt {
   prompt: string
   negative_prompt: string
   seed: number | null
+  /** キャラの選んだ絵柄セット(絵柄だけの参照として足す) */
+  style_set?: Pick<StyleSet, 'id' | 'name' | 'image_path' | 'strength' | 'fidelity' | 'style_tags' | 'negative_tags'> | null
+}
+
+/** 絵柄セット(GET /api/style-sets)。members はそのセットを選んでいるキャラ(参照画像はプレビューのサンプル) */
+export interface StyleSet {
+  id: number
+  name: string
+  image_path: string
+  strength: number
+  fidelity: number
+  style_tags: string
+  negative_tags: string
+  notes: string
+  members: { id: number; name: string; reference_image_path: string | null }[]
 }
 
 export interface GenerateResponse {

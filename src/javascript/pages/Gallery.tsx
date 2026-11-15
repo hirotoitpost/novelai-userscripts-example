@@ -4,6 +4,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage'
 import { masonryColumns, useColumnCount } from '../masonry'
 import PublishDialog, { publishedMessage, PublishTarget } from '../components/PublishDialog'
 import {
+  API_ORIGIN,
   deleteImages,
   downloadFile,
   fileUrl,
@@ -12,6 +13,7 @@ import {
   Publication,
   Rating,
   RATINGS,
+  readErrorDetail,
   setAdult,
   setBookmark,
   thumbUrl,
@@ -281,6 +283,29 @@ export default function Gallery() {
       }
     } catch (e) {
       setItems(prev => prev.map(i => (i.key === item.key ? { ...i, bookmarked: !next } : i)))
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /**
+   * この画像を「絵柄だけ」の参照にした絵柄セットを作る(画像は絵柄セットの置き場所へ写すので、元の画像を整理しても残る)。
+   * キャラに選ばせると、外見の違うキャラでも同じタッチ・線・色使いで描ける。
+   */
+  async function makeStyleSet(item: GalleryImage) {
+    const name = window.prompt('絵柄セットの名前(キャラシートで選ぶときに表示します)', '')?.trim()
+    if (!name) return
+    setError(null)
+    try {
+      const res = await fetch(`${API_ORIGIN}/api/style-sets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, gallery_key: item.key }),
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      if (window.confirm(`絵柄セット「${name}」を作りました。絵柄セットのページで、強さやタグを調整し、キャラを入れますか?`)) {
+        navigate('/style-sets')
+      }
+    } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
   }
@@ -751,6 +776,10 @@ export default function Gallery() {
               <button type="button" onClick={() => void sendToGenerate(current)} disabled={sending}
                 title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値と、生成に使った参照画像も入れます)">
                 {sending ? '読み取り中…' : '似た画像を生成(画像生成ページへ)'}
+              </button>
+              <button type="button" onClick={() => void makeStyleSet(current)}
+                title="この画像を「絵柄だけ」の参照にした絵柄セットを作ります。キャラに選ばせると、その絵柄で描けます">
+                絵柄セットにする
               </button>
               {current.source_key && (
                 <button type="button" onClick={() => void openKey(current.source_key!)}

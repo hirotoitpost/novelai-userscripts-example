@@ -192,3 +192,33 @@ def test_back_view_candidates_drop_the_face_and_register_as_back(client: TestCli
         conn.close()
     assert saved["back_reference_image_path"].startswith("outputs/manga/refs/char")
     assert saved["reference_image_path"] == "outputs/manga/refs/front.png" and saved["seed"] == 123
+
+
+def test_candidates_use_the_characters_style_set(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """絵柄セットを選んだキャラの候補には、絵柄だけ(style)の参照と、セットの絵柄タグ・ネガティブを足す。"""
+    from python import style_sets
+
+    monkeypatch.setattr(db, "_PROJECT_ROOT", tmp_path)
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 12), "red").save(buf, format="PNG")
+    conn = db.get_connection()
+    try:
+        created = db.create_style_set(conn, {
+            "name": "細線", "image_path": style_sets.save_image(buf.getvalue()), "strength": 0.8, "fidelity": 1.0,
+            "style_tags": "delicate thin lineart", "negative_tags": "thick lineart",
+        })
+    finally:
+        conn.close()
+    character_id = _character()
+    conn = db.get_connection()
+    try:
+        db.update_character_sheet(conn, character_id, {"style_set_id": created["id"]})
+    finally:
+        conn.close()
+    res = client.post(f"/api/manga-v2/characters/{character_id}/reference-candidates", json={"count": 1}, headers=AUTH)
+    assert res.status_code == 200, res.text
+    call = client.calls[0]  # type: ignore[attr-defined]
+    assert "delicate thin lineart" in call["character_tags"][0]
+    assert "thick lineart" in call["negative"]
+    ref = call["character_reference"]
+    assert ref.type == "style" and ref.strength == 0.8

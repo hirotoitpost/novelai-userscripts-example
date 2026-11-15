@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { guardFetch } from '../guardFetch'
 import GrowthStages from './GrowthStages'
 import ReferenceCandidates from './ReferenceCandidates'
+import StyleSetPicker from './StyleSetPicker'
 import type { Character } from './StoryCharacters'
 
 /** キャラシートで編集する項目。容姿は変えない部分、服装は場面で差し替える部分。 */
@@ -294,6 +295,14 @@ export default function CharacterSheetEditor({
           未定義のキャラが性的な場面にいるときの扱いは、管理ページのコンテンツガードで決めます。
         </span>
       </label>
+
+      <div className={classes.field}>
+        <span className={classes.label}>
+          絵柄セット(参照画像の候補・画像生成ページで、そのセットの絵柄だけの参照とタグを足します。漫画のコマには足しません)
+        </span>
+        <StyleSetPicker value={character.style_set_id} disabled={busy} excludeCharacterId={character.id}
+          onChange={id => void put({ style_set_id: id })} />
+      </div>
 
       <GrowthStages
         apiOrigin={apiOrigin}

@@ -273,6 +273,10 @@ export default function Characters() {
             素体を一括で描く
           </button>
         )}
+        <button type="button" className="chars-small" onClick={() => navigate('/style-sets', { state: BACK })}
+          title="気に入った絵柄を保存して、キャラに選ばせます(外見の違うキャラも同じタッチで描けます)">
+          絵柄セット
+        </button>
       </header>
       {error && <p className="chars-error" role="alert">{error}</p>}
 

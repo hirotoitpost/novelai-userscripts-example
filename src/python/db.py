@@ -912,6 +912,24 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_character_outfits_character ON character_outfits(character_id)")
+    # 絵柄セット: 絵柄だけの参照画像(Character Reference の style)と強さ・忠実度、絵柄タグ・ネガティブを名前を付けて
+    # 保存する。キャラは characters.style_set_id で1つ選び、キャラの絵(参照画像の候補・画像生成)に効かせる
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS style_sets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            image_path TEXT NOT NULL,
+            strength REAL NOT NULL DEFAULT 0.8,
+            fidelity REAL NOT NULL DEFAULT 1.0,
+            style_tags TEXT NOT NULL DEFAULT '',
+            negative_tags TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     if first_wardrobe:
         from .wardrobe import DEFAULT_PARTS
 
@@ -1186,6 +1204,8 @@ _CHARACTERS_EXTRA_COLUMNS = {
     "body_base_id": "INTEGER",
     # 普段の衣装(character_outfits の id)。選ぶと、その衣装のタグを outfit_tags に入れる
     "outfit_id": "INTEGER",
+    # 絵柄セット(style_sets の id)。キャラの絵に、そのセットの絵柄の参照とタグを足す
+    "style_set_id": "INTEGER",
 }
 
 
@@ -1390,7 +1410,7 @@ def update_character_reference(
 
 CHARACTER_SHEET_FIELDS = (
     "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
-    "is_minor", "growth_of", "growth_label", "growth_order", "age",
+    "is_minor", "growth_of", "growth_label", "growth_order", "age", "style_set_id",
 )
 
 
@@ -4260,3 +4280,72 @@ def update_publication(
 def delete_publication(conn: sqlite3.Connection, publication_id: int) -> None:
     conn.execute("DELETE FROM publications WHERE id = ?", (publication_id,))
     conn.commit()
+
+
+# ---- 絵柄セット(style_sets)------------------------------------------------------------------------
+
+STYLE_SET_FIELDS = ("name", "image_path", "strength", "fidelity", "style_tags", "negative_tags", "notes")
+
+
+def list_style_sets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """絵柄セットの一覧(名前順)。members に、そのセットのキャラ(id・名前・参照画像)を付ける。"""
+    sets = [dict(r) for r in conn.execute("SELECT * FROM style_sets ORDER BY name")]
+    members: dict[int, list[dict[str, Any]]] = {}
+    for row in conn.execute(
+        "SELECT id, name, reference_image_path, style_set_id FROM characters WHERE style_set_id IS NOT NULL ORDER BY name"
+    ):
+        members.setdefault(row["style_set_id"], []).append(
+            {"id": row["id"], "name": row["name"], "reference_image_path": row["reference_image_path"]}
+        )
+    for item in sets:
+        item["members"] = members.get(item["id"], [])
+    return sets
+
+
+def get_style_set(conn: sqlite3.Connection, style_set_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM style_sets WHERE id = ?", (style_set_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def create_style_set(conn: sqlite3.Connection, values: dict[str, Any]) -> dict[str, Any]:
+    """絵柄セットを作る。values は STYLE_SET_FIELDS(name と image_path は必須)。同じ名前は IntegrityError。"""
+    now = datetime.now(timezone.utc).isoformat()
+    fields = [f for f in STYLE_SET_FIELDS if f in values]
+    row = conn.execute(
+        f"INSERT INTO style_sets ({', '.join(fields)}, created_at, updated_at)"
+        f" VALUES ({', '.join('?' for _ in fields)}, ?, ?) RETURNING *",
+        (*(values[f] for f in fields), now, now),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def update_style_set(conn: sqlite3.Connection, style_set_id: int, values: dict[str, Any]) -> dict[str, Any] | None:
+    """渡した項目だけ書き換える。"""
+    fields = [f for f in STYLE_SET_FIELDS if f in values]
+    if fields:
+        conn.execute(
+            f"UPDATE style_sets SET {', '.join(f'{f} = ?' for f in fields)}, updated_at = ? WHERE id = ?",
+            (*(values[f] for f in fields), datetime.now(timezone.utc).isoformat(), style_set_id),
+        )
+        conn.commit()
+    return get_style_set(conn, style_set_id)
+
+
+def delete_style_set(conn: sqlite3.Connection, style_set_id: int) -> None:
+    """絵柄セットを消す。そのセットを選んでいたキャラは、セットなしに戻す(キャラは消さない)。"""
+    conn.execute("UPDATE characters SET style_set_id = NULL WHERE style_set_id = ?", (style_set_id,))
+    conn.execute("DELETE FROM style_sets WHERE id = ?", (style_set_id,))
+    conn.commit()
+
+
+def set_characters_style_set(conn: sqlite3.Connection, character_ids: list[int], style_set_id: int | None) -> int:
+    """キャラの絵柄セットをまとめて決める(None でセットなし)。書き換えたキャラの数を返す。"""
+    if not character_ids:
+        return 0
+    cursor = conn.execute(
+        f"UPDATE characters SET style_set_id = ? WHERE id IN ({', '.join('?' for _ in character_ids)})",
+        (style_set_id, *character_ids),
+    )
+    conn.commit()
+    return cursor.rowcount

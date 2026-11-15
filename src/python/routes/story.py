@@ -2289,7 +2289,7 @@ async def create_new_character(req: CharacterNewRequest) -> dict[str, Any]:
             raise HTTPException(
                 status_code=409, detail=f"「{name}」という名前のキャラは既にあります(上書きするなら、そのキャラを選んでください)。"
             )
-        fields = req.model_dump(exclude_unset=True, exclude={"name", "notes"})
+        fields = _checked_style_set(conn, req.model_dump(exclude_unset=True, exclude={"name", "notes"}))
         sheet = _checked_sheet({"name": name}, _checked_growth(conn, None, fields))
         created = save_character(conn, name, str(sheet.pop("appearance_tags", "") or ""), req.notes)
         return update_character_sheet(conn, created["id"], sheet) or created
@@ -2340,7 +2340,8 @@ async def put_character_sheet(
         if current is None:
             raise HTTPException(status_code=404, detail="character not found")
         # seed は null で「基準シードなし」に戻せるよう、送られたものはそのまま反映する
-        sheet = _checked_sheet(current, _checked_growth(conn, character_id, req.model_dump(exclude_unset=True), current), token)
+        fields = _checked_style_set(conn, req.model_dump(exclude_unset=True))
+        sheet = _checked_sheet(current, _checked_growth(conn, character_id, fields, current), token)
         updated = update_character_sheet(conn, character_id, sheet) or {}
         # 元のキャラを未成年にしたら、年齢の入っていない成長段階も未成年にする(段階のほうから守りが外れないように)
         if sheet.get("is_minor"):
@@ -2351,6 +2352,16 @@ async def put_character_sheet(
     finally:
         conn.close()
 
+
+
+def _checked_style_set(conn: Any, sheet: dict[str, Any]) -> dict[str, Any]:
+    """選んだ絵柄セットがあるか確かめる(null は「なし」でよい)。"""
+    from ..db import get_style_set
+
+    style_set_id = sheet.get("style_set_id")
+    if style_set_id is not None and get_style_set(conn, style_set_id) is None:
+        raise HTTPException(status_code=422, detail="選んだ絵柄セットが見つかりません。")
+    return sheet
 
 
 def _checked_growth(

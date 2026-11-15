@@ -30,7 +30,7 @@ from novelai.types import CharacterReference, GenerateImageParams
 from . import mcp_identity
 from .db import user_files
 from .mcp_manga import register_manga_tools
-from .mcp_reference import character_reference
+from .mcp_reference import character_reference, style_record, style_reference
 from .db import (
     create_custom_chunk,
     find_conflicts,
@@ -197,6 +197,8 @@ async def generate_image_tool(
     reference_strength: float = 0.7,
     reference_fidelity: float = 1.0,
     reference_type: str = "character",
+    style_set_id: int | None = None,
+    use_style_set: bool = True,
 ) -> list[TextContent | ImageContent]:
     """
     実際にNovelAIへ画像を生成させ、生成履歴に記録して画像を返す。
@@ -207,8 +209,15 @@ async def generate_image_tool(
     reference_strength / reference_fidelity: 参照の強さと忠実度(0〜1)。強いほど顔が参照に近くなるが、
     参照画像の絵柄にも引っ張られる。絵柄を寄せたいときは 0.5 / 0.6 くらいに下げる。
     reference_type: "character"(顔・髪だけ)か "character&style"(参照の絵柄も寄せる)。
+    style_set_id: 絵柄セット(manga_list_style_sets)の ID。そのセットの絵柄だけの参照(style)と絵柄タグ・ネガティブを足す。
+    use_style_set: reference_character_id のキャラが絵柄セットを選んでいれば、style_set_id が無くてもそれを使う
+    (False で使わない)。絵柄の参照は1枚ぶん Anlas が増える。
     """
     reference = character_reference(reference_character_id, reference_type, reference_fidelity, reference_strength)
+    style = style_reference(style_set_id, reference_character_id if use_style_set else None)
+    if style is not None:
+        prompt = ", ".join(t for t in (prompt, style.style_tags) if t.strip())
+        negative_prompt = ", ".join(t for t in (negative_prompt or "", style.negative_tags) if t.strip()) or None
     client = _get_novelai_client()
     try:
         kwargs: dict[str, Any] = {
@@ -224,11 +233,14 @@ async def generate_image_tool(
         }
         if seed is not None:
             kwargs["seed"] = seed
-        if reference is not None:
-            kwargs["character_references"] = [
-                CharacterReference(image=reference.image, type=reference.type, fidelity=reference.fidelity,
-                                   strength=reference.strength)
-            ]
+        refs = [] if reference is None else [
+            CharacterReference(image=reference.image, type=reference.type, fidelity=reference.fidelity,
+                               strength=reference.strength)
+        ]
+        if style is not None:
+            refs.append(CharacterReference(image=style.image, type="style", fidelity=style.fidelity, strength=style.strength))
+        if refs:
+            kwargs["character_references"] = refs
         params = GenerateImageParams(**kwargs)
         images = await client.image.generate(params)
     finally:
@@ -259,15 +271,19 @@ async def generate_image_tool(
             seed=seed,
             chunk_ids=chunk_ids or [],
             image_paths=image_paths,
-            character_references=[reference.record(_HISTORY_DIR)] if reference else None,
+            character_references=[
+                *([reference.record(_HISTORY_DIR)] if reference else []),
+                *([style_record(style, _HISTORY_DIR)] if style else []),
+            ] or None,
             based_on_id=based_on,
             character_id=reference_character_id,
         )
     finally:
         conn.close()
 
+    note = f"(絵柄セット「{style.name}」を使いました)" if style else ""
     result: list[TextContent | ImageContent] = [
-        TextContent(type="text", text=f"生成完了。history_id={entry['id']}")
+        TextContent(type="text", text=f"生成完了。history_id={entry['id']}{note}")
     ]
     result.extend(ImageContent(type="image", data=b64, mime_type="image/png") for b64 in b64_images)
     return result

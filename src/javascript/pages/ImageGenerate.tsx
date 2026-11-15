@@ -14,6 +14,7 @@ import {
   MetadataGenerationSettings, GENERATE_FROM_IMAGE_KEY, CharacterReferenceInput, GalleryImageReferences,
 } from '../api'
 import { fileFetchUrl } from '../library'
+import { useStyleSets } from '../components/StyleSetPicker'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
 import { insertTag } from '../tagInsert'
 import ImageCropDialog from '../components/ImageCropDialog'
@@ -226,6 +227,18 @@ export default function ImageGenerate() {
     const image = await readAsDataUrl(file)
     setCharRefs(prev => [...prev, { image, type: 'character', fidelity: 1.0, strength: 0.7, label: file.name }])
   }
+  // 絵柄セット: 絵柄だけの参照(style)として足す。同じセットは2回足さない(ラベルで見分ける)
+  const { sets: styleSets } = useStyleSets()
+  const addStyleSetRef = async (set: { name: string; image_path: string; strength: number; fidelity: number }) => {
+    const label = `絵柄セット「${set.name}」`
+    const res = await fetch(fileFetchUrl(set.image_path))
+    if (!res.ok) throw new Error(`絵柄セット「${set.name}」の画像を読み込めませんでした`)
+    const image = await readAsDataUrl(await res.blob())
+    setCharRefs(prev => [
+      ...prev.filter(c => c.label !== label),
+      { image, type: 'style', fidelity: set.fidelity, strength: set.strength, label },
+    ])
+  }
   const takeI2iFile = useCallback((file: File) => { setI2iOriginal(null); handleI2iFile(file) }, [handleI2iFile])
   // Image-to-Image を使っているあいだは、ページのどこで Ctrl+V しても参照画像にする
   usePasteImage(i2iEnabled, takeI2iFile)
@@ -388,11 +401,21 @@ export default function ImageGenerate() {
       setNegPrompt(sheet.negative_prompt)
       setSeed(sheet.seed != null ? String(sheet.seed) : '')
       caretRef.current = null
+      let styleNote = ''
+      if (sheet.style_set) {
+        try {
+          await addStyleSetRef(sheet.style_set)
+          styleNote = `絵柄セット「${sheet.style_set.name}」を絵柄だけの参照として足し、そのタグも入れました`
+        } catch (e) {
+          styleNote = e instanceof Error ? e.message : String(e)
+        }
+      }
       setSheetMsg({
         text: [
           `「${sheet.name}」のキャラシートを読み込みました`,
           sheet.seed == null ? '基準シードが無いため、シード値は空(毎回ランダム)にしました' : '',
           target.reference_image_path ? '参照画像はこのページでは使いません' : '',
+          styleNote,
         ].filter(Boolean).join('。'),
         isError: false,
       })
@@ -1376,6 +1399,17 @@ export default function ImageGenerate() {
                 e.target.value = ''
               }} />
             </label>
+            {styleSets.length > 0 && (
+              <select className="ig-charref-style" value="" aria-label="絵柄セットを足す"
+                title="絵柄セットの画像を、絵柄だけ(スタイルのみ)の参照として足します。タグはプロンプトに足しません"
+                onChange={e => {
+                  const set = styleSets.find(x => x.id === Number(e.target.value))
+                  if (set) void addStyleSetRef(set).catch(err => setSheetMsg({ text: String(err), isError: true }))
+                }}>
+                <option value="">+ 絵柄セットを足す</option>
+                {styleSets.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>
+            )}
           </section>
 
           {linkedCharacter && (

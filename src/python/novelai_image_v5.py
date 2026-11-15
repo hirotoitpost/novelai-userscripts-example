@@ -259,6 +259,8 @@ class CharacterReferenceInput:
     image_b64: str
     strength: float = 1.0
     fidelity: float = 1.0
+    # character&style(キャラと絵柄)/ character(キャラだけ)/ style(絵柄だけ。絵柄セット)
+    type: str = "character&style"
 
 
 # 参照画像は 1024x1536 に縦横比を保って縮め、余白を黒で埋めて渡す(SDKの crop_and_resize と同じ)
@@ -285,7 +287,7 @@ def _apply_character_reference(parameters: dict[str, Any], refs: list[CharacterR
     """
     parameters["director_reference_images"] = [ref.image_b64 for ref in refs]
     parameters["director_reference_descriptions"] = [
-        {"caption": {"base_caption": "character&style", "char_captions": []}, "legacy_uc": False} for _ in refs
+        {"caption": {"base_caption": ref.type, "char_captions": []}, "legacy_uc": False} for ref in refs
     ]
     parameters["director_reference_strength_values"] = [round(ref.strength, 2) for ref in refs]
     parameters["director_reference_secondary_strength_values"] = [round(1 - ref.fidelity, 2) for ref in refs]

@@ -456,9 +456,11 @@ def register_manga_tools(mcp: MCPServer) -> None:
         growth_label: str | None = None,
         growth_order: int | None = None,
         age: int | None = None,
+        style_set_id: int | None = None,
     ) -> dict[str, Any]:
         """
         キャラシートを新しく作る(同じ名前があれば作らない)。age(歳)を入れると、18 歳未満は未成年・以上は成人になる。
+        style_set_id は絵柄セット(manga_list_style_sets)。選ぶと参照画像の候補などキャラの絵がその絵柄になる。
         appearance_tags は変えない容姿(顔・髪・目)、outfit_tags はふだんの服装(シーンの character_outfits で差し替えられる。
         眼鏡のように外す場面がある物はこちらに入れる)。is_minor は未成年(性的な場面には描かない)、is_adult は成人。
         growth_of に元のキャラの ID を渡すと、その人物の成長段階(growth_label: 新生児・1歳 など、growth_order: 幼い順の番号)
@@ -468,17 +470,31 @@ def register_manga_tools(mcp: MCPServer) -> None:
         for key, value in (
             ("outfit_tags", outfit_tags), ("negative_tags", negative_tags), ("notes", notes), ("is_adult", is_adult),
             ("is_minor", is_minor), ("growth_of", growth_of), ("growth_label", growth_label), ("growth_order", growth_order),
-            ("age", age),
+            ("age", age), ("style_set_id", style_set_id),
         ):
             if value is not None:
                 body[key] = value
         return await _call("POST", "/api/story/characters/new", body)
 
     @mcp.tool()
+    async def manga_list_style_sets() -> list[dict[str, Any]]:
+        """
+        絵柄セットの一覧(ID・名前・強さ・忠実度・絵柄タグ・ネガティブ・そのセットのキャラ)。絵柄セットは「絵柄だけ」の
+        参照画像を保存したもので、キャラに選ばせる(manga_create_character / manga_update_character の style_set_id)と、
+        参照画像の候補・generate_image_tool(reference_character_id か style_set_id)がその絵柄で描く。漫画のコマには足さない。
+        """
+        sets = await _call("GET", "/api/style-sets")
+        return [
+            {k: s[k] for k in ("id", "name", "strength", "fidelity", "style_tags", "negative_tags", "notes")}
+            | {"members": [{"id": m["id"], "name": m["name"]} for m in s["members"]]}
+            for s in sets
+        ]
+
+    @mcp.tool()
     async def manga_update_character(character_id: int, sheet: dict[str, Any]) -> dict[str, Any]:
         """
         キャラシートを書き換える(sheet に渡した項目だけ)。項目: appearance_tags・outfit_tags・body_tags・style_tags・
-        negative_tags・seed・is_adult・is_minor・growth_of(null で成長段階から外す)・growth_label・growth_order・
+        negative_tags・seed・style_set_id(絵柄セット。null でなし)・is_adult・is_minor・growth_of(null で成長段階から外す)・growth_label・growth_order・
         age(歳。入れると年齢区分はそれで決まる)。
         未成年の定義を外すこと(年齢を 18 歳以上に上げることを含む)はここではできない(コンテンツガードのパスワードが
         要るので、画面で行う)。

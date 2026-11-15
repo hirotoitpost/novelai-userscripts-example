@@ -186,6 +186,7 @@ from ..models import (
     StoryJobResponse,
 )
 from .. import app_settings
+from .. import style_sets
 from ..character_sheet import (
     drop_face_tags,
     safe_negative,
@@ -731,16 +732,20 @@ async def make_illustration_candidates(
     from novelai.types import CharacterReference
 
     layout = back.tags if back else app_settings.get("reference.candidate_tags")
-    prompt = join_tags(sheet_prompt(character), layout)
-    negative = sheet_negative(character, extra=back.negative if back else None)
-    refs = None
+    style = style_sets.for_character(character)
+    prompt = join_tags(sheet_prompt(character), style.style_tags if style else None, layout)
+    negative = sheet_negative(character, extra=join_tags(back.negative if back else None, style.negative_tags if style else None))
+    refs: list[CharacterReference] = []
     if back and back.reference:
-        refs = [CharacterReference(
+        refs.append(CharacterReference(
             image=base64.b64decode(back.reference.image_b64), type="character", fidelity=1.0,
             strength=back.reference.strength,
-        )]
+        ))
+    if style:
+        # 絵柄セット: 絵柄だけの参照を足す(タグだけでは同じ絵柄にならない)
+        refs.append(CharacterReference(image=style.image, type="style", fidelity=style.fidelity, strength=style.strength))
     cfg = GenConfig(
-        output_root=_CANDIDATE_DIR, model=model or _REFERENCE_MODEL, negative_prompt=negative, character_references=refs
+        output_root=_CANDIDATE_DIR, model=model or _REFERENCE_MODEL, negative_prompt=negative, character_references=refs or None
     )
     _CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
     candidates: list[dict[str, Any]] = []
@@ -769,6 +774,14 @@ async def make_reference_candidates(
     """
     tags = character_prompt_tags(character)
     layout = back.tags if back else app_settings.get("reference.candidate_tags")
+    style = style_sets.for_character(character)
+    refs: list[CharacterReferenceInput] = [back.reference] if back and back.reference else []
+    if style:
+        # 絵柄セット: 絵柄だけの参照と絵柄タグを足す
+        tags = join_tags(tags, style.style_tags)
+        refs.append(CharacterReferenceInput(
+            image_b64=reference_image_b64(style.image), strength=style.strength, fidelity=style.fidelity, type="style",
+        ))
     _CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
     candidates: list[dict[str, Any]] = []
     for _ in range(count):
@@ -778,14 +791,14 @@ async def make_reference_candidates(
             build_panel_prompt(layout, color=color, complexity=None),
             join_tags(
                 build_panel_negative(None, color=color), safe_negative(), character.get("negative_tags"),
-                back.negative if back else None,
+                back.negative if back else None, style.negative_tags if style else None,
             ),
             model=model or _REFERENCE_MODEL,
             width=832,
             height=1216,
             seed=seed,
             character_tags=[tags],
-            character_reference=back.reference if back else None,
+            character_reference=refs[0] if len(refs) == 1 else (refs or None),
         )
         filename = f"char{character['id']}_{seed}_{uuid4().hex[:6]}.png"
         (_CANDIDATE_DIR / filename).write_bytes(image)

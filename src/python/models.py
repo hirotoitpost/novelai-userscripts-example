@@ -717,6 +717,8 @@ class CharacterSheetPromptResponse(BaseModel):
     prompt: str
     negative_prompt: str
     seed: Optional[int] = None
+    # キャラの選んだ絵柄セット(id・name・image_path・strength・fidelity)。画面で絵柄だけの参照として足す
+    style_set: Optional[dict[str, Any]] = None
 
 
 class DatasetImportRequest(BaseModel):
@@ -1346,6 +1348,8 @@ class CharacterResponse(BaseModel):
     age: Optional[int] = None
     # 普段の衣装(character_outfits の id。衣装を選んでいなければ None)
     outfit_id: Optional[int] = None
+    # 絵柄セット(style_sets の id。選んでいなければ None)
+    style_set_id: Optional[int] = None
 
 
 class CharacterSheetRequest(BaseModel):
@@ -1368,6 +1372,9 @@ class CharacterSheetRequest(BaseModel):
     growth_order: Optional[int] = Field(None, ge=0, le=10000, description="成長段階を並べる順(小さいほど幼い)")
     age: Optional[int] = Field(
         None, ge=0, le=200, description="年齢(歳)。18 歳未満は未成年、18 歳以上は成人になる(null で年齢なし)"
+    )
+    style_set_id: Optional[int] = Field(
+        None, description="絵柄セット(style_sets の id)。キャラの絵に、そのセットの絵柄の参照とタグを足す(null でなし)"
     )
 
 
@@ -2092,3 +2099,40 @@ class StorySaveAsRequest(StoryEditRequest):
     """別名保存。title が新しい物語の題名になる。"""
 
     title: str = Field(min_length=1, max_length=200)
+
+
+class StyleSetRequest(BaseModel):
+    """
+    絵柄セットを作る。画像は image(base64 / data URL)か gallery_key(ギャラリーの画像のキー。"file:<パス>" も可)の
+    どちらか。画像は絵柄セットの置き場所へ写す(元の画像を整理しても残る)。
+    """
+
+    name: str = Field(min_length=1, max_length=60)
+    image: Optional[str] = None
+    gallery_key: Optional[str] = Field(None, max_length=500)
+    strength: float = Field(0.8, ge=0.0, le=1.0)
+    fidelity: float = Field(1.0, ge=0.0, le=1.0)
+    style_tags: str = Field("", max_length=2000)
+    negative_tags: str = Field("", max_length=2000)
+    notes: str = Field("", max_length=1000)
+    # 作ると同時にこのセットに入れるキャラ
+    character_ids: list[int] = Field(default_factory=list, max_length=500)
+
+
+class StyleSetUpdateRequest(BaseModel):
+    """絵柄セットを書き換える(送った項目だけ)。画像を差し替えるときは image か gallery_key。"""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=60)
+    image: Optional[str] = None
+    gallery_key: Optional[str] = Field(None, max_length=500)
+    strength: Optional[float] = Field(None, ge=0.0, le=1.0)
+    fidelity: Optional[float] = Field(None, ge=0.0, le=1.0)
+    style_tags: Optional[str] = Field(None, max_length=2000)
+    negative_tags: Optional[str] = Field(None, max_length=2000)
+    notes: Optional[str] = Field(None, max_length=1000)
+
+
+class StyleSetCharactersRequest(BaseModel):
+    """キャラを絵柄セットに入れる(すでに別のセットにいれば移す)。"""
+
+    character_ids: list[int] = Field(min_length=1, max_length=500)
