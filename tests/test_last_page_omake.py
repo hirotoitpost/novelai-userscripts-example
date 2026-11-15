@@ -180,3 +180,50 @@ def test_omake_needs_characters(client: TestClient, tmp_path: Path) -> None:
     story = client.post("/api/story/scripted", json={"title": "風景", "scenes": [{"text": "海", "prompt_tags": "no humans"}]}).json()
     res = client.post(f"/api/manga-v2/{story['id']}/omake", json={})
     assert res.status_code == 400
+
+
+def test_omake_background_blends_into_the_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("python.manga_v2.compose.detect_heads", lambda path: [])
+    # うっすら灰色の地(240)に、濃い色の人物
+    omake = tmp_path / "omake.png"
+    image = Image.new("RGB", (1216, 832), (240, 240, 236))
+    image.paste(Image.new("RGB", (200, 400), _PINK), (508, 216))
+    image.save(omake)
+    plan = plan_pages("grid4", 2, last_page="omake", omake=omake)[0]
+    fonts = resolve_font(None), resolve_font(None, DEFAULT_SFX_FONT_ID)
+    page, _ = compose_page(plan.spec, [], LetteringStyle(*fonts))
+    x0, y0, x1, y1 = plan.spec.extras[0][0]
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    assert page.getpixel((cx, cy)) == _PINK
+    # 絵の地は、ページの地(白)にそろって境目が出ない
+    assert page.getpixel((x0 + (x1 - x0) // 10, cy)) == (255, 255, 255)
+
+
+def test_omake_tags_weight_chibi() -> None:
+    assert "1.6::chibi::" in manga_v2.OMAKE_TAGS and "hearts" in manga_v2.OMAKE_TAGS
+
+
+def test_select_an_earlier_omake(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    story_id = _story(client, tmp_path, 6)
+    colors = iter([(255, 0, 0), (0, 0, 255)])
+
+    async def fake_generate(api_key, prompt, negative, **kwargs):
+        return _png_bytes(next(colors))
+
+    monkeypatch.setattr(manga_v2, "generate_image_v5", fake_generate)
+    first = client.post(f"/api/manga-v2/{story_id}/omake", json={"seed": 1}).json()
+    second = client.post(f"/api/manga-v2/{story_id}/omake", json={"seed": 2}).json()
+    assert client.get(f"/api/manga-v2/{story_id}/omake").json()["image_path"] == second["image_path"]
+    candidates = client.get(f"/api/manga-v2/{story_id}/omake/candidates").json()
+    assert {c["image_path"] for c in candidates} == {first["image_path"], second["image_path"]}
+
+    # 作り直す前の絵に戻す
+    key = next(c["gallery_key"] for c in candidates if c["image_path"] == first["image_path"])
+    monkeypatch.setattr("python.routes.library._PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("python.routes.library._is_served", lambda full: True)
+    res = client.put(f"/api/manga-v2/{story_id}/omake", json={"gallery_key": key})
+    assert res.status_code == 200, res.text
+    assert client.get(f"/api/manga-v2/{story_id}/omake").json()["image_path"] == first["image_path"]
+    # 無い画像は 404
+    missing = client.put(f"/api/manga-v2/{story_id}/omake", json={"gallery_key": "file:outputs/manga/omake/none.png"})
+    assert missing.status_code == 404

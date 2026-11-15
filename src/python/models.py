@@ -1729,6 +1729,12 @@ class MangaV2ComposeRequest(BaseModel):
     last_page: Literal["fill", "blank", "omake"] = "fill"
 
 
+class MangaV2OmakeSelectRequest(BaseModel):
+    """ギャラリーにある絵をおまけ絵にする(history:{履歴ID}:{n} / file:<パス> などのキー)。"""
+
+    gallery_key: str = Field(min_length=1, max_length=1000)
+
+
 class MangaV2OmakeRequest(BaseModel):
     """最後のページに置くおまけ絵(登場キャラのチビキャラ)を作る。"""
 
