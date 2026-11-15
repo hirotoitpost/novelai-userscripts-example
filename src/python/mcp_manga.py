@@ -560,7 +560,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
               nude(ヌード写真集。乳首・性器は描かない featureless。撮影場所ごとにポーズを演じる。explicit は足さない)/
               nude2(ヌード写真集 〜旅する素肌〜。和室・森の泉・アトリエ・夜景・砂丘。下からの構図・お尻を突き出す・表情多め)/
               nude_day(はだかの一日。休日に部屋で服を着ずに過ごす朝から夜までの24場面。乳首を描き、性器は描かない)
-        nipple_shape: はだかの一日の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ puffy_inverted(半陥没・ぷっくり)/ large_areolae(大きめの乳輪)/ small。
+        nipple_shape: はだかの一日の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ puffy_inverted(半陥没・ぷっくり)/ erect(勃起)/ large_areolae(大きめの乳輪)/ small。
             all(全部の形)か "puffy,inverted" のようにカンマで並べると、形ごとに別の物語を作る(stories で返す)
         body: sheet(キャラシートのまま)/ slender / curvy(省略時はコレクションが slender、からかいが curvy、ヌードが sheet)
         poses: からかいのポーズのキー、nude / nude2 ならその種類のヌードのポーズのキー(nude_poses の kind)、

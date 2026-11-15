@@ -396,3 +396,11 @@ def test_nude_day_inverted_is_strong_and_nails_shows_the_brush() -> None:
     assert "puffy areolae" in semi["character_outfits"][1] and "nipple tip peeking out" in semi["character_outfits"][1]
     nails = build_collection(one, CollectionOptions(kind="nude_day", poses=["nails"]))["scenes"][0]
     assert "painting toenails" in nails["character_actions"][1] and "from side" in nails["prompt_tags"]
+
+
+def test_nude_day_erect_nipples_stand_out() -> None:
+    one = [{"id": 1, "name": "あかね"}]
+    erect = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="erect", poses=["coffee"]))["scenes"][0]
+    assert "1.6::erect nipples::" in erect["character_outfits"][1]
+    # 陥没にならないよう打ち消す
+    assert "inverted nipples" in erect["negative_prompt"]
