@@ -764,7 +764,13 @@ class NippleShape:
 NIPPLE_SHAPES: dict[str, NippleShape] = {
     "normal": NippleShape("ふつう", "nipples, pink nipples", "puffy nipples, inverted nipples"),
     "puffy": NippleShape("ぷっくり", "nipples, 1.6::puffy nipples::, 1.3::puffy areolae::", "inverted nipples"),
-    "inverted": NippleShape("陥没", "1.6::inverted nipples::", "puffy nipples, erect nipples"),
+    # 1.6 では参照画像・画風の乳首に負けて、ふつうの乳首になりがちだった(九条ゆら 物語313 2026-11-16)
+    "inverted": NippleShape("陥没", "1.9::inverted nipples::, 1.3::nipple slit::, flat areolae",
+                            "1.4::erect nipples::, protruding nipples, puffy nipples, large nipples"),
+    # 陥没から乳首の先が少しのぞき、乳輪ごとぷっくり盛り上がる(半陥没。ユーザーの希望 2026-11-16)
+    "puffy_inverted": NippleShape("半陥没・ぷっくり",
+                                  "1.5::inverted nipples::, 1.5::puffy areolae::, 1.2::nipple tip peeking out::, soft nipples",
+                                  "1.3::erect nipples::, long nipples, large nipples, flat areolae"),
     "large_areolae": NippleShape("大きめの乳輪", "nipples, 1.4::large areolae::", "small areolae, puffy nipples, inverted nipples"),
     "small": NippleShape("小さめ", "nipples, 1.3::small nipples::, small areolae, pink nipples", "large areolae, puffy nipples"),
 }
@@ -851,9 +857,11 @@ DAY_SCENES: tuple[DayScene, ...] = (
     DayScene("night_bath", "夜のお風呂", "夜", "bathroom, bathtub, night, dim light", "upper body",
              "partially submerged, relaxed, eyes half closed, head resting on bathtub edge", "ふぁ〜……とろける……",
              outfit=WET, negative=NO_FOAM, hair_down=True),
-    DayScene("nails", "ネイルを塗る", "夜", "living room, night, lamp light, low table, nail polish bottle", "cowboy shot",
-             "sitting on floor, painting toenails, concentrating, tongue out", "はみ出さないように……",
-             outfit="barefoot", negative="spread legs", hair_down=True, whole=True),
+    # 足の爪を塗る動きが出ず、座って胸を抱えるだけの絵になった(物語312・313)。横から、片膝を立てて足先に筆を当てる
+    DayScene("nails", "ネイルを塗る", "夜", "living room, night, lamp light, low table, nail polish bottle", "full body, from side",
+             "sitting on floor, one knee up, foot on edge of low table, 1.4::painting toenails::, "
+             "holding small nail polish brush near toes, concentrating, tongue out, looking down at foot",
+             "はみ出さないように……", outfit="barefoot", negative="spread legs", hair_down=True, whole=True),
     DayScene("diary", "日記", "夜", "bedroom, night, lamp light, on bed, notebook", "upper body",
              "lying on stomach, writing in diary, pen, thinking, finger on chin", "今日は……はだかの日、っと",
              outfit="bare back", hair_down=True),
