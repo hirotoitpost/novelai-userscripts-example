@@ -771,8 +771,11 @@ NIPPLE_SHAPES: dict[str, NippleShape] = {
     "puffy_inverted": NippleShape("半陥没・ぷっくり",
                                   "1.5::inverted nipples::, 1.5::puffy areolae::, 1.2::nipple tip peeking out::, soft nipples",
                                   "1.3::erect nipples::, long nipples, large nipples, flat areolae"),
+    # 乳首が立って先がつんと突き出る(烏丸あかね 2026-11-16)
+    "erect": NippleShape("勃起", "nipples, 1.6::erect nipples::, 1.3::protruding nipples::, perky nipples",
+                         "1.4::inverted nipples::, flat nipples, puffy areolae"),
     "large_areolae": NippleShape("大きめの乳輪", "nipples, 1.4::large areolae::", "small areolae, puffy nipples, inverted nipples"),
-    "small": NippleShape("小さめ", "nipples, 1.3::small nipples::, small areolae, pink nipples", "large areolae, puffy nipples"),
+    "small":NippleShape("小さめ", "nipples, 1.3::small nipples::, small areolae, pink nipples", "large areolae, puffy nipples"),
 }
 
 

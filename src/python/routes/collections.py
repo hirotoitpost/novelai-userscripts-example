@@ -30,8 +30,8 @@ class CollectionRequest(BaseModel):
     poses: list[str] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     lines: bool = True
-    # はだかの一日の乳首の形: normal / puffy / inverted / puffy_inverted(半陥没) / large_areolae / small
-    nipple_shape: Literal["normal", "puffy", "inverted", "puffy_inverted", "large_areolae", "small"] = "normal"
+    # はだかの一日の乳首の形: normal / puffy / inverted / puffy_inverted(半陥没) / erect(勃起) / large_areolae / small
+    nipple_shape: Literal["normal", "puffy", "inverted", "puffy_inverted", "erect", "large_areolae", "small"] = "normal"
     panels_per_page: int = Field(4, ge=1, le=12)
     series_id: Optional[int] = None
     volume_no: Optional[int] = Field(None, ge=1)
@@ -46,7 +46,7 @@ async def get_catalog() -> dict[str, Any]:
 class NippleShapesRequest(CollectionRequest):
     """はだかの一日を、乳首の形ごとに別の物語にする(空なら全部の形)。"""
 
-    nipple_shapes: list[Literal["normal", "puffy", "inverted", "puffy_inverted", "large_areolae", "small"]] = Field(default_factory=list)
+    nipple_shapes: list[Literal["normal", "puffy", "inverted", "puffy_inverted", "erect", "large_areolae", "small"]] = Field(default_factory=list)
 
 
 @router.post("/nipple-shapes", response_model=list[StoryResponse])
