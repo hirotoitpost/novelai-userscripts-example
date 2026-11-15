@@ -384,3 +384,15 @@ def test_nude_day_one_story_per_nipple_shape(client: TestClient) -> None:
     # はだかの一日のほかは作れない
     other = client.post("/api/collections/nipple-shapes", json={"kind": "nude", "character_ids": [adult]})
     assert other.status_code == 422
+
+
+def test_nude_day_inverted_is_strong_and_nails_shows_the_brush() -> None:
+    one = [{"id": 1, "name": "ゆら"}]
+    inverted = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="inverted", poses=["coffee"]))["scenes"][0]
+    assert "1.9::inverted nipples::" in inverted["character_outfits"][1]
+    assert "protruding nipples" in inverted["negative_prompt"]
+    # 半陥没(ぷっくり): 陥没から乳首の先が少しのぞき、乳輪ごと盛り上がる
+    semi = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="puffy_inverted", poses=["coffee"]))["scenes"][0]
+    assert "puffy areolae" in semi["character_outfits"][1] and "nipple tip peeking out" in semi["character_outfits"][1]
+    nails = build_collection(one, CollectionOptions(kind="nude_day", poses=["nails"]))["scenes"][0]
+    assert "painting toenails" in nails["character_actions"][1] and "from side" in nails["prompt_tags"]
