@@ -98,6 +98,12 @@ interface Props {
   onClose: () => void
   /** 保存したあと。上書きなら同じ物語、別名保存なら新しい物語のID */
   onSaved: (storyId: number) => void
+  /** 開いたときに移るシーン(漫画の欄の「このシーンを直す」から開いたとき) */
+  focusSceneId?: number | null
+  /** 物語ページで処理(コマの生成など)が走っているか。走っている間は描き直せない */
+  taskBusy?: boolean
+  /** 1コマを描き直す(番号は0始まり。終わるまで待つ)。漫画v2のときだけ渡す */
+  onRedraw?: (sceneIndex: number) => Promise<void>
 }
 
 let keySeq = 0
@@ -127,7 +133,9 @@ function move<T>(list: T[], from: number, to: number): T[] {
   return next
 }
 
-export default function StoryEditor({ apiOrigin, storyId, characters, states, fileUrl, onClose, onSaved }: Props) {
+export default function StoryEditor({
+  apiOrigin, storyId, characters, states, fileUrl, onClose, onSaved, focusSceneId = null, taskBusy = false, onRedraw,
+}: Props) {
   const [data, setData] = useState<EditData | null>(null)
   const [original, setOriginal] = useState<Record<number, string>>({})
   const [title, setTitle] = useState('')
@@ -201,6 +209,38 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
     load().catch(e => setError(e instanceof Error ? e.message : String(e)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storyId])
+
+  // 描き直しているコマ(0始まり)
+  const [drawing, setDrawing] = useState<number | null>(null)
+  // 「このシーンを直す」から開いたときに光らせるシーン
+  const [highlight, setHighlight] = useState<number | null>(null)
+  const listRef = useRef<HTMLOListElement>(null)
+  const focused = useRef(false)
+
+  // 読み込んだら、目当てのシーンまで移って、しばらく枠を光らせる(開いたときの1回だけ)
+  useEffect(() => {
+    if (!data || focusSceneId === null || focused.current) return
+    focused.current = true
+    const item = listRef.current?.querySelector<HTMLElement>(`[data-scene-id="${focusSceneId}"]`)
+    if (!item) return
+    item.scrollIntoView({ block: 'start' })
+    setHighlight(focusSceneId)
+    const timer = window.setTimeout(() => setHighlight(null), 2500)
+    return () => window.clearTimeout(timer)
+  }, [data, focusSceneId])
+
+  /** 描き直したあと、コマの絵と候補の枚数だけを読み直す(直している途中の内容は残す) */
+  async function refreshPanels() {
+    const res = await fetch(`${apiOrigin}/api/story/${storyId}/edit`)
+    if (!res.ok) throw new Error(await errorDetail(res))
+    const loaded = (await res.json()) as { scenes: Pick<EditScene, 'id' | 'panel' | 'candidates'>[] }
+    const byId = new Map(loaded.scenes.map(s => [s.id, s]))
+    setScenes(prev => prev.map(s => {
+      const fresh = s.id !== null ? byId.get(s.id) : undefined
+      return fresh ? { ...s, panel: fresh.panel, candidates: fresh.candidates } : s
+    }))
+    return byId
+  }
 
   // 閉じる・再読み込みで下書きが消えるときは確かめる
   useEffect(() => {
@@ -330,7 +370,10 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
     }
   }
 
-  const overwrite = () => run(async () => {
+  const overwrite = () => run(save)
+
+  /** 上書き保存する(失敗したら投げる) */
+  async function save() {
     const res = await fetch(`${apiOrigin}/api/story/${storyId}/edit`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body()),
     })
@@ -342,6 +385,27 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
     if (result.stale_panels) parts.push(`描き直し待ちのコマ ${result.stale_panels}`)
     if (result.dropped_pages) parts.push(`内容の変わったページの挿絵 ${result.dropped_pages} 枚を外しました`)
     setNote(parts.join('。'))
+  }
+
+  /** 直した内容を保存してから、そのコマだけを描き直す(並びは保存しても変わらないので、番号はそのまま使える) */
+  const saveAndRedraw = (index: number) => run(async () => {
+    if (!onRedraw) return
+    if (dirty) await save()
+    const before = scenes[index]?.panel?.image_path ?? null
+    setDrawing(index)
+    try {
+      await onRedraw(index)
+    } finally {
+      setDrawing(null)
+    }
+    const fresh = await refreshPanels()
+    const id = scenes[index]?.id
+    const after = id !== null && id !== undefined ? fresh.get(id)?.panel?.image_path ?? null : null
+    setNote(id === null || id === undefined
+      ? `コマ${index + 1}の描き直しが終わりました。`
+      : after && after !== before
+      ? `コマ${index + 1}を描き直しました。`
+      : `コマ${index + 1}の絵は変わっていません(止めたか、うまくいかなかったときは、物語ページに理由が出ます)。`)
   })
 
   /** コマの絵を左右反転する(元の絵は残る。反転した絵をもう一度反転すると元に戻る)。下書きの内容は変えない */
@@ -430,7 +494,7 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
           </p>
         </header>
 
-        <ol className="sed-scenes">
+        <ol className="sed-scenes" ref={listRef}>
           {scenes.map((s, i) => {
             const changed = s.id !== null && s.panel !== null && original[s.id] !== imageKey(s)
             const newPage = i === 0 || pages[i] !== pages[i - 1]
@@ -444,7 +508,8 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
                     </button>
                   </li>
                 )}
-                <li className="sed-scene">
+                <li className={highlight !== null && s.id === highlight ? 'sed-scene sed-scene--focus' : 'sed-scene'}
+                  data-scene-id={s.id ?? undefined}>
                   <SceneCard
                     index={i}
                     total={scenes.length}
@@ -462,6 +527,10 @@ export default function StoryEditor({ apiOrigin, storyId, characters, states, fi
                     onAdd={() => addScene(i)}
                     onRemove={() => removeScene(i)}
                     onMirror={() => void mirror(i)}
+                    onRedraw={onRedraw ? () => void saveAndRedraw(i) : undefined}
+                    redrawLabel={dirty ? '保存して描き直す' : '描き直す'}
+                    redrawDisabled={busy || taskBusy}
+                    drawing={drawing === i}
                     trackCaret={trackCaret}
                   />
                 </li>
@@ -507,11 +576,18 @@ interface CardProps {
   apiOrigin: string
   /** 候補を選んだ・消したあと(選んだ絵のパス、消しただけなら null。残った候補の枚数) */
   onPanel: (imagePath: string | null, candidates: number) => void
+  /** このコマを描き直す(直した内容があれば先に保存する)。漫画v2のときだけ */
+  onRedraw?: () => void
+  redrawLabel: string
+  redrawDisabled: boolean
+  /** いま描き直しているか */
+  drawing: boolean
   trackCaret: TrackCaret
 }
 
 function SceneCard({
-  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove, onMirror, apiOrigin, onPanel, trackCaret,
+  index, total, scene, changed, busy, characters, states, fileUrl, onChange, onLines, onMove, onAdd, onRemove, onMirror, apiOrigin, onPanel,
+  onRedraw, redrawLabel, redrawDisabled, drawing, trackCaret,
 }: CardProps) {
   const [candidatesOpen, setCandidatesOpen] = useState(false)
   /** チャンクの入れ先にできる欄に付けるもの(フォーカス・カーソル移動で入れ先にする) */
@@ -559,6 +635,7 @@ function SceneCard({
       </div>
 
       <div className="sed-card-body">
+        <div className="sed-thumb-col">
         <div className="sed-thumb">
           {scene.panel ? <img src={fileUrl(scene.panel.image_path)} alt={`コマ${index + 1}の絵`} /> : <span>絵なし</span>}
           {scene.panel && (changed || scene.panel.stale) && <span className="sed-badge">描き直し待ち</span>}
@@ -570,6 +647,13 @@ function SceneCard({
           {scene.id !== null && scene.candidates > 0 && (
             <button type="button" className="sed-candidates-open" disabled={busy} onClick={() => setCandidatesOpen(o => !o)}
               title="このコマに描いた候補の絵を見比べて、使う1枚を選びます">候補 {scene.candidates}</button>
+          )}
+        </div>
+          {onRedraw && (
+            <button type="button" className="sed-redraw" disabled={redrawDisabled} onClick={onRedraw}
+              title="直した内容を上書き保存してから、このコマだけを漫画の欄の設定(画像の設定・キャラ参照)で描き直します">
+              {drawing ? '描いています…' : scene.panel ? redrawLabel : redrawLabel.replace('描き直す', '描く')}
+            </button>
           )}
         </div>
         {candidatesOpen && scene.id !== null && (
