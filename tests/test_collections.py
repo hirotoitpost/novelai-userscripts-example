@@ -365,3 +365,22 @@ def test_nude_day_via_api(client: TestClient) -> None:
     assert res.status_code == 200, res.text
     minor = _character("リン", 16)
     assert client.post("/api/collections", json={"kind": "nude_day", "character_ids": [minor]}).status_code == 422
+
+
+def test_nude_day_one_story_per_nipple_shape(client: TestClient) -> None:
+    from python.collection_templates import NIPPLE_SHAPES
+
+    adult = _character("ちひろ", 24)
+    res = client.post("/api/collections/nipple-shapes", json={"kind": "nude_day", "character_ids": [adult], "themes": ["朝"]})
+    assert res.status_code == 200, res.text
+    stories = res.json()
+    assert len(stories) == len(NIPPLE_SHAPES)
+    assert [s["title"].rsplit("(", 1)[1].rstrip(")") for s in stories] == [v.label for v in NIPPLE_SHAPES.values()]
+    # 選んだ形だけ・題名を決めたとき
+    two = client.post("/api/collections/nipple-shapes", json={
+        "kind": "nude_day", "character_ids": [adult], "themes": ["朝"], "title": "休日", "nipple_shapes": ["puffy", "inverted"],
+    }).json()
+    assert [s["title"] for s in two] == ["休日(ぷっくり)", "休日(陥没)"]
+    # はだかの一日のほかは作れない
+    other = client.post("/api/collections/nipple-shapes", json={"kind": "nude", "character_ids": [adult]})
+    assert other.status_code == 422

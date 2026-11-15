@@ -560,7 +560,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
               nude(ヌード写真集。乳首・性器は描かない featureless。撮影場所ごとにポーズを演じる。explicit は足さない)/
               nude2(ヌード写真集 〜旅する素肌〜。和室・森の泉・アトリエ・夜景・砂丘。下からの構図・お尻を突き出す・表情多め)/
               nude_day(はだかの一日。休日に部屋で服を着ずに過ごす朝から夜までの24場面。乳首を描き、性器は描かない)
-        nipple_shape: はだかの一日の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ large_areolae(大きめの乳輪)/ small
+        nipple_shape: はだかの一日の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ large_areolae(大きめの乳輪)/ small。
+            all(全部の形)か "puffy,inverted" のようにカンマで並べると、形ごとに別の物語を作る(stories で返す)
         body: sheet(キャラシートのまま)/ slender / curvy(省略時はコレクションが slender、からかいが curvy、ヌードが sheet)
         poses: からかいのポーズのキー、nude / nude2 ならその種類のヌードのポーズのキー(nude_poses の kind)、
                nude_day なら場面のキー(day_scenes)。省略で全部。キャラ全員がそれぞれ演じる
@@ -572,6 +573,11 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "explicit": explicit, "poses": poses or [], "themes": themes or [], "lines": lines,
             "nipple_shape": nipple_shape,
         }
+        if kind == "nude_day" and (nipple_shape == "all" or "," in nipple_shape):
+            # 形ごとに別の物語(all は全部の形)
+            shapes = [] if nipple_shape == "all" else [s.strip() for s in nipple_shape.split(",") if s.strip()]
+            stories = await _call("POST", "/api/collections/nipple-shapes", {**req, "nipple_shape": "normal", "nipple_shapes": shapes}, timeout=900)
+            return {"stories": [{"story_id": s["id"], "title": s.get("title"), "scenes": s.get("n_scenes")} for s in stories]}
         story = await _call("POST", "/api/collections", req, timeout=600)
         return {"story_id": story["id"], "title": story.get("title"), "scenes": story.get("n_scenes")}
 

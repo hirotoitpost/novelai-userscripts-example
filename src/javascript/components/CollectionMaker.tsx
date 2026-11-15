@@ -20,6 +20,9 @@ interface Catalog {
   nipple_shapes?: { id: string; label: string }[]
 }
 
+// 乳首の形で「全部の形(形ごとに1冊ずつ)」を選んだとき
+const ALL_SHAPES = '__all__'
+
 interface Props {
   apiOrigin: string
   /** 物語ができたら呼ぶ(呼び出し側で開く) */
@@ -74,6 +77,8 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   const nudeSets = new Set(pickedNude.map(p => p.set)).size
   // コマ数の目安: みんなのコマ2枚 + (からかい: ポーズ×人数 / ヌード: 場所の見出し+ポーズ×人数 /
   // コレクション: テーマ×(見出し+人数×正面・背面))
+  const allShapes = day && nippleShape === ALL_SHAPES
+  const books = allShapes ? (catalog?.nipple_shapes ?? []).length : 1
   const panels = cast.length === 0 ? 0
     : day ? pickedDay.length * cast.length
     : 2 + (tease ? pickedPoses.length * cast.length
@@ -91,19 +96,20 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
     setBusy(true)
     setError(null)
     try {
-      const res = await fetch(`${apiOrigin}/api/collections`, {
+      const res = await fetch(`${apiOrigin}/api/collections${allShapes ? '/nipple-shapes' : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind, character_ids: cast, title: title.trim() || null, body: body || null, style_tags: styleTags,
           explicit, lines, themes: [...themes].filter(t => themeNames.includes(t)),
           poses: tease || nude || day ? [...poses] : [],
-          nipple_shape: nippleShape,
+          nipple_shape: allShapes ? 'normal' : nippleShape,
         }),
       })
       if (!res.ok) throw new Error(await errorDetail(res))
-      const story: { id: number } = await res.json()
-      onCreated(story.id)
+      // 形ごとに作ったときは、最初の1冊を開く(ほかの冊は物語の一覧にある)
+      const made: { id: number } | { id: number }[] = await res.json()
+      onCreated(Array.isArray(made) ? made[0].id : made.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -189,6 +195,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
               乳首の形
               <select value={nippleShape} disabled={off} onChange={e => setNippleShape(e.target.value)}>
                 {(catalog.nipple_shapes ?? []).map(n => <option key={n.id} value={n.id}>{n.label}</option>)}
+                <option value={ALL_SHAPES}>全部の形(形ごとに1冊ずつ作る)</option>
               </select>
             </label>
           </div>
@@ -223,7 +230,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
       </div>
       <div className="story-actions">
         <button type="button" disabled={off || cast.length === 0} onClick={() => void create()}>
-          {busy ? '作成中…' : `コレクションを作る${panels ? `(${panels}コマ)` : ''}`}
+          {busy ? '作成中…' : `コレクションを作る${panels ? `(${books > 1 ? `${books}冊 × ` : ''}${panels}コマ)` : ''}`}
         </button>
       </div>
       {error && <div className="story-error" role="alert">{error}</div>}
