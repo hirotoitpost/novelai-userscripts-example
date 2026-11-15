@@ -1,5 +1,5 @@
 """
-下着・水着のコレクションと、からかいコレクション・ヌード写真集を、好きなキャラで作る(collection_templates.py の台本を
+下着・水着のコレクションと、からかいコレクション・ヌード写真集・はだかの一日を、好きなキャラで作る(collection_templates.py の台本を
 /api/story/scripted と同じ手順で物語にする)。成人キャラ(年齢を入れた 18 歳以上)だけで作れる。
 """
 
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 
 
 class CollectionRequest(BaseModel):
-    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2"]
+    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2", "nude_day"]
     character_ids: list[int] = Field(min_length=1, max_length=4)
     title: Optional[str] = Field(None, max_length=200)
     # 体つき: sheet(キャラシートのまま)/ slender / curvy。省略時はコレクションが slender、からかいが curvy、ヌードが sheet
@@ -30,6 +30,8 @@ class CollectionRequest(BaseModel):
     poses: list[str] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     lines: bool = True
+    # はだかの一日の乳首の形: normal / puffy / inverted / large_areolae / small
+    nipple_shape: Literal["normal", "puffy", "inverted", "large_areolae", "small"] = "normal"
     panels_per_page: int = Field(4, ge=1, le=12)
     series_id: Optional[int] = None
     volume_no: Optional[int] = Field(None, ge=1)
@@ -60,7 +62,7 @@ async def create_collection(req: CollectionRequest) -> StoryResponse:
         )
     options = CollectionOptions(
         kind=req.kind, title=req.title, body=req.body, style_tags=req.style_tags, explicit=req.explicit,
-        poses=req.poses, lines=req.lines, themes=req.themes,
+        poses=req.poses, lines=req.lines, themes=req.themes, nipple_shape=req.nipple_shape,
     )
     try:
         script = build_collection([c for c in characters if c], options)

@@ -551,21 +551,26 @@ def register_manga_tools(mcp: MCPServer) -> None:
         poses: list[str] | None = None,
         themes: list[str] | None = None,
         lines: bool = True,
+        nipple_shape: str = "normal",
     ) -> dict[str, Any]:
         """
-        下着・水着のコレクション/からかいコレクション/ヌード写真集の漫画(物語)を、選んだ成人キャラで作る。
+        下着・水着のコレクション/からかいコレクション/ヌード写真集/はだかの一日の漫画(物語)を、選んだ成人キャラで作る。
         絵は manga_generate_panels。
         kind: lingerie(下着)/ swimsuit(水着)/ tease_lingerie(からかい下着)/ tease_swimsuit(からかい水着)/
               nude(ヌード写真集。乳首・性器は描かない featureless。撮影場所ごとにポーズを演じる。explicit は足さない)/
-              nude2(ヌード写真集 〜旅する素肌〜。和室・森の泉・アトリエ・夜景・砂丘。下からの構図・お尻を突き出す・表情多め)
+              nude2(ヌード写真集 〜旅する素肌〜。和室・森の泉・アトリエ・夜景・砂丘。下からの構図・お尻を突き出す・表情多め)/
+              nude_day(はだかの一日。休日に部屋で服を着ずに過ごす朝から夜までの24場面。乳首を描き、性器は描かない)
+        nipple_shape: はだかの一日の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ large_areolae(大きめの乳輪)/ small
         body: sheet(キャラシートのまま)/ slender / curvy(省略時はコレクションが slender、からかいが curvy、ヌードが sheet)
-        poses: からかいのポーズのキー、nude / nude2 ならその種類のヌードのポーズのキー(nude_poses の kind)。省略で全部。キャラ全員がそれぞれ演じる
-        themes: テーマの名前(nude / nude2 なら撮影場所の名前。省略で全部)
+        poses: からかいのポーズのキー、nude / nude2 ならその種類のヌードのポーズのキー(nude_poses の kind)、
+               nude_day なら場面のキー(day_scenes)。省略で全部。キャラ全員がそれぞれ演じる
+        themes: テーマの名前(nude / nude2 なら撮影場所の名前、nude_day なら時間帯 朝・昼前・昼・午後・夜。省略で全部)
         style_tags: 全コマの作画タグに足す画風。種類・テーマ・ポーズの一覧は manga_collection_catalog。
         """
         req = {
             "kind": kind, "character_ids": character_ids, "title": title, "body": body, "style_tags": style_tags,
             "explicit": explicit, "poses": poses or [], "themes": themes or [], "lines": lines,
+            "nipple_shape": nipple_shape,
         }
         story = await _call("POST", "/api/collections", req, timeout=600)
         return {"story_id": story["id"], "title": story.get("title"), "scenes": story.get("n_scenes")}

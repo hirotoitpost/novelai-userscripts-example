@@ -845,6 +845,14 @@
       "description": "ヌード写真集の、どのコマにも入れるネガティブ(乳首・乳輪・性器など)。乳首・性器は描かず(featureless)、湯気・モザイクで隠さない。脚を開くポーズ(M字など)以外は、テンプレートが spread legs も足す。",
       "kind": "text",
       "value": "nipples, areolae, nipple outline, pussy, genitals, clitoris, labia, cameltoe, pubic hair, anus, nsfw, child, loli, multiple views, steam, fog, mist, censored, mosaic censoring, bar censor"
+    },
+    {
+      "key": "collection.nude_day_negative",
+      "group": "コレクション",
+      "label": "はだかの一日で描いてはいけないもの",
+      "description": "はだかの一日(乳首は描く)の、どのコマにも入れるネガティブ。性器・性的な行為・子ども・赤ちゃんは描かず、湯気・モザイクで隠さない。",
+      "kind": "text",
+      "value": "pussy, genitals, clitoris, labia, cameltoe, pubic hair, anus, sex, cum, masturbation, child, loli, young, baby, infant, multiple views, steam, fog, mist, censored, mosaic censoring, bar censor"
     }
   ]
 }

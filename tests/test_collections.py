@@ -313,3 +313,55 @@ def test_nude2_squat_and_balance_from_every_angle() -> None:
     # 背面下からは、背面かつ下から
     back_low = [s for s in scenes if "from behind" in s["prompt_tags"] and "from below" in s["prompt_tags"]]
     assert len(back_low) == 2
+
+
+# ---- はだかの一日(nude_day) ----
+
+
+def test_nude_day_has_24_scenes_with_nipples_and_featureless_crotch() -> None:
+    from python.collection_templates import DAY_SCENES
+
+    character = {"id": 7, "name": "ちひろ", "appearance_tags": "milk tea hair, long hair, ponytail"}
+    script = build_collection([character], CollectionOptions(kind="nude_day"))
+    scenes = script["scenes"]
+    assert len(scenes) == len(DAY_SCENES) == 24
+    ScriptedStoryRequest(title=script["title"], scenes=scenes)
+    for scene, day in zip(scenes, DAY_SCENES):
+        outfit = scene["character_outfits"][7]
+        assert "nipples" in outfit and "nude" in outfit
+        # 乳首は打ち消さない。性器・赤ちゃんは打ち消す
+        negative = {t.strip() for t in scene["negative_prompt"].split(",")}
+        assert "nipples" not in negative and "areolae" not in negative
+        assert {"pussy", "genitals", "baby", "sex"} <= negative
+        assert ("featureless crotch" in outfit) == day.whole
+    # お風呂の場面では、まとめ髪(ポニーテール)を下ろす
+    bath = scenes[[d.key for d in DAY_SCENES].index("bath")]
+    assert "ponytail" not in bath["character_appearances"][7] and "hair down" in bath["character_appearances"][7]
+
+
+def test_nude_day_nipple_shapes_and_filters() -> None:
+    from python.collection_templates import NIPPLE_SHAPES
+
+    one = [{"id": 1, "name": "しらね"}]
+    for key, shape in NIPPLE_SHAPES.items():
+        scene = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape=key, poses=["coffee"]))["scenes"][0]
+        assert shape.tags in scene["character_outfits"][1]
+    puffy = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="puffy", poses=["coffee"]))["scenes"][0]
+    assert "puffy nipples" in puffy["character_outfits"][1] and "inverted nipples" in puffy["negative_prompt"]
+    with pytest.raises(ValueError, match="乳首の形"):
+        build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="square"))
+    # 時間帯で絞る・キャラ全員がそれぞれ演じる
+    night = build_collection(PAIR, CollectionOptions(kind="nude_day", themes=["夜"]))["scenes"]
+    assert len(night) == 5 * 2 and [s["character_ids"][0] for s in night[:2]] == [1, 2]
+
+
+def test_nude_day_via_api(client: TestClient) -> None:
+    catalog = client.get("/api/collections").json()
+    assert {"id": "nude_day", "label": "はだかの一日"} in catalog["kinds"]
+    assert {"id": "inverted", "label": "陥没"} in catalog["nipple_shapes"]
+    assert catalog["themes"]["nude_day"][0] == "朝" and len(catalog["day_scenes"]) == 24
+    adult = _character("ちひろ", 24)
+    res = client.post("/api/collections", json={"kind": "nude_day", "character_ids": [adult], "nipple_shape": "puffy"})
+    assert res.status_code == 200, res.text
+    minor = _character("リン", 16)
+    assert client.post("/api/collections", json={"kind": "nude_day", "character_ids": [minor]}).status_code == 422
