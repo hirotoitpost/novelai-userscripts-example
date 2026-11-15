@@ -61,6 +61,26 @@ def fill_template(template_id: str, n_panels: int) -> str:
     return _FILL_TEMPLATES.get(n_panels, template_id)
 
 
+# 最後のページのコマが足りないときの扱い。fill は少ないコマ数のテンプレートに切り替える(空きゴマを残さない。
+# 今までの動き)、blank はテンプレートのマスの大きさのまま空いたマスを余白にする、omake は余白におまけ絵を置く
+LAST_PAGE_MODES = ("fill", "blank", "omake")
+
+
+def unused_rect(template_id: str, used: int) -> Rect | None:
+    """
+    テンプレートの used 番目より後ろの(空いた)マスをまとめた外接矩形。空きが無ければ None。
+    まとめた矩形が使ったマスに重なる(grid4 で1コマだけのとき、空きが L 字になる)なら、一番大きい空きのマスにする。
+    """
+    all_rects = panel_rects(template_id)
+    rects = all_rects[used:]
+    if not rects:
+        return None
+    box = (min(r[0] for r in rects), min(r[1] for r in rects), max(r[2] for r in rects), max(r[3] for r in rects))
+    if any(r[0] < box[2] and box[0] < r[2] and r[1] < box[3] and box[1] < r[3] for r in all_rects[:used]):
+        return max(rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+    return box
+
+
 def panel_rects(template_id: str) -> list[Rect]:
     """テンプレートのコマをページ上のピクセル座標にする。内側の辺だけ余白の半分ずつ削る。"""
     return _content_rects(TEMPLATES[template_id].panels)
@@ -178,6 +198,8 @@ class PageSpec:
     panels: tuple[PanelShape, ...]
     # ページの地の色(余白・コマの間隔に見える色)
     background: tuple[int, int, int] = (255, 255, 255)
+    # コマとは別に置く絵(枠なし)。(置く範囲, 絵のファイル)。最後のページの空いたマスに置くおまけ絵など
+    extras: tuple[tuple[Rect, Any], ...] = ()
 
 
 def template_page(template_id: str) -> PageSpec:

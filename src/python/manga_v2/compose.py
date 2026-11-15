@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ from .layout import (
     Rect,
     fill_template,
     layout_page,
+    unused_rect,
     layout_size,
     panel_rects,
     rect_shape,
@@ -1110,6 +1111,8 @@ def compose_page(
             page.paste(layer, (0, 0), mask)
         if shape.border:
             _draw_border(page, shape)
+    for rect, path in spec.extras:
+        _draw_extra(page, rect, path)
     # 文字は全部の絵と枠線の上に描く(形のあるコマで吹き出しが形に切られない・隣のコマに隠れないように)。
     # 前面のコマに覆われた所には、後ろのコマの吹き出しを置かない
     rank = {i: r for r, i in enumerate(order)}
@@ -1124,6 +1127,21 @@ def compose_page(
         ]
         elements.extend(_draw_lettering(page, shape.rect, panels[i], style, pictures[i], area, covered))
     return page, elements
+
+
+def _draw_extra(page: Image.Image, rect: Rect, path: Any) -> None:
+    """
+    コマとは別の絵(おまけ絵)を、範囲に収まる大きさで真ん中に置く(枠なし・切り抜かない)。白い地は
+    ページの地にそのまま溶ける。ファイルが無ければ何も置かない(余白のまま)。
+    """
+    if path is None or not Path(path).is_file():
+        return
+    x0, y0, x1, y1 = rect
+    with Image.open(path) as src:
+        image = src.convert("RGB")
+    # 余白いっぱいだと窮屈なので、範囲の9割に収める
+    image = ImageOps.contain(image, (max(1, int((x1 - x0) * 0.9)), max(1, int((y1 - y0) * 0.9))), Image.Resampling.LANCZOS)
+    page.paste(image, (x0 + (x1 - x0 - image.width) // 2, y0 + (y1 - y0 - image.height) // 2))
 
 
 def _intersection(a: Rect, b: Rect) -> Rect | None:
@@ -1148,6 +1166,8 @@ def plan_pages(
     count: int,
     layouts: Sequence[PageLayout] | None = None,
     groups: Sequence[int] | None = None,
+    last_page: str = "fill",
+    omake: Path | None = None,
 ) -> list[PagePlan]:
     """
     シーン順のコマ count 個をテンプレートのコマ数ずつページに割り付ける。最後のページのコマが
@@ -1157,6 +1177,8 @@ def plan_pages(
     groups(コマごとのページ番号。編集画面でページの区切りを決めたとき)があれば、同じ番号が続くコマを
     1ページにまとめ、そのコマ数に合うテンプレートにする。テンプレートより多いときは、そのページの中だけで分ける。
     写したコマ割りがあるときは、そちらを優先する。
+    last_page(LAST_PAGE_MODES)が blank / omake なら、物語の最後のページはテンプレートのマスの大きさのまま
+    空いたマスを余白にし、omake ならそこにおまけ絵(omake のファイル)を置く。
     """
     plans = []
     start = 0
@@ -1178,6 +1200,13 @@ def plan_pages(
     for run_start, run_end in runs:
         for i in range(run_start, run_end, per_page):
             end = min(i + per_page, run_end)
+            if end == count and end - i < per_page and last_page in ("blank", "omake"):
+                spec = template_page(template_id)
+                spare = unused_rect(template_id, end - i)
+                if last_page == "omake" and omake is not None and spare is not None:
+                    spec = replace(spec, extras=((spare, omake),))
+                plans.append(PagePlan(spec, i, end, template=template_id))
+                continue
             filled = fill_template(template_id, end - i)
             plans.append(PagePlan(template_page(filled), i, end, template=filled))
     return plans
@@ -1188,13 +1217,14 @@ def slot_rects(
     count: int,
     layouts: Sequence[PageLayout] | None = None,
     groups: Sequence[int] | None = None,
+    last_page: str = "fill",
 ) -> list[Rect]:
     """
     合成と同じ割り付け(plan_pages)で、シーン順のコマが入る枠の外接矩形(ピクセル座標)。コマの生成サイズを決める。
     セリフの多いシーンを寄りのコマに分けると(合成の設定)、その後ろのコマは枠が1つずつずれる。
     """
     rects: list[Rect] = []
-    for plan in plan_pages(template_id, count, layouts, groups):
+    for plan in plan_pages(template_id, count, layouts, groups, last_page):
         rects.extend(shape.rect for shape in plan.spec.panels[: plan.end - plan.start])
     return rects
 
@@ -1205,11 +1235,13 @@ def compose_pages(
     style: LetteringStyle,
     layouts: Sequence[PageLayout] | None = None,
     groups: Sequence[int] | None = None,
+    last_page: str = "fill",
+    omake: Path | None = None,
 ) -> list[tuple[Image.Image, list[Element]]]:
     """コマをページに割り付けて(plan_pages)、ページごとに合成する。"""
     return [
         compose_page(plan.spec, panels[plan.start : plan.end], style)
-        for plan in plan_pages(template_id, len(panels), layouts, groups)
+        for plan in plan_pages(template_id, len(panels), layouts, groups, last_page, omake)
     ]
 
 

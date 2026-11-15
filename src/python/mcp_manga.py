@@ -913,6 +913,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         text_scale: float | None = None,
         monochrome: bool | None = None,
         avoid_bodies: bool | None = None,
+        last_page: str | None = None,
         show_pages: bool = True,
         page_max_size: int = 900,
     ) -> list[TextContent | ImageContent]:
@@ -921,6 +922,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
         省略した項目は前回の合成設定を使う。show_pages で全ページの画像も返す(読み味・吹き出しの確認用)。
         monochrome: True でコマの絵を白黒にしてから嵌める(モノクロの漫画。色の残ったコマのシーン番号も知らせる)。
         avoid_bodies: 吹き出しを人物の体にも掛からない所へ置く(既定 True。手で動かした吹き出しはそのまま)。
+        last_page: 最後のページのコマが足りないとき。fill(少ないコマのテンプレートに切り替える。既定)/
+            blank(テンプレートのマスのまま空きを余白にする)/ omake(余白に manga_make_omake のおまけ絵を置く)。
         """
         story = await _call("GET", f"/api/story/{story_id}")
         body = dict(story.get("manga_v2_compose_settings") or {})
@@ -931,6 +934,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "text_scale": text_scale,
             "monochrome": monochrome,
             "avoid_bodies": avoid_bodies,
+            "last_page": last_page,
         }
         body |= {k: v for k, v in given.items() if v is not None}
         result = await _call("POST", f"/api/manga-v2/{story_id}/compose", body, timeout=600)
@@ -947,6 +951,37 @@ def register_manga_tools(mcp: MCPServer) -> None:
         if show_pages:
             content.extend(_image_content(_project_file(p), page_max_size) for p in result["pages"])
         return content
+
+    @mcp.tool()
+    async def manga_make_omake(
+        story_id: int,
+        extra_tags: str = "",
+        character_ids: list[int] | None = None,
+        seed: int | None = None,
+        size: str | None = None,
+    ) -> list[TextContent | ImageContent]:
+        """
+        最後のページの空いたマスに置くおまけ絵を作る(NovelAI の Anlas を使う): 登場キャラのチビキャラがニコニコしていて、
+        周りにハートが2〜3個漂う絵。全年齢で描く。生成の履歴(ギャラリー)にも残る。
+        extra_tags: 足す英語のタグ(holding baby など、キャラシートに無いもの)。character_ids: 描くキャラ(省略で物語の
+        登場キャラ、4人まで)。size: portrait / landscape / square(省略で最後のページに空くマスの形)。
+        置くには manga_compose / manga_finish で last_page="omake" にする。作り直すと差し替わる(前の絵は残る)。
+        """
+        body: dict[str, Any] = {"extra_tags": extra_tags}
+        if character_ids:
+            body["character_ids"] = character_ids
+        if seed is not None:
+            body["seed"] = seed
+        if size:
+            body["size"] = size
+        omake = await _call("POST", f"/api/manga-v2/{story_id}/omake", body, timeout=300)
+        return [
+            TextContent(
+                type="text",
+                text=f"おまけ絵を作りました: {omake['image_path']} (seed {omake['seed']}, 履歴 {omake.get('history_id')})",
+            ),
+            _image_content(_project_file(omake["image_path"]), 640),
+        ]
 
     @mcp.tool()
     async def manga_set_page_layouts(story_id: int, import_id: int | None) -> dict[str, Any]:
@@ -1307,6 +1342,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         max_lines_per_panel: int | None = None,
         monochrome: bool | None = None,
         avoid_bodies: bool | None = None,
+        last_page: str | None = None,
         reset_bubbles: bool = False,
         report_panels: bool = True,
         show_pages: bool = False,
@@ -1316,6 +1352,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         仕上げを1回で: 合成(manga_compose と同じ。省略した項目は前回の合成設定)→ PDF に書き出し(manga_export_pdf)→
         怪しいコマの知らせ(manga_report_panels。描き直さない)。PDF のパスとページ数・怪しいコマを返す。
         reset_bubbles: 手で動かした吹き出しの位置・大きさを消してから合成する(体を避ける自動の置き方に任せ直す)。
+        last_page: 最後のページのコマが足りないとき fill / blank / omake(manga_compose と同じ)。
         show_pages で全ページの画像も返す。
         """
         if reset_bubbles:
@@ -1327,6 +1364,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "max_lines_per_panel": max_lines_per_panel,
             "monochrome": monochrome,
             "avoid_bodies": avoid_bodies,
+            "last_page": last_page,
         }
         body |= {k: v for k, v in given.items() if v is not None}
         result = await _call("POST", f"/api/manga-v2/{story_id}/compose", body, timeout=900)

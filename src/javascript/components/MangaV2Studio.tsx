@@ -59,6 +59,17 @@ export interface MangaV2ComposeSettings {
   sfx_scale: number
   /** モノクロの漫画(コマの絵を白黒にしてから嵌める) */
   monochrome?: boolean
+  /** 最後のページのコマが足りないとき: fill=少ないコマに切り替える / blank=余白 / omake=余白におまけ絵 */
+  last_page?: LastPageMode
+}
+
+export type LastPageMode = 'fill' | 'blank' | 'omake'
+
+/** 最後のページに置くおまけ絵(サーバーの GET /{story_id}/omake) */
+interface Omake {
+  image_path: string
+  seed: number
+  history_id?: number
 }
 
 interface ComposeResult {
@@ -181,6 +192,10 @@ export default function MangaV2Studio({
   // コマのプロンプトの先頭に manga style を付けるか(外すと画風がイラスト寄りになる)
   const [mangaStyle, setMangaStyle] = useLocalStorage('nai_manga_v2_manga_style', true)
   const [maxLines, setMaxLines] = useLocalStorage('nai_manga_v2_max_lines_v2', 2)
+  // 最後のページのコマが足りないときの扱いと、置くおまけ絵(物語ごと)
+  const [lastPage, setLastPage] = useLocalStorage<LastPageMode>('nai_manga_v2_last_page', 'fill')
+  const [omake, setOmake] = useState<Omake | null>(null)
+  const [omakeTags, setOmakeTags] = useState('')
   // 文字の大きさの全体の倍率(%)。コマの大きさ・叫び/小声による自動調整に、さらに掛ける
   const [textScale, setTextScale] = useLocalStorage('nai_manga_v2_text_scale', 100)
   const [sfxScale, setSfxScale] = useLocalStorage('nai_manga_v2_sfx_scale', 100)
@@ -254,8 +269,19 @@ export default function MangaV2Studio({
     setTextScale(Math.round(saved.text_scale * 100))
     setSfxScale(Math.round(saved.sfx_scale * 100))
     if (saved.monochrome !== undefined) setColor(!saved.monochrome)
+    if (saved.last_page) setLastPage(saved.last_page)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storyId])
+
+  // 物語を開いたら、その物語のおまけ絵を読む
+  useEffect(() => {
+    setOmake(null)
+    fetch(`${apiOrigin}/api/manga-v2/${storyId}/omake`, { headers: authHeaders })
+      .then(res => (res.ok ? res.json() : null))
+      .then((data: Omake | null) => setOmake(data))
+      .catch(() => setOmake(null))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiOrigin, storyId])
 
   // 物語を開いたら、対象の範囲を全シーンにする。シーンが増減したときは、
   // 終わりが全シーンのままだったときだけ新しい全シーンに合わせる(自分で狭めた範囲は保つ)。
@@ -369,6 +395,21 @@ export default function MangaV2Studio({
     return () => { redrawRef.current = null }
   })
 
+  /** 最後のページに置くおまけ絵(登場キャラのチビキャラ・ハート)を作る。作り直すと差し替わる(前の絵はギャラリーに残る) */
+  function makeOmake() {
+    return runTask('おまけ絵の生成', async signal => {
+      const res = await fetch(`${apiOrigin}/api/manga-v2/${storyId}/omake`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ extra_tags: omakeTags }),
+        signal,
+      })
+      if (!res.ok) throw new Error(await readErrorDetail(res))
+      setOmake(await res.json())
+      setLastPage('omake')
+    })
+  }
+
   function suggestSfx() {
     return runTask('効果音のAI提案', async signal => {
       await startJob(
@@ -467,6 +508,7 @@ export default function MangaV2Studio({
     sfx_scale: sfxScale / 100,
     // モノクロで描くなら、合成でも絵を白黒にそろえる(水や空の場面に色が残ることがある)
     monochrome: !color,
+    last_page: lastPage,
   }
 
   /** シーンのコマを動かすうごイラを決める(null で外す)。次に合成したときから動く */
@@ -640,6 +682,36 @@ export default function MangaV2Studio({
               onChange={e => setMaxLines(Math.max(0, Number(e.target.value)))} />
           </label>
         </div>
+        <div className="story-row">
+          <label>
+            最後のページのコマが足りないとき
+            <select value={lastPage} disabled={busy} onChange={e => setLastPage(e.target.value as LastPageMode)}>
+              <option value="fill">少ないコマ割りに切り替える(空きを作らない)</option>
+              <option value="blank">空いたマスを余白にする</option>
+              <option value="omake">空いたマスにおまけ絵を置く</option>
+            </select>
+          </label>
+          {lastPage === 'omake' && (
+            <label title="キャラシートに無いもの(holding baby など)を英語のタグで足せます">
+              おまけ絵に足すタグ
+              <input type="text" value={omakeTags} disabled={busy} placeholder="holding baby"
+                onChange={e => setOmakeTags(e.target.value)} />
+            </label>
+          )}
+        </div>
+        {lastPage === 'omake' && (
+          <div className="story-row">
+            {omake ? (
+              <img className="mv2-ref-thumb" src={fileUrl(omake.image_path)} alt="おまけ絵" />
+            ) : (
+              <span className="story-muted">おまけ絵はまだありません(無いあいだは余白になります)。</span>
+            )}
+            <button type="button" disabled={busy} onClick={() => void makeOmake()}>
+              {omake ? 'おまけ絵を作り直す' : 'おまけ絵を作る'}
+            </button>
+            <span className="story-muted">登場キャラのチビキャラがニコニコして、周りにハートが漂う絵です(Anlas を使います)。</span>
+          </div>
+        )}
         <div className="story-row">
           <label className="mv2-check">
             <input type="checkbox" checked={color} disabled={busy} onChange={e => setColor(e.target.checked)} />

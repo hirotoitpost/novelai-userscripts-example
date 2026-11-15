@@ -37,6 +37,8 @@ from ..db import (
     get_character,
     get_connection,
     get_manga_v2_compose_settings,
+    get_manga_v2_omake,
+    record_generation,
     get_manga_import,
     get_manga_v2_negatives,
     get_manga_v2_overrides,
@@ -72,6 +74,7 @@ from ..db import (
     list_characters,
     list_story_scenes,
     set_manga_v2_compose_settings,
+    set_manga_v2_omake,
     set_manga_v2_overrides,
     set_manga_v2_sfx_fonts,
     set_manga_v2_sfx_stamps,
@@ -130,9 +133,11 @@ from ..manga_v2.layout import (
     normalize_gaps,
     normalize_style,
     normalize_tree,
+    panel_rects,
     panel_size_kind,
     tree_layout,
     tree_rects,
+    unused_rect,
 )
 from ..manga_v2.lettering import DEFAULT_SFX_FONT_ID, available_fonts, draw_sfx, fit_sfx, resolve_font
 from ..manga_v2.overlay import (
@@ -161,6 +166,7 @@ from ..models import (
     MangaV2PanelReportRequest,
     MangaV2FlowReviewRequest,
     MangaV2ComposeRequest,
+    MangaV2OmakeRequest,
     MangaV2RedrawStatesRequest,
     PanelRedrawStateRequest,
     MangaV2MakeRequest,
@@ -1736,6 +1742,20 @@ def overlay_pieces(scene: dict[str, Any], panels: dict[int, dict[str, Any]]) -> 
     return pieces
 
 
+def _last_page(story_id: int, mode: str | None = None) -> tuple[str, Path | None]:
+    """
+    最後のページの扱い(合成の設定の last_page。mode を渡せばそれ)と、置くおまけ絵のファイル(作っていなければ None)。
+    """
+    conn = get_connection()
+    try:
+        settings = get_manga_v2_compose_settings(conn, story_id) or {}
+        omake = get_manga_v2_omake(conn, story_id)
+    finally:
+        conn.close()
+    chosen = mode or settings.get("last_page") or "fill"
+    return chosen, (_PROJECT_ROOT / omake["image_path"]) if omake else None
+
+
 def _page_layouts(story_id: int) -> list[Any]:
     conn = get_connection()
     try:
@@ -1781,7 +1801,9 @@ def panel_size_kinds(story: dict[str, Any], template_id: str, layouts: list[Any]
     """
     scenes = story["scenes"]
     groups = [s["page_index"] for s in scenes] if story.get("custom_pages") else None
-    rects = slot_rects(template_id, len(scenes), layouts, groups)
+    # 物語の行でない(編集画面で組み直した並びの)ときは、最後のページの扱いを見ない
+    last_page = _last_page(story["id"])[0] if story.get("id") is not None else "fill"
+    rects = slot_rects(template_id, len(scenes), layouts, groups, last_page)
     return {s["id"]: panel_size_kind(rect) for s, rect in zip(scenes, rects)}
 
 
@@ -2342,6 +2364,128 @@ async def reset_page_layout(story_id: int, template: str = "grid4") -> dict[str,
     return {"stale_panels": _save_page_layouts(story_id, template, None)}
 
 
+# ---- 最後のページのおまけ絵 ----
+
+# おまけ絵の置き場所(利用者のフォルダの outputs/manga の下。ギャラリーの配信の対象)
+_OMAKE_DIR = _MANGA_DIR / "omake"
+# 登場キャラをデフォルメしたチビキャラが、ニコニコしていて周りにハートが2〜3個漂う絵(2026-11 ユーザーの希望)
+OMAKE_TAGS = (
+    "chibi, super deformed, full body, smile, happy, closed eyes smile, ^_^, blush stickers, "
+    "1.2::floating hearts::, three hearts, pink hearts around, cute, white background, simple background"
+)
+OMAKE_NEGATIVE = "text, speech bubble, frame, border, panel, comic, multiple views, realistic, 3d, sad, crying"
+_OMAKE_MAX_CHARACTERS = 4
+
+
+def _story_cast(story: dict[str, Any]) -> list[dict[str, Any]]:
+    """物語のシーンに出てくるキャラ(出てくる順・重なりなし)。"""
+    seen: dict[int, dict[str, Any]] = {}
+    for scene in story["scenes"]:
+        for member in scene.get("characters") or []:
+            seen.setdefault(member["id"], member)
+    return list(seen.values())
+
+
+def _omake_size(story_id: int) -> str:
+    """合成の設定のテンプレートで最後のページに空くマスの形(空かなければ横長)。"""
+    conn = get_connection()
+    try:
+        settings = get_manga_v2_compose_settings(conn, story_id) or {}
+        count = len(list_story_scenes(conn, story_id))
+    finally:
+        conn.close()
+    template = settings.get("template") or "grid4"
+    if template not in TEMPLATES:
+        return "landscape"
+    per_page = len(panel_rects(template))
+    spare = unused_rect(template, count % per_page) if count % per_page else None
+    return panel_size_kind(spare) if spare else "landscape"
+
+
+@router.get("/{story_id}/omake")
+async def get_omake(story_id: int) -> dict[str, Any] | None:
+    """最後のページに置くおまけ絵(作っていなければ null)。"""
+    conn = get_connection()
+    try:
+        return get_manga_v2_omake(conn, story_id)
+    finally:
+        conn.close()
+
+
+@router.post("/{story_id}/omake")
+async def make_omake(story_id: int, req: MangaV2OmakeRequest, client: ClientDep) -> dict[str, Any]:
+    """
+    最後のページの空いたマスに置くおまけ絵を作る: 登場キャラのチビキャラがニコニコしていて、周りにハートが漂う絵。
+    合成の設定の last_page を omake にすると置かれる。作り直すと前の絵のファイルは残したまま差し替える。
+    物語が成人向けでも、おまけ絵は全年齢で描く(全年齢のネガティブを入れる)。
+    """
+    conn = get_connection()
+    try:
+        story = get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="物語が見つかりません。")
+        if req.character_ids:
+            cast = [c for cid in req.character_ids if (c := get_character(conn, cid)) is not None]
+        else:
+            cast = _story_cast(story)
+    finally:
+        conn.close()
+    cast = cast[:_OMAKE_MAX_CHARACTERS]
+    if not cast:
+        raise HTTPException(status_code=400, detail="おまけ絵に描くキャラがいません(シーンに登場キャラを入れてください)。")
+    seed = req.seed if req.seed is not None else random.randrange(4294967296)
+    size = req.size or _omake_size(story_id)
+    width, height = PANEL_SIZES[size]
+    prompt = join_tags(OMAKE_TAGS, req.extra_tags, "very aesthetic, masterpiece")
+    # 体型はチビキャラにするので入れない(容姿と服装だけ)
+    character_tags = [join_tags(c.get("appearance_tags"), c.get("outfit_tags"), "chibi") for c in cast]
+    negative = join_tags(build_panel_negative(None, color=True), safe_negative(), OMAKE_NEGATIVE)
+    image = await generate_image_v5(
+        client.api_key,
+        prompt,
+        negative,
+        model=_REFERENCE_MODEL,
+        width=width,
+        height=height,
+        seed=seed,
+        character_tags=character_tags,
+        character_negatives=[c.get("negative_tags") or "" for c in cast],
+        log_context={"story_id": story_id, "kind": "omake"},
+    )
+    _OMAKE_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"story{story_id}_omake_{seed}_{uuid4().hex[:6]}.png"
+    (_OMAKE_DIR / filename).write_bytes(image)
+    omake = {
+        "image_path": (_OMAKE_DIR / filename).relative_to(_PROJECT_ROOT).as_posix(),
+        "seed": seed,
+        "prompt": prompt,
+        "character_ids": [c["id"] for c in cast],
+        "size": size,
+    }
+    conn = get_connection()
+    try:
+        # 生成した絵はギャラリーにも残す(生成の履歴に入れる。キャラごとのプロンプトもプロンプトに書き添える)
+        history = record_generation(
+            conn, join_tags(prompt, *(f"[{c['name']}] {t}" for c, t in zip(cast, character_tags))), negative,
+            _REFERENCE_MODEL, f"{width}x{height}", 27, 7.0, seed, [], [omake["image_path"]],
+        )
+        omake["history_id"] = history["id"]
+        set_manga_v2_omake(conn, story_id, omake)
+    finally:
+        conn.close()
+    return omake
+
+
+@router.delete("/{story_id}/omake", status_code=204)
+async def delete_omake(story_id: int) -> None:
+    """おまけ絵を外す(絵のファイルは消さない。last_page が omake のままなら余白になる)。"""
+    conn = get_connection()
+    try:
+        set_manga_v2_omake(conn, story_id, None)
+    finally:
+        conn.close()
+
+
 # 画像処理で数秒かかるので、同期関数にしてスレッドプールで実行させる(イベントループを塞がない)
 @router.post("/{story_id}/compose", response_model=MangaV2ComposeResponse)
 def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
@@ -2349,7 +2493,8 @@ def compose(story_id: int, req: MangaV2ComposeRequest) -> dict[str, Any]:
     contents, style, _ = _compose_inputs(story_id, req)
     layouts = _page_layouts(story_id)
     split = _split(contents, req.max_lines_per_panel, layouts)
-    plans = plan_pages(req.template, len(split), layouts, _page_groups(story_id, split))
+    last_page, omake = _last_page(story_id, req.last_page)
+    plans = plan_pages(req.template, len(split), layouts, _page_groups(story_id, split), last_page, omake)
     composed = [compose_page(plan.spec, split[plan.start : plan.end], style) for plan in plans]
     pages = [page for page, _ in composed]
     tracks = _ugoira_tracks(story_id)
@@ -2575,7 +2720,8 @@ def _download_images(
         if kind == "pages_clean":
             # 寄りのコマもセリフありと同じ並びにするため、分けた後で文字だけを外す
             split = [replace(c, dialogue=[], sfx=[], narration="") for c in split]
-        pages = [page for page, _ in compose_pages(req.template, split, style, layouts, groups)]
+        last_page, omake = _last_page(story_id, req.last_page) if story_id is not None else ("fill", None)
+        pages = [page for page, _ in compose_pages(req.template, split, style, layouts, groups, last_page, omake)]
         width = max(2, len(str(len(pages))))
         return [(f"page_{i + 1:0{width}d}.png", page) for i, page in enumerate(pages)]
 

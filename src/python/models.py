@@ -1724,6 +1724,21 @@ class MangaV2ComposeRequest(BaseModel):
     monochrome: bool = False
     # 吹き出しを、頭だけでなく人物の体にも掛からない所へ置く(人物の切り分けのモデル anime-seg があるとき)
     avoid_bodies: bool = True
+    # 最後のページのコマが足りないとき: fill=少ないコマのテンプレートに切り替える / blank=空いたマスを余白にする /
+    # omake=空いたマスにおまけ絵(POST /{story_id}/omake で作ったチビキャラの絵)を置く
+    last_page: Literal["fill", "blank", "omake"] = "fill"
+
+
+class MangaV2OmakeRequest(BaseModel):
+    """最後のページに置くおまけ絵(登場キャラのチビキャラ)を作る。"""
+
+    # 足すタグ(英語。赤ちゃんを抱っこ など、キャラシートに無いもの)
+    extra_tags: str = Field("", max_length=500)
+    # 描くキャラ。省略なら物語のシーンに出てくるキャラ(出てくる順に4人まで)
+    character_ids: Optional[list[int]] = Field(None, max_length=4)
+    seed: Optional[int] = Field(None, ge=0, le=4294967295)
+    # landscape(横長)/ square / portrait。省略なら合成の設定のテンプレートで空くマスの形
+    size: Optional[Literal["portrait", "landscape", "square"]] = None
 
 
 # ダウンロードに入れるもの。pages=合成したページ、pages_clean=セリフ・効果音・ナレーションなしのページ、
