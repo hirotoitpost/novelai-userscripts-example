@@ -1087,6 +1087,9 @@ _STORIES_EXTRA_COLUMNS = {
     # 成長段階: この巻で使う人物の年齢ごとのキャラシート。JSON {"age": 歳 か null, "stages": {人物のID: 段階のキャラID}}。
     # シーンの登場キャラがその人物(元のキャラかどの段階)なら、選んだ段階の見た目で描く(characters_by_scene)
     "manga_v2_growth": "TEXT",
+    # 漫画v2の最後のページの空いたマスに置くおまけ絵(登場キャラのチビキャラ)。JSON {"image_path", "seed", "prompt"}。
+    # 合成の設定の last_page が omake のときに置く
+    "manga_v2_omake": "TEXT",
 }
 
 
@@ -1268,6 +1271,21 @@ def set_manga_v2_compose_settings(conn: sqlite3.Connection, story_id: int, setti
     conn.execute(
         "UPDATE stories SET manga_v2_compose_settings = ? WHERE id = ?",
         (json.dumps(settings, ensure_ascii=False), story_id),
+    )
+    conn.commit()
+
+
+def get_manga_v2_omake(conn: sqlite3.Connection, story_id: int) -> dict[str, Any] | None:
+    """最後のページに置くおまけ絵。まだ作っていなければ None。"""
+    row = conn.execute("SELECT manga_v2_omake FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return json.loads(row["manga_v2_omake"]) if row and row["manga_v2_omake"] else None
+
+
+def set_manga_v2_omake(conn: sqlite3.Connection, story_id: int, omake: dict[str, Any] | None) -> None:
+    """おまけ絵を記録する(None で外す。絵のファイルは消さない)。"""
+    conn.execute(
+        "UPDATE stories SET manga_v2_omake = ? WHERE id = ?",
+        (json.dumps(omake, ensure_ascii=False) if omake else None, story_id),
     )
     conn.commit()
 

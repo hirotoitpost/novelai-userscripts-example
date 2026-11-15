@@ -60,7 +60,10 @@ def _template(conn: sqlite3.Connection, story_id: int) -> str:
 
 def _sizes(conn: sqlite3.Connection, story_id: int, custom_pages: bool, scenes: list[tuple[int, str | None]]) -> list[str]:
     """シーン(ページ番号, 決めた生成サイズ)の並びごとの、実際に使う生成サイズ。決めていなければ入る枠の形から。"""
-    story = {"custom_pages": custom_pages, "scenes": [{"id": i, "page_index": page} for i, (page, _) in enumerate(scenes)]}
+    story = {
+        "id": story_id, "custom_pages": custom_pages,
+        "scenes": [{"id": i, "page_index": page} for i, (page, _) in enumerate(scenes)],
+    }
     auto = panel_size_kinds(story, _template(conn, story_id), get_manga_v2_page_layouts(conn, story_id))
     return [size or auto[i] for i, (_, size) in enumerate(scenes)]
 
