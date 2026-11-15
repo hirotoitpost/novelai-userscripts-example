@@ -30,6 +30,8 @@ export interface Character {
   growth_order?: number | null
   /** 年齢(歳)。入れてあれば年齢区分はこれで決まる(18 歳未満は未成年) */
   age?: number | null
+  /** 絵柄セット(style_sets の id)。キャラの絵に、そのセットの絵柄の参照とタグを足す */
+  style_set_id?: number | null
 }
 
 export interface SceneCharacter {

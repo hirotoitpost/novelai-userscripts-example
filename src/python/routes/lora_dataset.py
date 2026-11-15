@@ -582,14 +582,27 @@ async def get_character_sheet_prompt(character_id: int) -> dict:
     キャラシートから組み立てた生成用のプロンプト・ネガティブ・基準シード。画像生成ページで
     キャラシートを読み込むのに使う。キャラ別データセット(全年齢)からトリガーワードを除いた
     組み立てなので、データセットと同じ見た目を単発で試せる(参照画像は画像生成ページでは使わない)。
+    キャラが絵柄セットを選んでいれば、そのタグ・ネガティブも入れ、style_set(画面で絵柄だけの参照として足す)を返す。
     """
+    from ..db import get_connection as _conn, get_style_set
+
     character = _load_character(character_id)
+    style_set = None
+    if character.get("style_set_id") is not None:
+        conn = _conn()
+        try:
+            found = get_style_set(conn, character["style_set_id"])
+        finally:
+            conn.close()
+        if found:
+            style_set = {k: found[k] for k in ("id", "name", "image_path", "strength", "fidelity", "style_tags", "negative_tags")}
     return {
         "character_id": character["id"],
         "name": character["name"],
-        "prompt": sheet_prompt(character),
-        "negative_prompt": sheet_negative(character),
+        "prompt": join_tags(sheet_prompt(character), style_set["style_tags"] if style_set else None),
+        "negative_prompt": sheet_negative(character, extra=style_set["negative_tags"] if style_set else None),
         "seed": character.get("seed"),
+        "style_set": style_set,
     }
 
 

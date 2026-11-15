@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from .db import get_character, get_connection, user_files
+from .style_sets import StyleReference, load as load_style_set
 
 
 @dataclass
@@ -48,3 +49,28 @@ def character_reference(character_id: int | None, ref_type: str, fidelity: float
     if full is None or not full.is_file():
         raise ValueError(f"「{character['name']}」には参照画像がありません(キャラシートで登録してください)")
     return Reference(full.read_bytes(), ref_type, fidelity, strength)
+
+
+def style_reference(style_set_id: int | None, character_id: int | None) -> StyleReference | None:
+    """
+    使う絵柄セット。style_set_id があればそれ、無ければ character_id のキャラが選んだセット(どちらも無ければ None)。
+    style_set_id を指定したのにセットが無いときはエラー。
+    """
+    if style_set_id is not None:
+        style = load_style_set(style_set_id)
+        if style is None:
+            raise ValueError(f"絵柄セット {style_set_id} が見つかりません(画像が無い場合も)")
+        return style
+    if character_id is None:
+        return None
+    conn = get_connection()
+    try:
+        character = get_character(conn, character_id)
+    finally:
+        conn.close()
+    return load_style_set(character.get("style_set_id")) if character else None
+
+
+def style_record(style: StyleReference, history_dir: Path) -> dict[str, Any]:
+    """履歴に残す形(絵柄の参照画像も outputs/history/ に写す。ギャラリーの「似た画像を生成」で引き継げる)。"""
+    return Reference(style.image, "style", style.fidelity, style.strength).record(history_dir)
