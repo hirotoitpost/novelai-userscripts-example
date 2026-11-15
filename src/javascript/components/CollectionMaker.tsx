@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Character } from './StoryCharacters'
 
 /**
- * 下着・水着のコレクション/からかいコレクション/ヌード写真集を、好きなキャラで物語にする(/api/collections)。
+ * 下着・水着のコレクション/からかいコレクション/ヌード写真集/はだかの一日を、好きなキャラで物語にする(/api/collections)。
  * テーマ(衣装)とポーズの組み合わせで台本を作るだけなので、できた物語は編集画面でセリフ・タグを直してから描ける。
  * 成人キャラ(年齢を入れた 18 歳以上)だけを選べる。
  */
@@ -14,7 +14,14 @@ interface Catalog {
   /** ヌード写真集のポーズ(撮影場所 set ごと) */
   nude_poses?: { key: string; label: string; set: string; kind?: string }[]
   bodies: { id: string; label: string }[]
+  /** はだかの一日の場面(時間帯 part ごと) */
+  day_scenes?: { key: string; label: string; part: string }[]
+  /** はだかの一日の乳首の形 */
+  nipple_shapes?: { id: string; label: string }[]
 }
+
+// 乳首の形で「全部の形(形ごとに1冊ずつ)」を選んだとき
+const ALL_SHAPES = '__all__'
 
 interface Props {
   apiOrigin: string
@@ -46,6 +53,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   const [themes, setThemes] = useState<Set<string>>(new Set())
   const [poses, setPoses] = useState<Set<string>>(new Set())
   const [title, setTitle] = useState('')
+  const [nippleShape, setNippleShape] = useState('normal')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -55,7 +63,11 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   }, [apiOrigin])
 
   const tease = kind.startsWith('tease')
-  const nude = kind.startsWith('nude')
+  // はだかの一日(乳首を描く・場面ごとに全員が演じる)は、ヌード写真集とは別に扱う
+  const day = kind === 'nude_day'
+  const nude = kind.startsWith('nude') && !day
+  const dayScenes = (catalog?.day_scenes ?? []).filter(d => themes.size === 0 || themes.has(d.part))
+  const pickedDay = dayScenes.filter(d => poses.size === 0 || poses.has(d.key))
   const themeNames = catalog?.themes[kind] ?? []
   const adults = characters.filter(isAdult)
   const pickedThemes = themeNames.filter(t => themes.size === 0 || themes.has(t))
@@ -65,7 +77,10 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   const nudeSets = new Set(pickedNude.map(p => p.set)).size
   // コマ数の目安: みんなのコマ2枚 + (からかい: ポーズ×人数 / ヌード: 場所の見出し+ポーズ×人数 /
   // コレクション: テーマ×(見出し+人数×正面・背面))
+  const allShapes = day && nippleShape === ALL_SHAPES
+  const books = allShapes ? (catalog?.nipple_shapes ?? []).length : 1
   const panels = cast.length === 0 ? 0
+    : day ? pickedDay.length * cast.length
     : 2 + (tease ? pickedPoses.length * cast.length
       : nude ? nudeSets + pickedNude.length * cast.length
         : pickedThemes.length * (1 + cast.length * 2))
@@ -81,18 +96,20 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
     setBusy(true)
     setError(null)
     try {
-      const res = await fetch(`${apiOrigin}/api/collections`, {
+      const res = await fetch(`${apiOrigin}/api/collections${allShapes ? '/nipple-shapes' : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind, character_ids: cast, title: title.trim() || null, body: body || null, style_tags: styleTags,
           explicit, lines, themes: [...themes].filter(t => themeNames.includes(t)),
-          poses: tease || nude ? [...poses] : [],
+          poses: tease || nude || day ? [...poses] : [],
+          nipple_shape: allShapes ? 'normal' : nippleShape,
         }),
       })
       if (!res.ok) throw new Error(await errorDetail(res))
-      const story: { id: number } = await res.json()
-      onCreated(story.id)
+      // 形ごとに作ったときは、最初の1冊を開く(ほかの冊は物語の一覧にある)
+      const made: { id: number } | { id: number }[] = await res.json()
+      onCreated(Array.isArray(made) ? made[0].id : made.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -114,7 +131,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
         <label>
           体つき
           <select value={body} disabled={off} onChange={e => setBody(e.target.value)}>
-            <option value="">おまかせ({tease ? 'むっちり' : nude ? 'キャラシートのまま' : 'すらっと'})</option>
+            <option value="">おまかせ({tease ? 'むっちり' : nude || day ? 'キャラシートのまま' : 'すらっと'})</option>
             {catalog.bodies.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
           </select>
         </label>
@@ -138,7 +155,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
       </fieldset>
 
       <fieldset className="collection-maker-group">
-        <legend>{nude ? '撮影場所(何も選ばなければ全部)' : 'テーマ(衣装。何も選ばなければ全部)'}</legend>
+        <legend>{day ? '時間帯(何も選ばなければ全部)' : nude ? '撮影場所(何も選ばなければ全部)' : 'テーマ(衣装。何も選ばなければ全部)'}</legend>
         {themeNames.map(t => (
           <label key={t} className="collection-maker-check">
             <input type="checkbox" checked={themes.has(t)} disabled={off} onChange={() => toggle(themes, t, setThemes)} />
@@ -171,6 +188,29 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
         </fieldset>
       )}
 
+      {day && (
+        <>
+          <div className="story-row">
+            <label>
+              乳首の形
+              <select value={nippleShape} disabled={off} onChange={e => setNippleShape(e.target.value)}>
+                {(catalog.nipple_shapes ?? []).map(n => <option key={n.id} value={n.id}>{n.label}</option>)}
+                <option value={ALL_SHAPES}>全部の形(形ごとに1冊ずつ作る)</option>
+              </select>
+            </label>
+          </div>
+          <fieldset className="collection-maker-group">
+            <legend>場面(乳首は描き、性器は描きません。キャラ全員がそれぞれ演じます。何も選ばなければ全部)</legend>
+            {dayScenes.map(d => (
+              <label key={d.key} className="collection-maker-check">
+                <input type="checkbox" checked={poses.has(d.key)} disabled={off} onChange={() => toggle(poses, d.key, setPoses)} />
+                {d.part}: {d.label}
+              </label>
+            ))}
+          </fieldset>
+        </>
+      )}
+
       <div className="story-row">
         <label className="collection-maker-wide">
           画風のタグ(任意。全コマの作画タグに足します)
@@ -179,7 +219,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
         </label>
       </div>
       <div className="story-row">
-        {!nude && <label className="collection-maker-check">
+        {!nude && !day && <label className="collection-maker-check">
           <input type="checkbox" checked={explicit} disabled={off} onChange={e => setExplicit(e.target.checked)} />
           explicit を足す(食い込み・肌の柔らかさが出ます。乳首・性器などはネガティブで打ち消します)
         </label>}
@@ -190,7 +230,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
       </div>
       <div className="story-actions">
         <button type="button" disabled={off || cast.length === 0} onClick={() => void create()}>
-          {busy ? '作成中…' : `コレクションを作る${panels ? `(${panels}コマ)` : ''}`}
+          {busy ? '作成中…' : `コレクションを作る${panels ? `(${books > 1 ? `${books}冊 × ` : ''}${panels}コマ)` : ''}`}
         </button>
       </div>
       {error && <div className="story-error" role="alert">{error}</div>}
