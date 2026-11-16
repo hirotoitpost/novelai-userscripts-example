@@ -778,6 +778,11 @@ NIPPLE_SHAPES: dict[str, NippleShape] = {
     "ring_piercing": NippleShape("大きなリングピアス",
                                  "nipples, 1.5::nipple piercing::, 1.5::nipple rings::, large hoop nipple rings, 1.4::thick nipple rings::, heavy silver rings",
                                  "nipple bar, small nipple rings, thin rings, wire rings, inverted nipples"),
+    # リングピアスの先に家畜の耳標(cow tag)を下げる(矢野栄子 2026-11-16)
+    "ring_cow_tag": NippleShape("リングピアス・カウタグ",
+                                "nipples, 1.5::nipple piercing::, 1.5::nipple rings::, large hoop nipple rings, 1.4::thick nipple rings::, "
+                                "heavy silver rings, 1.5::cow tag::, 1.3::yellow ear tag hanging from nipple ring::, numbered tag",
+                                "nipple bar, small nipple rings, thin rings, wire rings, inverted nipples, cow print, cow ears, cow horns, bell, 1.3::earrings::, tag on ear"),
     "large_areolae": NippleShape("大きめの乳輪", "nipples, 1.4::large areolae::", "small areolae, puffy nipples, inverted nipples"),
     "small":NippleShape("小さめ", "nipples, 1.3::small nipples::, small areolae, pink nipples", "large areolae, puffy nipples"),
 }

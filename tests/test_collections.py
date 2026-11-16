@@ -412,3 +412,11 @@ def test_nude_day_ring_piercing() -> None:
     assert "nipple rings" in ring["character_outfits"][1] and "nipple piercing" in ring["character_outfits"][1]
     # 細い針金のようにならないよう太く
     assert "thick nipple rings" in ring["character_outfits"][1] and "thin rings" in ring["negative_prompt"]
+
+
+def test_nude_day_ring_cow_tag() -> None:
+    one = [{"id": 1, "name": "栄子"}]
+    tag = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="ring_cow_tag", poses=["coffee"]))["scenes"][0]
+    assert "nipple rings" in tag["character_outfits"][1] and "cow tag" in tag["character_outfits"][1]
+    # 牛柄・牛耳のコスプレにならないよう打ち消す
+    assert "cow print" in tag["negative_prompt"]
