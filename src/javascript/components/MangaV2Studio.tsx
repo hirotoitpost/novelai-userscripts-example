@@ -4,6 +4,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
 import { SceneCharacter } from './StoryCharacters'
 import MangaV2PageEditor, { MangaV2Element } from './MangaV2PageEditor'
+import MangaReader from './MangaReader'
 import MangaV2SfxFonts from './MangaV2SfxFonts'
 import MangaV2Stamps from './MangaV2Stamps'
 import NegativeEditor from './NegativeEditor'
@@ -179,6 +180,8 @@ export default function MangaV2Studio({
   const [templates, setTemplates] = useState<TemplateOption[]>([])
   const [panels, setPanels] = useState<Panel[]>([])
   const [composed, setComposed] = useState<ComposeResult | null>(null)
+  // 漫画の読み上げ(VOICEVOX)を開いている
+  const [readerOpen, setReaderOpen] = useState(false)
   const [editPage, setEditPage] = useState(0)
   const [sfxFontsKey, setSfxFontsKey] = useState(0)
 
@@ -1122,7 +1125,22 @@ export default function MangaV2Studio({
                 このページの手動配置を戻す
               </button>
             )}
+            <button type="button" className={readerOpen ? 'mv2-mode-active' : 'story-secondary'} onClick={() => setReaderOpen(o => !o)}>
+              🔊 読み上げ
+            </button>
           </div>
+          {readerOpen && (
+            <MangaReader
+              apiOrigin={apiOrigin}
+              storyId={storyId}
+              token={token}
+              pages={composed.pages}
+              elements={composed.elements}
+              pageWidths={composed.pages.map((_, i) => composed.page_widths?.[i] ?? composed.page_width)}
+              pageHeight={composed.page_height}
+              fileUrl={fileUrl}
+            />
+          )}
         </div>
       )}
 
