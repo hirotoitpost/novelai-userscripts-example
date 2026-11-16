@@ -16,6 +16,8 @@ interface Catalog {
   bodies: { id: string; label: string }[]
   /** はだかの一日の場面(時間帯 part ごと) */
   day_scenes?: { key: string; label: string; part: string }[]
+  /** 乳首を描く場面集(はだかの一日・温泉旅行など)の場面。kind ごと */
+  book_scenes?: Record<string, { key: string; label: string; part: string }[]>
   /** はだかの一日の乳首の形 */
   nipple_shapes?: { id: string; label: string }[]
 }
@@ -63,10 +65,11 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
   }, [apiOrigin])
 
   const tease = kind.startsWith('tease')
-  // はだかの一日(乳首を描く・場面ごとに全員が演じる)は、ヌード写真集とは別に扱う
-  const day = kind === 'nude_day'
+  // 乳首を描く場面集(はだかの一日・温泉旅行など。場面ごとに全員が演じる)は、ヌード写真集とは別に扱う
+  const bookScenes = catalog?.book_scenes?.[kind] ?? (kind === 'nude_day' ? catalog?.day_scenes : undefined)
+  const day = bookScenes !== undefined
   const nude = kind.startsWith('nude') && !day
-  const dayScenes = (catalog?.day_scenes ?? []).filter(d => themes.size === 0 || themes.has(d.part))
+  const dayScenes = (bookScenes ?? []).filter(d => themes.size === 0 || themes.has(d.part))
   const pickedDay = dayScenes.filter(d => poses.size === 0 || poses.has(d.key))
   const themeNames = catalog?.themes[kind] ?? []
   const adults = characters.filter(isAdult)
@@ -155,7 +158,7 @@ export default function CollectionMaker({ apiOrigin, onCreated, disabled }: Prop
       </fieldset>
 
       <fieldset className="collection-maker-group">
-        <legend>{day ? '時間帯(何も選ばなければ全部)' : nude ? '撮影場所(何も選ばなければ全部)' : 'テーマ(衣装。何も選ばなければ全部)'}</legend>
+        <legend>{day ? '区切り(時間帯・季節・衣装など。何も選ばなければ全部)' : nude ? '撮影場所(何も選ばなければ全部)' : 'テーマ(衣装。何も選ばなければ全部)'}</legend>
         {themeNames.map(t => (
           <label key={t} className="collection-maker-check">
             <input type="checkbox" checked={themes.has(t)} disabled={off} onChange={() => toggle(themes, t, setThemes)} />

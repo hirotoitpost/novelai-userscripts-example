@@ -559,13 +559,15 @@ def register_manga_tools(mcp: MCPServer) -> None:
         kind: lingerie(下着)/ swimsuit(水着)/ tease_lingerie(からかい下着)/ tease_swimsuit(からかい水着)/
               nude(ヌード写真集。乳首・性器は描かない featureless。撮影場所ごとにポーズを演じる。explicit は足さない)/
               nude2(ヌード写真集 〜旅する素肌〜。和室・森の泉・アトリエ・夜景・砂丘。下からの構図・お尻を突き出す・表情多め)/
-              nude_day(はだかの一日。休日に部屋で服を着ずに過ごす朝から夜までの24場面。乳首を描き、性器は描かない)
-        nipple_shape: はだかの一日の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ puffy_inverted(半陥没・ぷっくり)/ erect(勃起)/ ring_piercing(大きなリングピアス)/ ring_cow_tag(リングピアス・カウタグ)/ large_areolae(大きめの乳輪)/ small。
+              nude_day(はだかの一日。休日に部屋で服を着ずに過ごす朝から夜までの24場面。乳首を描き、性器は描かない)/
+              乳首を描くほかの場面集: nude_onsen(温泉旅行)/ nude_apron(裸エプロン)/ nude_atelier(ヌードモデルのアトリエ)/
+              nude_seasons(季節のはだか 1〜12月)/ nude_strip(着替え。衣装ごとに少しずつ脱ぐ)
+        nipple_shape: はだかの一日など(nude_ で始まる場面集)の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ puffy_inverted(半陥没・ぷっくり)/ erect(勃起)/ ring_piercing(大きなリングピアス)/ ring_cow_tag(リングピアス・カウタグ)/ large_areolae(大きめの乳輪)/ small。
             all(全部の形)か "puffy,inverted" のようにカンマで並べると、形ごとに別の物語を作る(stories で返す)
         body: sheet(キャラシートのまま)/ slender / curvy(省略時はコレクションが slender、からかいが curvy、ヌードが sheet)
         poses: からかいのポーズのキー、nude / nude2 ならその種類のヌードのポーズのキー(nude_poses の kind)、
-               nude_day なら場面のキー(day_scenes)。省略で全部。キャラ全員がそれぞれ演じる
-        themes: テーマの名前(nude / nude2 なら撮影場所の名前、nude_day なら時間帯 朝・昼前・昼・午後・夜。省略で全部)
+               nude_day などの場面集なら場面のキー(book_scenes)。省略で全部。キャラ全員がそれぞれ演じる
+        themes: テーマの名前(nude / nude2 なら撮影場所の名前、nude_day などの場面集なら区切り(時間帯・季節・衣装。catalog の themes)。省略で全部)
         style_tags: 全コマの作画タグに足す画風。種類・テーマ・ポーズの一覧は manga_collection_catalog。
         """
         req = {
@@ -573,7 +575,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
             "explicit": explicit, "poses": poses or [], "themes": themes or [], "lines": lines,
             "nipple_shape": nipple_shape,
         }
-        if kind == "nude_day" and (nipple_shape == "all" or "," in nipple_shape):
+        if kind.startswith("nude_") and (nipple_shape == "all" or "," in nipple_shape):
             # 形ごとに別の物語(all は全部の形)
             shapes = [] if nipple_shape == "all" else [s.strip() for s in nipple_shape.split(",") if s.strip()]
             stories = await _call("POST", "/api/collections/nipple-shapes", {**req, "nipple_shape": "normal", "nipple_shapes": shapes}, timeout=900)
