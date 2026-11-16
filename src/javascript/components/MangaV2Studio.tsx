@@ -579,6 +579,14 @@ export default function MangaV2Studio({
     return runTask('ページの合成', requestCompose)
   }
 
+  // 読み上げの欄(合成結果はシーンの一覧の下にあるので、開いたらそこまで動かす)
+  const readerRef = useRef<HTMLDivElement | null>(null)
+  async function openReader() {
+    if (!composed) await runTask('ページの合成', requestCompose)
+    setReaderOpen(true)
+    setTimeout(() => readerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+  }
+
   function toggleDownloadContent(id: DownloadContent, checked: boolean) {
     const next = checked ? [...downloadContents, id] : downloadContents.filter(c => c !== id)
     // 表示順にそろえておく(zip のフォルダ・PDF の並びもこの順になる)
@@ -936,6 +944,10 @@ export default function MangaV2Studio({
         <button type="button" onClick={compose} disabled={busy || panels.length === 0}>
           ページを合成
         </button>
+        <button type="button" onClick={() => void openReader()} disabled={busy || panels.length === 0}
+          title="合成したページを VOICEVOX で読み上げる(まだ合成していなければ合成してから)">
+          🔊 読み上げ
+        </button>
         <HelpLink slug="manga-panels" label="描き方" />
         <HelpLink slug="manga-compose" label="仕上げ方" />
       </div>
@@ -1130,6 +1142,7 @@ export default function MangaV2Studio({
             </button>
           </div>
           {readerOpen && (
+            <div ref={readerRef}>
             <MangaReader
               apiOrigin={apiOrigin}
               storyId={storyId}
@@ -1140,6 +1153,7 @@ export default function MangaV2Studio({
               pageHeight={composed.page_height}
               fileUrl={fileUrl}
             />
+            </div>
           )}
         </div>
       )}
