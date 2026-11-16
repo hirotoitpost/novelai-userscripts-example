@@ -12,6 +12,8 @@
 - はだかの一日(nude_day): 休日、ひとり暮らしの部屋で服を着ずに過ごす朝から夜までの24場面(柚原ちひろ 物語312 から
   作った。2026-11-16)。こちらは乳首を描き(形は nipple_shape で選ぶ)、性器は描かない(featureless crotch)。
   性的な行為はない。
+- 同じ作り(乳首を描く場面集 SCENE_BOOKS)で、温泉旅行(nude_onsen)・裸エプロン(nude_apron)・ヌードモデルのアトリエ
+  (nude_atelier)・季節のはだか(nude_seasons)・着替え(nude_strip。衣装ごとに少しずつ脱ぐ)。
 
 描いてはいけないもの(乳首・乳輪・性器・cameltoe など)はネガティブで必ず打ち消す。ヌードは乳首・性器を描かない
 featureless の絵で、湯気・モザイクで隠さない(はだかの一日だけは乳首を描く)。成人キャラ専用(年齢を入れた 18 歳以上のキャラだけ。呼び出し側で確かめる)。
@@ -19,13 +21,14 @@ featureless の絵で、湯気・モザイクで隠さない(はだかの一日�
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from . import content_guard
 from . import vocabulary as vocab
 
-Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2", "nude_day"]
+Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2", "nude_day",
+               "nude_onsen", "nude_apron", "nude_atelier", "nude_seasons", "nude_strip"]
 
 KINDS: dict[str, str] = {
     "lingerie": "下着コレクション",
@@ -35,6 +38,11 @@ KINDS: dict[str, str] = {
     "nude": "ヌード写真集",
     "nude2": "ヌード写真集 〜旅する素肌〜",
     "nude_day": "はだかの一日",
+    "nude_onsen": "はだかの温泉旅行",
+    "nude_apron": "裸エプロンの一日",
+    "nude_atelier": "ヌードモデルのアトリエ",
+    "nude_seasons": "季節のはだか",
+    "nude_strip": "着替え(ストリップ)",
 }
 
 # 場所(作画タグ)
@@ -807,6 +815,10 @@ class DayScene:
     whole: bool = False
     # 体に掛ける小物(タオル・布団)がある(服・タオルを打ち消さない)
     prop: bool = False
+    # 服を着ている(裸の代わりにこの服装。服・タオルは打ち消さない)
+    dressed: str = ""
+    # 胸を出している(乳首の形のタグを足す。False なら乳首を打ち消す)
+    chest: bool = True
 
 
 DAY_PARTS = ("朝", "昼前", "昼", "午後", "夜")
@@ -884,18 +896,297 @@ DAY_SCENES: tuple[DayScene, ...] = (
 DAY_SCENES_BY_KEY = {d.key: d for d in DAY_SCENES}
 
 
-def _build_nude_day(characters: list[dict[str, Any]], options: CollectionOptions) -> dict[str, Any]:
-    """はだかの一日の台本。時間帯(themes)・場面(poses のキー)を選べる。場面ごとにキャラ全員がそれぞれ1コマずつ演じる。"""
+# ---- 乳首を描くほかの場面集(はだかの一日と同じ作り。2026-11-16 柚原ちひろで試作) ----
+#
+# 温泉旅行・裸エプロン・ヌードモデルのアトリエ・季節のはだか・着替え(ストリップ)。どれも成人キャラだけ・性的な行為なし。
+# 乳首の形(nipple_shape)は、はだかの一日と同じものを選べる。服を着ているコマ(dressed)は、服をその場面の服装にし、
+# 胸を出していない(chest=False)コマは乳首を打ち消す。
+
+APRON = "1.4::naked apron::, apron only, frilled apron, nothing under apron, bare shoulders, bare back, bare arms, sideboob, apron strings"
+APRON_NEGATIVE = "shirt, skirt, pants, panties, bra, dress, sleeves"
+OPEN_YUKATA = "open yukata, loose yukata, yukata slipping off shoulders, bare shoulders"
+OPEN_ROBE = "open white robe, robe slipping off shoulders, bare shoulders"
+ATELIER = "art studio, atelier, easels, canvas, north light window, wooden floor, drapery"
+ONSEN_BATH_NEGATIVE = f"{NO_FOAM}, swimsuit, bath towel"
+
+ONSEN_PARTS = ("到着", "露天風呂", "夜", "翌朝")
+ONSEN_SCENES: tuple[DayScene, ...] = (
+    DayScene("arrive", "浴衣を脱ぐ", "到着", "ryokan room, tatami, japanese inn, afternoon, window, mountains", "cowboy shot",
+             "taking off yukata, smile, looking at viewer", "浴衣も着てみたけど……やっぱりまずはお風呂!",
+             outfit=OPEN_YUKATA, prop=True),
+    DayScene("corridor", "露天風呂へ", "到着", "path to outdoor bath, wooden walkway, bamboo fence, afternoon",
+             "cowboy shot, from behind", "walking, holding small towel, from behind, back, ass", "誰もいない……貸し切りだ!",
+             outfit="bare back, holding small towel", negative=FACE_AWAY_NEGATIVE, prop=True),
+    DayScene("wash", "かけ湯", "露天風呂", "onsen washing area, wooden stool, wooden bucket", "upper body, from side",
+             "sitting on wooden stool, pouring water over shoulder with wooden bucket, eyes closed, smile", "ざばーっ",
+             outfit=WET, negative=ONSEN_BATH_NEGATIVE),
+    DayScene("soak", "肩までつかる", "露天風呂", "outdoor hot spring, rotenburo, rocks, autumn leaves, mountains, daytime", "upper body",
+             "partially submerged, arms resting on rock, blissful smile, eyes closed, blush", "はぁ〜……極楽……",
+             outfit=WET, negative=ONSEN_BATH_NEGATIVE),
+    DayScene("view", "山を眺める", "露天風呂", "outdoor hot spring, rotenburo, rocks, mountain view, autumn leaves, daytime",
+             "cowboy shot, from behind", "standing in hot spring, waist-deep water, looking at mountains, back",
+             "紅葉、きれい……", outfit=_join(WET, "bare back"), negative=_join(ONSEN_BATH_NEGATIVE, FACE_AWAY_NEGATIVE)),
+    DayScene("edge", "岩に腰かける", "露天風呂", "outdoor hot spring, rock edge, rotenburo, daytime", "full body",
+             "sitting on rock edge, feet in water, fanning face with hand, flushed, sweat", "のぼせちゃう……",
+             outfit=WET, negative=_join(ONSEN_BATH_NEGATIVE, "spread legs"), whole=True),
+    DayScene("sake", "お湯でお酒", "露天風呂", "outdoor hot spring, wooden tray floating on water, sake bottle, sake cup", "upper body",
+             "partially submerged, holding sake cup, cheerful smile, blush", "お風呂でお酒、一度やってみたかったの",
+             outfit=WET, negative=ONSEN_BATH_NEGATIVE),
+    DayScene("milk", "湯上がりの牛乳", "露天風呂", "bathhouse dressing room, wooden lockers, glass bottle of milk", "cowboy shot",
+             "hand on hip, drinking milk from glass bottle, head tilted back", "やっぱり湯上がりはこれ!",
+             outfit="damp skin, towel around neck", prop=True, whole=True),
+    DayScene("fan", "扇風機で涼む", "露天風呂", "ryokan room, tatami, electric fan", "upper body",
+             "sitting in front of electric fan, eyes closed, open mouth, hair blowing", "あ゛〜〜〜",
+             outfit="damp skin"),
+    DayScene("dinner", "夕食の会席", "夜", "ryokan room, tatami, low table, kaiseki dinner, many small dishes", "upper body",
+             "holding chopsticks, happy, sparkling eyes", "わぁ、豪華〜!", outfit=OPEN_YUKATA, prop=True),
+    DayScene("stars", "貸切風呂の星空", "夜", "private open-air bath, hinoki wooden tub, night, lanterns, starry sky", "upper body",
+             "partially submerged, looking up at stars, peaceful smile", "星、すごい……",
+             outfit=WET, negative=ONSEN_BATH_NEGATIVE),
+    DayScene("moon", "月夜の露天風呂", "夜", "outdoor hot spring, night, full moon, moonlight, rocks", "cowboy shot, from side",
+             "standing in hot spring, waist-deep water, stretching arms up, looking at moon", "月がまんまる",
+             outfit=WET, negative=ONSEN_BATH_NEGATIVE),
+    DayScene("chair", "広縁でビール", "夜", "ryokan room, window seating area, chair, night, glass of beer", "cowboy shot",
+             "sitting in chair by window, legs crossed, holding glass of beer, relaxed smile", "(明日の朝も入ろうっと)",
+             outfit="barefoot", whole=True),
+    DayScene("futon", "ふかふかの布団", "夜", "ryokan room, night, futon on tatami, paper lantern", "full body, from above",
+             "lying on futon, on back, arms spread, satisfied smile, eyes closed", "ふかふか〜",
+             outfit="barefoot", negative="spread legs, blanket", whole=True),
+    DayScene("morning", "朝風呂", "翌朝", "outdoor hot spring, early morning, sunrise, mountains, rocks", "upper body",
+             "partially submerged, stretching, yawning, sleepy eyes", "朝風呂も最高……",
+             outfit=WET, negative=ONSEN_BATH_NEGATIVE),
+    DayScene("breakfast", "朝ごはん", "翌朝", "ryokan room, morning, low table, japanese breakfast, rice, grilled fish, miso soup",
+             "upper body", "eating rice with chopsticks, closed eyes, happy smile", "朝ごはんもおいしい〜",
+             outfit=OPEN_YUKATA, prop=True),
+    DayScene("pack", "帰り支度", "翌朝", "ryokan room, morning, suitcase, tatami", "cowboy shot",
+             "kneeling, folding yukata, putting it in suitcase, wistful smile", "もう帰るのかぁ",
+             outfit="barefoot", whole=True, prop=True),
+    DayScene("window", "またね", "翌朝", "ryokan room, window, morning sunlight, mountains", "upper body, from side",
+             "looking out window, hand on window frame, gentle smile", "また来るね", ),
+)
+
+APRON_PARTS = ("朝", "昼", "おやつ", "夕方")
+APRON_SCENES: tuple[DayScene, ...] = (
+    DayScene("tie", "エプロンを結ぶ", "朝", "kitchen, morning, sunlight", "cowboy shot, from behind",
+             "tying apron strings behind back, from behind, back, ass", "よし、今日はこれ一枚で!",
+             negative=FACE_AWAY_NEGATIVE),
+    DayScene("egg", "目玉焼き", "朝", "kitchen, morning, frying pan, sunny side up egg, stove", "upper body, from side",
+             "cooking, holding frying pan, humming, smile", "ふんふ〜ん♪"),
+    DayScene("coffee", "コーヒーを淹れる", "朝", "kitchen, morning, coffee pot, mug", "upper body, from side",
+             "pouring coffee into mug, gentle smile, half-closed eyes", "いい香り……"),
+    DayScene("call", "ごはんできたよ", "朝", "kitchen, morning, dining table, breakfast", "cowboy shot",
+             "holding ladle, waving, cheerful smile, looking at viewer", "ごはんできたよー!"),
+    DayScene("cut", "野菜を切る", "昼", "kitchen, cutting board, kitchen knife, vegetables", "upper body, from side",
+             "cutting vegetables, concentrating, looking down", "トントントン……"),
+    DayScene("taste", "味見", "昼", "kitchen, pot, stove, small plate", "upper body, from side",
+             "tasting soup from small plate, eyes closed, satisfied", "うん、いい感じ"),
+    DayScene("onigiri", "おにぎり", "昼", "kitchen counter, rice, onigiri, plate", "upper body",
+             "making rice balls with both hands, rice grain on cheek, smile", "形、むずかしい……"),
+    DayScene("dishes", "洗い物", "昼", "kitchen sink, dishes, water", "cowboy shot, from behind",
+             "washing dishes at sink, from behind, back, ass, looking back over shoulder, smile", "洗い物、終わり〜"),
+    DayScene("whisk", "生地を混ぜる", "おやつ", "kitchen, mixing bowl, whisk, flour, eggs", "upper body",
+             "whisking batter in bowl, flour on cheek, determined", "おいしくなーれ"),
+    DayScene("oven", "オーブンをのぞく", "おやつ", "kitchen, oven, oven light", "cowboy shot, from side",
+             "bent forward, hands on knees, peeking into oven, excited", "ふくらんできた!", whole=True),
+    DayScene("cookies", "焼けた!", "おやつ", "kitchen, baking tray, cookies, oven mitts", "upper body",
+             "holding baking tray with cookies, wearing oven mitts, proud smile", "上手に焼けました!",
+             outfit="oven mitts"),
+    DayScene("sneak", "つまみ食い", "おやつ", "kitchen, cookies on plate", "upper body",
+             "eating cookie, finger to lips, shushing, wink, mischievous smile", "ひとつだけ……ナイショ"),
+    DayScene("stew", "シチューを煮込む", "夕方", "kitchen, evening, pot, stove, ladle, warm light", "upper body, from side",
+             "stirring pot with ladle, gentle smile", "コトコト……"),
+    DayScene("table", "お皿を並べる", "夕方", "dining room, evening, table, plates, warm light", "cowboy shot, from side",
+             "placing plates on table, smile", "いただきますの準備!", whole=True),
+    DayScene("wait", "待ってるね", "夕方", "dining room, evening, table, dinner, warm light", "upper body",
+             "sitting at table, chin resting on hands, smile, looking at viewer", "早く帰ってこないかな"),
+    DayScene("untie", "おつかれさま", "夕方", "kitchen, night, warm light", "cowboy shot, from side",
+             "untying apron, apron slipping off, relaxed smile", "今日もおつかれさま、わたし",
+             negative="clothes, underwear"),
+)
+# どの場面もエプロン一枚(最後の「おつかれさま」はエプロンを外していく)
+APRON_SCENES = tuple(
+    replace(d, dressed="apron slipping off, untied apron" if d.key == "untie" else APRON,
+            negative=_join(APRON_NEGATIVE, d.negative))
+    for d in APRON_SCENES
+)
+
+ATELIER_PARTS = ("準備", "古典ポーズ", "休憩", "仕上げ")
+ATELIER_SCENES: tuple[DayScene, ...] = (
+    DayScene("robe", "ローブを脱ぐ", "準備", ATELIER, "cowboy shot, from side",
+             "taking off robe, shy smile, blush", "よ、よろしくお願いします……", outfit=OPEN_ROBE, prop=True),
+    DayScene("stand", "モデル台に上がる", "準備", _join(ATELIER, "model stand"), "full body",
+             "stepping onto model stand, barefoot, nervous smile, looking at viewer", "ここに立てばいいんですね",
+             outfit="barefoot", whole=True),
+    DayScene("venus", "コントラポスト", "古典ポーズ", _join(ATELIER, "model stand, soft light"), "full body",
+             "contrapposto, standing, weight on one leg, one hand resting on hip, serene expression, looking away",
+             "(動かない、動かない……)", outfit="barefoot", whole=True),
+    DayScene("odalisque", "寝椅子の裸婦", "古典ポーズ", _join(ATELIER, "chaise longue, white drapery"), "full body",
+             "lying on side on chaise longue, propped on elbow, legs together, calm smile, looking at viewer",
+             "この姿勢、楽でいいかも", outfit="barefoot", negative="spread legs", whole=True),
+    DayScene("stool", "スツールに座る", "古典ポーズ", _join(ATELIER, "wooden stool"), "cowboy shot, from side",
+             "sitting on stool, hands on knee, profile, calm expression", "……", whole=True),
+    DayScene("hair", "髪をかき上げる", "古典ポーズ", _join(ATELIER, "cushion"), "upper body",
+             "kneeling, arms raised, holding hair up, eyes closed, serene", "(腕がぷるぷるする……)"),
+    DayScene("back", "背中を見せる", "古典ポーズ", _join(ATELIER, "model stand"), "cowboy shot, from behind",
+             "sitting, back to viewer, looking over shoulder, gentle smile", "背中、変じゃないですか?",
+             outfit="bare back"),
+    DayScene("drape", "布を腰に", "古典ポーズ", _join(ATELIER, "model stand"), "cowboy shot",
+             "standing, holding white drapery cloth at waist, cloth draped over hips, looking up", "女神さまみたい……?",
+             outfit="white drapery around hips", prop=True),
+    DayScene("lying", "仰向けで", "古典ポーズ", _join(ATELIER, "white drapery on platform"), "full body, from above",
+             "lying on back on drapery, arms above head, eyes half closed, relaxed", "ちょっと眠くなっちゃう",
+             negative="spread legs", whole=True),
+    DayScene("tea", "ローブでお茶", "休憩", _join(ATELIER, "tea cup, table"), "upper body",
+             "holding tea cup, laughing, closed eyes", "あはは、緊張しましたー", outfit=OPEN_ROBE, prop=True),
+    DayScene("peek", "スケッチをのぞく", "休憩", _join(ATELIER, "sketch on canvas"), "upper body, from side",
+             "looking at sketch on easel, surprised, blush, hand on cheek", "わ、私こんな顔してる?!"),
+    DayScene("stretch", "伸び", "休憩", ATELIER, "cowboy shot",
+             "stretching arms up, yawning, one eye closed", "んーっ、肩がこる〜"),
+    DayScene("sunset", "夕日の光", "仕上げ", _join(ATELIER, "sunset, orange light through window, rim light"),
+             "cowboy shot, from side", "standing by window, sunset light on skin, looking out window, calm",
+             "この光、きれい……"),
+    DayScene("final", "最後のポーズ", "仕上げ", _join(ATELIER, "model stand, evening light"), "full body",
+             "standing, arms behind back, chest out, confident gentle smile, looking at viewer", "最後まで、がんばります!",
+             outfit="barefoot", whole=True),
+    DayScene("painting", "完成した絵", "仕上げ", _join(ATELIER, "finished oil painting of a nude woman on easel"), "cowboy shot",
+             "standing next to finished painting, peace sign, happy smile", "完成ですね!", outfit=OPEN_ROBE, prop=True),
+    DayScene("thanks", "おつかれさま", "仕上げ", _join(ATELIER, "evening"), "upper body",
+             "bowing slightly, smile, blush", "ありがとうございました", outfit=OPEN_ROBE, prop=True),
+)
+
+SEASON_PARTS = ("冬", "春", "夏", "秋")
+SEASON_SCENES: tuple[DayScene, ...] = (
+    DayScene("jan", "1月 こたつ", "冬", "japanese room, kotatsu, mandarin oranges, new year decorations, winter", "upper body",
+             "sitting in kotatsu, peeling mandarin orange, cozy smile", "こたつから出られない……"),
+    DayScene("feb", "2月 チョコ作り", "冬", "kitchen, valentine, chocolate, heart-shaped molds", "upper body, from side",
+             "stirring melted chocolate in bowl with spatula, determined, blush", "ハート、うまくできるかな"),
+    DayScene("mar", "3月 ひな祭り", "春", "japanese room, hina dolls display, peach blossoms", "cowboy shot",
+             "sitting, holding cup of amazake, gentle smile, looking at hina dolls", "おひなさま、今年も出したよ", whole=True),
+    DayScene("apr", "4月 お花見", "春", "balcony, cherry blossoms, falling petals, sunny, spring", "upper body",
+             "leaning on railing, catching cherry blossom petal, smile", "桜、満開!"),
+    DayScene("may", "5月 こいのぼり", "春", "room, open window, koinobori outside, fresh green, breeze", "cowboy shot",
+             "sitting by window, eyes closed, hair blowing in wind, smile", "風が気持ちいい", whole=True),
+    DayScene("jun", "6月 雨の日", "夏", "room, rainy day, raindrops on window, hydrangea outside", "upper body",
+             "hugging knees, looking at rain through window, calm", "今日は一日おうち"),
+    DayScene("jul", "7月 ベランダプール", "夏", "balcony, inflatable pool, summer, blue sky, water splash", "full body",
+             "sitting in small inflatable pool, splashing water, laughing", "つめたーい!",
+             outfit=WET, negative=_join(NO_FOAM, "swimsuit"), whole=True),
+    DayScene("aug", "8月 スイカ", "夏", "veranda, engawa, summer, wind chime, watermelon slices", "upper body",
+             "eating watermelon slice, happy, sweat", "夏はやっぱりこれ!", outfit="sweat"),
+    DayScene("sep", "9月 お月見", "秋", "veranda, night, full moon, susuki grass, tsukimi dango", "cowboy shot, from side",
+             "sitting on engawa, holding dango, looking at moon", "お月さま、まんまる", whole=True),
+    DayScene("oct", "10月 ハロウィン", "秋", "room, halloween, jack-o'-lantern, candles, night", "upper body",
+             "holding jack-o'-lantern, mischievous smile, wink", "トリック・オア・トリート!",
+             outfit="witch hat", prop=True),
+    DayScene("nov", "11月 焼きいも", "秋", "room, autumn, window, red maple leaves outside, roasted sweet potato", "upper body",
+             "holding roasted sweet potato, blowing on it, happy", "あちち……でもおいしい"),
+    DayScene("dec", "12月 クリスマス", "冬", "living room, christmas tree, ornaments, fairy lights, night", "cowboy shot",
+             "decorating christmas tree, hanging ornament, on tiptoes, smile", "メリークリスマス!",
+             outfit="santa hat", prop=True, whole=True),
+)
+
+
+@dataclass(frozen=True)
+class StripCostume:
+    name: str
+    stage: str
+    # 着ている・脱ぎかけ・下着
+    dressed: str
+    half: str
+    lingerie: str
+    # 上を外したあとも残す下
+    panties: str
+    undress: str
+    hello: str
+
+
+STRIP_COSTUMES: tuple[StripCostume, ...] = (
+    StripCostume("メイド", "elegant mansion room, curtains, warm light", "maid, maid headdress, maid apron, black dress, long sleeves",
+                 "maid headdress, black dress slipping off shoulders, apron removed", "white lace bra, white lace panties, maid headdress", "white lace panties",
+                 "untying apron, unbuttoning dress", "おかえりなさいませ♪"),
+    StripCostume("スーツ", "apartment bedroom, night, city lights through window", "office lady, black business suit, white shirt, pencil skirt",
+                 "open white shirt, unbuttoned shirt, pencil skirt", "black lace bra, black lace panties", "black lace panties",
+                 "loosening shirt collar, unbuttoning shirt", "はぁ、やっと帰ってこれた……"),
+    StripCostume("浴衣", "japanese room, tatami, night, paper lantern", "yukata, floral yukata, obi, hair ornament",
+                 "yukata slipping off shoulders, loose obi, hair ornament", "white bra, white panties, hair ornament", "white panties",
+                 "untying obi", "お祭り、楽しかったね"),
+    StripCostume("チャイナドレス", "chinese style room, red lanterns, night", "china dress, red cheongsam, side slit, hair buns",
+                 "china dress slipping off shoulders, unbuttoned collar", "red lace bra, red lace panties", "red lace panties",
+                 "unbuttoning china dress collar", "似合ってるでしょ?"),
+    StripCostume("ナース", "bedroom, night, warm light", "nurse, white nurse uniform, nurse cap",
+                 "white nurse uniform unbuttoned, nurse cap", "pink bra, pink panties, nurse cap", "pink panties",
+                 "unbuttoning nurse uniform", "検温の時間ですよ〜"),
+)
+STRIP_PARTS = tuple(c.name for c in STRIP_COSTUMES)
+
+
+def _strip_scenes() -> tuple[DayScene, ...]:
+    """衣装ごとに、着た姿 → 脱ぎかけ → 半分 → 下着 → 上を外す → 裸 の6コマ。"""
+    scenes: list[DayScene] = []
+    for n, c in enumerate(STRIP_COSTUMES):
+        k = f"c{n}"
+        scenes += [
+            DayScene(f"{k}_dressed", f"{c.name}", c.name, c.stage, "cowboy shot",
+                     "standing, hand on hip, smile, looking at viewer", c.hello, dressed=c.dressed, chest=False),
+            DayScene(f"{k}_undo", f"{c.name}・脱ぎはじめ", c.name, c.stage, "cowboy shot",
+                     f"{c.undress}, shy smile, blush, looking at viewer", "ちょっとだけ、ね", dressed=c.dressed, chest=False),
+            DayScene(f"{k}_half", f"{c.name}・脱ぎかけ", c.name, c.stage, "cowboy shot",
+                     "clothes slipping off, lingerie visible, embarrassed smile, blush", "あんまり見ないで……",
+                     dressed=_join(c.half, c.lingerie), chest=False),
+            DayScene(f"{k}_lingerie", f"{c.name}・下着", c.name, c.stage, "cowboy shot",
+                     "standing, hands behind back, blush, looking away", "下着も、かわいいでしょ?",
+                     dressed=c.lingerie, chest=False),
+            DayScene(f"{k}_topless", f"{c.name}・上を外す", c.name, c.stage, "upper body",
+                     "holding bra in hand, topless, embarrassed smile, blush", "……えいっ",
+                     dressed=_join("topless", c.panties), negative="bra"),
+            DayScene(f"{k}_nude", f"{c.name}・ぜんぶ", c.name, c.stage, "full body",
+                     "standing, hands clasped behind back, embarrassed smile, blush, looking at viewer", "ぜんぶ、脱いじゃった",
+                     outfit="barefoot", negative="panties, underwear", whole=True),
+        ]
+    return tuple(scenes)
+
+
+STRIP_SCENES = _strip_scenes()
+
+
+@dataclass(frozen=True)
+class SceneBook:
+    parts: tuple[str, ...]
+    scenes: tuple[DayScene, ...]
+    premise: str
+
+
+# 乳首を描く場面集(kind → 時間帯・場所の区切りと場面)。{names} にキャラの名前が入る
+SCENE_BOOKS: dict[str, SceneBook] = {
+    "nude_day": SceneBook(DAY_PARTS, DAY_SCENES, "休日、{names}が部屋で服を着ずにのんびり過ごす朝から夜まで。性的な行為はなし。"),
+    "nude_onsen": SceneBook(ONSEN_PARTS, ONSEN_SCENES, "{names}が温泉旅館へ一泊二日のひとり旅。露天風呂・貸切風呂・朝風呂を楽しむ。性的な行為はなし。"),
+    "nude_apron": SceneBook(APRON_PARTS, APRON_SCENES, "{names}が裸エプロンで、朝ごはんからおやつ・夕ごはんまで料理する一日。性的な行為はなし。"),
+    "nude_atelier": SceneBook(ATELIER_PARTS, ATELIER_SCENES, "{names}がアトリエでヌードモデルを務める。古典的なポーズと休憩。性的な行為はなし。"),
+    "nude_seasons": SceneBook(SEASON_PARTS, SEASON_SCENES, "{names}の、1月から12月まで季節ごとのはだかの一枚。性的な行為はなし。"),
+    "nude_strip": SceneBook(STRIP_PARTS, STRIP_SCENES, "{names}が衣装ごとに、少しずつ脱いでいく。性的な行為はなし。"),
+}
+
+
+COVERED_CHEST_NEGATIVE = "1.3::nipples::, areolae, see-through, nipple slip"
+
+
+def _build_scene_book(characters: list[dict[str, Any]], options: CollectionOptions) -> dict[str, Any]:
+    """
+    乳首を描く場面集(はだかの一日・温泉旅行など SCENE_BOOKS)の台本。区切り(themes)・場面(poses のキー)を選べる。
+    場面ごとにキャラ全員がそれぞれ1コマずつ演じる。
+    """
+    book = SCENE_BOOKS[options.kind]
     shape = NIPPLE_SHAPES.get(options.nipple_shape)
     if shape is None:
         raise ValueError(f"乳首の形は {', '.join(NIPPLE_SHAPES)} のどれかにしてください。")
     body = BODIES.get(options.body or "sheet")
     if body is None:
         raise ValueError(f"体つきは {', '.join(BODIES)} のどれかにしてください。")
-    picked = set(options.poses) & set(DAY_SCENES_BY_KEY)
+    keys = {d.key for d in book.scenes}
+    picked = set(options.poses) & keys
     if options.poses and not picked:
         raise ValueError("場面が1つもありません。")
-    plan = [d for d in DAY_SCENES if (not options.themes or d.part in options.themes) and (not picked or d.key in picked)]
+    plan = [d for d in book.scenes if (not options.themes or d.part in options.themes) and (not picked or d.key in picked)]
     if not plan:
         raise ValueError("場面が1つもありません。")
     base_negative = _join(content_guard.text("collection.nude_day_negative"), HAND_NEGATIVE, SKIN_NEGATIVE, ABS_NEGATIVE)
@@ -904,9 +1195,10 @@ def _build_nude_day(characters: list[dict[str, Any]], options: CollectionOptions
     for day in plan:
         for character in characters:
             cid = int(character["id"])
-            outfit = _join(body, "nude, completely nude, adult proportions", shape.tags, SKIN_FINISH, SOFT_BELLY,
-                           "featureless crotch" if day.whole else "", day.outfit)
-            negative = _join(base_negative, shape.negative, day.negative, "" if day.prop else "clothes, towel, underwear")
+            outfit = _join(body, day.dressed or "nude, completely nude, adult proportions", shape.tags if day.chest else "",
+                           SKIN_FINISH, SOFT_BELLY, "featureless crotch" if day.whole else "", day.outfit)
+            negative = _join(base_negative, shape.negative if day.chest else COVERED_CHEST_NEGATIVE, day.negative,
+                             "" if day.prop or day.dressed else "clothes, towel, underwear")
             scene = _scene(
                 _join(day.stage, "solo", day.framing, options.style_tags), [cid], {cid: day.action}, {cid: outfit},
                 negative, narration=f"{day.part}　{day.label}" if len(characters) > 1 else None,
@@ -916,9 +1208,8 @@ def _build_nude_day(characters: list[dict[str, Any]], options: CollectionOptions
             if hair_down:
                 scene["character_appearances"] = {cid: hair_down}
             scenes.append(scene)
-    title = options.title or f"{names}の{KINDS['nude_day']}"
-    return {"title": title, "premise": f"休日、{names}が部屋で服を着ずにのんびり過ごす朝から夜まで。性的な行為はなし。",
-            "scenes": scenes}
+    title = options.title or f"{names}の{KINDS[options.kind]}"
+    return {"title": title, "premise": book.premise.format(names=names), "scenes": scenes}
 
 
 def build_collection(characters: list[dict[str, Any]], options: CollectionOptions) -> dict[str, Any]:
@@ -931,8 +1222,8 @@ def build_collection(characters: list[dict[str, Any]], options: CollectionOption
     kind = options.kind
     if kind in NUDE_KINDS:
         return _build_nude(characters, options)
-    if kind == "nude_day":
-        return _build_nude_day(characters, options)
+    if kind in SCENE_BOOKS:
+        return _build_scene_book(characters, options)
     tease = kind.startswith("tease")
     body = BODIES.get(options.body or ("curvy" if tease else "slender"))
     if body is None:
@@ -1025,8 +1316,10 @@ def catalog() -> dict[str, Any]:
         "kinds": [{"id": k, "label": v} for k, v in KINDS.items()],
         "themes": {**{k: [t.name for t in v] for k, v in THEMES.items()},
                    **{k: [s.name for s in sets] for k, sets in NUDE_KINDS.items()},
-                   "nude_day": list(DAY_PARTS)},
+                   **{k: list(b.parts) for k, b in SCENE_BOOKS.items()}},
         "day_scenes": [{"key": d.key, "label": d.label, "part": d.part} for d in DAY_SCENES],
+        # 乳首を描く場面集(はだかの一日・温泉旅行など)の場面。kind ごと
+        "book_scenes": {k: [{"key": d.key, "label": d.label, "part": d.part} for d in b.scenes] for k, b in SCENE_BOOKS.items()},
         "nipple_shapes": [{"id": k, "label": v.label} for k, v in NIPPLE_SHAPES.items()],
         "poses": [{"key": p.key, "label": p.label, "wedgie": p.wedgie} for p in TEASE_POSES],
         "nude_poses": [{"key": p.key, "label": p.label, "set": s.name, "kind": kind}

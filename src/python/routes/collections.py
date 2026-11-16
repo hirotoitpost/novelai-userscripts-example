@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
-from ..collection_templates import NIPPLE_SHAPES, CollectionOptions, build_collection, catalog
+from ..collection_templates import NIPPLE_SHAPES, SCENE_BOOKS, CollectionOptions, build_collection, catalog
 from ..content_guard import is_defined_adult
 from ..db import get_character, get_connection
 from ..models import ScriptedStoryRequest, StoryResponse
@@ -20,7 +20,8 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 
 
 class CollectionRequest(BaseModel):
-    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2", "nude_day"]
+    kind: Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2", "nude_day",
+                  "nude_onsen", "nude_apron", "nude_atelier", "nude_seasons", "nude_strip"]
     character_ids: list[int] = Field(min_length=1, max_length=4)
     title: Optional[str] = Field(None, max_length=200)
     # 体つき: sheet(キャラシートのまま)/ slender / curvy。省略時はコレクションが slender、からかいが curvy、ヌードが sheet
@@ -55,8 +56,8 @@ async def create_per_nipple_shape(req: NippleShapesRequest) -> list[StoryRespons
     はだかの一日を、選んだ乳首の形ごとに1冊ずつ作る(何も選ばなければ全部の形)。題名の後ろに形の名前を付ける。
     1冊の中は同じ形でそろう。
     """
-    if req.kind != "nude_day":
-        raise HTTPException(status_code=422, detail="乳首の形ごとに作れるのは、はだかの一日だけです。")
+    if req.kind not in SCENE_BOOKS:
+        raise HTTPException(status_code=422, detail="乳首の形ごとに作れるのは、はだかの一日などの乳首を描く場面集だけです。")
     shapes = list(dict.fromkeys(req.nipple_shapes)) or list(NIPPLE_SHAPES)
     stories = []
     for shape in shapes:

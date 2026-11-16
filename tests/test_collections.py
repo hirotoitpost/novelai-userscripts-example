@@ -420,3 +420,48 @@ def test_nude_day_ring_cow_tag() -> None:
     assert "nipple rings" in tag["character_outfits"][1] and "cow tag" in tag["character_outfits"][1]
     # 牛柄・牛耳のコスプレにならないよう打ち消す
     assert "cow print" in tag["negative_prompt"]
+
+
+# ---- 乳首を描くほかの場面集(温泉旅行・裸エプロン・アトリエ・季節・着替え) ----
+
+
+def test_scene_books_build_with_nipples() -> None:
+    from python.collection_templates import SCENE_BOOKS
+
+    one = [{"id": 1, "name": "ちひろ"}]
+    counts = {k: len(build_collection(one, CollectionOptions(kind=k))["scenes"]) for k in SCENE_BOOKS}
+    assert counts == {"nude_day": 24, "nude_onsen": 18, "nude_apron": 16, "nude_atelier": 16, "nude_seasons": 12, "nude_strip": 30}
+    apron = build_collection(one, CollectionOptions(kind="nude_apron", poses=["egg"]))["scenes"][0]
+    # 裸エプロン: エプロンは打ち消さず、乳首は描く
+    assert "naked apron" in apron["character_outfits"][1] and "pink nipples" in apron["character_outfits"][1]
+    assert "clothes" not in apron["negative_prompt"].split(", ")
+    winter = build_collection(one, CollectionOptions(kind="nude_seasons", themes=["冬"]))["scenes"]
+    assert len(winter) == 3
+
+
+def test_strip_covers_nipples_until_topless() -> None:
+    one = [{"id": 1, "name": "ちひろ"}]
+    maid = build_collection(one, CollectionOptions(kind="nude_strip", themes=["メイド"]))["scenes"]
+    assert len(maid) == 6
+    # 着ている・下着のコマは乳首を打ち消す
+    assert "maid" in maid[0]["character_outfits"][1] and "1.3::nipples::" in maid[0]["negative_prompt"]
+    assert "1.3::nipples::" in maid[3]["negative_prompt"] and "pink nipples" not in maid[3]["character_outfits"][1]
+    # 上を外す: 下着(下)は残し、乳首を描く
+    assert "white lace panties" in maid[4]["character_outfits"][1] and "pink nipples" in maid[4]["character_outfits"][1]
+    assert "bra" in maid[4]["negative_prompt"].split(", ")
+    # ぜんぶ脱ぐ
+    assert "completely nude" in maid[5]["character_outfits"][1] and "featureless crotch" in maid[5]["character_outfits"][1]
+
+
+def test_scene_books_via_api(client: TestClient) -> None:
+    catalog = client.get("/api/collections").json()
+    assert {"id": "nude_onsen", "label": "はだかの温泉旅行"} in catalog["kinds"]
+    assert len(catalog["book_scenes"]["nude_strip"]) == 30 and catalog["themes"]["nude_seasons"] == ["冬", "春", "夏", "秋"]
+    adult = _character("ちひろ", 24)
+    res = client.post("/api/collections", json={"kind": "nude_atelier", "character_ids": [adult], "nipple_shape": "erect"})
+    assert res.status_code == 200, res.text
+    shapes = client.post("/api/collections/nipple-shapes", json={
+        "kind": "nude_seasons", "character_ids": [adult], "themes": ["夏"], "nipple_shapes": ["puffy", "small"]})
+    assert shapes.status_code == 200 and len(shapes.json()) == 2
+    minor = _character("リン", 16)
+    assert client.post("/api/collections", json={"kind": "nude_onsen", "character_ids": [minor]}).status_code == 422
