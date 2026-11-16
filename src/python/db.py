@@ -1090,6 +1090,8 @@ _STORIES_EXTRA_COLUMNS = {
     # 漫画v2の最後のページの空いたマスに置くおまけ絵(登場キャラのチビキャラ)。JSON {"image_path", "seed", "prompt"}。
     # 合成の設定の last_page が omake のときに置く
     "manga_v2_omake": "TEXT",
+    # 漫画の読み上げのナレーションの声(VOICEVOX のスタイル ID)。NULL なら既定の声
+    "voice_narrator": "INTEGER",
 }
 
 
@@ -1209,6 +1211,10 @@ _CHARACTERS_EXTRA_COLUMNS = {
     "outfit_id": "INTEGER",
     # 絵柄セット(style_sets の id)。キャラの絵に、そのセットの絵柄の参照とタグを足す
     "style_set_id": "INTEGER",
+    # 漫画の読み上げの声(VOICEVOX のスタイル ID)・話す速さ・声の高さ。NULL なら既定の声(全部の物語で共通)
+    "voice_speaker": "INTEGER",
+    "voice_speed": "REAL",
+    "voice_pitch": "REAL",
 }
 
 
@@ -1286,6 +1292,28 @@ def set_manga_v2_omake(conn: sqlite3.Connection, story_id: int, omake: dict[str,
     conn.execute(
         "UPDATE stories SET manga_v2_omake = ? WHERE id = ?",
         (json.dumps(omake, ensure_ascii=False) if omake else None, story_id),
+    )
+    conn.commit()
+
+
+def get_story_narrator(conn: sqlite3.Connection, story_id: int) -> int | None:
+    """読み上げのナレーションの声(VOICEVOX のスタイル ID)。決めていなければ None。"""
+    row = conn.execute("SELECT voice_narrator FROM stories WHERE id = ?", (story_id,)).fetchone()
+    return row["voice_narrator"] if row else None
+
+
+def set_story_narrator(conn: sqlite3.Connection, story_id: int, speaker: int | None) -> None:
+    conn.execute("UPDATE stories SET voice_narrator = ? WHERE id = ?", (speaker, story_id))
+    conn.commit()
+
+
+def set_character_voice(
+    conn: sqlite3.Connection, character_id: int, speaker: int | None, speed: float | None, pitch: float | None
+) -> None:
+    """キャラの読み上げの声(None で既定の声に戻す)。"""
+    conn.execute(
+        "UPDATE characters SET voice_speaker = ?, voice_speed = ?, voice_pitch = ? WHERE id = ?",
+        (speaker, speed, pitch, character_id),
     )
     conn.commit()
 

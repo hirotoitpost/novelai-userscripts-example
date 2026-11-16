@@ -19,6 +19,8 @@ class TtsRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
     speaker: int = Field(8, ge=0, le=10000)
     speed: float = Field(1.0, ge=0.5, le=2.0)
+    pitch: float = Field(0.0, ge=-0.15, le=0.15)
+    volume: float = Field(1.0, ge=0.5, le=1.5)
 
 
 class SplitRequest(BaseModel):
@@ -47,7 +49,7 @@ async def post_split(req: SplitRequest) -> dict[str, Any]:
 @router.post("/tts")
 async def post_tts(req: TtsRequest) -> Response:
     try:
-        audio = await asyncio.to_thread(voice.synthesize, req.text, req.speaker, req.speed)
+        audio = await asyncio.to_thread(voice.synthesize, req.text, req.speaker, req.speed, req.pitch, req.volume)
     except voice.VoiceUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
