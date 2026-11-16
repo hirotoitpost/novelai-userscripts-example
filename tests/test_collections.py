@@ -430,7 +430,7 @@ def test_scene_books_build_with_nipples() -> None:
 
     one = [{"id": 1, "name": "ちひろ"}]
     counts = {k: len(build_collection(one, CollectionOptions(kind=k))["scenes"]) for k in SCENE_BOOKS}
-    assert counts == {"nude_day": 24, "nude_onsen": 18, "nude_apron": 16, "nude_atelier": 16, "nude_seasons": 12, "nude_strip": 30}
+    assert counts == {"nude_day": 24, "nude_onsen": 18, "nude_apron": 16, "nude_atelier": 16, "nude_seasons": 12, "nude_strip": 30, "nude_wash": 25}
     apron = build_collection(one, CollectionOptions(kind="nude_apron", poses=["egg"]))["scenes"][0]
     # 裸エプロン: エプロンは打ち消さず、乳首は描く
     assert "naked apron" in apron["character_outfits"][1] and "pink nipples" in apron["character_outfits"][1]
@@ -465,3 +465,30 @@ def test_scene_books_via_api(client: TestClient) -> None:
     assert shapes.status_code == 200 and len(shapes.json()) == 2
     minor = _character("リン", 16)
     assert client.post("/api/collections", json={"kind": "nude_onsen", "character_ids": [minor]}).status_code == 422
+
+
+# ---- 体の洗い方(nude_wash) ----
+
+
+def test_wash_hair_up_and_no_anus() -> None:
+    one = [{"id": 1, "name": "ちひろ", "appearance_tags": "adult, long hair, low twin braids, loose braids, purple eyes"}]
+    script = build_collection(one, CollectionOptions(kind="nude_wash"))["scenes"]
+    # どの場面も髪をお団子にまとめる(三つ編みは外す)
+    assert all(s["character_appearances"][1] == "adult, long hair, purple eyes, hair up, hair bun, updo" for s in script)
+    crack = build_collection(one, CollectionOptions(kind="nude_wash", poses=["butt_crack"]))["scenes"][0]
+    assert "anus" in crack["negative_prompt"].split(", ") and "spread ass" in crack["negative_prompt"]
+    rinse = build_collection(one, CollectionOptions(kind="nude_wash", poses=["butt_rinse"]))["scenes"][0]
+    assert "urine" in rinse["negative_prompt"]
+
+
+def test_wash_peel_only_for_inverted_nipples() -> None:
+    one = [{"id": 1, "name": "ちひろ"}]
+    keys = lambda shape: [s["text"] for s in build_collection(one, CollectionOptions(kind="nude_wash", nipple_shape=shape))["scenes"]]  # noqa: E731
+    normal, inverted = keys("normal"), keys("inverted")
+    assert len(normal) == 25 and len(inverted) == 28
+    assert any("顔を出させて" in t for t in inverted) and not any("顔を出させて" in t for t in normal)
+    peel = build_collection(one, CollectionOptions(kind="nude_wash", nipple_shape="puffy_inverted", poses=["peel"]))["scenes"][0]
+    # 剥いた乳首は半分勃起(形のタグの代わり)
+    assert "half-erect nipple" in peel["character_outfits"][1] and "nipple tip peeking out" in peel["character_outfits"][1]
+    pinch = build_collection(one, CollectionOptions(kind="nude_wash", nipple_shape="inverted", poses=["pinch"]))["scenes"][0]
+    assert "long nipples" in pinch["character_outfits"][1] and "pinching own nipple" in pinch["character_actions"][1]
