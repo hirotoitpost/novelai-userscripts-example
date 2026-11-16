@@ -13,7 +13,7 @@
   作った。2026-11-16)。こちらは乳首を描き(形は nipple_shape で選ぶ)、性器は描かない(featureless crotch)。
   性的な行為はない。
 - 同じ作り(乳首を描く場面集 SCENE_BOOKS)で、温泉旅行(nude_onsen)・裸エプロン(nude_apron)・ヌードモデルのアトリエ
-  (nude_atelier)・季節のはだか(nude_seasons)・着替え(nude_strip。衣装ごとに少しずつ脱ぐ)。
+  (nude_atelier)・季節のはだか(nude_seasons)・着替え(nude_strip。衣装ごとに少しずつ脱ぐ)・体の洗い方(nude_wash)。
 
 描いてはいけないもの(乳首・乳輪・性器・cameltoe など)はネガティブで必ず打ち消す。ヌードは乳首・性器を描かない
 featureless の絵で、湯気・モザイクで隠さない(はだかの一日だけは乳首を描く)。成人キャラ専用(年齢を入れた 18 歳以上のキャラだけ。呼び出し側で確かめる)。
@@ -28,7 +28,7 @@ from . import content_guard
 from . import vocabulary as vocab
 
 Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2", "nude_day",
-               "nude_onsen", "nude_apron", "nude_atelier", "nude_seasons", "nude_strip"]
+               "nude_onsen", "nude_apron", "nude_atelier", "nude_seasons", "nude_strip", "nude_wash"]
 
 KINDS: dict[str, str] = {
     "lingerie": "下着コレクション",
@@ -43,6 +43,7 @@ KINDS: dict[str, str] = {
     "nude_atelier": "ヌードモデルのアトリエ",
     "nude_seasons": "季節のはだか",
     "nude_strip": "着替え(ストリップ)",
+    "nude_wash": "体の洗い方",
 }
 
 # 場所(作画タグ)
@@ -80,6 +81,18 @@ HANGING_HAIR = "hair hanging down to floor between hands"
 def has_long_hair(appearance: str | None) -> bool:
     tags = {t.strip().lower() for t in (appearance or "").split(",")}
     return any(word in tags for word in vocab.items("collection.long_hair_tags"))
+
+
+# 髪をまとめるとき外す髪型の語(まとめ髪の語に足して、三つ編み・ツインテールなど)
+HAIR_STYLE_WORDS = {"braid", "braids", "twintails", "pigtails", "drill", "sidelocks"}
+
+
+def hair_up_appearance(appearance: str | None) -> str:
+    """容姿から髪型のタグを外し、お団子にまとめた容姿にする(体を洗う・湯船)。"""
+    tags = [t.strip() for t in (appearance or "").split(",") if t.strip()]
+    words = set(vocab.words("collection.hair_up_words")) | HAIR_STYLE_WORDS
+    kept = [t for t in tags if not set(t.lower().replace("_", " ").split()) & words and t.lower() != "hair down"]
+    return _join(", ".join(kept), "hair up, hair bun, updo")
 
 
 def hair_down_appearance(appearance: str | None) -> str | None:
@@ -819,6 +832,13 @@ class DayScene:
     dressed: str = ""
     # 胸を出している(乳首の形のタグを足す。False なら乳首を打ち消す)
     chest: bool = True
+    # この乳首の形のときだけ出す場面(空なら全部の形。陥没を剥くなど)
+    shapes: tuple[str, ...] = ()
+    # 乳首の形のタグの代わりに使うタグ(剥いて半分出た乳首など)と、その打ち消し
+    nipples: str = ""
+    nipple_negative: str = ""
+    # 髪をまとめる(お団子。体を洗うとき)
+    hair_up: bool = False
 
 
 DAY_PARTS = ("朝", "昼前", "昼", "午後", "夜")
@@ -1149,6 +1169,128 @@ def _strip_scenes() -> tuple[DayScene, ...]:
 STRIP_SCENES = _strip_scenes()
 
 
+# ---- 体の洗い方(nude_wash。柚原ちひろ 物語325 から作った。2026-11-17) ----
+#
+# お風呂で体を隅々まで手で洗う。髪はお団子にまとめる。股の部分を洗う場面・肛門は描かない(お尻は外側と割れ目の泡まで)。
+# 陥没系の乳首(inverted / puffy_inverted)なら、剥いて(半分勃起して出る)つまんで伸ばして洗う場面が入る。
+# 乳首のアップは参照画像の強さを 0.45 くらいに下げると動作が出やすい。
+
+WASH_STAGE = "bathroom, japanese bathroom, shower, bath stool, tiled wall, bright lighting"
+WASH_NEGATIVE = "aroused, heavy breathing, ahegao, tongue out, lactation, milk, licking, sponge, body towel, steam"
+BUTT_NEGATIVE = "anus, spread ass, spreading buttocks, vulva, slit, cleft of venus, crotch seam, red mark"
+NO_PEE = "1.4::peeing::, urine, water stream between legs, liquid between legs, puddle"
+WASH_SQUAT_NEGATIVE = f"{BUTT_NEGATIVE}, kneeling, sitting, all fours, seiza, feet out of frame, cropped legs"
+INVERTED_SHAPES = ("inverted", "puffy_inverted")
+OTHER_SHAPES = tuple(k for k in NIPPLE_SHAPES if k not in INVERTED_SHAPES)
+# 剥いて半分出た乳首 / つまんで伸ばした乳首
+PEELED = ("1.3::inverted nipples::, 1.3::half-erect nipple::, 1.3::nipple half out of areola::, 1.2::long nipples::, "
+          "nipple tip peeking out, puffy areolae, pink areolae")
+STRETCHED = ("1.3::long nipples::, 1.3::stretched nipple::, 1.2::erect nipple::, nipple pulled out, puffy areolae, "
+             "pink areolae, pink nipples")
+PINCH = ("1.5::pinching own nipple between thumb and index finger::, 1.4::gently pulling nipple to stretch it::, "
+         "washing nipple with soapy fingertips, other hand supporting breast, looking down at own chest, calm, careful")
+
+WASH_PARTS = ("準備", "上半身", "胸", "おなか", "背中・お尻", "脚", "仕上げ")
+_WASH_SCENES: tuple[DayScene, ...] = (
+    DayScene("tie", "髪をまとめる", "準備", "", "cowboy shot",
+             "tying hair up into bun, arms raised, cheerful smile, looking at viewer", "髪はまとめて、と。今日は隅々まで洗うぞ〜"),
+    DayScene("rinse", "かけ湯", "準備", "sitting on bath stool", "upper body, from side",
+             "sitting, holding shower head, rinsing shoulders with shower water, eyes closed, relaxed", "まずはかけ湯で、体をあっためて"),
+    DayScene("lather", "泡立て", "準備", "sitting on bath stool", "upper body",
+             "making thick soap lather with foaming net, white foam in hands, happy, looking at hands", "泡立てネットで、もこもこに"),
+    DayScene("neck", "首まわり", "上半身", "", "upper body, from side",
+             "washing neck with soapy hand, tilting head, soap lather on neck, eyes closed", "首まわりと耳の後ろも、忘れずに"),
+    DayScene("arm", "腕", "上半身", "", "upper body",
+             "arm stretched out, washing arm with soapy hand, soap lather on arm, gentle smile", "肩から腕へ、くるくる"),
+    DayScene("armpit", "わきの下", "上半身", "", "upper body",
+             "one arm raised, washing armpit with soapy hand, soap lather on armpit, concentrating", "わきの下も、しっかり"),
+    DayScene("under", "胸の下", "胸", "", "upper body",
+             "lifting own breast with one hand, washing underneath breast with soapy hand, soap lather, looking down, focused",
+             "胸の下は汗がたまりやすいから、持ち上げて", outfit="soap lather on chest"),
+    DayScene("cleavage", "谷間", "胸", "", "upper body",
+             "pushing soapy fingers into cleavage, washing between breasts, soap lather in cleavage, looking down, focused",
+             "谷間は汗がこもるから、指を入れてしっかり", outfit="soap lather on cleavage"),
+    DayScene("underboob", "下乳", "胸", "", "upper body, from below",
+             "lifting both breasts with both hands, washing underboob crease, soap lather under breasts, looking down",
+             "下乳は、両手でぐっと持ち上げて", outfit="underboob, soap lather under breasts"),
+    DayScene("underboob2", "下乳(反対側)", "胸", "", "upper body, from side",
+             "lifting one breast, tracing soapy fingers along underboob crease, soap lather, concentrating",
+             "反対側も、輪郭にそってなぞるように", outfit="underboob, soap lather"),
+    DayScene("inverted", "陥没に泡", "胸", "", "upper body, close-up, breast focus",
+             "looking down at own chest, fingertip with soap foam touching areola, careful, focused expression",
+             "陥没してるところは、汚れがたまりやすいから……", outfit="soap foam on areola", shapes=INVERTED_SHAPES),
+    DayScene("peel", "乳首を剥く", "胸", "", "upper body, close-up, breast focus, nipple focus",
+             "1.5::fingers spreading areola apart::, 1.4::pulling out own nipple with fingertips::, "
+             "thumb and index finger pressing both sides of areola, looking down at own chest, concentrating, careful",
+             "乳輪のまわりをそっと押して、顔を出させて", outfit="soap foam on breast", shapes=INVERTED_SHAPES,
+             nipples=PEELED, nipple_negative="large nipples, flat areolae"),
+    DayScene("pinch", "つまんで洗う", "胸", "", "upper body, close-up, breast focus, nipple focus", PINCH,
+             "出てきたところをつまんで、少し伸ばしながら泡でやさしく洗う", outfit="soap foam on nipple, soap foam on breast",
+             negative="shower head", shapes=INVERTED_SHAPES, nipples=STRETCHED, nipple_negative="nipple slit, flat areolae"),
+    DayScene("pinch2", "反対側も", "胸", "", "upper body, close-up, breast focus, nipple focus", PINCH,
+             "反対側も、つまんで伸ばして", outfit="soap foam on nipple, soap foam on breast",
+             negative="shower head", shapes=INVERTED_SHAPES, nipples=STRETCHED, nipple_negative="nipple slit, flat areolae"),
+    DayScene("nipple", "乳首まわり", "胸", "", "upper body, close-up, breast focus", PINCH,
+             "乳首のまわりも、つまんでやさしく", outfit="1.2::stretched nipple::, soap foam on nipple, soap foam on breast",
+             negative="shower head", shapes=OTHER_SHAPES),
+    DayScene("navel", "おへそ", "おなか", "", "close-up, stomach focus, navel focus, upper body, from side",
+             "fingertip gently circling inside navel with soap foam, looking down at own navel, careful, focused",
+             "おへそは汚れがたまりやすいから、泡をのせて指先でくるくる", outfit="navel, soap foam in navel, soft stomach"),
+    DayScene("navel_rinse", "おへそを流す", "おなか", "", "upper body, from side",
+             "holding shower head at waist level, rinsing navel with gentle water, other hand fingertip at navel, "
+             "looking down, satisfied small smile",
+             "奥までやさしく……シャワーで流して、ぴかぴか", outfit="navel, clean navel, soft stomach",
+             negative="hand between legs, hand on crotch, lower body, crotch, from below, liquid on crotch"),
+    DayScene("belly", "おなか", "おなか", "", "upper body, from side",
+             "washing stomach with soapy hand, soap lather on stomach, looking down, smile", "おなかも、まあるく"),
+    DayScene("back", "背中", "背中・お尻", "", "cowboy shot, from behind",
+             "reaching behind back with soapy hands, washing back, back, soap lather on back", "背中は、手の届くところまで",
+             outfit="bare back", negative="looking at viewer, looking back"),
+    DayScene("butt", "お尻", "背中・お尻", "", "cowboy shot, from behind",
+             "standing, washing buttocks with soapy hands, back, looking over shoulder, slight blush", "お尻も、まあるく洗って",
+             outfit="ass, soap lather on buttocks", negative=BUTT_NEGATIVE),
+    DayScene("butt_fours", "四つんばいでお尻", "背中・お尻", "tiled floor", "1.4::full body::, feet, wide shot, from behind",
+             "on all fours, arched back, from behind, looking back over shoulder, ass focus, one hand reaching back, "
+             "stroking own buttock with soapy palm, slight blush", "四つんばいになって、お尻を手のひらでなでなで",
+             outfit="ass, soap lather on buttocks, barefoot", negative=_join(BUTT_NEGATIVE, "feet out of frame, cropped legs"),
+             whole=True),
+    DayScene("butt_crack", "割れ目", "背中・お尻", "tiled floor", "full body, from behind",
+             "squatting, from behind, ass focus, looking back over shoulder, one hand on knee, other hand reaching behind, "
+             "1.4::soapy fingertips running along middle of butt crack::, washing between buttocks, slight blush",
+             "しゃがんで、割れ目も指でそっとなでて",
+             outfit="ass, butt crack, 1.3::thick soap foam in butt crack::, soap lather on buttocks, barefoot",
+             negative=WASH_SQUAT_NEGATIVE, whole=True),
+    DayScene("butt_rinse", "お尻を流す", "背中・お尻", "tiled floor", "full body, from behind",
+             "squatting, facing away, from behind, back, ass focus, looking back over shoulder, holding shower head above shoulder, "
+             "shower water spraying on back, other hand stroking buttocks, rinsing foam",
+             "しゃがんだまま、シャワーで流しながらなでて", outfit="ass, butt crack, water running down back, barefoot",
+             negative=_join(WASH_SQUAT_NEGATIVE, NO_PEE), whole=True),
+    DayScene("thigh", "太もも", "脚", "sitting on bath stool", "full body, from side",
+             "sitting, legs together, washing thigh with soapy hands, soap lather on thigh, looking down", "太ももは、上から下へ",
+             negative="spread legs, legs apart", whole=True),
+    DayScene("knee", "ひざの裏", "脚", "sitting on bath stool", "full body, from side",
+             "sitting, one knee raised, washing back of knee with soapy hand, soap lather", "ひざの裏も、意外と汚れてるんだよね",
+             negative="spread legs, legs apart", whole=True),
+    DayScene("toes", "足の指", "脚", "sitting on bath stool", "close-up on foot, lower body",
+             "washing between toes with fingers, soap lather on foot, foot on knee", "足の指の間も、一本ずつ",
+             negative="spread legs, legs apart", whole=True),
+    DayScene("shower", "泡を流す", "仕上げ", "", "standing, cowboy shot",
+             "rinsing body with shower, foam flowing down body, eyes closed, smile, head tilted up", "シャワーで泡を流して……すっきり!",
+             outfit="foam sliding down body", negative=NO_PEE),
+    DayScene("mirror", "鏡でチェック", "仕上げ", "mirror, reflection", "cowboy shot",
+             "checking body in mirror, turning slightly, satisfied smile", "流し残しがないか、鏡でチェック"),
+    DayScene("tub", "湯船へ", "仕上げ", "bathtub, water surface", "upper body",
+             "partially submerged in bathtub, arms resting on edge, blissful smile, eyes closed, blush",
+             "はぁ〜……ぴかぴかの体で、湯船へ", negative="foam, bubbles"),
+)
+# どの場面もお風呂場・濡れた肌・髪をまとめる
+WASH_SCENES: tuple[DayScene, ...] = tuple(
+    replace(d, stage=_join(WASH_STAGE, d.stage), outfit=_join(WET, d.outfit), negative=_join(WASH_NEGATIVE, d.negative),
+            hair_up=True)
+    for d in _WASH_SCENES
+)
+
+
 @dataclass(frozen=True)
 class SceneBook:
     parts: tuple[str, ...]
@@ -1164,6 +1306,7 @@ SCENE_BOOKS: dict[str, SceneBook] = {
     "nude_atelier": SceneBook(ATELIER_PARTS, ATELIER_SCENES, "{names}がアトリエでヌードモデルを務める。古典的なポーズと休憩。性的な行為はなし。"),
     "nude_seasons": SceneBook(SEASON_PARTS, SEASON_SCENES, "{names}の、1月から12月まで季節ごとのはだかの一枚。性的な行為はなし。"),
     "nude_strip": SceneBook(STRIP_PARTS, STRIP_SCENES, "{names}が衣装ごとに、少しずつ脱いでいく。性的な行為はなし。"),
+    "nude_wash": SceneBook(WASH_PARTS, WASH_SCENES, "{names}が、お風呂で体を隅々まで手で洗う。性的な行為はなし。性器・肛門は描かない。"),
 }
 
 
@@ -1186,7 +1329,8 @@ def _build_scene_book(characters: list[dict[str, Any]], options: CollectionOptio
     picked = set(options.poses) & keys
     if options.poses and not picked:
         raise ValueError("場面が1つもありません。")
-    plan = [d for d in book.scenes if (not options.themes or d.part in options.themes) and (not picked or d.key in picked)]
+    plan = [d for d in book.scenes if (not options.themes or d.part in options.themes) and (not picked or d.key in picked)
+            and (not d.shapes or options.nipple_shape in d.shapes)]
     if not plan:
         raise ValueError("場面が1つもありません。")
     base_negative = _join(content_guard.text("collection.nude_day_negative"), HAND_NEGATIVE, SKIN_NEGATIVE, ABS_NEGATIVE)
@@ -1195,9 +1339,10 @@ def _build_scene_book(characters: list[dict[str, Any]], options: CollectionOptio
     for day in plan:
         for character in characters:
             cid = int(character["id"])
-            outfit = _join(body, day.dressed or "nude, completely nude, adult proportions", shape.tags if day.chest else "",
+            nipples, nipple_negative = (day.nipples, day.nipple_negative) if day.nipples else (shape.tags, shape.negative)
+            outfit = _join(body, day.dressed or "nude, completely nude, adult proportions", nipples if day.chest else "",
                            SKIN_FINISH, SOFT_BELLY, "featureless crotch" if day.whole else "", day.outfit)
-            negative = _join(base_negative, shape.negative if day.chest else COVERED_CHEST_NEGATIVE, day.negative,
+            negative = _join(base_negative, nipple_negative if day.chest else COVERED_CHEST_NEGATIVE, day.negative,
                              "" if day.prop or day.dressed else "clothes, towel, underwear")
             scene = _scene(
                 _join(day.stage, "solo", day.framing, options.style_tags), [cid], {cid: day.action}, {cid: outfit},
@@ -1207,6 +1352,8 @@ def _build_scene_book(characters: list[dict[str, Any]], options: CollectionOptio
             hair_down = hair_down_appearance(character.get("appearance_tags")) if day.hair_down else None
             if hair_down:
                 scene["character_appearances"] = {cid: hair_down}
+            if day.hair_up:
+                scene["character_appearances"] = {cid: hair_up_appearance(character.get("appearance_tags"))}
             scenes.append(scene)
     title = options.title or f"{names}の{KINDS[options.kind]}"
     return {"title": title, "premise": book.premise.format(names=names), "scenes": scenes}
