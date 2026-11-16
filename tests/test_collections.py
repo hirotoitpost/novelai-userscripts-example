@@ -404,3 +404,11 @@ def test_nude_day_erect_nipples_stand_out() -> None:
     assert "1.6::erect nipples::" in erect["character_outfits"][1]
     # 陥没にならないよう打ち消す
     assert "inverted nipples" in erect["negative_prompt"]
+
+
+def test_nude_day_ring_piercing() -> None:
+    one = [{"id": 1, "name": "栄子"}]
+    ring = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="ring_piercing", poses=["coffee"]))["scenes"][0]
+    assert "nipple rings" in ring["character_outfits"][1] and "nipple piercing" in ring["character_outfits"][1]
+    # 細い針金のようにならないよう太く
+    assert "thick nipple rings" in ring["character_outfits"][1] and "thin rings" in ring["negative_prompt"]
