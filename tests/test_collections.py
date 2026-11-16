@@ -410,3 +410,5 @@ def test_nude_day_ring_piercing() -> None:
     one = [{"id": 1, "name": "栄子"}]
     ring = build_collection(one, CollectionOptions(kind="nude_day", nipple_shape="ring_piercing", poses=["coffee"]))["scenes"][0]
     assert "nipple rings" in ring["character_outfits"][1] and "nipple piercing" in ring["character_outfits"][1]
+    # 細い針金のようにならないよう太く
+    assert "thick nipple rings" in ring["character_outfits"][1] and "thin rings" in ring["negative_prompt"]
