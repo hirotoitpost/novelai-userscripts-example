@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .db import get_character, get_connection, user_files
+from .db import get_character, get_connection, list_image_presets, user_files
 from .style_sets import StyleReference, load as load_style_set
 
 
@@ -74,3 +74,25 @@ def style_reference(style_set_id: int | None, character_id: int | None) -> Style
 def style_record(style: StyleReference, history_dir: Path) -> dict[str, Any]:
     """履歴に残す形(絵柄の参照画像も outputs/history/ に写す。ギャラリーの「似た画像を生成」で引き継げる)。"""
     return Reference(style.image, "style", style.fidelity, style.strength).record(history_dir)
+
+
+_SIZE_NAMES = {(832, 1216): "portrait", (1216, 832): "landscape", (1024, 1024): "square",
+               (1024, 1536): "large_portrait", (1536, 1024): "large_landscape"}
+
+
+def image_preset_settings(preset_id: int | None) -> dict[str, Any]:
+    """画像生成のプリセットの値(size は名前か (幅, 高さ))。preset_id が無ければ空。"""
+    if preset_id is None:
+        return {}
+    conn = get_connection()
+    try:
+        presets = {p["id"]: p for p in list_image_presets(conn)}
+    finally:
+        conn.close()
+    if preset_id not in presets:
+        raise ValueError(f"プリセット {preset_id} がありません(list_image_presets_tool で一覧を見られます)")
+    settings = dict(presets[preset_id]["settings"])
+    width, height = settings.get("width"), settings.get("height")
+    if width and height:
+        settings["size"] = _SIZE_NAMES.get((int(width), int(height)), (int(width), int(height)))
+    return settings
