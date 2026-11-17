@@ -1356,6 +1356,8 @@ class CharacterSheetRequest(BaseModel):
     """キャラシートの更新。送った項目だけ書き換える(未送信の項目は変えない)。"""
 
     appearance_tags: Optional[str] = None
+    # メモ(人物像・設定・参照画像の出どころなど。生成には使わない)
+    notes: Optional[str] = Field(None, max_length=4000)
     # 標準の体型(キャラ別データセットの状態は、ここを置き換える)
     body_tags: Optional[str] = None
     trigger_word: Optional[str] = None

@@ -7,12 +7,13 @@ import type { Character } from './StoryCharacters'
 
 /** キャラシートで編集する項目。容姿は変えない部分、服装は場面で差し替える部分。 */
 export type SheetField =
-  | 'appearance_tags' | 'body_tags' | 'outfit_tags' | 'style_tags' | 'negative_tags' | 'trigger_word' | 'seed' | 'age'
+  | 'notes' | 'appearance_tags' | 'body_tags' | 'outfit_tags' | 'style_tags' | 'negative_tags' | 'trigger_word' | 'seed' | 'age'
 
 /** 数字で送る項目(空欄は null) */
 const NUMBER_FIELDS: Partial<Record<SheetField, string>> = { seed: '基準シード', age: '年齢' }
 
 export const SHEET_FIELDS: { key: SheetField; label: string; placeholder: string; rows: number }[] = [
+  { key: 'notes', label: 'メモ(人物像・設定・参照画像の出どころなど。絵の生成には使いません)', placeholder: '幼なじみの22歳。おっとりした性格。参照=生成履歴1017', rows: 3 },
   { key: 'appearance_tags', label: '容姿(顔・髪・目。固定)', placeholder: '1girl, brown hair, long hair, two side up, pink scrunchie, yellow eyes', rows: 2 },
   { key: 'body_tags', label: '標準の体型(データセットの状態はここを置き換える)', placeholder: 'slim, medium breasts', rows: 1 },
   { key: 'outfit_tags', label: '普段の服装', placeholder: 'school uniform, cardigan, pleated skirt', rows: 1 },

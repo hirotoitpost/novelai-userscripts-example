@@ -121,3 +121,14 @@ def test_stage_is_made_from_the_base_by_duplicate(client: TestClient) -> None:
                       json={"name": "ひなた(1歳)", "sheet": {"growth_label": "1歳", "growth_order": 12}})
     assert res.status_code == 200, res.text
     assert (res.json()["growth_of"], res.json()["growth_label"]) == (base["id"], "1歳")
+
+
+def test_edit_notes_on_the_sheet(client: TestClient) -> None:
+    chara = _new(client, name="ちひろ", appearance_tags="1girl, milk tea hair", age=24)
+    res = client.put(f"/api/story/characters/{chara['id']}/sheet", json={"notes": "おっとりした癒し系のお姉さん。参照=306"})
+    assert res.status_code == 200, res.text
+    assert res.json()["notes"] == "おっとりした癒し系のお姉さん。参照=306"
+    # メモだけ変えても、ほかの項目はそのまま
+    assert res.json()["appearance_tags"] == "1girl, milk tea hair" and res.json()["age"] == 24
+    cleared = client.put(f"/api/story/characters/{chara['id']}/sheet", json={"notes": ""}).json()
+    assert cleared["notes"] == ""
