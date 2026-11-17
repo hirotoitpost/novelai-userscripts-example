@@ -1455,7 +1455,7 @@ def update_character_reference(
 
 
 CHARACTER_SHEET_FIELDS = (
-    "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
+    "notes", "appearance_tags", "body_tags", "trigger_word", "outfit_tags", "style_tags", "negative_tags", "seed", "is_adult",
     "is_minor", "growth_of", "growth_label", "growth_order", "age", "style_set_id",
 )
 
