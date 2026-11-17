@@ -71,3 +71,23 @@ def test_unknown_character_and_bad_values(files: Path) -> None:
         character_reference(character_id, "style", 1.0, 0.7)
     with pytest.raises(ValueError, match="0〜1"):
         character_reference(character_id, "character", 1.0, 1.5)
+
+
+def test_image_preset_settings(files: Path) -> None:
+    from python.mcp_reference import image_preset_settings
+
+    conn = db.get_connection()
+    try:
+        standard = db.save_image_preset(conn, "V4.5 Full 標準", {
+            "model": "nai-diffusion-4-5-full", "width": 832, "height": 1216, "steps": 27, "scale": 6.3,
+            "sampler": "k_euler_ancestral", "noise_schedule": "karras", "cfg_rescale": 0.54, "negative_prompt": None})
+        wide = db.save_image_preset(conn, "細長い", {"width": 640, "height": 1600, "steps": 23})
+    finally:
+        conn.close()
+    assert image_preset_settings(None) == {}
+    settings = image_preset_settings(standard["id"])
+    assert settings["size"] == "portrait" and settings["cfg_rescale"] == 0.54 and settings["sampler"] == "k_euler_ancestral"
+    # 名前のないサイズは (幅, 高さ) のまま
+    assert image_preset_settings(wide["id"])["size"] == (640, 1600)
+    with pytest.raises(ValueError, match="プリセット"):
+        image_preset_settings(99999)
