@@ -36,6 +36,7 @@ from .routes.library import router as library_router
 from .routes.lora_dataset import router as lora_dataset_router
 from .routes.wardrobe import router as wardrobe_router
 from .routes.style_sets import router as style_sets_router
+from .routes.title_styles import router as title_styles_router
 from .routes.adult_patterns import router as adult_patterns_router
 from .routes.character_images import router as character_images_router
 from .routes.metadata import router as metadata_router
@@ -151,6 +152,7 @@ app.include_router(library_router)
 app.include_router(lora_dataset_router)
 app.include_router(wardrobe_router)
 app.include_router(style_sets_router)
+app.include_router(title_styles_router)
 app.include_router(adult_patterns_router)
 app.include_router(character_images_router)
 app.include_router(metadata_router)

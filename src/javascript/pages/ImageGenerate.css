@@ -852,3 +852,10 @@
   color: inherit;
   cursor: pointer;
 }
+
+/* 作品風テンプレート(ブルアカ風・NIKKE風など)をプロンプトに足す */
+.ig-title-style {
+  margin-top: 0.4rem;
+  max-width: 100%;
+  font-size: 0.85rem;
+}
