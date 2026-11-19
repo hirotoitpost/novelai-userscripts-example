@@ -27,7 +27,7 @@ from mcp.types import ImageContent, TextContent
 from novelai import AsyncNovelAI
 from novelai.types import CharacterReference, GenerateImageParams
 
-from . import mcp_identity
+from . import mcp_identity, title_styles
 from .db import user_files
 from .mcp_manga import register_manga_tools
 from .mcp_reference import character_reference, image_preset_settings, style_record, style_reference
@@ -204,6 +204,8 @@ async def generate_image_tool(
     reference_type: str = "character",
     style_set_id: int | None = None,
     use_style_set: bool = True,
+    title_style: str | None = None,
+    title_outfit: bool = True,
 ) -> list[TextContent | ImageContent]:
     """
     実際にNovelAIへ画像を生成させ、生成履歴に記録して画像を返す。
@@ -217,6 +219,8 @@ async def generate_image_tool(
     style_set_id: 絵柄セット(manga_list_style_sets)の ID。そのセットの絵柄だけの参照(style)と絵柄タグ・ネガティブを足す。
     use_style_set: reference_character_id のキャラが絵柄セットを選んでいれば、style_set_id が無くてもそれを使う
     (False で使わない)。絵柄の参照は1枚ぶん Anlas が増える。
+    title_style: 作品風テンプレートのキー(manga_title_styles)。作品タグ・立ち絵の雰囲気・衣装の例をプロンプトに、
+    混ざりやすい物をネガティブに足す(Anlas は増えない)。title_outfit=False なら衣装の例は足さない。
     preset_id: 画像生成のプリセット(画像生成ページで保存したもの。list_image_presets_tool)の値を使う
     (モデル・サイズ・ステップ・Scale・サンプラー・ノイズスケジュール・CFG Rescale・ネガティブ・シード)。
     model・size・steps・scale・sampler・noise_schedule・cfg_rescale・negative_prompt・seed を渡すと、それで上書き。
@@ -235,6 +239,7 @@ async def generate_image_tool(
         "cfg_rescale": cfg_rescale if cfg_rescale is not None else preset.get("cfg_rescale"),
         "variety_boost": preset.get("variety_boost"),
     }.items() if v is not None}
+    prompt, negative_prompt = title_styles.apply(prompt, negative_prompt, title_style, title_outfit)
     reference = character_reference(reference_character_id, reference_type, reference_fidelity, reference_strength)
     style = style_reference(style_set_id, reference_character_id if use_style_set else None)
     if style is not None:

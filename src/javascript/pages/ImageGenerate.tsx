@@ -15,6 +15,7 @@ import {
 } from '../api'
 import { fileFetchUrl } from '../library'
 import { useStyleSets } from '../components/StyleSetPicker'
+import TitleStylePicker, { appendTags } from '../components/TitleStylePicker'
 import { MODELS, SIZES, SAMPLERS, NOISE_SCHEDULES, UC_PRESETS } from '../imageOptions'
 import { insertTag } from '../tagInsert'
 import ImageCropDialog from '../components/ImageCropDialog'
@@ -807,6 +808,10 @@ export default function ImageGenerate() {
               placeholder="1girl, masterpiece, best quality, ..."
               rows={5}
             />
+            <TitleStylePicker onApply={style => {
+              setPrompt(appendTags(prompt, style.prompt_tags))
+              if (style.negative) setNegPrompt(appendTags(negPrompt, style.negative))
+            }} />
           </section>
 
           {/* Prompt chunks */}

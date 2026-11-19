@@ -29,7 +29,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ImageContent, TextContent
 from PIL import Image
 
-from . import mcp_identity
+from . import mcp_identity, title_styles
 from .db import user_files
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -552,6 +552,7 @@ def register_manga_tools(mcp: MCPServer) -> None:
         themes: list[str] | None = None,
         lines: bool = True,
         nipple_shape: str = "normal",
+        title_style: str | None = None,
     ) -> dict[str, Any]:
         """
         下着・水着のコレクション/からかいコレクション/ヌード写真集/はだかの一日の漫画(物語)を、選んだ成人キャラで作る。
@@ -570,7 +571,11 @@ def register_manga_tools(mcp: MCPServer) -> None:
                nude_day などの場面集なら場面のキー(book_scenes)。省略で全部。キャラ全員がそれぞれ演じる
         themes: テーマの名前(nude / nude2 なら撮影場所の名前、nude_day などの場面集なら区切り(時間帯・季節・衣装。catalog の themes)。省略で全部)
         style_tags: 全コマの作画タグに足す画風。種類・テーマ・ポーズの一覧は manga_collection_catalog。
+        title_style: 作品風テンプレートのキー(manga_title_styles)。作品タグと雰囲気を style_tags に足す
+                     (衣装は場面が決めるので足さない)。
         """
+        if title_style:
+            style_tags = title_styles.join_tags(style_tags, title_styles.require(title_style).style_tags())
         req = {
             "kind": kind, "character_ids": character_ids, "title": title, "body": body, "style_tags": style_tags,
             "explicit": explicit, "poses": poses or [], "themes": themes or [], "lines": lines,
@@ -583,6 +588,18 @@ def register_manga_tools(mcp: MCPServer) -> None:
             return {"stories": [{"story_id": s["id"], "title": s.get("title"), "scenes": s.get("n_scenes")} for s in stories]}
         story = await _call("POST", "/api/collections", req, timeout=600)
         return {"story_id": story["id"], "title": story.get("title"), "scenes": story.get("n_scenes")}
+
+    @mcp.tool()
+    async def manga_title_styles() -> list[dict[str, Any]]:
+        """
+        作品風テンプレートの一覧(ブルーアーカイブ・NIKKE・原神・ウマ娘・葬送のフリーレンなど、よく画像生成で使われる
+        ゲーム/アニメの立ち絵・画面の雰囲気)。キー・作品タグ・雰囲気(look)・衣装の例(outfit)・ネガティブ・傾向(notes)。
+        自作キャラに作品の絵柄・塗り・衣装の方向を借りるためのもの(既存キャラを描くものではない)。
+        使い方: generate_image_tool の title_style、manga_create_collection の title_style、
+        またはキャラシートの style_tags に style_tags を入れる。作品タグは作品のキャラの特徴を混ぜることがあるので、
+        キャラの髪色・髪型・目のタグを強めにする。
+        """
+        return title_styles.catalog()
 
     @mcp.tool()
     async def manga_collection_catalog() -> dict[str, Any]:
