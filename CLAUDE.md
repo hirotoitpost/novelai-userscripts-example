@@ -15,14 +15,16 @@ NovelAI 向けのユーザースクリプト例を収録したリポジトリで
 | novelai-image-metadata | `../novelai-image-metadata` | 参照用ライブラリ |
 | novelai-script-examples | `../novelai-script-examples` | 参照用サンプル |
 | novelai-tokenizer | `../novelai-tokenizer` | 参照用トークナイザー |
+| **voicevox-assistant-mcp** | `../voicevox-assistant-mcp` | **Claude Code の音声アシスタント（作業対象）** |
 
 ## 重要: Git 操作ルール
 
-**git commit / git push などの書き込み操作は、必ず `novelai-userscripts-example` リポジトリ内でのみ実行してください。**
+**git commit / git push などの書き込み操作は、必ず作業対象のリポジトリ (`novelai-userscripts-example`, `voicevox-assistant-mcp`) 内でのみ実行してください。**
 
-- 他の 4 つのリポジトリ (`novelai-sdk`, `novelai-image-metadata`, `novelai-script-examples`, `novelai-tokenizer`) は**読み取り専用**として扱う。
+- 参照用の 4 つのリポジトリ (`novelai-sdk`, `novelai-image-metadata`, `novelai-script-examples`, `novelai-tokenizer`) は**読み取り専用**として扱う。
 - コードの参照・検索は他リポジトリに対して行ってよい。
-- ファイルの編集・コミット・プッシュは `novelai-userscripts-example` のみに限定する。
+- ファイルの編集・コミット・プッシュは作業対象の 2 つのリポジトリのみに限定する。
+- `voicevox-assistant-mcp` はユーザー全体に `uv tool install` で入れて使っている。変更をマージしたら `uv tool upgrade voicevox-assistant-mcp` と、ウィンドウの再読み込みが必要。
 - ユーザーから明示的に指示があった場合でも、他リポジトリへの git 書き込み操作は実行前に必ず確認を取る。
 
 ## ディレクトリ構成
