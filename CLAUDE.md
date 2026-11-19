@@ -24,7 +24,11 @@ NovelAI 向けのユーザースクリプト例を収録したリポジトリで
 - 参照用の 4 つのリポジトリ (`novelai-sdk`, `novelai-image-metadata`, `novelai-script-examples`, `novelai-tokenizer`) は**読み取り専用**として扱う。
 - コードの参照・検索は他リポジトリに対して行ってよい。
 - ファイルの編集・コミット・プッシュは作業対象の 2 つのリポジトリのみに限定する。
-- `voicevox-assistant-mcp` はユーザー全体に `uv tool install` で入れて使っている。変更をマージしたら `uv tool upgrade voicevox-assistant-mcp` と、ウィンドウの再読み込みが必要。
+- `voicevox-assistant-mcp` はユーザー全体に `uv tool install` で入れて使っている。変更をマージしたら、ユーザーに次の手順で入れ直してもらう:
+  1. VS Code のウィンドウをすべて閉じる(MCP サーバーが動いている間はファイルを置き換えられない)
+  2. Windows の PowerShell で `uv tool install --force git+https://github.com/hirotoitpost/voicevox-assistant-mcp`
+  3. VS Code を開き直す
+- Claude Code の中から `uv tool install` / `uv tool upgrade` を実行しない(動作中のサーバーのせいで入れ替えが途中で止まり、読み上げとフックが壊れる)。
 - ユーザーから明示的に指示があった場合でも、他リポジトリへの git 書き込み操作は実行前に必ず確認を取る。
 
 ## ディレクトリ構成
