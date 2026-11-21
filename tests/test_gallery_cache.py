@@ -133,3 +133,20 @@ def test_warm_gallery_cache_builds_the_list(gallery) -> None:
     assert len(builds) == 1
     client.get("/api/library/images")
     assert len(builds) == 1
+
+
+def test_bulk_bookmark_sets_and_clears_many(gallery) -> None:
+    client, root, builds = gallery
+    _record(root, "a.png")
+    _record(root, "b.png")
+    keys = [i["key"] for i in client.get("/api/library/images").json()["items"]]
+    res = client.put("/api/library/bookmarks/bulk", json={"kind": "image", "keys": keys + keys[:1], "bookmarked": True})
+    assert res.status_code == 204
+    assert all(i["bookmarked"] for i in client.get("/api/library/images").json()["items"])
+    assert client.get("/api/library/images?bookmarked=true").json()["total"] == 2
+    res = client.put("/api/library/bookmarks/bulk", json={"kind": "image", "keys": keys[:1], "bookmarked": False})
+    assert res.status_code == 204
+    marks = {i["key"]: i["bookmarked"] for i in client.get("/api/library/images").json()["items"]}
+    assert marks == {keys[0]: False, keys[1]: True}
+    # 空の選択は受け付けない
+    assert client.put("/api/library/bookmarks/bulk", json={"kind": "image", "keys": [], "bookmarked": True}).status_code == 422
