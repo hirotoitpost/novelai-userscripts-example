@@ -299,6 +299,8 @@ PREGNANCY_PARTS: tuple[BodyPart, ...] = tuple(
 # body_base.adult_only_groups)に入れ、お腹とぶつかる体型のタグを外す
 _PUFFY = "1.6::puffy nipples::, 1.3::puffy areolae::"
 _INVERTED = "1.6::inverted nipples::"
+# 半陥没: 乳首の先が乳輪のくぼみから少しのぞき、乳輪はぷっくり(夏川つぐみ 2026-11-22。はだかの一日の puffy_inverted と同じタグ)
+_SEMI_INVERTED = "1.5::inverted nipples::, 1.5::puffy areolae::, 1.2::nipple tip peeking out::, soft nipples"
 _PREGNANT_NIPPLES = "pregnant, large areolae, dark areolae, dark nipples, large nipples"
 _NIPPLE_TYPES = (
     # (キーの前半, 名前, まとまり, タグ, ネガティブ, 確かめる点)
@@ -306,6 +308,8 @@ _NIPPLE_TYPES = (
      "乳輪全体がドーム状に盛り上がり、乳首との境目がなだらか。横から見ると乳輪の厚みが分かる"),
     ("inverted", "陥没", "nipple", _INVERTED, "puffy nipples, erect nipples",
      "乳首が乳輪の面より奥に入り、中央に横長のくぼみ。乳輪は平らか、わずかに盛り上がる"),
+    ("semi_inverted", "半陥没", "nipple", _SEMI_INVERTED, "1.3::erect nipples::, long nipples, large nipples, flat areolae",
+     "ぷっくりした乳輪の中央のくぼみから、乳首の先が少しだけのぞく(陥没と勃起の間)"),
     ("preg", "ふつう", "pregnancy_nipple", _PREGNANT_NIPPLES, "small areolae, pink nipples",
      "妊娠で乳輪が広がって色が濃くなり、乳首も大きくなる。乳輪のまわりに小さな粒(モントゴメリー腺)"),
     ("preg_puffy", "ぷっくり", "pregnancy_nipple", f"{_PUFFY}, {_PREGNANT_NIPPLES}",
@@ -314,6 +318,9 @@ _NIPPLE_TYPES = (
     ("preg_inverted", "陥没", "pregnancy_nipple", f"{_INVERTED}, {_PREGNANT_NIPPLES}",
      "puffy nipples, erect nipples, small areolae, pink nipples",
      "広がって濃くなった乳輪の中央に、乳首が奥へ入ったくぼみ"),
+    ("preg_semi_inverted", "半陥没", "pregnancy_nipple", f"{_SEMI_INVERTED}, {_PREGNANT_NIPPLES}",
+     "1.3::erect nipples::, long nipples, small areolae, pink nipples",
+     "広がって濃くなった乳輪のくぼみから、乳首の先が少しだけのぞく"),
 )
 _NIPPLE_VIEWS = ("nipple_front", "nipple_side", "nipple_three_quarter", "nipple_below")
 
