@@ -16,6 +16,7 @@ import {
   RATINGS,
   setAdult,
   setBookmark,
+  setBookmarks,
   thumbUrl,
 } from '../library'
 import WorkRelations, { Author } from '../components/WorkRelations'
@@ -159,6 +160,7 @@ export default function Bookshelf() {
   // 出版する本を選ぶ(選んだ本の漫画のページから生成情報を取り除いて、出版物として別に保存する)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [bookmarking, setBookmarking] = useState(false)
   // 出版のダイアログに渡すもの(fromSelection: 選択バーから開いた = 出版できたら選択を終える)
   const [publishTarget, setPublishTarget] = useState<(PublishTarget & { fromSelection: boolean }) | null>(null)
   const [published, setPublished] = useState<{ publication: Publication; downloaded: boolean } | null>(null)
@@ -258,6 +260,28 @@ export default function Bookshelf() {
       else next.add(id)
       return next
     })
+  }
+
+  /** 選んだ本をまとめてブックマークする・外す。 */
+  async function bookmarkSelected(bookmarked: boolean) {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    setBookmarking(true)
+    try {
+      await setBookmarks('book', ids.map(String), bookmarked)
+      const chosen = new Set(ids)
+      setBooks(prev =>
+        prev
+          .map(b => (chosen.has(b.id) ? { ...b, bookmarked } : b))
+          // ブックマークだけ表示中なら、外した本は棚から下ろす
+          .filter(b => !(onlyBookmarked && !bookmarked && chosen.has(b.id))),
+      )
+      if (onlyBookmarked && !bookmarked) setSelected(new Set())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBookmarking(false)
+    }
   }
 
   function exitSelecting() {
@@ -452,6 +476,12 @@ export default function Bookshelf() {
           <span>{selected.size} 冊選択</span>
           <button type="button" onClick={() => setSelected(new Set(books.map(b => b.id)))}>表示中をすべて選択</button>
           <button type="button" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>解除</button>
+          <button type="button" onClick={() => void bookmarkSelected(true)} disabled={selected.size === 0 || bookmarking}>
+            ★ ブックマーク
+          </button>
+          <button type="button" onClick={() => void bookmarkSelected(false)} disabled={selected.size === 0 || bookmarking}>
+            ☆ ブックマークを外す
+          </button>
           <button type="button" className="shelf-selectbar-primary" onClick={publishSelected}
             disabled={selected.size === 0}
             title="選んだ本の漫画のページから NovelAI の生成情報(メタデータ)を取り除き、出版物として別に保存して ZIP にまとめます">

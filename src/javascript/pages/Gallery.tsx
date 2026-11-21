@@ -16,6 +16,7 @@ import {
   readErrorDetail,
   setAdult,
   setBookmark,
+  setBookmarks,
   thumbUrl,
 } from '../library'
 import FullscreenViewer from '../components/FullscreenViewer'
@@ -118,6 +119,7 @@ export default function Gallery() {
   const [fullscreen, setFullscreen] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bookmarking, setBookmarking] = useState(false)
   const [downloading, setDownloading] = useState(false)
   // 出版(選んだ画像から生成情報を取り除いて、出版物として別に保存する)
   // 出版のダイアログに渡すもの(fromSelection: 選択バーから開いた = 出版できたら選択を終える)
@@ -284,6 +286,30 @@ export default function Gallery() {
     } catch (e) {
       setItems(prev => prev.map(i => (i.key === item.key ? { ...i, bookmarked: !next } : i)))
       setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 選んだ画像をまとめてブックマークする・外す。 */
+  async function bookmarkSelected(bookmarked: boolean) {
+    const keys = [...selected]
+    if (keys.length === 0) return
+    setBookmarking(true)
+    try {
+      await setBookmarks('image', keys, bookmarked)
+      const chosen = new Set(keys)
+      if (onlyBookmarked && !bookmarked) {
+        // ブックマークだけ表示中なら、外した画像は一覧から下ろす
+        const removed = items.filter(i => chosen.has(i.key)).length
+        setItems(prev => prev.filter(i => !chosen.has(i.key)))
+        setTotal(t => t - removed)
+        setSelected(new Set())
+      } else {
+        setItems(prev => prev.map(i => (chosen.has(i.key) ? { ...i, bookmarked } : i)))
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBookmarking(false)
     }
   }
 
@@ -641,6 +667,12 @@ export default function Gallery() {
           </button>
           <button type="button" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
             解除
+          </button>
+          <button type="button" onClick={() => void bookmarkSelected(true)} disabled={selected.size === 0 || bookmarking}>
+            ★ ブックマーク
+          </button>
+          <button type="button" onClick={() => void bookmarkSelected(false)} disabled={selected.size === 0 || bookmarking}>
+            ☆ ブックマークを外す
           </button>
           <button
             type="button"

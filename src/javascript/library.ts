@@ -45,6 +45,16 @@ export async function setBookmark(kind: 'image' | 'book', key: string, bookmarke
   if (!res.ok) throw new Error(await readErrorDetail(res))
 }
 
+/** 選んだ画像・本をまとめてブックマークする・外す。 */
+export async function setBookmarks(kind: 'image' | 'book', keys: string[], bookmarked: boolean): Promise<void> {
+  const res = await fetch(`${API_ORIGIN}/api/library/bookmarks/bulk`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, keys, bookmarked }),
+  })
+  if (!res.ok) throw new Error(await readErrorDetail(res))
+}
+
 /** Content-Disposition の filename*(日本語名)を優先して取り出す。 */
 function filenameFrom(res: Response, fallback: string): string {
   const header = res.headers.get('Content-Disposition') ?? ''

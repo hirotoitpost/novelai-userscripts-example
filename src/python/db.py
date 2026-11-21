@@ -1968,6 +1968,20 @@ def set_bookmark(conn: sqlite3.Connection, kind: str, item_key: str, bookmarked:
     conn.commit()
 
 
+def set_bookmarks(conn: sqlite3.Connection, kind: str, item_keys: list[str], bookmarked: bool) -> None:
+    """まとめてブックマークする・外す(ギャラリー・本棚の選択から)。1つのトランザクションで書く。"""
+    keys = list(dict.fromkeys(item_keys))
+    if bookmarked:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.executemany(
+            "INSERT OR IGNORE INTO bookmarks (kind, item_key, created_at) VALUES (?, ?, ?)",
+            [(kind, key, now) for key in keys],
+        )
+    else:
+        conn.executemany("DELETE FROM bookmarks WHERE kind = ? AND item_key = ?", [(kind, key) for key in keys])
+    conn.commit()
+
+
 def list_adult_marks(conn: sqlite3.Connection, kind: str) -> dict[str, bool]:
     rows = conn.execute("SELECT item_key, adult FROM adult_marks WHERE kind = ?", (kind,)).fetchall()
     return {row["item_key"]: bool(row["adult"]) for row in rows}

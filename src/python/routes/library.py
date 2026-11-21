@@ -18,7 +18,7 @@ import io
 import re
 import zipfile
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
@@ -53,6 +53,7 @@ from ..db import (
     list_story_texts,
     set_adult_mark,
     set_bookmark,
+    set_bookmarks,
 )
 from ..relatedness import Item, idf_weights, normalize_tags, rank
 from .lora_dataset import _safe_name
@@ -216,6 +217,22 @@ def put_bookmark(req: BookmarkRequest) -> None:
     conn = get_connection()
     try:
         set_bookmark(conn, req.kind, req.key, req.bookmarked)
+    finally:
+        conn.close()
+
+
+class BulkBookmarkRequest(BaseModel):
+    kind: Literal["image", "book"]
+    keys: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(min_length=1, max_length=5000)
+    bookmarked: bool
+
+
+@router.put("/bookmarks/bulk", status_code=204)
+def put_bookmarks_bulk(req: BulkBookmarkRequest) -> None:
+    """選んだ画像・本をまとめてブックマークする・外す。"""
+    conn = get_connection()
+    try:
+        set_bookmarks(conn, req.kind, req.keys, req.bookmarked)
     finally:
         conn.close()
 
