@@ -564,6 +564,8 @@ def register_manga_tools(mcp: MCPServer) -> None:
               乳首を描くほかの場面集: nude_onsen(温泉旅行)/ nude_apron(裸エプロン)/ nude_atelier(ヌードモデルのアトリエ)/
               nude_seasons(季節のはだか 1〜12月)/ nude_strip(着替え。衣装ごとに少しずつ脱ぐ)/
               nude_wash(体の洗い方。陥没系の乳首なら剥いて・つまんで洗う場面が入る。乳首のアップは reference_strength 0.45 前後)
+              nude_gravure(グラビア撮影会。ローレッグの水着・半ケツ・下からの見上げ・乳輪のはみ出し・部屋着の着替え・
+              乳首をつまむ・はだかのスクワット。股を開く裸は手かタオルで隠す)
         nipple_shape: はだかの一日など(nude_ で始まる場面集)の乳首の形。normal / puffy(ぷっくり)/ inverted(陥没)/ puffy_inverted(半陥没・ぷっくり)/ erect(勃起)/ ring_piercing(大きなリングピアス)/ ring_cow_tag(リングピアス・カウタグ)/ large_areolae(大きめの乳輪)/ small。
             all(全部の形)か "puffy,inverted" のようにカンマで並べると、形ごとに別の物語を作る(stories で返す)
         body: sheet(キャラシートのまま)/ slender / curvy(省略時はコレクションが slender、からかいが curvy、ヌードが sheet)

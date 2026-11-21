@@ -430,7 +430,8 @@ def test_scene_books_build_with_nipples() -> None:
 
     one = [{"id": 1, "name": "ちひろ"}]
     counts = {k: len(build_collection(one, CollectionOptions(kind=k))["scenes"]) for k in SCENE_BOOKS}
-    assert counts == {"nude_day": 24, "nude_onsen": 18, "nude_apron": 16, "nude_atelier": 16, "nude_seasons": 12, "nude_strip": 30, "nude_wash": 25}
+    assert counts == {"nude_day": 24, "nude_onsen": 18, "nude_apron": 16, "nude_atelier": 16, "nude_seasons": 12, "nude_strip": 30, "nude_wash": 25,
+                      "nude_gravure": 34}
     apron = build_collection(one, CollectionOptions(kind="nude_apron", poses=["egg"]))["scenes"][0]
     # 裸エプロン: エプロンは打ち消さず、乳首は描く
     assert "naked apron" in apron["character_outfits"][1] and "pink nipples" in apron["character_outfits"][1]
@@ -492,3 +493,51 @@ def test_wash_peel_only_for_inverted_nipples() -> None:
     assert "half-erect nipple" in peel["character_outfits"][1] and "nipple tip peeking out" in peel["character_outfits"][1]
     pinch = build_collection(one, CollectionOptions(kind="nude_wash", nipple_shape="inverted", poses=["pinch"]))["scenes"][0]
     assert "long nipples" in pinch["character_outfits"][1] and "pinching own nipple" in pinch["character_actions"][1]
+
+
+# ---- グラビア撮影会(nude_gravure) ----
+
+
+def test_gravure_lowleg_cover_and_no_uniform() -> None:
+    one = [{"id": 1, "name": "つぐみ"}]
+    scenes = build_collection(one, CollectionOptions(kind="nude_gravure", nipple_shape="puffy_inverted"))["scenes"]
+    assert len(scenes) == 34
+    # どのコマも性器・肛門を打ち消す
+    assert all("2::pussy::" in s["negative_prompt"] and "1.8::anus::" in s["negative_prompt"] for s in scenes)
+    pick = lambda key: build_collection(one, CollectionOptions(kind="nude_gravure", nipple_shape="puffy_inverted", poses=[key]))["scenes"][0]  # noqa: E731
+    # 浅履きは lowleg bikini。水着のコマは乳首を打ち消す
+    back = pick("lowleg_back")
+    assert "lowleg bikini" in back["character_outfits"][1] and "1.3::nipples::" in back["negative_prompt"]
+    # はみ出しは水着のまま乳首の形を描く
+    slip = pick("slip_squat")
+    assert "areola slip" in slip["character_outfits"][1] and "nipple tip peeking out" in slip["character_outfits"][1]
+    # つまむ: 水着を打ち消す(水着をつまむ絵にならないように)
+    pinch = pick("pinch_both")
+    assert "self nipple pinch" in pinch["character_actions"][1] and "bikini" in pinch["negative_prompt"].split(", ")
+    # 股を開く裸は手かタオルで隠す
+    assert "covering crotch" in pick("squat_hands")["character_actions"][1]
+    towel = pick("squat_towel")
+    assert "towel held over crotch" in towel["character_actions"][1] and "towel" not in towel["negative_prompt"].split(", ")
+    assert "towel held over crotch" in pick("straddle_towel")["character_actions"][1]
+    # 着替えは制服に見える物を打ち消す
+    assert all("necktie" in pick(k)["negative_prompt"] for k in ("sofa", "closet", "unbutton", "bed_undress", "hotel", "locker"))
+
+
+def test_gravure_only_for_adults(client: TestClient) -> None:
+    assert client.get("/api/collections").json()["themes"]["nude_gravure"][0] == "水着"
+    adult = _character("つぐみ", 20)
+    res = client.post("/api/collections", json={"kind": "nude_gravure", "character_ids": [adult], "themes": ["スクワット"]})
+    assert res.status_code == 200, res.text
+    minor = _character("リン", 16)
+    assert client.post("/api/collections", json={"kind": "nude_gravure", "character_ids": [minor]}).status_code == 422
+
+
+def test_gravure_pregnancy_is_maternity_only() -> None:
+    one = [{"id": 1, "name": "つぐみ"}]
+    preg = build_collection(one, CollectionOptions(kind="nude_gravure", themes=["妊娠"]))["scenes"]
+    assert [s["character_outfits"][1].count("pregnant") > 0 for s in preg] == [False, True, True, True]
+    for s in preg:
+        neg = s["negative_prompt"].split(", ")
+        # 分娩・赤ちゃん・性的な場面は打ち消し、下は履いたまま
+        assert {"labor", "baby", "delivery table", "sex"} <= set(neg) and "white panties" in s["character_outfits"][1]
+    assert "dark areolae" in preg[3]["character_outfits"][1] and "maternity photo" not in preg[3]["character_outfits"][1]
