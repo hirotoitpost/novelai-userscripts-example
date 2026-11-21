@@ -1295,13 +1295,14 @@ WASH_SCENES: tuple[DayScene, ...] = tuple(
 
 # ---- グラビア撮影会(nude_gravure。夏川つぐみ 2026-11-21 の 1834〜1916 から作った) ----
 #
-# ローレッグの水着 → 半ケツ → 下から見上げる → 乳輪のはみ出し → 部屋着の着替え → 乳首をつまむ → 裸のスクワット。
+# ローレッグの水着 → 半ケツ → 下から見上げる → 乳輪のはみ出し → 部屋着の着替え → 乳首をつまむ → 裸のスクワット
+# → 妊娠の経過(マタニティフォト風)。
 # 浅履きは "low-rise" だと紐の多いデザインに化けるので、danbooru の "lowleg bikini" を使う。
 # 乳首をつまむ動作は、水着の言葉があると「水着をつまむ」絵になるので、上半身裸で水着を打ち消す。
 # 股・お尻: 性器・肛門は描かない。股を開く裸・カメラを跨ぐ裸は、手かタオルで股を覆う(featureless だけに任せない)。
 # 制服に見える組み合わせ(ネクタイ・リボン・学校)は使わない(成人でも学生の性的な絵に見えるため)。
 
-GRAVURE_PARTS = ("水着", "半ケツ", "見上げ", "はみ出し", "着替え", "つまむ", "スクワット")
+GRAVURE_PARTS = ("水着", "半ケツ", "見上げ", "はみ出し", "着替え", "つまむ", "スクワット", "妊娠")
 LOWLEG = "1.6::lowleg bikini::, side-tie bikini"
 CRACK = "1.4::butt crack::, lower back, back dimples"
 FROM_BELOW = ("1.8::from below::, 1.6::worm's-eye view::, 1.4::extreme low angle::, pov, 1.3::foreshortening::, "
@@ -1316,6 +1317,28 @@ NO_UNIFORM = "school uniform, necktie, bowtie, neck ribbon, serafuku, classroom,
 SQUAT_SPOT = "living room, yoga mat, morning light"
 COVER_TOWEL = "1.8::towel held over crotch::, 1.6::hand holding towel covering crotch::"
 COVER_HANDS = "1.8::both hands covering crotch::, 1.5::hands between thighs::"
+
+# 妊娠の経過(マタニティフォト風の上半身裸。つぐみの 1799〜1806)。お腹のタグは素体の妊娠の経過(body_base)と同じ。
+# "maternity photo" はお腹を大きくしすぎるので使わない。妊娠前・分娩・赤ちゃん・性的な場面は入れない。
+_PREG_STAGE = "bright studio, white background, soft window light"
+_PREG_NEGATIVE = "labor, giving birth, hospital, delivery table, baby, infant, newborn, sex, spread legs"
+_PREG_POSE = "three-quarter view, standing, one hand gently on belly, other hand on hip, gentle smile, looking at viewer"
+_PREG_SCENES = (
+    ("3", "3か月", "1.1::slight belly bulge::, small belly, lower belly slightly rounded",
+     "big belly, huge belly, pregnant belly", "pink areolae", "まだ、ほとんど分からないね"),
+    ("5", "5か月", "0.8::pregnant::, small round belly, slight belly bulge",
+     "big belly, huge belly, very large belly", "slightly darker areolae", "ふくらんできた……!"),
+    ("7", "7か月", "pregnant, round belly, 0.9::big belly::",
+     "flat stomach, huge belly, very large belly", "large areolae, light brown areolae", "動いた、今!"),
+    ("9", "臨月", "1.1::pregnant::, big belly, 1.1::huge belly::, belly protruding",
+     "flat stomach, small belly", "large areolae, dark areolae, dark nipples, large nipples", "もうすぐ会えるね"),
+)
+_PREGNANCY_SCENES = tuple(
+    DayScene(f"preg{key}", f"妊娠{label}", "妊娠", _PREG_STAGE, "cowboy shot", _PREG_POSE, line,
+             dressed=_join("topless, white panties", belly), nipples=_join("nipples", areolae),
+             negative=_join(_PREG_NEGATIVE, avoid))
+    for key, label, belly, avoid, areolae, line in _PREG_SCENES
+)
 
 GRAVURE_SCENES: tuple[DayScene, ...] = (
     DayScene("lowleg_front", "ローレッグで頭の後ろに手", "水着", "beach, blue sky, ocean, sunlight", "cowboy shot",
@@ -1428,9 +1451,10 @@ GRAVURE_SCENES: tuple[DayScene, ...] = (
              _join(STRADDLE, FROM_BELOW, COVER_TOWEL, "other hand on hip, teasing smile, fang, sweat"),
              "残念、見せてあげない♪", outfit="high ponytail, sweat", negative=_join(EYE_LEVEL_NEGATIVE, "towel covering breasts"),
              prop=True),
+    *_PREGNANCY_SCENES,
 )
 # どの場面も股・お尻の奥は描かない
-GRAVURE_SCENES = tuple(replace(d, negative=_join(GRAVURE_CROTCH_NEGATIVE, d.negative)) for d in GRAVURE_SCENES)
+GRAVURE_SCENES =tuple(replace(d, negative=_join(GRAVURE_CROTCH_NEGATIVE, d.negative)) for d in GRAVURE_SCENES)
 
 
 @dataclass(frozen=True)
@@ -1450,7 +1474,7 @@ SCENE_BOOKS: dict[str, SceneBook] = {
     "nude_strip": SceneBook(STRIP_PARTS, STRIP_SCENES, "{names}が衣装ごとに、少しずつ脱いでいく。性的な行為はなし。"),
     "nude_wash": SceneBook(WASH_PARTS, WASH_SCENES, "{names}が、お風呂で体を隅々まで手で洗う。性的な行為はなし。性器・肛門は描かない。"),
     "nude_gravure": SceneBook(GRAVURE_PARTS, GRAVURE_SCENES,
-                              "{names}のグラビア撮影会。ローレッグの水着から部屋着の着替え、はだかのスクワットまで。"
+                              "{names}のグラビア撮影会。ローレッグの水着から部屋着の着替え、はだかのスクワット、妊娠の経過まで。"
                               "性器・肛門は描かず、股を開くときは手かタオルで隠す。"),
 }
 

@@ -431,7 +431,7 @@ def test_scene_books_build_with_nipples() -> None:
     one = [{"id": 1, "name": "ちひろ"}]
     counts = {k: len(build_collection(one, CollectionOptions(kind=k))["scenes"]) for k in SCENE_BOOKS}
     assert counts == {"nude_day": 24, "nude_onsen": 18, "nude_apron": 16, "nude_atelier": 16, "nude_seasons": 12, "nude_strip": 30, "nude_wash": 25,
-                      "nude_gravure": 30}
+                      "nude_gravure": 34}
     apron = build_collection(one, CollectionOptions(kind="nude_apron", poses=["egg"]))["scenes"][0]
     # 裸エプロン: エプロンは打ち消さず、乳首は描く
     assert "naked apron" in apron["character_outfits"][1] and "pink nipples" in apron["character_outfits"][1]
@@ -501,7 +501,7 @@ def test_wash_peel_only_for_inverted_nipples() -> None:
 def test_gravure_lowleg_cover_and_no_uniform() -> None:
     one = [{"id": 1, "name": "つぐみ"}]
     scenes = build_collection(one, CollectionOptions(kind="nude_gravure", nipple_shape="puffy_inverted"))["scenes"]
-    assert len(scenes) == 30
+    assert len(scenes) == 34
     # どのコマも性器・肛門を打ち消す
     assert all("2::pussy::" in s["negative_prompt"] and "1.8::anus::" in s["negative_prompt"] for s in scenes)
     pick = lambda key: build_collection(one, CollectionOptions(kind="nude_gravure", nipple_shape="puffy_inverted", poses=[key]))["scenes"][0]  # noqa: E731
@@ -530,3 +530,14 @@ def test_gravure_only_for_adults(client: TestClient) -> None:
     assert res.status_code == 200, res.text
     minor = _character("リン", 16)
     assert client.post("/api/collections", json={"kind": "nude_gravure", "character_ids": [minor]}).status_code == 422
+
+
+def test_gravure_pregnancy_is_maternity_only() -> None:
+    one = [{"id": 1, "name": "つぐみ"}]
+    preg = build_collection(one, CollectionOptions(kind="nude_gravure", themes=["妊娠"]))["scenes"]
+    assert [s["character_outfits"][1].count("pregnant") > 0 for s in preg] == [False, True, True, True]
+    for s in preg:
+        neg = s["negative_prompt"].split(", ")
+        # 分娩・赤ちゃん・性的な場面は打ち消し、下は履いたまま
+        assert {"labor", "baby", "delivery table", "sex"} <= set(neg) and "white panties" in s["character_outfits"][1]
+    assert "dark areolae" in preg[3]["character_outfits"][1] and "maternity photo" not in preg[3]["character_outfits"][1]
