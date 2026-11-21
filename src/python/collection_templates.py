@@ -13,7 +13,8 @@
   作った。2026-11-16)。こちらは乳首を描き(形は nipple_shape で選ぶ)、性器は描かない(featureless crotch)。
   性的な行為はない。
 - 同じ作り(乳首を描く場面集 SCENE_BOOKS)で、温泉旅行(nude_onsen)・裸エプロン(nude_apron)・ヌードモデルのアトリエ
-  (nude_atelier)・季節のはだか(nude_seasons)・着替え(nude_strip。衣装ごとに少しずつ脱ぐ)・体の洗い方(nude_wash)。
+  (nude_atelier)・季節のはだか(nude_seasons)・着替え(nude_strip。衣装ごとに少しずつ脱ぐ)・体の洗い方(nude_wash)・
+  グラビア撮影会(nude_gravure。ローレッグの水着・半ケツ・下からの見上げ・乳輪のはみ出し・着替え・乳首をつまむ・スクワット)。
 
 描いてはいけないもの(乳首・乳輪・性器・cameltoe など)はネガティブで必ず打ち消す。ヌードは乳首・性器を描かない
 featureless の絵で、湯気・モザイクで隠さない(はだかの一日だけは乳首を描く)。成人キャラ専用(年齢を入れた 18 歳以上のキャラだけ。呼び出し側で確かめる)。
@@ -28,7 +29,7 @@ from . import content_guard
 from . import vocabulary as vocab
 
 Kind = Literal["lingerie", "swimsuit", "tease_lingerie", "tease_swimsuit", "nude", "nude2", "nude_day",
-               "nude_onsen", "nude_apron", "nude_atelier", "nude_seasons", "nude_strip", "nude_wash"]
+               "nude_onsen", "nude_apron", "nude_atelier", "nude_seasons", "nude_strip", "nude_wash", "nude_gravure"]
 
 KINDS: dict[str, str] = {
     "lingerie": "下着コレクション",
@@ -44,6 +45,7 @@ KINDS: dict[str, str] = {
     "nude_seasons": "季節のはだか",
     "nude_strip": "着替え(ストリップ)",
     "nude_wash": "体の洗い方",
+    "nude_gravure": "グラビア撮影会",
 }
 
 # 場所(作画タグ)
@@ -1291,6 +1293,146 @@ WASH_SCENES: tuple[DayScene, ...] = tuple(
 )
 
 
+# ---- グラビア撮影会(nude_gravure。夏川つぐみ 2026-11-21 の 1834〜1916 から作った) ----
+#
+# ローレッグの水着 → 半ケツ → 下から見上げる → 乳輪のはみ出し → 部屋着の着替え → 乳首をつまむ → 裸のスクワット。
+# 浅履きは "low-rise" だと紐の多いデザインに化けるので、danbooru の "lowleg bikini" を使う。
+# 乳首をつまむ動作は、水着の言葉があると「水着をつまむ」絵になるので、上半身裸で水着を打ち消す。
+# 股・お尻: 性器・肛門は描かない。股を開く裸・カメラを跨ぐ裸は、手かタオルで股を覆う(featureless だけに任せない)。
+# 制服に見える組み合わせ(ネクタイ・リボン・学校)は使わない(成人でも学生の性的な絵に見えるため)。
+
+GRAVURE_PARTS = ("水着", "半ケツ", "見上げ", "はみ出し", "着替え", "つまむ", "スクワット")
+LOWLEG = "1.6::lowleg bikini::, side-tie bikini"
+CRACK = "1.4::butt crack::, lower back, back dimples"
+FROM_BELOW = ("1.8::from below::, 1.6::worm's-eye view::, 1.4::extreme low angle::, pov, 1.3::foreshortening::, "
+              "thighs in foreground, looking down at viewer")
+STRADDLE = "1.5::standing over viewer::, 1.4::straddling viewer::, legs apart"
+EYE_LEVEL_NEGATIVE = "straight-on, eye level, from above"
+GRAVURE_CROTCH_NEGATIVE = "2::pussy::, 1.9::vulva::, 1.9::labia::, 1.8::anus::, 1.6::cameltoe::, cleft of venus, panties aside, wedgie"
+SLIP = "1.6::areola slip::, 1.3::areolae peeking out of bikini::, small bikini top"
+SELF_PINCH = "1.8::self nipple pinch::, 1.6::nipple tweak::, 1.5::nipple pull::"
+NO_SWIMSUIT = "bikini, bra, swimsuit, clothes, holding bikini, bikini pull"
+NO_UNIFORM = "school uniform, necktie, bowtie, neck ribbon, serafuku, classroom, schoolgirl, plaid skirt"
+SQUAT_SPOT = "living room, yoga mat, morning light"
+COVER_TOWEL = "1.8::towel held over crotch::, 1.6::hand holding towel covering crotch::"
+COVER_HANDS = "1.8::both hands covering crotch::, 1.5::hands between thighs::"
+
+GRAVURE_SCENES: tuple[DayScene, ...] = (
+    DayScene("lowleg_front", "ローレッグで頭の後ろに手", "水着", "beach, blue sky, ocean, sunlight", "cowboy shot",
+             "1.4::hands behind head::, arms up, armpits, contrapposto, hip tilt, seductive smile, looking at viewer",
+             "どう? 似合ってる?", dressed=_join(LOWLEG, "white bikini, hip bones, navel"), chest=False),
+    DayScene("lowleg_back", "後ろ姿の半ケツ", "水着", "beach, sunset, orange sky", "cowboy shot, from behind",
+             "1.4::from behind::, hands behind head, arms up, looking back over shoulder, seductive smile",
+             "後ろも、ちゃんと見て", dressed=_join(LOWLEG, CRACK, "lavender bikini"), chest=False,
+             negative="fully exposed buttocks, thong, bent over"),
+    DayScene("stretch", "バンザイで伸び", "水着", "poolside, sunlight", "cowboy shot",
+             "1.4::arms up::, stretching, armpits, cheerful smile, fang, looking at viewer", "ん〜っ、いい天気!",
+             dressed=_join(LOWLEG, "coral pink bikini, wet skin"), chest=False),
+    DayScene("half_down", "ショーツを半分下ろす", "半ケツ", "poolside, sunlight", "cowboy shot, from behind",
+             "1.4::from behind::, looking back over shoulder, 1.5::both hands pulling down bikini bottom::, "
+             "thumbs hooked in bikini bottom sides, teasing smile, blush", "……ちょっとだけ、ね",
+             dressed=_join(LOWLEG, CRACK, "1.3::half-exposed buttocks::, coral pink bikini"), chest=False,
+             negative="fully exposed buttocks, thong, bent over"),
+    DayScene("ass_close", "お尻のアップ", "半ケツ", "beach, sunset", "close-up, lower body, from behind",
+             "1.4::from behind::, 1.4::ass focus::, standing", "(……視線、感じる)", dressed=_join(LOWLEG, CRACK, "lavender bikini"),
+             chest=False, negative="face, fully exposed buttocks, thong, bent over"),
+    DayScene("back_head", "後頭部からお尻へ", "半ケツ", "poolside, pool water, sunlight", "cowboy shot, from behind",
+             "1.5::from behind::, 1.4::facing away::, back of head, 1.3::ass focus::, thumbs hooked in bikini bottom",
+             "後ろ、ちゃんと撮れてる?", dressed=_join(LOWLEG, CRACK, "1.3::half-exposed buttocks::, coral pink bikini"), chest=False,
+             negative=_join(FACE_AWAY_NEGATIVE, "face, profile, fully exposed buttocks")),
+    DayScene("bent", "膝に手をついてお尻を突き出す", "半ケツ", "beach, sunset, sand", "full body, from side",
+             "1.3::from side::, 1.4::bent over::, hands on knees, ass out, arched back, seductive smile, looking at viewer",
+             "ふふ、見とれてた?", dressed=_join(LOWLEG, CRACK, "lavender bikini"), chest=False, outfit="barefoot"),
+    DayScene("fours", "四つんばい", "半ケツ", "beach towel, sand, beach, sunlight", "full body, from behind",
+             "1.4::all fours::, 1.3::from behind::, 1.3::ass up::, knees together, looking back, smile, blush",
+             "日焼け止め、塗ってくれる?", dressed=_join(LOWLEG, CRACK, "white bikini"), chest=False,
+             negative="spread legs, fully exposed buttocks, thong"),
+    DayScene("straddle", "カメラを跨ぐ", "見上げ", "blue sky, sun, beach", "",
+             _join(STRADDLE, FROM_BELOW, "hands on own hips, teasing smile, fang"), "下から見ないでよ〜",
+             dressed=_join(LOWLEG, "white bikini, underboob"), chest=False, negative=EYE_LEVEL_NEGATIVE),
+    DayScene("squat_below", "しゃがんで見下ろす", "見上げ", "sunset, orange sky", "",
+             _join("1.5::squatting::, 1.4::squatting over viewer::, knees apart", FROM_BELOW, "hands on knees, seductive smile"),
+             "ほら、こっち見て", dressed=_join(LOWLEG, "lavender bikini"), chest=False,
+             negative=_join(EYE_LEVEL_NEGATIVE, "sitting")),
+    DayScene("kneel_below", "膝立ちで見下ろす", "見上げ", "indoor pool, ceiling, sunlight", "",
+             _join("1.5::kneeling::, 1.4::kneeling over viewer::, knees apart", FROM_BELOW, "hands on own thighs, cheerful smile"),
+             "つかまえた♪", dressed=_join(LOWLEG, "coral pink bikini, wet skin"), chest=False, negative=EYE_LEVEL_NEGATIVE),
+    DayScene("slip_stand", "はみ出し・跨ぐ", "はみ出し", "blue sky, sun, beach", "",
+             _join(STRADDLE, FROM_BELOW, "hands on own hips, teasing smile"), "あ……ずれてる?",
+             dressed=_join(SLIP, LOWLEG, "white bikini"), negative=_join(EYE_LEVEL_NEGATIVE, "topless")),
+    DayScene("slip_squat", "はみ出し・しゃがむ", "はみ出し", "sunset, orange sky", "",
+             _join("1.5::squatting::, 1.4::squatting over viewer::, knees apart", FROM_BELOW, "hands on knees, grin"),
+             "気づいてないふり、してあげる", dressed=_join(SLIP, LOWLEG, "black bikini"),
+             negative=_join(EYE_LEVEL_NEGATIVE, "topless, sitting")),
+    DayScene("lift", "胸を持ち上げる", "はみ出し", "blue sky, sun, beach", "",
+             _join(STRADDLE, FROM_BELOW, "1.5::lifting own breasts::, 1.3::hands under breasts::, half-closed eyes, seductive smile"),
+             "重いんだから、これ", dressed=_join(SLIP, LOWLEG, "white bikini"), negative=_join(EYE_LEVEL_NEGATIVE, "topless")),
+    DayScene("squeeze", "胸を寄せて揉む", "はみ出し", "indoor pool, ceiling, sunlight", "",
+             _join("1.5::kneeling::, 1.4::kneeling over viewer::, knees apart", FROM_BELOW,
+                   "1.5::grabbing own breasts::, squeezing breasts together, embarrassed smile, blush"),
+             "……やわらかいでしょ", dressed=_join(SLIP, LOWLEG, "coral pink bikini"), negative=_join(EYE_LEVEL_NEGATIVE, "topless")),
+    DayScene("sofa", "ソファでずり落ちる", "着替え", "living room, sofa, warm lamp light, evening", "upper body",
+             "sitting on sofa, surprised, wide eyes, open mouth, looking down at own chest, fingers on camisole strap",
+             "えっ、ずれてた!?", dressed="1.3::oversized cream cardigan::, off shoulder, 1.2::loose camisole pulled down::, no bra",
+             negative=NO_UNIFORM),
+    DayScene("closet", "クローゼット前で着替え", "着替え", "bedroom, closet, hangers, morning light", "cowboy shot",
+             "1.4::undressing::, taking off cardigan, relaxed smile, looking at viewer", "今日は何着ようかな",
+             dressed="cream cardigan sliding off shoulders, 1.3::unbuttoned white shirt::, open shirt, no bra, denim shorts",
+             negative=NO_UNIFORM),
+    DayScene("unbutton", "鏡の前でボタンを外す", "着替え", "apartment, mirror, bathroom doorway, warm light", "cowboy shot",
+             "1.4::unbuttoning shirt::, hands on shirt buttons, surprised, open mouth, looking at viewer", "あっ、まだ見ちゃだめ!",
+             dressed="1.5::white collared shirt::, shirt half unbuttoned, cream cardigan worn over shirt, white lace bra, "
+                     "cleavage, beige flared midi skirt", chest=False, negative=NO_UNIFORM),
+    DayScene("bed_undress", "夜のベッドで肩から落とす", "着替え", "bedroom, night, bedside lamp, city night view", "full body",
+             "sitting on bed, wariza, pulling open shirt off shoulders, sleepy smile, half-closed eyes",
+             "今日はもう、着替えるのもめんどう……",
+             dressed="1.5::white collared shirt::, fully unbuttoned shirt slipping off shoulders, cream cardigan off shoulders, "
+                     "topless under shirt, long flared skirt", negative=_join(NO_UNIFORM, "spread legs, panties")),
+    DayScene("hotel", "仕事帰りのホテル", "着替え", "hotel room, city night view through window, bedside lamp", "cowboy shot",
+             "sitting on hotel bed, pulling bra down, tired smile, half-closed eyes, looking at viewer", "はぁ、やっと一人……",
+             dressed="office lady, 1.4::unbuttoned white blouse::, open blouse, black lace bra pulled down, black pencil skirt, pantyhose",
+             negative=NO_UNIFORM),
+    DayScene("locker", "更衣室でニットをめくる", "着替え", "changing room, lockers", "cowboy shot",
+             "1.4::undressing::, lifting knit sweater, embarrassed, blush, looking at viewer", "ちょ、ちょっと待って!",
+             dressed="lifting knit sweater, topless under sweater, pink lace panties", negative=_join(NO_UNIFORM, "spread legs")),
+    DayScene("pinch_both", "両手でつまむ", "つまむ", "bedroom, soft lighting", "upper body, breast focus",
+             _join(SELF_PINCH, "pinching own nipples with fingertips, both hands on chest, embarrassed, blush, parted lips"),
+             "……ちょっと、くすぐったい", outfit="topless", negative=NO_SWIMSUIT),
+    DayScene("pinch_mouth", "口元を隠してつまむ", "つまむ", "bedroom, bed, morning light, white sheets", "upper body, breast focus",
+             _join(SELF_PINCH, "pinching one nipple, other hand covering mouth, embarrassed, looking away, blush"),
+             "(声、出ちゃいそう……)", outfit="topless", negative=NO_SWIMSUIT),
+    DayScene("pinch_shower", "シャワーでつまむ", "つまむ", "shower, bathroom, tiles, running water", "upper body, breast focus",
+             _join(SELF_PINCH, "playful smile, fang, blush, looking at viewer"), "えへへ、見てた?",
+             outfit=_join("topless", WET), negative=_join(NO_SWIMSUIT, NO_FOAM, "steam"), hair_down=True),
+    DayScene("pinch_onsen", "露天風呂で揉みながら", "つまむ", "outdoor hot spring, onsen, rocks, autumn leaves", "upper body",
+             _join("1.6::fondling own breasts::", SELF_PINCH, "partially submerged, water up to waist, relaxed smile, half-closed eyes"),
+             "あったまる〜……", outfit=_join("nude", WET), negative=_join(NO_SWIMSUIT, NO_FOAM, "towel, steam"), hair_up=True),
+    DayScene("squat_side", "横からスクワット", "スクワット", SQUAT_SPOT, "full body, from side",
+             "1.6::from side::, 1.5::profile::, 1.5::squat exercise::, hips pushed back, hands behind head, sweat, panting",
+             "いち、に……っ", outfit="barefoot, high ponytail, light sweat, crotch hidden by thigh",
+             negative="front view, from front, from behind, spread legs, abs", whole=True),
+    DayScene("squat_front", "正面で膝を閉じて", "スクワット", SQUAT_SPOT, "full body, from front",
+             "1.5::from front::, 1.4::squatting::, 1.6::knees together::, 1.5::thighs together::, hands on knees, shy smile",
+             "あんまりじっと見ないでね", outfit="barefoot, high ponytail, light sweat, crotch hidden by thighs",
+             negative="spread legs, legs apart, knees apart, abs", whole=True),
+    DayScene("squat_hands", "股を開いて手で隠す", "スクワット", SQUAT_SPOT, "full body, from front",
+             _join("1.5::from front::, 1.4::squatting::, knees apart", COVER_HANDS, "embarrassed smile, blush, sweat"),
+             "こ、ここは見せないからね!", outfit="barefoot, high ponytail, light sweat", negative="masturbation, fingering, abs",
+             whole=True),
+    DayScene("squat_towel", "股を開いてタオルで隠す", "スクワット", "bedroom, wooden floor, afternoon sunlight, water bottle",
+             "full body, from front",
+             _join("1.5::from front::, 1.4::squatting::, knees apart", COVER_TOWEL, "panting, sweat, flushed, open mouth"),
+             "はぁ、はぁ……あと10回!", outfit="barefoot, high ponytail, sweat drops", negative="towel covering breasts, abs",
+             prop=True, whole=True),
+    DayScene("straddle_towel", "カメラを跨いでタオルで隠す", "スクワット", "bedroom, ceiling light, afternoon sunlight", "",
+             _join(STRADDLE, FROM_BELOW, COVER_TOWEL, "other hand on hip, teasing smile, fang, sweat"),
+             "残念、見せてあげない♪", outfit="high ponytail, sweat", negative=_join(EYE_LEVEL_NEGATIVE, "towel covering breasts"),
+             prop=True),
+)
+# どの場面も股・お尻の奥は描かない
+GRAVURE_SCENES = tuple(replace(d, negative=_join(GRAVURE_CROTCH_NEGATIVE, d.negative)) for d in GRAVURE_SCENES)
+
+
 @dataclass(frozen=True)
 class SceneBook:
     parts: tuple[str, ...]
@@ -1307,6 +1449,9 @@ SCENE_BOOKS: dict[str, SceneBook] = {
     "nude_seasons": SceneBook(SEASON_PARTS, SEASON_SCENES, "{names}の、1月から12月まで季節ごとのはだかの一枚。性的な行為はなし。"),
     "nude_strip": SceneBook(STRIP_PARTS, STRIP_SCENES, "{names}が衣装ごとに、少しずつ脱いでいく。性的な行為はなし。"),
     "nude_wash": SceneBook(WASH_PARTS, WASH_SCENES, "{names}が、お風呂で体を隅々まで手で洗う。性的な行為はなし。性器・肛門は描かない。"),
+    "nude_gravure": SceneBook(GRAVURE_PARTS, GRAVURE_SCENES,
+                              "{names}のグラビア撮影会。ローレッグの水着から部屋着の着替え、はだかのスクワットまで。"
+                              "性器・肛門は描かず、股を開くときは手かタオルで隠す。"),
 }
 
 
