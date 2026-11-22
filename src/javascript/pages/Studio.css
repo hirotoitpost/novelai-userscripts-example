@@ -1,0 +1,303 @@
+/* 対話生成(Studio.tsx)。見出しなどは出版物のページ(Publications.css)と同じ */
+.studio-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.studio-select {
+  max-width: 16rem;
+  padding: 0.25rem 0.4rem;
+  background: #14142a;
+  color: inherit;
+  border: 1px solid #2c2c50;
+  border-radius: 6px;
+}
+
+.studio-error {
+  margin: 0.4rem 1rem;
+}
+
+.studio-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(18rem, 2fr) 3fr;
+  gap: 0.8rem;
+  padding: 0.6rem 1rem 1rem;
+}
+
+.studio-chat,
+.studio-canvas {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #1f1f3a;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.studio-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.studio-empty {
+  color: #9a9ab8;
+  font-size: 0.85rem;
+}
+
+.studio-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 92%;
+}
+
+.studio-msg--user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.studio-bubble {
+  white-space: pre-wrap;
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  background: #1a1a33;
+}
+
+.studio-msg--user .studio-bubble {
+  background: #3b2f6b;
+}
+
+.studio-wait {
+  color: #9a9ab8;
+}
+
+.studio-changes {
+  font-size: 0.78rem;
+  color: #b8a4ff;
+}
+
+.studio-diff {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-left: 0.4rem;
+}
+
+.studio-chip {
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-family: ui-monospace, monospace;
+}
+
+.studio-chip--add { background: #12391f; color: #8be3a5; }
+.studio-chip--change { background: #3a3212; color: #f0d27a; }
+.studio-chip--remove { background: #3d1616; color: #f19a9a; text-decoration: line-through; }
+
+.studio-thumb-inline {
+  padding: 0;
+  border: 1px solid #2c2c50;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  width: 96px;
+}
+
+.studio-thumb-inline img {
+  width: 100%;
+  display: block;
+  border-radius: 6px;
+}
+
+.studio-input {
+  border-top: 1px solid #1f1f3a;
+  padding: 0.5rem;
+}
+
+.studio-input textarea,
+.studio-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0f0f22;
+  color: inherit;
+  border: 1px solid #2c2c50;
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.studio-field textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+}
+
+.studio-input-row,
+.studio-actions,
+.studio-shot-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+}
+
+.studio-send,
+.studio-generate {
+  padding: 0.4rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: #6b4fd8;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+
+.studio-send:disabled,
+.studio-generate:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.studio-canvas {
+  overflow-y: auto;
+  padding: 0.6rem;
+}
+
+.studio-image {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 16rem;
+  background: #0b0b18;
+  border-radius: 8px;
+}
+
+.studio-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+}
+
+.studio-placeholder {
+  color: #6f6f90;
+}
+
+.studio-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 8, 20, 0.6);
+  z-index: 1;
+}
+
+.studio-strip {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+}
+
+.studio-strip-item {
+  position: relative;
+  flex: 0 0 auto;
+  width: 64px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.studio-strip-item.is-active {
+  border-color: #b8a4ff;
+}
+
+.studio-strip-item img {
+  width: 100%;
+  display: block;
+  border-radius: 4px;
+}
+
+.studio-strip-item span {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  font-size: 0.7rem;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0 0.25rem;
+  border-radius: 3px;
+}
+
+.studio-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.studio-field > span {
+  display: block;
+  font-size: 0.82rem;
+  margin-bottom: 0.2rem;
+}
+
+.studio-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  font-size: 0.82rem;
+}
+
+.studio-options select,
+.studio-options input[type='number'] {
+  margin-left: 0.3rem;
+  background: #0f0f22;
+  color: inherit;
+  border: 1px solid #2c2c50;
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
+}
+
+.studio-options input[type='number'] {
+  width: 4.5rem;
+}
+
+.studio-seed {
+  width: 8rem !important;
+}
+
+.studio-hint {
+  color: #8a8aa8;
+  font-size: 0.76rem;
+}
+
+@media (max-width: 900px) {
+  .studio-root {
+    height: auto;
+  }
+
+  .studio-main {
+    grid-template-columns: 1fr;
+  }
+
+  .studio-log {
+    max-height: 55vh;
+  }
+}

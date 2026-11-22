@@ -230,6 +230,14 @@ export default function CharacterImages() {
     setPendingKey(key)
   }
 
+  /** この画像のタグとシードから、対話生成のページで直す。 */
+  function openStudio(item: Item) {
+    if (characterId === null) return
+    const q = new URLSearchParams({ character: String(characterId), path: item.path })
+    if (item.seed !== null) q.set('seed', String(item.seed))
+    navigate(`/studio?${q.toString()}`)
+  }
+
   /** 似た画像を作るために、画像生成ページへ送る(キャラシートの参照画像も入れ、できた画像をこのキャラに関連付ける)。 */
   async function sendToGenerate(item: Item) {
     if (!token || characterId === null) return
@@ -432,6 +440,10 @@ export default function CharacterImages() {
                   title="この画像の設定(プロンプト・シードなど)と、キャラシートの参照画像を画像生成ページに入れます。できた画像はこのキャラの一覧に並びます">
                   {sending ? '読み取り中…' : '似た画像を生成'}
                 </button>
+                <button type="button" className="ipv-btn" onClick={() => openStudio(visible[index])}
+                  title="この画像のタグとシードから、対話生成のページで相談しながら直します">
+                  対話で直す
+                </button>
                 <WholeEnhance key={visible[index].key} token={token} imageKey={visible[index].key} characterId={characterId}
                   onOpen={key => void openMade(key)} />
               </>
@@ -474,6 +486,11 @@ export default function CharacterImages() {
                     <button type="button" className="fsv-close" disabled={sending}
                       onClick={() => void sendToGenerate(visible[fullscreen])}>
                       {sending ? '読み取り中…' : '似た画像を生成'}
+                    </button>
+                  )}
+                  {token && (
+                    <button type="button" className="fsv-close" onClick={() => openStudio(visible[fullscreen])}>
+                      対話で直す
                     </button>
                   )}
                 </div>
