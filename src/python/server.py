@@ -52,6 +52,7 @@ from .routes.works import router as works_router
 from .routes.writer import router as writer_router
 from .routes.help import router as help_router
 from .routes.assistant import router as assistant_router
+from .routes.studio import router as studio_router
 from .routes.voice import router as voice_router
 from .routes.manga_voice import router as manga_voice_router
 
@@ -168,6 +169,7 @@ app.include_router(user_router)
 app.include_router(writer_router)
 app.include_router(help_router)
 app.include_router(assistant_router)
+app.include_router(studio_router)
 app.include_router(voice_router)
 app.include_router(manga_voice_router)
 

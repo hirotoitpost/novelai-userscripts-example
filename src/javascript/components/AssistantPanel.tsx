@@ -17,6 +17,7 @@ import './AssistantPanel.css'
  * 「チャット」: 今のページの状況とヘルプの記事を渡して、文章モデルと話す(AssistantChat。読むだけ)。
  * 「ヘルプ」: ヘルプのチャット(今のページに合う記事を優先)。
  * 押すとその場所へ移るだけで、操作(生成・設定の変更)はしない。押すのは利用者。
+ * 「チャット」の上の「対話で描く」は、対話生成のページ(/studio)へ移るだけ(描くのはそのページ)。
  */
 
 interface Step {
@@ -216,7 +217,18 @@ export default function AssistantPanel() {
             )}
           </>
         )}
-        {tab === 'chat' && <AssistantChat page={page} storyId={storyId} characterId={characterId} onNavigate={go} />}
+        {tab === 'chat' && (
+          <>
+            {page !== 'studio' && (
+              <button type="button" className="as-refresh as-studio-link"
+                onClick={() => go(characterId ? `/studio?character=${characterId}` : '/studio')}
+                title="相談しながら絵を描くページを開きます(今開いているキャラを選んだ状態で)">
+                💬 対話で描く{characterId ? '(このキャラで)' : ''}
+              </button>
+            )}
+            <AssistantChat page={page} storyId={storyId} characterId={characterId} onNavigate={go} />
+          </>
+        )}
         {tab === 'help' && <HelpChat current={guide?.help || undefined} />}
       </div>
     </aside>

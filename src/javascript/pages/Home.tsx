@@ -336,6 +336,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/studio')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/studio')}
+          >
+            <div className="home-card-icon">💬</div>
+            <h2>対話生成</h2>
+            <p>描きたい絵を日本語で相談しながら、タグを組み立てて直していきます。キャラを選ぶと見た目・絵柄はキャラシートから入ります。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/ugoira')}
             role="button"
             tabIndex={0}

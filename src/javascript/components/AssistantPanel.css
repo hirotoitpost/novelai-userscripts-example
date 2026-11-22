@@ -154,3 +154,4 @@ html.assistant-docked .nb-panel { right: calc(var(--as-width) + 16px); }
 .as-mic { padding: 8px 12px; font-size: 13px; }
 .as-mic--on { border-color: #ff6b6b; color: #ff8a8a; }
 .as-mic:disabled { opacity: 0.45; cursor: default; }
+.as-studio-link { margin: 0 0 8px; padding: 0; }
