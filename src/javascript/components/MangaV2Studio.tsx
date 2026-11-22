@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { MangaImageSettingsValue } from './MangaImageSettings'
 import { SceneCharacter } from './StoryCharacters'
@@ -10,6 +10,7 @@ import MangaV2Stamps from './MangaV2Stamps'
 import NegativeEditor from './NegativeEditor'
 import GrowthPicker from './GrowthPicker'
 import HelpLink from './HelpLink'
+import { savePanelSettings, studioPanelUrl } from '../studioPanel'
 import OverlayEditor from './OverlayEditor'
 import PageLayoutEditor from './PageLayoutEditor'
 
@@ -176,6 +177,7 @@ export default function MangaV2Studio({
   apiOrigin, storyId, scenes, savedComposeSettings, imageSettings, token, busy, runTask, pollJob, onChanged, fileUrl,
   onEditScene, redrawRef,
 }: Props) {
+  const navigate = useNavigate()
   const [fonts, setFonts] = useState<FontOption[]>([])
   const [templates, setTemplates] = useState<TemplateOption[]>([])
   const [panels, setPanels] = useState<Panel[]>([])
@@ -390,6 +392,15 @@ export default function MangaV2Studio({
 
   function redrawPanel(scene: MangaV2Scene) {
     return redrawScene(scene.scene_index)
+  }
+
+  /** 対話生成のページで、このコマを相談しながら描き直す(いまの描き方の設定を渡す)。 */
+  function openInStudio(scene: MangaV2Scene) {
+    savePanelSettings({
+      template, color, manga_style: mangaStyle, ...referenceOptions,
+      settings: imageSettings as unknown as Record<string, unknown>,
+    })
+    navigate(studioPanelUrl(scene.id))
   }
 
   function redrawScene(sceneIndex: number) {
@@ -1049,6 +1060,10 @@ export default function MangaV2Studio({
                 <div className="mv2-card-actions">
                   <button type="button" onClick={() => redrawPanel(scene)} disabled={busy}>
                     {panel ? '描き直す' : '描く'}
+                  </button>
+                  <button type="button" className="story-secondary" disabled={busy} onClick={() => openInStudio(scene)}
+                    title="対話生成のページで、直したい所を日本語で相談しながら描き直します(描いた絵は候補に入り、採用するまでコマは変わりません)">
+                    💬 対話で描き直す
                   </button>
                   {onEditScene && (
                     <button type="button" className="story-secondary" disabled={busy} onClick={() => onEditScene(scene.id)}

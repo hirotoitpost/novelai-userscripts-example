@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext'
 import { useAssistantContext } from '../assistantContext'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { fileFetchUrl, fileUrl, getJson, thumbUrl } from '../library'
+import { readPanelSettings, type PanelDrawSettings } from '../studioPanel'
 import './Publications.css'
 import './Studio.css'
 
@@ -16,6 +17,9 @@ import './Studio.css'
  * アプリが入れる(/api/studio。studio.py)。描くのは「このタグで生成」を押したとき(「案が出たらすぐ描く」を
  * 入れると、案が出るたびに描く)。会話は利用者のフォルダに残り、左上の一覧から開き直せる。
  * ?character=ID でキャラを選んだ状態で、&path=画像のパス で、その画像のタグとシードから始める。
+ * ?scene=シーンID で、漫画のコマを描き直す(物語エディタの「対話で描き直す」)。タグはシーンの作画タグから始め、
+ * 描いた絵はコマの候補に入る(コマの絵は変えない)。「このコマに採用」で、その絵をコマにし、タグをシーンに保存する。
+ * 描き方(テンプレート・カラー・キャラ参照・画像の設定)は、ボタンを押したときの漫画のページの設定を使う。
  */
 
 interface Character {
@@ -51,9 +55,33 @@ interface Message {
 }
 
 interface Shot extends Tags {
-  history_id: number
+  /** 1枚の絵(生成履歴の ID) */
+  history_id?: number
+  /** コマの候補(候補の ID) */
+  candidate_id?: number
+  /** このコマに採用した */
+  adopted?: boolean
   path: string
   seed: number
+}
+
+interface PanelLink {
+  scene_id: number
+  story_id: number
+  draw: PanelDrawSettings
+}
+
+interface PanelInfo {
+  scene_id: number
+  story_id: number
+  story_title: string
+  scene_index: number
+  title: string
+  text: string
+  prompt_tags: string
+  absent_tags: string
+  characters: Character[]
+  panel: { image_path: string; seed: number } | null
 }
 
 interface SessionData {
@@ -62,6 +90,17 @@ interface SessionData {
   shots: Shot[]
   seed: number | null
   lockSeed: boolean
+  panel?: PanelLink | null
+}
+
+interface DrawResponse {
+  candidate_id: number
+  path: string
+  seed: number
+}
+
+function shotLabel(s: Shot): string {
+  return s.history_id !== undefined ? `#${s.history_id}` : `候補 ${s.candidate_id}`
 }
 
 interface SessionSummary {
@@ -131,6 +170,7 @@ export default function Studio() {
   const [autoGenerate, setAutoGenerate] = useLocalStorage('studio.autoGenerate', false)
   const [strength, setStrength] = useLocalStorage('studio.referenceStrength', 0.55)
   const [useReference, setUseReference] = useLocalStorage('studio.useReference', true)
+  const [panelInfo, setPanelInfo] = useState<PanelInfo | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const startedFrom = useRef<string | null>(null)
 
@@ -153,6 +193,7 @@ export default function Studio() {
       .then(s => {
         setCharacterId(s.character_id)
         setData({ ...EMPTY, ...s.data })
+        if (!s.data.panel) setPanelInfo(null)
         setViewing(s.data.shots?.length ? s.data.shots.length - 1 : null)
         setPreview(null)
       })
@@ -198,6 +239,42 @@ export default function Studio() {
     })()
   }, [token, params])
 
+  // コマを描き直す(物語エディタの「対話で描き直す」)
+  useEffect(() => {
+    const sceneId = Number(params.get('scene')) || null
+    if (!token || !sceneId || startedFrom.current === `scene:${sceneId}`) return
+    startedFrom.current = `scene:${sceneId}`
+    apiFetch<PanelInfo>(token, `/api/studio/panel/${sceneId}`)
+      .then(info => {
+        setPanelInfo(info)
+        setSessionId(null)
+        setCharacterId(null)
+        const seed = info.panel?.seed ?? null
+        setData({
+          ...EMPTY,
+          tags: { scene: info.prompt_tags, negative: info.absent_tags, size: 'portrait', use_outfit: false },
+          seed,
+          lockSeed: false,
+          panel: { scene_id: info.scene_id, story_id: info.story_id, draw: readPanelSettings() },
+          messages: [{
+            role: 'assistant',
+            text: `「${info.story_title}」のシーン${info.scene_index + 1}${info.title ? `「${info.title}」` : ''}のコマを描き直します。`
+              + `直したい所を書いてください。描いた絵はコマの候補に入り、「このコマに採用」を押すまでコマの絵は変わりません。`,
+          }],
+        })
+        setPreview(info.panel?.image_path ?? null)
+        setViewing(null)
+      })
+      .catch(e => setError(`コマを開けませんでした: ${e instanceof Error ? e.message : String(e)}`))
+  }, [token, params])
+
+  // 保存したコマの会話を開いたときも、シーンの情報(題・登場人物)を出す
+  const panelSceneId = data.panel?.scene_id ?? null
+  useEffect(() => {
+    if (!token || !panelSceneId || panelInfo?.scene_id === panelSceneId) return
+    apiFetch<PanelInfo>(token, `/api/studio/panel/${panelSceneId}`).then(setPanelInfo).catch(() => undefined)
+  }, [token, panelSceneId, panelInfo])
+
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' })
   }, [data.messages.length, busy])
@@ -207,7 +284,8 @@ export default function Studio() {
   /** 会話を保存する(初めての保存で会話を作る)。 */
   const save = useCallback(async (next: SessionData) => {
     if (!token || !next.messages.some(m => m.role === 'user')) return
-    const body = { title: next.messages.find(m => m.role === 'user')?.text.slice(0, 40) ?? '', character_id: characterId, data: next }
+    const first = next.messages.find(m => m.role === 'user')?.text.slice(0, 40) ?? ''
+    const body = { title: next.panel ? `コマ: ${first}` : first, character_id: next.panel ? null : characterId, data: next }
     try {
       if (sessionId) {
         await send(token, 'PUT', `/api/studio/sessions/${sessionId}`, body)
@@ -218,6 +296,7 @@ export default function Studio() {
           const q = new URLSearchParams(p)
           q.set('session', created.id)
           q.delete('path')
+          q.delete('scene')
           return q
         }, { replace: true })
       }
@@ -238,11 +317,61 @@ export default function Studio() {
     if (persist) void save(next)
   }, [save])
 
+  function addShot(shot: Shot, base: SessionData) {
+    update(d => {
+      const messages = [...d.messages]
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'assistant') {
+          messages[i] = { ...messages[i], imageIndex: d.shots.length }
+          break
+        }
+      }
+      return { ...d, shots: [...d.shots, shot], seed: shot.seed, messages }
+    })
+    setViewing(base.shots.length)
+    setPreview(null)
+  }
+
+  /** コマの候補をコマの絵にし、描いたときのタグをシーンに保存する。 */
+  async function adopt(index: number) {
+    const s = data.shots[index]
+    const link = data.panel
+    if (!token || !link || s.candidate_id === undefined) return
+    setError(null)
+    try {
+      await apiFetch(token, `/api/studio/panel/${link.scene_id}/adopt`, {
+        candidate_id: s.candidate_id, prompt_tags: s.scene, absent_tags: s.negative,
+      })
+      update(d => ({
+        ...d,
+        shots: d.shots.map((x, i) => ({ ...x, adopted: i === index })),
+        messages: [...d.messages, {
+          role: 'assistant',
+          text: `${index + 1} 枚目をコマの絵にしました。タグもシーンに保存しました(それまでのコマの絵は候補に戻ります)。`
+            + '吹き出しを入れ直すには、物語のページで合成し直してください。',
+        }],
+      }))
+    } catch (e) {
+      setError(`採用できませんでした: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   async function generate(tags: Tags, base: SessionData) {
     if (!token) return
     setBusy('generate')
     setError(null)
     try {
+      if (base.panel) {
+        const link = base.panel
+        const r = await apiFetch<DrawResponse>(token, `/api/studio/panel/${link.scene_id}/draw`, {
+          ...link.draw,
+          prompt_tags: tags.scene,
+          absent_tags: tags.negative,
+          seed: base.lockSeed && base.seed !== null ? base.seed : null,
+        })
+        addShot({ ...tags, candidate_id: r.candidate_id, path: r.path, seed: r.seed }, base)
+        return
+      }
       const last = base.shots[base.shots.length - 1]
       const r = await apiFetch<GenerateResponse>(token, '/api/studio/generate', {
         ...tags,
@@ -252,19 +381,7 @@ export default function Studio() {
         reference_strength: strength,
         based_on: last?.history_id ?? null,
       })
-      const shot: Shot = { ...tags, history_id: r.history_id, path: r.path, seed: r.seed }
-      update(d => {
-        const messages = [...d.messages]
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === 'assistant') {
-            messages[i] = { ...messages[i], imageIndex: d.shots.length }
-            break
-          }
-        }
-        return { ...d, shots: [...d.shots, shot], seed: r.seed, messages }
-      })
-      setViewing(base.shots.length)
-      setPreview(null)
+      addShot({ ...tags, history_id: r.history_id, path: r.path, seed: r.seed }, base)
     } catch (e) {
       setError(`生成できませんでした: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -286,7 +403,7 @@ export default function Studio() {
     setBusy('turn')
     try {
       const r = await apiFetch<TurnResponse>(token, '/api/studio/turn', {
-        message, history, character_id: characterId, current: data.tags,
+        message, history, character_id: characterId, current: data.tags, scene_id: data.panel?.scene_id ?? null,
       })
       const p = r.proposal
       const tags: Tags = { scene: p.scene, negative: p.negative, size: p.size, use_outfit: p.use_outfit }
@@ -310,6 +427,7 @@ export default function Studio() {
     setViewing(null)
     setPreview(null)
     startedFrom.current = null
+    setPanelInfo(null)
     setParams(characterId ? { character: String(characterId) } : {})
   }
 
@@ -327,7 +445,7 @@ export default function Studio() {
       ...d,
       tags: { scene: s.scene, negative: s.negative, size: s.size, use_outfit: s.use_outfit },
       seed: s.seed,
-      messages: [...d.messages, { role: 'assistant', text: `${index + 1} 枚目(#${s.history_id})のタグとシードに戻しました。` }],
+      messages: [...d.messages, { role: 'assistant', text: `${index + 1} 枚目(${shotLabel(s)})のタグとシードに戻しました。` }],
     }))
   }
 
@@ -335,13 +453,23 @@ export default function Studio() {
   const shown = shot?.path ?? preview
   const tags = data.tags
   const lastDiffMsg = [...data.messages].reverse().find(m => m.diff)
+  const panelMode = !!data.panel
 
   return (
     <div className="pub-root studio-root">
       <header className="pub-header">
         <button type="button" className="pub-link" onClick={() => navigate('/')}>← ホーム</button>
         <h1>対話生成<HelpLink slug="studio" /></h1>
-        <select
+        {panelMode && data.panel && (
+          <span className="studio-panel-info">
+            コマの描き直し: {panelInfo
+              ? `「${panelInfo.story_title}」シーン${panelInfo.scene_index + 1}${panelInfo.title ? `「${panelInfo.title}」` : ''}`
+                + (panelInfo.characters.length ? `(${panelInfo.characters.map(c => c.name).join('・')})` : '')
+              : `シーン ${data.panel.scene_id}`}
+            <button type="button" className="pub-link" onClick={() => navigate(`/story?story=${data.panel!.story_id}`)}>物語に戻る</button>
+          </span>
+        )}
+        {!panelMode && <select
           className="studio-select"
           value={characterId ?? ''}
           onChange={e => {
@@ -352,7 +480,7 @@ export default function Studio() {
         >
           <option value="">キャラなし</option>
           {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        </select>}
         <select
           className="studio-select"
           value={sessionId ?? ''}
@@ -423,25 +551,31 @@ export default function Studio() {
               ? <a href={fileUrl(shown)} target="_blank" rel="noreferrer"><img src={fileUrl(shown)} alt="描いた絵" /></a>
               : <p className="studio-placeholder">まだ描いていません</p>}
           </div>
+          {!shot && preview && panelMode && <div className="studio-shot-info"><span>いまのコマの絵</span></div>}
           {shot && (
             <div className="studio-shot-info">
-              <span>#{shot.history_id} / シード {shot.seed} / {SIZE_LABEL[shot.size]}</span>
-              <button type="button" className="pub-link" onClick={() => baseOnShot(viewing!)}>この絵を土台にする</button>
+              <span>{shotLabel(shot)} / シード {shot.seed}{panelMode ? '' : ` / ${SIZE_LABEL[shot.size]}`}{shot.adopted ? ' / コマに採用済み' : ''}</span>
+              <span>
+                {panelMode && shot.candidate_id !== undefined && !shot.adopted && (
+                  <button type="button" className="studio-adopt" onClick={() => void adopt(viewing!)}>このコマに採用</button>
+                )}
+                <button type="button" className="pub-link" onClick={() => baseOnShot(viewing!)}>この絵を土台にする</button>
+              </span>
             </div>
           )}
           {data.shots.length > 0 && (
             <div className="studio-strip" role="list">
               {data.shots.map((s, i) => (
                 <button
-                  key={s.history_id}
+                  key={s.history_id ?? `c${s.candidate_id}`}
                   type="button"
                   role="listitem"
                   className={`studio-strip-item${i === viewing ? ' is-active' : ''}`}
                   onClick={() => { setViewing(i); setPreview(null) }}
-                  title={`#${s.history_id}`}
+                  title={shotLabel(s)}
                 >
                   <img src={thumbUrl(s.path, 240)} alt={`${i + 1} 枚目`} loading="lazy" />
-                  <span>{i + 1}</span>
+                  <span>{i + 1}{s.adopted ? ' ✓' : ''}</span>
                 </button>
               ))}
             </div>
@@ -459,7 +593,7 @@ export default function Studio() {
               />
             </label>
             <label className="studio-field">
-              <span>ネガティブ</span>
+              <span>{panelMode ? 'このコマに出てはいけない物(ネガティブに足す)' : 'ネガティブ'}</span>
               <textarea
                 value={tags?.negative ?? ''}
                 onChange={e => update(d => ({ ...d, tags: { ...(d.tags ?? { scene: '', size: 'portrait', use_outfit: false }), negative: e.target.value } }), false)}
@@ -468,7 +602,7 @@ export default function Studio() {
               />
             </label>
             <div className="studio-options">
-              <label>
+              {!panelMode && <label>
                 向き
                 <select
                   value={tags?.size ?? 'portrait'}
@@ -476,8 +610,8 @@ export default function Studio() {
                 >
                   {(Object.keys(SIZE_LABEL) as Size[]).map(s => <option key={s} value={s}>{SIZE_LABEL[s]}</option>)}
                 </select>
-              </label>
-              {characterId && (
+              </label>}
+              {characterId && !panelMode && (
                 <>
                   <label><input type="checkbox" checked={tags?.use_outfit ?? false} onChange={e => update(d => ({ ...d, tags: { ...(d.tags ?? { scene: '', negative: '', size: 'portrait' }), use_outfit: e.target.checked } }))} /> 普段の服</label>
                   <label><input type="checkbox" checked={useReference} onChange={e => setUseReference(e.target.checked)} /> キャラ参照</label>
@@ -511,9 +645,13 @@ export default function Studio() {
                 disabled={busy !== null || !tags?.scene.trim()}
                 onClick={() => tags && void generate(tags, data)}
               >
-                {busy === 'generate' ? '生成しています…' : 'このタグで生成'}
+                {busy === 'generate' ? '生成しています…' : panelMode ? 'このタグで候補を描く' : 'このタグで生成'}
               </button>
-              <span className="studio-hint">キャラの見た目・絵柄はキャラシートから入ります。描いた絵はギャラリーとキャラの画像に並びます。</span>
+              <span className="studio-hint">
+                {panelMode
+                  ? '登場人物の見た目・服・コマの形は、物語の設定から入ります。描いた絵はコマの候補に入ります。'
+                  : 'キャラの見た目・絵柄はキャラシートから入ります。描いた絵はギャラリーとキャラの画像に並びます。'}
+              </span>
             </div>
           </div>
         </section>

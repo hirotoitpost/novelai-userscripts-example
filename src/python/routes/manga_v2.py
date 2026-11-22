@@ -1357,6 +1357,8 @@ async def generate_panels(story_id: int, req: MangaV2PanelsRequest, client: Clie
     ]
     if not targets:
         raise HTTPException(status_code=400, detail="生成するシーンがありません(範囲内は生成済みです)。")
+    if (req.prompt_tags is not None or req.absent_tags is not None) and len(targets) != 1:
+        raise HTTPException(status_code=422, detail="作画タグを差し替えて描けるのは1シーンだけです。")
 
     # get_client はリクエスト終了時にクライアントを閉じるので、トークンだけ持ち出す
     api_key = client.api_key
@@ -1491,7 +1493,8 @@ async def _run_panels(
         # (キャラシートの普段の服装も含む)
         scene_characters = characters.get(scene["id"], [])
         # 未成年キャラの安全対策: 性的な場面に成人でないキャラがいれば止めるか、全年齢で描く(minor_guard.py)
-        scene_tags = scene["draft_prompt_tags"]
+        scene_tags = req.prompt_tags if req.prompt_tags is not None else scene["draft_prompt_tags"]
+        absent = req.absent_tags if req.absent_tags is not None else scene.get("absent_tags")
         guard_negative = ""
         decision = minor_guard.decide(scene_tags, scene_characters, guard_text)
         place = f"漫画のコマ(シーン{scene['scene_index'] + 1})"
@@ -1539,9 +1542,10 @@ async def _run_panels(
             guard_negative,
             "" if multiple else characters_negative(scene_characters),
             # 出てはいけない物(まだもらっていない小物など)は、どのネガティブを使うときも足す
-            scene.get("absent_tags") or "",
+            absent or "",
         )
         # 候補を描くときは、コマの絵は変えずに候補をシードをずらして何枚か描く
+        as_candidate = req.candidates > 1 or req.as_candidate
         for k in range(req.candidates):
             draw_seed = seed if req.candidates == 1 else (seed + k * _CANDIDATE_SEED_STEP) % 4294967296
             if req.candidates > 1:
@@ -1563,20 +1567,20 @@ async def _run_panels(
                 character_reference=references,
                 character_negatives=character_negatives if multiple else None,
                 log_context={
-                    "purpose": "panel_candidate" if req.candidates > 1 else "panel",
+                    "purpose": "panel_candidate" if as_candidate else "panel",
                     "story_id": story_id,
                     "scene_id": scene["id"],
                     "scene_index": scene["scene_index"],
                     "references": used_references,
                 },
             )
-            suffix = f"_c{k + 1}" if req.candidates > 1 else ""
+            suffix = f"_c{k + 1}" if as_candidate else ""
             filename = f"story{story_id}_scene{scene['scene_index']}{suffix}_{uuid4().hex[:8]}.png"
             (_PANEL_DIR / filename).write_bytes(image)
 
             conn = get_connection()
             try:
-                if req.candidates > 1:
+                if as_candidate:
                     add_panel_candidate(
                         conn, story_id, scene["id"], f"outputs/manga/panels/{filename}", draw_seed, width, height,
                         used_references,
@@ -1595,7 +1599,7 @@ async def _run_panels(
     done = len(targets) - len(blocked)
     job.message = (
         f"{done}コマの候補を{req.candidates}枚ずつ生成しました(コマの絵はそのままです。候補から選んでください)"
-        if req.candidates > 1
+        if req.candidates > 1 or req.as_candidate
         else f"{done}コマの絵を生成しました"
     ) + (f"。{job.guard_note}" if job.guard_note else "")
 

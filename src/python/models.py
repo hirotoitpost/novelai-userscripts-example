@@ -1653,6 +1653,11 @@ class MangaV2PanelsRequest(BaseModel):
     # 2以上なら、コマの絵は変えずに候補をこの枚数描く(シードを候補ごとにずらす)。選ぶのは
     # POST /scenes/{scene_id}/candidates/{candidate_id}/adopt。
     candidates: int = Field(1, ge=1, le=8)
+    # True なら1枚でも候補に入れる(コマの絵は変えない。対話生成の「対話で描き直す」)
+    as_candidate: bool = False
+    # 1シーンだけ描くとき、シーンに保存した作画タグ・出てはいけない物の代わりに使う(保存はしない。対話生成で試す)
+    prompt_tags: Optional[str] = Field(None, max_length=4000)
+    absent_tags: Optional[str] = Field(None, max_length=1000)
     # width/height はテンプレートのコマの形から決めるので使わない。
     settings: MangaImageSettings = MangaImageSettings()
 

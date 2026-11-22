@@ -156,3 +156,63 @@ def test_candidates_go_away_with_the_scene(client: TestClient, monkeypatch: pyte
         assert db.count_panel_candidates(conn, story_id) == {}
     finally:
         conn.close()
+
+
+def test_as_candidate_draws_one_candidate_with_override_tags(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """対話生成の「対話で描き直す」: 1枚でも候補に入れ、保存していない作画タグ・出てはいけない物で描く。"""
+    story_id, scenes = _story(client)
+    first = scenes[0]
+    _generate(story_id, [first], monkeypatch, settings={"seed": 5})
+    prompts: list[tuple[str, str]] = []
+
+    async def fake_generate(api_key, prompt, negative, **kwargs):
+        prompts.append((prompt, negative))
+        return _png((1, 2, 3))
+
+    monkeypatch.setattr(manga_routes, "generate_image_v5", fake_generate)
+    req = MangaV2PanelsRequest(as_candidate=True, prompt_tags="looking back, peace sign", absent_tags="umbrella",
+                               settings={"seed": 9})
+    asyncio.run(manga_routes._run_panels(_Job(), story_id, req, "t", [first]))
+    assert "looking back, peace sign" in prompts[0][0] and "umbrella" in prompts[0][1]
+    entries = client.get(f"/api/manga-v2/scenes/{first['id']}/candidates").json()
+    assert len(entries) == 1 and entries[0]["seed"] == 9
+    conn = db.get_connection()
+    try:
+        assert db.get_scene(conn, first["id"])["draft_prompt_tags"] != "looking back, peace sign"  # 保存はしない
+    finally:
+        conn.close()
+
+
+def test_override_tags_need_a_single_scene(client: TestClient) -> None:
+    story_id, _ = _story(client)
+    res = client.post(f"/api/manga-v2/{story_id}/panels", json={"prompt_tags": "smile", "skip_existing": False},
+                      headers={"Authorization": "Bearer test"})
+    assert res.status_code == 422
+
+
+def test_studio_adopt_saves_tags_and_swaps_panel(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from python.routes import studio as studio_routes
+
+    client.app.include_router(studio_routes.router)
+    story_id, scenes = _story(client)
+    first = scenes[0]
+    _generate(story_id, [first], monkeypatch, settings={"seed": 5})
+    _generate(story_id, [first], monkeypatch, as_candidate=True, prompt_tags="peace sign", settings={"seed": 7})
+    info = client.get(f"/api/studio/panel/{first['id']}").json()
+    assert info["story_id"] == story_id and info["candidates"] == 1 and "cast" not in info
+    cand = client.get(f"/api/manga-v2/scenes/{first['id']}/candidates").json()[0]
+
+    res = client.post(f"/api/studio/panel/{first['id']}/adopt",
+                      json={"candidate_id": cand["id"], "prompt_tags": "peace sign", "absent_tags": "umbrella"})
+    assert res.status_code == 200, res.text
+    conn = db.get_connection()
+    try:
+        scene = db.get_scene(conn, first["id"])
+        panel = db.list_manga_panels(conn, story_id)[0]
+    finally:
+        conn.close()
+    assert scene["draft_prompt_tags"] == "peace sign" and scene["absent_tags"] == "umbrella"
+    assert panel["image_path"] == cand["image_path"] and not panel["stale"]
+    # 前のコマの絵は候補に戻る。同じ候補をもう一度採用しようとすると 404
+    assert len(client.get(f"/api/manga-v2/scenes/{first['id']}/candidates").json()) == 1
+    assert client.post(f"/api/studio/panel/{first['id']}/adopt", json={"candidate_id": cand["id"]}).status_code == 404

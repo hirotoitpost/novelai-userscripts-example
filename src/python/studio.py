@@ -76,30 +76,35 @@ def join_tags(*parts: str | None) -> str:
     return ", ".join(out)
 
 
-def character_tags(character: dict[str, Any] | None) -> set[str]:
-    """キャラシートが入れるタグ(scene から取り除く)。"""
-    if not character:
-        return set()
+Characters = dict[str, Any] | list[dict[str, Any]] | None
+
+
+def _as_list(characters: Characters) -> list[dict[str, Any]]:
+    if not characters:
+        return []
+    return [characters] if isinstance(characters, dict) else [c for c in characters if c]
+
+
+def character_tags(characters: Characters) -> set[str]:
+    """キャラシートが入れるタグ(scene から取り除く)。コマなら場面のキャラ全員の分。"""
     keys: set[str] = set()
-    for field in ("appearance_tags", "outfit_tags", "style_tags", "body_tags"):
-        keys.update(_tag_key(t) for t in split_tags(character.get(field)))
+    for character in _as_list(characters):
+        for field in ("appearance_tags", "outfit_tags", "style_tags", "body_tags"):
+            keys.update(_tag_key(t) for t in split_tags(character.get(field)))
     return keys
 
 
-def scene_from_prompt(character: dict[str, Any] | None, prompt: str) -> str:
+def scene_from_prompt(character: Characters, prompt: str) -> str:
     """生成済みの画像のプロンプトから、キャラシートが入れる分を除いた場面のタグ(画像から始めるとき)。"""
     own = character_tags(character)
     return ", ".join(t for t in split_tags(prompt) if _tag_key(t) not in own)
 
 
-def _name_keys(character: dict[str, Any] | None) -> set[str]:
-    if not character:
-        return set()
-    name = str(character.get("name") or "").strip().lower()
-    return {name} if name else set()
+def _name_keys(characters: Characters) -> set[str]:
+    return {str(c.get("name") or "").strip().lower() for c in _as_list(characters)} - {""}
 
 
-def clean_scene(character: dict[str, Any] | None, scene: str) -> str:
+def clean_scene(character: Characters, scene: str) -> str:
     """モデルが書いた場面のタグから、キャラシートの分とキャラの名前を除く。"""
     own = character_tags(character) | _name_keys(character)
     return join_tags(", ".join(t for t in split_tags(scene) if _tag_key(t) not in own))
@@ -140,16 +145,31 @@ def build_prompt(character: dict[str, Any] | None, scene: str, negative: str, us
     return prompt, neg
 
 
-def system_prompt(character: dict[str, Any] | None) -> str:
-    if character:
-        who = (
-            f"キャラ: {character.get('name')}(年齢 {character.get('age') or '未設定'})。\n"
-            f"見た目のタグ(アプリが入れる。scene に書かない): {character.get('appearance_tags') or ''}\n"
-            f"普段の服(use_outfit が true のときアプリが入れる): {character.get('outfit_tags') or 'なし'}\n"
-            f"メモ: {(character.get('notes') or '')[:300]}"
-        )
-    else:
-        who = "キャラは選ばれていない。人物の見た目も scene に書く。"
+def _who(character: dict[str, Any]) -> str:
+    return (
+        f"キャラ: {character.get('name')}(年齢 {character.get('age') or '未設定'})。\n"
+        f"見た目のタグ(アプリが入れる。scene に書かない): {character.get('appearance_tags') or ''}\n"
+        f"普段の服(use_outfit が true のときアプリが入れる): {character.get('outfit_tags') or 'なし'}\n"
+        f"メモ: {(character.get('notes') or '')[:300]}"
+    )
+
+
+def _panel_note(panel: dict[str, Any]) -> str:
+    """漫画のコマを描き直すときの前置き。"""
+    return (
+        "これは漫画のコマの描き直し。コマの形(縦長・横長)とモノクロ/カラーはアプリが決めるので、size は前のままでよい。\n"
+        "登場人物の見た目・服はキャラシートとシーンの設定からアプリが入れる(use_outfit は使わない)。"
+        "scene には、人数(1girl, 2girls など)・構図・ポーズ・表情・背景・光を書く。セリフ・吹き出し・文字は描かない。\n"
+        "negative は「このコマに出てはいけない物」(英語タグ)。\n"
+        f"シーンの内容: {panel.get('title') or ''} / {str(panel.get('text') or '')[:400]}"
+    )
+
+
+def system_prompt(character: Characters, panel: dict[str, Any] | None = None) -> str:
+    members = _as_list(character)
+    who = "\n\n".join(_who(c) for c in members) if members else "キャラは選ばれていない。人物の見た目も scene に書く。"
+    if panel:
+        who = f"{_panel_note(panel)}\n\n{who}"
     return f"""あなたは NovelAI(NAI Diffusion 4.5)の画像生成アシスタント。ユーザーと日本語で相談しながら1枚の絵を仕上げる。
 毎回、次の JSON オブジェクトだけを返す(前後に文章・コードブロックを付けない):
 {{"say": "ユーザーへの返事(日本語。短く。説明を頼まれたらここに詳しく)",
@@ -184,10 +204,11 @@ def state_note(current: dict[str, Any] | None) -> str:
 
 
 def build_messages(
-    character: dict[str, Any] | None,
+    character: Characters,
     history: list[dict[str, str]],
     message: str,
     current: dict[str, Any] | None,
+    panel: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """system + 会話(新しい方から入るだけ)+ 今のタグ + 今回の発言。"""
     turns: list[dict[str, str]] = []
@@ -201,7 +222,7 @@ def build_messages(
         turns.append({"role": role, "content": content})
     turns.reverse()
     return [
-        {"role": "system", "content": system_prompt(character)},
+        {"role": "system", "content": system_prompt(character, panel)},
         *turns,
         {"role": "user", "content": f"{state_note(current)}\n\nユーザー: {message}"},
     ]
