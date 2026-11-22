@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch, isAuthExpired, notifyAuthExpired } from '../api'
 import type { MetadataGenerationSettings } from '../api'
+import CharacterPicker from '../components/CharacterPicker'
 import HelpLink from '../components/HelpLink'
 import { useAuth } from '../context/AuthContext'
 import { useAssistantContext } from '../assistantContext'
@@ -25,6 +26,7 @@ import './Studio.css'
 interface Character {
   id: number
   name: string
+  reference_image_path?: string | null
 }
 
 type Size = 'portrait' | 'landscape' | 'square'
@@ -171,6 +173,7 @@ export default function Studio() {
   const [strength, setStrength] = useLocalStorage('studio.referenceStrength', 0.55)
   const [useReference, setUseReference] = useLocalStorage('studio.useReference', true)
   const [panelInfo, setPanelInfo] = useState<PanelInfo | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
   const startedFrom = useRef<string | null>(null)
 
@@ -454,6 +457,7 @@ export default function Studio() {
   const tags = data.tags
   const lastDiffMsg = [...data.messages].reverse().find(m => m.diff)
   const panelMode = !!data.panel
+  const current = characters.find(c => c.id === characterId) ?? null
 
   return (
     <div className="pub-root studio-root">
@@ -469,18 +473,24 @@ export default function Studio() {
             <button type="button" className="pub-link" onClick={() => navigate(`/story?story=${data.panel!.story_id}`)}>物語に戻る</button>
           </span>
         )}
-        {!panelMode && <select
-          className="studio-select"
-          value={characterId ?? ''}
-          onChange={e => {
-            const id = Number(e.target.value) || null
-            setCharacterId(id)
+        {!panelMode && (
+          <button type="button" className="cpk-trigger" onClick={() => setPickerOpen(true)} title="キャラを絵で選ぶ">
+            {current?.reference_image_path
+              ? <img src={thumbUrl(current.reference_image_path, 240)} alt="" />
+              : <span className="cpk-trigger-blank" />}
+            {current ? current.name : 'キャラなし'} ▾
+          </button>
+        )}
+        <CharacterPicker
+          open={pickerOpen}
+          currentId={characterId}
+          onClose={() => setPickerOpen(false)}
+          onPick={c => {
+            setPickerOpen(false)
+            if (c && !characters.some(x => x.id === c.id)) setCharacters(list => [...list, c])
+            setCharacterId(c ? c.id : null)
           }}
-          aria-label="キャラ"
-        >
-          <option value="">キャラなし</option>
-          {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>}
+        />
         <select
           className="studio-select"
           value={sessionId ?? ''}
