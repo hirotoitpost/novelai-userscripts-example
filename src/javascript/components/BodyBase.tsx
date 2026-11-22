@@ -167,6 +167,8 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
   const [useReference, setUseReference] = useState(true)
   // 自動チェック: 描いた絵を調べ、合わなければシードを変えて描き直す(回数は開発管理者の設定)
   const [autoCheck, setAutoCheck] = useState(true)
+  // 新しいシードで描く: キャラの基準シードのままだと、描き直しても同じ絵になる
+  const [newSeed, setNewSeed] = useState(false)
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -439,7 +441,7 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
       const res = await fetch(`/api/lora-dataset/character/${characterId}/body-base`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ keys: [...picked], root_name: rootName, use_reference: useReference, auto_check: autoCheck }),
+        body: JSON.stringify({ keys: [...picked], root_name: rootName, use_reference: useReference, auto_check: autoCheck, new_seed: newSeed }),
       })
       if (!res.ok || !res.body) {
         setStatus(`描けませんでした: ${await detail(res)}`)
@@ -703,6 +705,10 @@ export default function BodyBase({ characterId, characterName, token, rootName, 
           <label className="fsh-label" title="振り返り・2人並び・手の突き出し・足裏の構図・Aポーズの崩れを調べ、合わなければシードを変えて描き直します(回数は開発管理者の設定。描くたびに Anlas を使います)">
             <input type="checkbox" checked={autoCheck} disabled={busy} onChange={e => setAutoCheck(e.target.checked)} />
             自動チェック(合わなければ描き直す)
+          </label>
+          <label className="fsh-label" title="ふだんはキャラの基準シードで描くので、描き直しても同じ絵になります。入れると部位ごとに新しいシードで描きます(前の絵は履歴に残ります)">
+            <input type="checkbox" checked={newSeed} disabled={busy} onChange={e => setNewSeed(e.target.checked)} />
+            シードを変えて描く(前と違う絵にする)
           </label>
           <label className="fsh-label">
             <input type="checkbox" checked={useReference} disabled={busy} onChange={e => setUseReference(e.target.checked)} />
