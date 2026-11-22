@@ -53,6 +53,7 @@ from .routes.writer import router as writer_router
 from .routes.help import router as help_router
 from .routes.assistant import router as assistant_router
 from .routes.studio import router as studio_router
+from .routes.x_posts import router as x_posts_router
 from .routes.voice import router as voice_router
 from .routes.manga_voice import router as manga_voice_router
 
@@ -82,6 +83,24 @@ async def _auto_backup_loop() -> None:
         await asyncio.sleep(3600)
 
 
+async def _x_post_loop() -> None:
+    """30 秒ごとに、時刻になった X への予約投稿を投稿する(x_posts.py)。"""
+    import asyncio
+
+    from . import x_posts
+
+    try:
+        await asyncio.to_thread(x_posts.recover_interrupted)
+    except Exception:  # noqa: BLE001 見回りが止まらないように
+        pass
+    while True:
+        try:
+            await asyncio.to_thread(x_posts.run_tick)
+        except Exception:  # noqa: BLE001 見回りが止まらないように
+            pass
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import asyncio
@@ -90,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     check_config()
     await init_llm_clients()
     auto_backup = asyncio.create_task(_auto_backup_loop())
+    x_post = asyncio.create_task(_x_post_loop())
     # ギャラリーの一覧を裏で作り置きする(最初に開いたときに数十秒待たせないように。起動は待たない)
     from .routes.library import warm_gallery_cache
 
@@ -97,6 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
     warm.cancel()
     auto_backup.cancel()
+    x_post.cancel()
     await close_client()
     await close_llm_clients()
 
@@ -170,6 +191,7 @@ app.include_router(writer_router)
 app.include_router(help_router)
 app.include_router(assistant_router)
 app.include_router(studio_router)
+app.include_router(x_posts_router)
 app.include_router(voice_router)
 app.include_router(manga_voice_router)
 

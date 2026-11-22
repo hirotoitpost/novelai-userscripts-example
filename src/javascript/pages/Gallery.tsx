@@ -29,6 +29,7 @@ import GalleryMangaDialog, { GALLERY_MANGA_MAX } from '../components/GalleryMang
 import type { GalleryMangaJob } from '../components/GalleryMangaDialog'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './Gallery.css'
+import { openXPost } from '../xpost'
 import { isShortcutKey, keyIs } from '../shortcuts'
 
 type Source = 'generate' | 'panel' | 'illustration' | 'dataset'
@@ -698,6 +699,16 @@ export default function Gallery() {
             title="NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として別に保存して ZIP にまとめます"
           >
             出版する
+          </button>
+          <button
+            type="button"
+            className="gallery-primary"
+            // 選んだ順に並べる(投稿のページで並べ替えられる)
+            onClick={() => openXPost([...selected], navigate)}
+            disabled={selected.size === 0}
+            title="選んだ画像を X に投稿します(4枚までは1件、それより多いとスレッド。予約もできます)"
+          >
+            X に投稿
           </button>
           <button
             type="button"
