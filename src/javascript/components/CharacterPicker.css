@@ -55,6 +55,11 @@
   cursor: pointer;
 }
 
+.cpk-none.is-on {
+  background: #3b2f6b;
+  color: #fff;
+}
+
 .cpk-close {
   margin-left: auto;
   border: none;
@@ -97,7 +102,7 @@
 
 .cpk-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 0.9rem;
 }
 
@@ -128,7 +133,9 @@
 }
 
 .cpk-thumb {
-  aspect-ratio: 1 / 1;
+  height: 200px;
+  overflow: hidden;
+  flex: 0 0 auto;
   background: #0b0b18;
   display: flex;
   align-items: center;
@@ -161,9 +168,10 @@
 }
 
 .cpk-blurb {
-  padding: 0 0.6rem 0.6rem;
+  margin: 0 0.6rem 0.6rem;
   font-size: 0.75rem;
   line-height: 1.45;
+  max-height: calc(0.75rem * 1.45 * 2);
   color: #a8a8c4;
   display: -webkit-box;
   -webkit-line-clamp: 2;

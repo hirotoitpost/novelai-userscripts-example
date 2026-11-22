@@ -6,6 +6,7 @@ import './CharacterPicker.css'
  * キャラを絵で選ぶ画面(全画面の上に出す)。キャラシートの参照画像のカードを、作品(シリーズ)ごとの横の列に並べる。
  * カードを押すとプロフィール(大きい絵・年齢・普段の服・出ている作品・メモ)を出し、「このキャラにする」で決める。
  * 上の検索欄で名前・メモから絞れる(絞っているあいだは列に分けず、まとめて並べる)。
+ * 「全キャラ一覧」で、列に分けずに全員を名前順に並べる(もう一度押すと作品ごとに戻る)。
  * 使う側は open / onClose / onPick を渡すだけ(一覧は開いたときに読む)。
  */
 
@@ -79,6 +80,11 @@ function groupsOf(list: PickerCharacter[], works: Record<string, Work[]>): Group
   return groups.filter(g => g.items.length)
 }
 
+/** 名前に段階の名前が入っていれば重ねて出さない(「九条ゆら(22歳)」に「(22歳)」を足さない) */
+function stageLabel(c: PickerCharacter): string | null {
+  return c.growth_label && !c.name.includes(c.growth_label) ? c.growth_label : null
+}
+
 function Card({ c, current, onOpen }: { c: PickerCharacter; current: boolean; onOpen: () => void }) {
   return (
     <button type="button" className={`cpk-card${current ? ' is-current' : ''}`} onClick={onOpen} title={c.name}>
@@ -87,7 +93,7 @@ function Card({ c, current, onOpen }: { c: PickerCharacter; current: boolean; on
           ? <img src={thumbUrl(c.reference_image_path, 360)} alt="" loading="lazy" />
           : <span className="cpk-noimg">参照画像なし</span>}
       </div>
-      <div className="cpk-name">{c.name}{c.growth_label ? <small>({c.growth_label})</small> : null}</div>
+      <div className="cpk-name">{c.name}{stageLabel(c) ? <small>({stageLabel(c)})</small> : null}</div>
       <div className="cpk-blurb">{blurb(c) || ageLabel(c)}</div>
     </button>
   )
@@ -106,6 +112,7 @@ export default function CharacterPicker({
   const [works, setWorks] = useState<Record<string, Work[]>>({})
   const [query, setQuery] = useState('')
   const [detail, setDetail] = useState<PickerCharacter | null>(null)
+  const [showAll, setShowAll] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -134,10 +141,12 @@ export default function CharacterPicker({
 
   const groups = useMemo(() => (list ? groupsOf(list, works) : []), [list, works])
   const matches = useMemo(() => {
+    if (!list) return null
     const q = query.trim().toLowerCase()
-    if (!q || !list) return null
-    return list.filter(c => c.name.toLowerCase().includes(q) || (c.notes ?? '').toLowerCase().includes(q))
-  }, [list, query])
+    if (!q && !showAll) return null
+    const found = q ? list.filter(c => c.name.toLowerCase().includes(q) || (c.notes ?? '').toLowerCase().includes(q)) : list
+    return [...found].sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+  }, [list, query, showAll])
 
   if (!open) return null
   const detailWorks = detail ? (works[String(detail.id)] ?? []) : []
@@ -160,6 +169,12 @@ export default function CharacterPicker({
           {allowNone && !detail && (
             <button type="button" className="cpk-none" onClick={() => onPick(null)}>キャラなしで描く</button>
           )}
+          {!detail && (
+            <button type="button" className={`cpk-none${showAll ? ' is-on' : ''}`} onClick={() => setShowAll(v => !v)}
+              title={showAll ? '作品(シリーズ)ごとの列に戻します' : '列に分けずに、全員を名前順に並べます'}>
+              {showAll ? '作品ごとに戻る' : `全キャラ一覧${list ? `(${list.length}人)` : ''}`}
+            </button>
+          )}
           <button type="button" className="cpk-close" onClick={onClose} aria-label="閉じる">×</button>
         </header>
 
@@ -174,7 +189,7 @@ export default function CharacterPicker({
                 : <span className="cpk-noimg">参照画像なし</span>}
             </div>
             <div className="cpk-profile">
-              <h3>{detail.name}{detail.growth_label ? <small>({detail.growth_label})</small> : null}</h3>
+              <h3>{detail.name}{stageLabel(detail) ? <small>({stageLabel(detail)})</small> : null}</h3>
               {detail.notes && <p className="cpk-notes">{blurb(detail, 240)}</p>}
               <dl>
                 <dt>年齢</dt><dd>{ageLabel(detail)}</dd>
