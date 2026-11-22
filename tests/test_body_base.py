@@ -957,3 +957,24 @@ def test_limb_closeups_drop_face_and_chest_tags() -> None:
     chest = body_base.prompt(character, base, body_base.ITEMS["chest"], {})
     assert "medium breasts" in chest and "amber eyes" in chest
     assert "1.4::face::" not in body_base.part_negative("", body_base.ITEMS["chest"])
+
+
+def test_new_seed_redraws_with_a_fresh_seed(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 既定ではキャラの基準シードで描くので、描き直しても同じシード。new_seed なら部位ごとに新しいシードで描く
+    seeds: list[int | None] = []
+
+    async def fake_generate(client, prompt, size, cfg, seed=None, inpaint=None):  # noqa: ANN001
+        seeds.append(seed)
+        return Image.new("RGB", size, (200, 200, 200))
+
+    monkeypatch.setattr(lora_routes, "generate_one", fake_generate)
+    character = _character(client, "seeded", is_adult=1, age=25, seed=12345)
+    suit = _base(client, name="スーツ", kind="suit")
+    client.put(f"/api/lora-dataset/character/{character['id']}/body-base", json={"body_base_id": suit["id"]})
+    url = f"/api/lora-dataset/character/{character['id']}/body-base"
+    for _ in range(2):
+        assert '"status": "ok"' in client.post(url, json={"keys": ["front"], "auto_check": False}).text
+    assert seeds == [12345, 12345]
+    monkeypatch.setattr(lora_routes.random, "randint", lambda a, b: 777)
+    assert '"status": "ok"' in client.post(url, json={"keys": ["front", "side"], "auto_check": False, "new_seed": True}).text
+    assert seeds[2:] == [777, 777]

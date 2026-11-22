@@ -6,6 +6,7 @@ import dataclasses
 import binascii
 import io
 import json
+import random
 import re
 import shutil
 import sqlite3
@@ -1421,8 +1422,10 @@ async def generate_body_base(character_id: int, req: BodyBaseSheetRequest, clien
                 # 自動チェック: 合わなければシードを変えて描き直し、合う絵が出なければ点数のいちばん高い絵を残す
                 best: tuple[Image.Image, body_check.CheckResult | None] | None = None
                 tries = attempts if req.auto_check else 1
+                # 新しいシード: 部位ごとに乱数のシードから始める(基準シードのままだと、描き直しても同じ絵になる)
+                first_seed = random.randint(0, 2**32 - 1 - attempts * _CHECK_SEED_STEP) if req.new_seed else cfg.seed
                 for attempt in range(tries):
-                    seed = cfg.seed + attempt * _CHECK_SEED_STEP if cfg.seed is not None else None
+                    seed = first_seed + attempt * _CHECK_SEED_STEP if first_seed is not None else None
                     image = await generate_one(client, prompts[part.key], body_base.SIZES[part.size], part_cfg, seed=seed)
                     result = await asyncio.to_thread(body_check.check, part.key, image) if req.auto_check else None
                     if best is None or (result is not None and best[1] is not None and result.score > best[1].score):
