@@ -724,13 +724,17 @@ def test_body_base_uses_the_reference_image_by_default() -> None:
 
 
 def test_nipple_types_and_pregnant_nipples_reuse_the_four_views(client: TestClient) -> None:
-    # 乳首の種類(ぷっくり・陥没)と妊娠時の乳首(ふつう・ぷっくり・陥没) × 乳首の4方向。素体を作り分けずに部位で描く
+    # 乳首の種類(ぷっくり・陥没・半陥没)と妊娠時の乳首(ふつう・ぷっくり・陥没・半陥没) × 乳首の4方向。素体を作り分けずに部位で描く
     nipple = [p for p in body_base.PARTS if p.group == "nipple"]
     pregnant = [p for p in body_base.PARTS if p.group == "pregnancy_nipple"]
-    assert len(nipple) == 8 and len(pregnant) == 12
+    assert len(nipple) == 12 and len(pregnant) == 16
     puffy = body_base.ITEMS["nipple_puffy_side"]
     assert "puffy nipples::" in puffy.tags and "from side" in puffy.tags and "inverted nipples" in puffy.negative
     assert puffy.label == "乳首・ぷっくり(側面)"
+    semi = body_base.ITEMS["nipple_semi_inverted_front"]
+    assert "nipple tip peeking out::" in semi.tags and "puffy areolae::" in semi.tags and "erect nipples::" in semi.negative
+    assert semi.label == "乳首・半陥没(正面)"
+    assert body_base.ITEMS["nipple_preg_semi_inverted_below"].label == "妊娠時の乳首・半陥没(下から)"
     inverted = body_base.ITEMS["nipple_preg_inverted_below"]
     assert "inverted nipples::" in inverted.tags and "dark areolae" in inverted.tags and "from below" in inverted.tags
     assert inverted.label == "妊娠時の乳首・陥没(下から)"
