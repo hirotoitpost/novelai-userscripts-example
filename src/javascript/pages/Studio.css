@@ -301,3 +301,22 @@
     max-height: 55vh;
   }
 }
+
+.studio-panel-info {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #cfc3ff;
+}
+
+.studio-adopt {
+  margin-right: 0.6rem;
+  padding: 0.3rem 0.8rem;
+  border: none;
+  border-radius: 6px;
+  background: #2f8f5b;
+  color: #fff;
+  cursor: pointer;
+}

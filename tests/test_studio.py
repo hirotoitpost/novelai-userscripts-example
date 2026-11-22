@@ -77,3 +77,12 @@ def test_build_messages_keeps_recent_history_and_current_tags():
     assert "downward dog" in msgs[0]["content"]  # タグの効き方のメモを渡す
     assert [m["content"][0] for m in msgs[1:-1]] == ["y", "z"]  # 古いものから落とす
     assert "scene: all fours" in msgs[-1]["content"] and msgs[-1]["content"].endswith("顔が逆さま")
+
+
+def test_panel_prompt_covers_whole_cast():
+    other = {**ADULT, "name": "先生", "appearance_tags": "1boy, black hair, glasses"}
+    msgs = studio.build_messages([ADULT, other], [], "振り返って", {"scene": "standing"}, {"title": "ブレザー", "text": "まずは定番"})
+    system = msgs[0]["content"]
+    assert "漫画のコマの描き直し" in system and "ブレザー" in system
+    assert "夏川つぐみ" in system and "先生" in system
+    assert studio.clean_scene([ADULT, other], "glasses, black hair, peace sign, 先生") == "peace sign"
