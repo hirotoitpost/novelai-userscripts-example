@@ -23,6 +23,7 @@ import WorkRelations, { Author } from '../components/WorkRelations'
 import FullscreenViewer from '../components/FullscreenViewer'
 import { WorkExportButton, WorkImport } from '../components/WorkTransfer'
 import './Bookshelf.css'
+import { openXPost } from '../xpost'
 import { isShortcutKey, keyIs } from '../shortcuts'
 
 interface Book {
@@ -832,6 +833,10 @@ function Reader({
               <button type="button" onClick={() => onPublish(book)}
                 title="この本の漫画のページから NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として保存します">
                 出版する
+              </button>
+              <button type="button" onClick={() => openXPost([`book:${book.id}`], navigate)}
+                title="この本の漫画のページを X に投稿します(1ページずつのスレッド。予約もできます)">
+                X に投稿
               </button>
               <WorkExportButton storyId={book.id} />
               <button type="button" onClick={() => onToggleSelect(book.id)} aria-pressed={selectedForPublish}

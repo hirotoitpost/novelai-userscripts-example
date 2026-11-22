@@ -542,6 +542,27 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # X への投稿(x_posts.py)。1件 = 1つの投稿、または画像が多いときのスレッド(parts が投稿ごとの本文と画像)。
+    # 時刻は UTC の ISO 形式。tweet_ids は投稿できた分の ID(途中で止まったら、やり直しはその続きから)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS x_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            status TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            parts TEXT NOT NULL DEFAULT '[]',
+            sensitive INTEGER NOT NULL DEFAULT 0,
+            scheduled_at TEXT,
+            created_at TEXT NOT NULL,
+            posted_at TEXT,
+            tweet_ids TEXT NOT NULL DEFAULT '[]',
+            username TEXT,
+            error TEXT,
+            metrics TEXT,
+            metrics_at TEXT
+        )
+        """
+    )
     # アプリの既定値のうち、開発管理者のページで変えたもの(app_settings.py。値は JSON)
     conn.execute(
         """

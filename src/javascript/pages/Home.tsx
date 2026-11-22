@@ -323,6 +323,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/x-posts')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/x-posts')}
+          >
+            <div className="home-card-icon">🐦</div>
+            <h2>X 投稿</h2>
+            <p>ギャラリー・本棚で選んだ画像や漫画を X に投稿・予約します。投稿した記録と反応もここで確かめます。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/gallery')}
             role="button"
             tabIndex={0}

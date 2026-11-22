@@ -7,6 +7,7 @@ import BatchOrganize from './pages/BatchOrganize'
 import Bookshelf from './pages/Bookshelf'
 import Gallery from './pages/Gallery'
 import Publications from './pages/Publications'
+import XPosts from './pages/XPosts'
 import Trash from './pages/Trash'
 import GuardInspect from './pages/GuardInspect'
 import Ugoira from './pages/Ugoira'
@@ -149,6 +150,10 @@ function AppRoutes() {
       <Route
         path="/publications"
         element={<ProtectedRoute><Publications /></ProtectedRoute>}
+      />
+      <Route
+        path="/x-posts"
+        element={<ProtectedRoute><XPosts /></ProtectedRoute>}
       />
       <Route
         path="/trash"
