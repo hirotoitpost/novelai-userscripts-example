@@ -939,3 +939,21 @@ def test_floor_seated_poses_sit_on_the_invisible_floor_from_below() -> None:
             assert "sitting on an invisible transparent floor" in tags and "standing on an invisible" not in tags
             assert "soles of feet pressed" not in tags
     assert "standing on an invisible transparent floor" in body_base.ITEMS["yoga_forward_bend__below"].tags
+
+
+def test_limb_closeups_drop_face_and_chest_tags() -> None:
+    # 腕・手・脚の寄りは、顔・髪・胸・乳首のタグを外して頭を枠の外に出す(2026-11-22 実機: 残すとバストアップになった)
+    character = {"appearance_tags": "1girl, blonde hair, long hair, amber eyes, cheerful smile, fang, medium breasts",
+                 "style_tags": "detailed eyes, soft lighting"}
+    base = {"kind": "nude", "sex": "female", "extra_tags": "medium breasts, slim"}
+    limbs = [p for p in body_base.PARTS if p.limb_closeup]
+    assert {p.key for p in limbs} == {"arm", "forearm", "hand_palm", "hand_back", "calf", "foot"}
+    for part in limbs:
+        tags = body_base.prompt(character, base, part, {})
+        assert "head out of frame" in tags and "soft lighting" in tags and "slim" in tags
+        for word in ("hair", "eyes", "smile", "fang", "breasts", "nipples"):
+            assert word not in tags, (part.key, word)
+        assert "1.4::face::" in body_base.part_negative("", part)
+    chest = body_base.prompt(character, base, body_base.ITEMS["chest"], {})
+    assert "medium breasts" in chest and "amber eyes" in chest
+    assert "1.4::face::" not in body_base.part_negative("", body_base.ITEMS["chest"])

@@ -56,6 +56,8 @@ class BodyPart:
     reference_scale: float = 1.0
     # 視点の部位(with_view)の元のまとまり。成人キャラだけ・まとまりのネガティブ・はだしは、元のまとまりで決める
     base_group: str = ""
+    # 腕・手・脚の寄り。顔・髪・胸のタグを外し、頭を枠の外に出す(_LIMB_HIDDEN_RE)
+    limb_closeup: bool = False
 
     @property
     def family(self) -> str:
@@ -114,6 +116,16 @@ _SIDE_NEGATIVE = (
     "looking at viewer, from behind"
 )
 # 手は、こちらへ突き出すと遠近で縮んで指の長さが分からない(2026-10 実機)。顔の横に平らに上げた手にする
+# 腕・手・脚の寄りで外すタグ(顔・目・表情・髪・胸・乳首・股)。キャラの顔と裸の素体の nipples などが残ると、
+# arm focus より強く効いて、腕を伸ばしたバストアップになった(2026-11-22 実機: 夏川つぐみの裸の素体で6部位とも。
+# 参照画像を外しても同じ)。絵柄の目のタグ(detailed eyes など)も外す
+_LIMB_HIDDEN_RE = re.compile(
+    r"\beyes?\b|eyelash|eyeliner|\bbangs\b|\bforehead\b|\bahoge\b|\bhair\b|\bsmil(e|ing)\b|\bgrin\b|\bfang\b"
+    r"|open mouth|\bblush\b|expressionless|\bbreasts?\b|\bnipples?\b|featureless crotch|\bsideboob\b",
+    re.IGNORECASE,
+)
+_LIMB_TAGS = "head out of frame, no face"
+_LIMB_NEGATIVE = "1.4::face::, head, eyes, 1.3::breasts::, nipples, upper body, portrait, looking at viewer"
 _HAND = "hand focus, close-up, open hand, hand up, flat hand, fingers together"
 _HAND_NEGATIVE = "foreshortening, reaching towards viewer, outstretched hand, extra fingers, fused fingers, multiple views"
 PARTS: tuple[BodyPart, ...] = (
@@ -172,27 +184,31 @@ PARTS: tuple[BodyPart, ...] = (
              negative=_BACK_NEGATIVE, rear=True),
     BodyPart("pelvis", "骨盤・腰", "cowboy shot, front view, facing viewer, hips, waist, arms at sides, expressionless", "trunk",
              "女性は骨盤が広く、腰のくびれは臍の高さ。男性は肩幅に対して骨盤が狭い。股の高さは身長のほぼ半分", nude=False),
-    BodyPart("arm", "上腕・肘", "arm focus, upper arm, elbow, arm extended to side, close-up", "upper_limb",
-             "上腕の長さは肩から肘まで頭1つ半ほど。肘は外側へ少し反る(運搬角、女性で大きい)。上腕二頭筋は前、三頭筋は後ろ"),
-    BodyPart("forearm", "前腕・手首", "forearm focus, wrist, close-up", "upper_limb",
-             "前腕は肘側が太く手首側で細い。手首の幅は前腕の中ほどの約2/3。尺骨の頭が手首の小指側に出る"),
+    BodyPart("arm", "上腕・肘", "1.4::arm focus::, upper arm, elbow, arm extended to side, close-up", "upper_limb",
+             "上腕の長さは肩から肘まで頭1つ半ほど。肘は外側へ少し反る(運搬角、女性で大きい)。上腕二頭筋は前、三頭筋は後ろ",
+             limb_closeup=True),
+    BodyPart("forearm", "前腕・手首", "1.4::forearm focus::, wrist, close-up", "upper_limb",
+             "前腕は肘側が太く手首側で細い。手首の幅は前腕の中ほどの約2/3。尺骨の頭が手首の小指側に出る",
+             limb_closeup=True),
     BodyPart("hand_palm", "手(手掌)", f"solo, {_HAND}, palm, palm facing viewer, five fingers", "upper_limb",
              "指は5本。中指が最長で、手の長さは顔の顎から生え際の手前ほど。母指球・小指球のふくらみ。指の関節は3つ(親指は2つ)",
-             negative=_HAND_NEGATIVE),
+             negative=_HAND_NEGATIVE, limb_closeup=True),
     BodyPart("hand_back", "手(手背)", f"solo, {_HAND}, back of hand, five fingers, fingernails", "upper_limb",
              "指の付け根の関節(MP関節)は弧を描いて並ぶ。爪は指先の背側だけ。指の長さは中指>薬指≒人差し指>小指",
-             negative=_HAND_NEGATIVE),
+             negative=_HAND_NEGATIVE, limb_closeup=True),
     BodyPart("thigh_knee", "大腿・膝", "lower body, knees, thighs, front view, standing", "lower_limb",
              "大腿は股関節から膝へ内側に寄る(Q角、女性で大きい)。膝蓋骨は膝の前のやや上", nude=False),
-    BodyPart("calf", "下腿(すね・ふくらはぎ)", "lower legs focus, calves, shins, close-up, standing", "lower_limb",
-             "すね(脛骨)はまっすぐで皮膚の下に近い。ふくらはぎ(腓腹筋)は内側が低く大きい。内くるぶしは外くるぶしより高い"),
+    BodyPart("calf", "下腿(すね・ふくらはぎ)", "1.4::lower legs focus::, calves, shins, close-up, standing", "lower_limb",
+             "すね(脛骨)はまっすぐで皮膚の下に近い。ふくらはぎ(腓腹筋)は内側が低く大きい。内くるぶしは外くるぶしより高い",
+             limb_closeup=True),
     # 足の裏をこちらへ突き出す構図(soles, foot focus)は、形が縮んで分からず、性的な構図にもなりやすい。床に立った足を横から描く
     BodyPart("foot", "足(内側・足背)",
              "solo, barefoot, feet only, lower legs only, head out of frame, standing on floor, from side, ankles, toes, close-up",
              "lower_limb",
              "足の長さは前腕とほぼ同じ。内側から見ると土踏まず(内側縦アーチ)が浮き、踵・母指球・小指側の縁で接地する。"
              "内くるぶしは外より高く前。親指が最も太く、指先は弧を描く",
-             negative="soles, feet up, foreshortening, sitting, lying, presenting foot, bent over, bending forward, full body, face"),
+             negative="soles, feet up, foreshortening, sitting, lying, presenting foot, bent over, bending forward, full body, face",
+             limb_closeup=True),
 )
 
 # 可動域(ヨガ): 3Dモデルの関節の動く範囲を見るため、股関節を大きく動かすポーズを全身で描く(ユーザーの依頼 2026-11-09)。
@@ -816,7 +832,9 @@ def prompt(character: dict[str, Any], base: dict[str, Any], part: BodyPart, opti
         BACKGROUND,
         character.get("style_tags"),
     )
-    if part.rear:
+    if part.limb_closeup:
+        tags = join_tags(", ".join(t for t in split_tags(tags) if not _LIMB_HIDDEN_RE.search(t)), _LIMB_TAGS)
+    elif part.rear:
         tags = ", ".join(t for t in split_tags(tags) if not _REAR_HIDDEN_RE.search(t))
     elif part.side and not part.open_legs:
         # 真横で脚を閉じた部位は、正面からしか見えない股のタグ(ガードの body_base.side_hidden_tags)を外す。
@@ -867,7 +885,8 @@ def part_negative(negative_prompt: str, part: BodyPart) -> str:
         allowed = {_plain_weight(t) for t in content_guard.words("body_base.open_legs_allowed")}
         tags = [t for t in tags if _plain_weight(t) not in allowed]
     group = _GROUP_NEGATIVE.get(part.family)
-    return join_tags(", ".join(tags), part.negative, content_guard.text(group) if group else "")
+    return join_tags(", ".join(tags), part.negative, _LIMB_NEGATIVE if part.limb_closeup else "",
+                     content_guard.text(group) if group else "")
 
 
 # まとまりごとに足す打ち消し(ガードの項目)。部位の画面で部位のネガティブを書き換えても外れない
