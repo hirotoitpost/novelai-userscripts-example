@@ -838,6 +838,10 @@ function Reader({
                 title="この本の漫画のページを X に投稿します(1ページずつのスレッド。予約もできます)">
                 X に投稿
               </button>
+              <button type="button" onClick={() => openXPost([`book:${book.id}:${page}`], navigate)}
+                title="いま開いているページだけを X に投稿します">
+                このページを X に投稿
+              </button>
               <WorkExportButton storyId={book.id} />
               <button type="button" onClick={() => onToggleSelect(book.id)} aria-pressed={selectedForPublish}
                 title="ほかの本とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">

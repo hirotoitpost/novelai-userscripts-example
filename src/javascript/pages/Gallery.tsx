@@ -808,6 +808,10 @@ export default function Gallery() {
                 title="この画像から NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として保存します">
                 出版する
               </button>
+              <button type="button" onClick={() => openXPost([current.key], navigate)}
+                title="この画像を X に投稿します(本文を入れて、今すぐ・予約で投稿できます)">
+                X に投稿
+              </button>
               <button type="button" onClick={() => toggleSelectedFromViewer(current)} aria-pressed={selected.has(current.key)}
                 title="ほかの画像とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
                 {selected.has(current.key) ? `出版の選択から外す(${selected.size}枚選択中)` : `出版に選ぶ${selected.size > 0 ? `(${selected.size}枚選択中)` : ''}`}
