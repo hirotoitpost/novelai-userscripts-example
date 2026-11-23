@@ -129,13 +129,16 @@ def _public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         post = x_posts.get_post(int(item["x_post_id"]))
         if post and post.get("urls"):
             item["x_post_url"] = post["urls"][0]
-    if item.get("publication_id"):
-        conn = get_connection()
-        try:
+    conn = get_connection()
+    try:
+        if item.get("publication_id"):
             found = conn.execute("SELECT title FROM publications WHERE id = ?", (item["publication_id"],)).fetchone()
-        finally:
-            conn.close()
-        item["publication_title"] = found[0] if found else None
+            item["publication_title"] = found[0] if found else None
+        from .nft_records import token_for
+
+        item["nft"] = token_for(conn, int(item["mark_id"]))
+    finally:
+        conn.close()
     return item
 
 
