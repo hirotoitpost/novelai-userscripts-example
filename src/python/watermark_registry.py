@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 X_POST = "x_post"
 PUBLICATION = "publication"
 PURPOSE_LABEL = {X_POST: "X への投稿", PUBLICATION: "出版物"}
+# 透かしを読み切れなくても、指紋の近い台帳の番号と票がこれ以上合えば「透かしがほぼ読めた」とする
+# (関係ない番号ではほぼ 0、ばらつきの幅は約 0.18。指紋で 5 件までに絞ってから使う)
+PARTIAL_AGREEMENT = 0.6
 # 指紋が同じ絵とみなす距離(64 ビット中)。SIMILAR は「似ている」の目安
 MATCH_DISTANCE = 6
 SIMILAR_DISTANCE = 12
@@ -227,6 +230,7 @@ def verify(data: bytes) -> dict[str, Any]:
     画像・動画が台帳のどれかを照合する。戻り値:
       found: 自分が出したものと分かったか
       method: exact(ファイルが同じ) / watermark(透かしを読めた) / watermark_resized(大きさを戻して読めた) /
+              watermark_partial(読み切れないが、指紋の近い台帳の番号と票がよく合う) /
               similar(透かしは読めないが、見た目がほぼ同じ) / none
       mark_id / distance(指紋の距離) / record(台帳の行) / foreign_mark(台帳に無い番号の透かしが読めた)
     """
@@ -262,13 +266,20 @@ def _verify(
         conn.close()
     near = sorted(((distance(query_hash, row["phash"]), row) for row in rows), key=lambda pair: pair[0])
     near = [pair for pair in near if pair[0] <= SIMILAR_DISTANCE][:_CANDIDATES]
+    partial: tuple[float, int, sqlite3.Row] | None = None
     for dist, row in near:
         size = (int(row["width"]), int(row["height"]))
-        if size == picture.size:
-            continue
-        if read(size).mark_id == row["mark_id"]:
+        attempt = reading if size == picture.size else read(size)
+        if size != picture.size and attempt.mark_id == row["mark_id"]:
             return {"found": True, "method": "watermark_resized", "mark_id": row["mark_id"], "distance": dist,
                     "record": _public(row)}
+        score = watermark.agreement(attempt, int(row["mark_id"]))
+        if score >= PARTIAL_AGREEMENT and (partial is None or score > partial[0]):
+            partial = (score, dist, row)
+    if partial is not None:
+        score, dist, row = partial
+        return {"found": True, "method": "watermark_partial", "mark_id": row["mark_id"], "distance": dist,
+                "agreement": round(score, 3), "record": _public(row)}
     if near and near[0][0] <= MATCH_DISTANCE:
         dist, row = near[0]
         return {"found": True, "method": "similar", "mark_id": row["mark_id"], "distance": dist, "record": _public(row)}

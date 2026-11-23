@@ -26,7 +26,7 @@ from . import watermark
 VIDEO_SUFFIXES = (".mp4", ".mov", ".webm")
 MAX_SIDE = 1280
 # 読むときに使うコマの数
-READ_FRAMES = 24
+READ_FRAMES = 48
 _ENCODERS = ("libx264", "h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libopenh264")
 
 
@@ -185,20 +185,28 @@ def middle_frame(path: Path) -> Image.Image:
 
 
 def read(images: list[Image.Image], size: tuple[int, int] | None = None) -> watermark.Reading:
-    """何コマかの票を足して透かしを読む。size を渡すと、その大きさに戻してから読む。"""
-    total: np.ndarray | None = None
-    used = 0
-    for image in images:
-        if size and image.size != size:
-            image = image.resize(size, Image.Resampling.LANCZOS)
-        mean = watermark.votes(image, watermark.VIDEO)
-        if mean is None:
+    """
+    何コマかの票を足して透かしを読む。size を渡すと、その大きさに戻してから読む。
+    今の入れ方、だめなら前の入れ方で読む(読めなければ、票のはっきりしたほうを返す)。
+    """
+    pictures = [image.resize(size, Image.Resampling.LANCZOS) if size and image.size != size else image for image in images]
+    best = watermark.Reading(None, 0.0)
+    for profile in watermark.VIDEO_PROFILES:
+        total: np.ndarray | None = None
+        used = 0
+        for picture in pictures:
+            mean = watermark.votes(picture, profile)
+            if mean is None:
+                continue
+            total = mean if total is None else total + mean
+            used += 1
+        if total is None:
             continue
-        total = mean if total is None else total + mean
-        used += 1
-    if total is None:
-        return watermark.Reading(None, 0.0)
-    return watermark.decide(total / used)
+        reading = watermark.decide(total / used)
+        if reading.mark_id is not None:
+            return reading
+        best = reading if reading.confidence > best.confidence else best
+    return best
 
 
 def temp_path(suffix: str = ".mp4") -> Path:
