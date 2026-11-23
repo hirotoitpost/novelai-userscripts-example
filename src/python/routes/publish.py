@@ -81,6 +81,8 @@ def post_publication(req: PublishRequest) -> dict[str, Any]:
     """
     if not req.image_keys and not req.book_ids:
         raise HTTPException(status_code=422, detail="出版する画像か本を選んでください。")
+    if any(key.startswith("video:") for key in req.image_keys):
+        raise HTTPException(status_code=422, detail="動画は出版物に入れられません(出版物は画像と本だけです)。")
     entries = _entries(req)
     if not entries:
         raise HTTPException(status_code=404, detail="選んだ画像・本が見つかりません。")

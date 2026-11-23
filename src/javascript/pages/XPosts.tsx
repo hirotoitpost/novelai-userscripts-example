@@ -89,10 +89,29 @@ async function send<T>(path: string, method: string, body?: unknown): Promise<T>
   return res.status === 204 ? (undefined as T) : res.json()
 }
 
-function chunk<T>(items: T[], size: number): T[][] {
-  const result: T[][] = []
-  for (let i = 0; i < items.length; i += size) result.push(items.slice(i, i + size))
-  return result
+function isVideoRef(image: ImageRef): boolean {
+  return /\.(mp4|mov|webm)$/i.test(image.path)
+}
+
+/** 投稿ごとに分ける。動画は X の決まりで1件に1本だけなので、それだけで1件にする */
+function groupPool(items: ImageRef[], size: number): ImageRef[][] {
+  const groups: ImageRef[][] = []
+  let current: ImageRef[] = []
+  for (const item of items) {
+    if (isVideoRef(item)) {
+      if (current.length) groups.push(current)
+      groups.push([item])
+      current = []
+      continue
+    }
+    current.push(item)
+    if (current.length === size) {
+      groups.push(current)
+      current = []
+    }
+  }
+  if (current.length) groups.push(current)
+  return groups
 }
 
 /** datetime-local の初期値(今から1時間後、分は 0) */
@@ -182,7 +201,7 @@ export default function XPosts() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params])
 
-  const groups = useMemo(() => (pool.length ? chunk(pool, perPost) : [[]]), [pool, perPost])
+  const groups = useMemo(() => (pool.length ? groupPool(pool, perPost) : [[]]), [pool, perPost])
   const partTexts = groups.map((_, i) => texts[i] ?? '')
   const adult = pool.some(i => i.adult) || !!check?.adult
 
@@ -386,6 +405,7 @@ export default function XPosts() {
                   </select>
                 </label>
                 <span className="xp-hint">
+                  {pool.some(isVideoRef) && '動画は1本で1件になります。'}
                   画像 {pool.length} 枚 → {groups.length > 1 ? `${groups.length} 件のスレッド(2件目からは前の投稿への返信)` : '1件'}
                 </span>
                 {groups.length > 1 && <button type="button" className="xp-link" onClick={addNumbers}>(1/N) の番号を付ける</button>}
@@ -394,7 +414,7 @@ export default function XPosts() {
 
             <ol className="xp-parts">
               {groups.map((images, partIndex) => {
-                const offset = partIndex * perPost
+                const offset = groups.slice(0, partIndex).reduce((n, g) => n + g.length, 0)
                 const length = weightedLength(partTexts[partIndex])
                 return (
                   <li key={partIndex} className="xp-part">
@@ -411,6 +431,7 @@ export default function XPosts() {
                           <figure key={image.ref} className="xp-image">
                             <img src={thumbUrl(image.path, 240)} alt={image.label} loading="lazy" />
                             <figcaption>
+                              {isVideoRef(image) && <span className="xp-video">▶ 動画</span>}
                               {image.adult && <span className="xp-adult">R18</span>}
                               <button type="button" onClick={() => move(offset + i, -1)} disabled={offset + i === 0} aria-label="前へ">←</button>
                               <button type="button" onClick={() => move(offset + i, 1)} disabled={offset + i === pool.length - 1} aria-label="後ろへ">→</button>

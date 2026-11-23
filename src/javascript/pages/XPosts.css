@@ -325,3 +325,9 @@
     width: calc(50% - 0.25rem);
   }
 }
+
+.xp-video {
+  font-size: 0.7rem;
+  color: #c8c8ec;
+  margin-right: 0.3rem;
+}

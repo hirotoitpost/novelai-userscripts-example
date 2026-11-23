@@ -83,6 +83,7 @@ export default function Watermarks() {
   const [preview, setPreview] = useState<string | null>(null)
   const [result, setResult] = useState<Verify | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [previewIsVideo, setPreviewIsVideo] = useState(false)
   const [nft, setNft] = useState<NftConfig | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
   const [account, setAccount] = useState<string | null>(null)
@@ -174,6 +175,7 @@ export default function Watermarks() {
     setError(null)
     setResult(null)
     setPreview(URL.createObjectURL(file))
+    setPreviewIsVideo(file.type.startsWith('video/'))
     setBusy(true)
     try {
       const form = new FormData()
@@ -219,12 +221,14 @@ export default function Watermarks() {
             onDragLeave={() => setDragging(false)}
             onDrop={e => { e.preventDefault(); setDragging(false); onFiles(e.dataTransfer.files) }}
           >
-            <input type="file" accept="image/*" onChange={e => { onFiles(e.target.files); e.target.value = '' }} />
-            {busy ? '照合しています…' : '画像をここに置くか、押して選んでください'}
+            <input type="file" accept="image/*,video/mp4,video/quicktime,video/webm" onChange={e => { onFiles(e.target.files); e.target.value = '' }} />
+            {busy ? '照合しています…' : '画像・動画をここに置くか、押して選んでください'}
           </label>
           {(preview || result) && (
             <div className="wm-result">
-              {preview && <img src={preview} alt="照合した画像" />}
+              {preview && (previewIsVideo
+                ? <video src={preview} controls muted playsInline />
+                : <img src={preview} alt="照合した画像" />)}
               {result && (
                 <div className={`wm-verdict${result.found ? ' is-found' : ''}`}>
                   <strong>{result.found ? (result.method === 'similar' ? 'よく似た画像を出しています' : '自分の画像です') : '見つかりません'}</strong>
