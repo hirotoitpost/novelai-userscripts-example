@@ -1,0 +1,182 @@
+/* 見えない透かしのページ(Watermarks.tsx) */
+.wm-root {
+  min-height: 100vh;
+  background: #0b0b14;
+  color: #e8e8ff;
+}
+
+.wm-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.8rem 1.2rem;
+  border-bottom: 1px solid #1f1f3a;
+}
+
+.wm-header h1 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.wm-link {
+  background: transparent;
+  border: 1px solid #2a2a50;
+  border-radius: 6px;
+  color: #c8c8ec;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.wm-link:hover {
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.wm-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem 1.2rem 3rem;
+}
+
+.wm-lead {
+  font-size: 0.88rem;
+  line-height: 1.7;
+  color: #b8b8dc;
+}
+
+.wm-error {
+  color: #ff9aa8;
+  white-space: pre-wrap;
+}
+
+.wm-section {
+  margin-top: 1.6rem;
+}
+
+.wm-section h2 {
+  font-size: 1rem;
+  margin: 0 0 0.6rem;
+}
+
+.wm-meta {
+  font-size: 0.8rem;
+  color: #8a8ab0;
+}
+
+.wm-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 110px;
+  border: 2px dashed #34346a;
+  border-radius: 10px;
+  color: #a8a8d0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: center;
+  padding: 1rem;
+}
+
+.wm-drop.is-dragging,
+.wm-drop:hover {
+  border-color: #7b5cf6;
+  color: #fff;
+}
+
+.wm-drop input {
+  display: none;
+}
+
+.wm-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.wm-result > img {
+  max-width: 240px;
+  max-height: 320px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #15152a;
+}
+
+.wm-verdict {
+  flex: 1 1 280px;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  font-size: 0.88rem;
+}
+
+.wm-verdict.is-found {
+  border-color: #3d8a5a;
+}
+
+.wm-verdict strong {
+  font-size: 1rem;
+}
+
+.wm-verdict p {
+  margin: 0.35rem 0;
+}
+
+.wm-record,
+.wm-list li {
+  display: flex;
+  gap: 0.8rem;
+  align-items: flex-start;
+}
+
+.wm-record {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #1f1f3a;
+}
+
+.wm-record img,
+.wm-list img {
+  width: 72px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #15152a;
+  flex-shrink: 0;
+}
+
+.wm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.8rem;
+}
+
+.wm-list li {
+  border: 1px solid #1f1f3a;
+  border-radius: 8px;
+  padding: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.wm-list p {
+  margin: 0 0 0.25rem;
+}
+
+.wm-label {
+  overflow-wrap: anywhere;
+}
+
+.wm-root a {
+  color: #a99bff;
+  font-size: 0.85rem;
+}
+
+.wm-root code {
+  font-family: ui-monospace, Consolas, monospace;
+  color: #d8d0ff;
+}

@@ -7,7 +7,7 @@ import './XPosts.css'
 /**
  * X への投稿。ギャラリー・本棚で選んだ画像を、1件(4枚まで)またはスレッド(4枚ずつ)にして、今すぐ・予約で投稿する。
  * 下の一覧で、予約中・投稿済み・失敗を確かめる(取り消し・やり直し・X から削除・反応の数)。
- * 投稿する画像からは NovelAI の生成情報を取り除く。成人向けの画像があれば、センシティブ指定にする(外せない)。
+ * 投稿する画像からは NovelAI の生成情報を取り除き、見えない透かしを入れる(watermark_registry.py)。成人向けの画像があれば、センシティブ指定にする(外せない)。
  */
 
 interface ImageRef {
@@ -433,6 +433,7 @@ export default function XPosts() {
                 {adult && <small>(成人向けの画像があるので外せません)</small>}
               </label>
             </div>
+            <p className="xp-meta">画像には見えない透かし(番号)が自動で入り、「見えない透かし」の台帳に残ります。</p>
             <div className="xp-row">
               <label className="xp-check">
                 <input type="radio" checked={mode === 'now'} onChange={() => setMode('now')} /> 今すぐ投稿

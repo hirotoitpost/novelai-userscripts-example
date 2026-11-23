@@ -8,6 +8,7 @@ import Bookshelf from './pages/Bookshelf'
 import Gallery from './pages/Gallery'
 import Publications from './pages/Publications'
 import XPosts from './pages/XPosts'
+import Watermarks from './pages/Watermarks'
 import Trash from './pages/Trash'
 import GuardInspect from './pages/GuardInspect'
 import Ugoira from './pages/Ugoira'
@@ -154,6 +155,10 @@ function AppRoutes() {
       <Route
         path="/x-posts"
         element={<ProtectedRoute><XPosts /></ProtectedRoute>}
+      />
+      <Route
+        path="/watermarks"
+        element={<ProtectedRoute><Watermarks /></ProtectedRoute>}
       />
       <Route
         path="/trash"

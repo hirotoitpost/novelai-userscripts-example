@@ -79,7 +79,7 @@ export default function Publications() {
       <main className="pub-main">
         <p className="pub-hint">
           ギャラリーか本棚で「選択」して「出版する」と、選んだ画像・本から NovelAI の生成情報(プロンプト・シード値などの
-          メタデータ)を取り除いたものが、ここに出版物として保存されます。元の画像・本はそのまま残ります。
+          メタデータ)を取り除き、見えない透かし(番号)を入れたものが、ここに出版物として保存されます。透かしは「見えない透かし」の台帳に残ります。元の画像・本はそのまま残ります。
         </p>
         {error && <p className="pub-error" role="alert">{error}</p>}
         {!loading && publications.length === 0 && !error && <p className="pub-hint">まだありません。</p>}

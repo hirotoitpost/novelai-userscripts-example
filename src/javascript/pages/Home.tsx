@@ -336,6 +336,19 @@ export default function Home() {
 
           <div
             className="home-card home-card--available home-card--link"
+            onClick={() => navigate('/watermarks')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === 'Enter' && navigate('/watermarks')}
+          >
+            <div className="home-card-icon">🔏</div>
+            <h2>見えない透かし</h2>
+            <p>X に投稿した画像・出版物に自動で入る透かしの台帳。ネットで見かけた画像が自分のものかを照合します。</p>
+            <span className="home-card-badge home-card-badge--open">開く →</span>
+          </div>
+
+          <div
+            className="home-card home-card--available home-card--link"
             onClick={() => navigate('/gallery')}
             role="button"
             tabIndex={0}
