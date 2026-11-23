@@ -25,9 +25,10 @@ from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ImageContent, TextContent
 from novelai import AsyncNovelAI
-from novelai.types import CharacterReference, GenerateImageParams
+from novelai.types import CharacterReference, GenerateImageParams, InpaintParams
+from PIL import Image
 
-from . import mcp_identity, title_styles
+from . import inpaint_regions, mcp_identity, title_styles
 from .db import user_files
 from .mcp_manga import register_manga_tools
 from .mcp_reference import character_reference, image_preset_settings, style_record, style_reference
@@ -35,6 +36,7 @@ from .db import (
     create_custom_chunk,
     find_conflicts,
     get_connection,
+    get_generation_entry,
     get_preset,
     list_generation_history,
     list_image_presets,
@@ -312,6 +314,145 @@ async def generate_image_tool(
     note = f"(絵柄セット「{style.name}」を使いました)" if style else ""
     result: list[TextContent | ImageContent] = [
         TextContent(type="text", text=f"生成完了。history_id={entry['id']}{note}")
+    ]
+    result.extend(ImageContent(type="image", data=b64, mime_type="image/png") for b64 in b64_images)
+    return result
+
+
+def _history_image(history_id: int, image_index: int) -> tuple[Image.Image, dict[str, Any]]:
+    """生成履歴の画像(image_index 枚目)と、その履歴。"""
+    conn = get_connection()
+    try:
+        entry = get_generation_entry(conn, history_id)
+    finally:
+        conn.close()
+    if entry is None:
+        raise ValueError(f"生成履歴 id={history_id} が見つかりません")
+    paths = entry.get("image_paths") or []
+    if not 0 <= image_index < len(paths):
+        raise ValueError(f"生成履歴 id={history_id} の画像は {len(paths)} 枚です(image_index は 0 から)")
+    full_path = (_HISTORY_DIR.parent.parent / paths[image_index]).resolve()
+    full_path.relative_to(_HISTORY_DIR.resolve())  # outputs/history/ 配下以外は拒否
+    if not full_path.is_file():
+        raise ValueError(f"画像が見つかりません: {paths[image_index]}")
+    with Image.open(full_path) as image:
+        return image.convert("RGB"), entry
+
+
+@mcp.tool()
+async def inpaint_image_tool(
+    history_id: int,
+    regions: list[list[float]],
+    prompt: str,
+    negative_prompt: str | None = None,
+    image_index: int = 0,
+    strength: float = 1.0,
+    n_samples: int = 1,
+    seed: int | None = None,
+    reference_character_id: int | None = None,
+    reference_strength: float = 0.7,
+    reference_fidelity: float = 1.0,
+    reference_type: str = "character",
+    style_set_id: int | None = None,
+    use_style_set: bool = True,
+    keep_outside: bool = True,
+    feather: int = 4,
+) -> list[TextContent | ImageContent]:
+    """
+    生成履歴の絵の一部(長方形の範囲)だけを描き直す(NovelAI のインペイント)。構図はそのままで、崩れた小物・手などを直す。
+    history_id / image_index: 元の絵(生成履歴の ID と、その何枚目か。0 から)。
+    regions: 描き直す範囲のリスト。1つは [x, y, 幅, 高さ](元の絵のピクセル。左上が 0,0)。8 ピクセル単位に外側へ広げる。
+    prompt: 範囲の中に描く物(例: "wooden table, glass vase")。絵全体のタグを全部書かなくてよい。
+    消したい物は negative_prompt に入れる(例: "scissors")。
+    strength: 描き直しの強さ(1.0 で範囲の中を作り直す。0.5 くらいで元の形を残す)。n_samples: 候補の枚数(1〜4)。
+    reference_character_id / style_set_id: generate_image_tool と同じ(人物の手・顔を描き直すときに使う)。
+    keep_outside: True なら、描き直した絵から範囲の中だけを元の絵に貼り戻す(NovelAI は範囲の外もわずかに変えるため)。
+    feather: 貼り戻す境目をなじませる幅(ピクセル。範囲の内側だけ)。
+    生成した画像は元の絵の based_on として生成履歴(ギャラリー)に残る。
+    """
+    if not 1 <= n_samples <= 4:
+        raise ValueError("n_samples は 1〜4 にしてください")
+    if not 0.01 <= strength <= 1.0:
+        raise ValueError("strength は 0.01〜1.0 にしてください")
+    original, entry = _history_image(history_id, image_index)
+    if original.width % 64 or original.height % 64:
+        raise ValueError(f"元の絵の大きさ({original.width}x{original.height})が 64 の倍数ではありません")
+    mask, boxes = inpaint_regions.build_mask(original.size, regions)
+    model = entry.get("model") or "nai-diffusion-4-5-full"
+    reference = character_reference(reference_character_id, reference_type, reference_fidelity, reference_strength)
+    style = style_reference(style_set_id, reference_character_id if use_style_set else None)
+    if style is not None:
+        prompt = ", ".join(t for t in (prompt, style.style_tags) if t.strip())
+        negative_prompt = ", ".join(t for t in (negative_prompt or "", style.negative_tags) if t.strip()) or None
+    client = _get_novelai_client()
+    try:
+        kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "model": model,
+            "size": original.size,
+            "steps": int(entry.get("steps") or 27),
+            "scale": float(entry.get("scale") or 5.0),
+            "quality": True,
+            "uc_preset": "light",
+            "n_samples": n_samples,
+            "inpaint": InpaintParams(image=original, mask=mask.convert("RGB"), strength=strength,
+                                     **({"seed": seed} if seed is not None else {})),
+        }
+        if seed is not None:
+            kwargs["seed"] = seed
+        refs = [] if reference is None else [
+            CharacterReference(image=reference.image, type=reference.type, fidelity=reference.fidelity,
+                               strength=reference.strength)
+        ]
+        if style is not None:
+            refs.append(CharacterReference(image=style.image, type="style", fidelity=style.fidelity, strength=style.strength))
+        if refs:
+            kwargs["character_references"] = refs
+        images = await client.image.generate(GenerateImageParams(**kwargs))
+    finally:
+        await client.close()
+
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    image_paths: list[str] = []
+    b64_images: list[str] = []
+    for img in images:
+        final = inpaint_regions.composite(original, img, mask, feather) if keep_outside else img.convert("RGB")
+        buf = BytesIO()
+        final.save(buf, format="PNG")
+        raw = buf.getvalue()
+        filename = f"{uuid4().hex}_mcp.png"
+        (_HISTORY_DIR / filename).write_bytes(raw)
+        image_paths.append(f"outputs/history/{filename}")
+        b64_images.append(base64.b64encode(raw).decode())
+
+    conn = get_connection()
+    try:
+        record = record_generation(
+            conn,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            model=model,
+            size=f"{original.width}x{original.height}",
+            steps=kwargs["steps"],
+            scale=kwargs["scale"],
+            seed=seed,
+            chunk_ids=[],
+            image_paths=image_paths,
+            character_references=[
+                *([reference.record(_HISTORY_DIR)] if reference else []),
+                *([style_record(style, _HISTORY_DIR)] if style else []),
+            ] or None,
+            based_on_id=history_id,
+            character_id=reference_character_id or entry.get("character_id"),
+        )
+    finally:
+        conn.close()
+
+    spans = ", ".join(f"[{left},{top},{right - left},{bottom - top}]" for left, top, right, bottom in boxes)
+    outside = "範囲の外は元の絵のまま" if keep_outside else "範囲の外も NovelAI の出力のまま"
+    result: list[TextContent | ImageContent] = [
+        TextContent(type="text", text=f"インペイント完了。history_id={record['id']}(元: {history_id}、範囲: {spans}、{outside})")
     ]
     result.extend(ImageContent(type="image", data=b64, mime_type="image/png") for b64 in b64_images)
     return result
