@@ -159,7 +159,8 @@ def _video_images() -> list[GalleryImage]:
 
     from ..video_marks import is_video
 
-    folder = Path(os.fspath(_VIDEO_DIR))
+    root = Path(os.fspath(_PROJECT_ROOT))
+    folder = root / "outputs" / "videos"
     if not folder.is_dir():
         return []
     items: list[GalleryImage] = []
@@ -181,7 +182,7 @@ def _video_images() -> list[GalleryImage]:
             GalleryImage(
                 key=f"video:{entry.name}",
                 source="video",
-                path=entry.relative_to(Path(os.fspath(_PROJECT_ROOT))).as_posix(),
+                path=entry.relative_to(root).as_posix(),
                 created_at=str(meta.get("created_at") or datetime.fromtimestamp(entry.stat().st_mtime, timezone.utc).isoformat()),
                 width=width,
                 height=height,

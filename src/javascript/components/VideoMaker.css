@@ -1,0 +1,73 @@
+/* ギャラリーの「動画にする」(VideoMaker.tsx) */
+.vm-root {
+  margin: 0.6rem 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #2a2a50;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.vm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.vm-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 0.4rem;
+  border-radius: 6px;
+}
+
+.vm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.vm-row input[type="number"] {
+  width: 3.5rem;
+}
+
+.vm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.vm-note {
+  margin: 0;
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.vm-primary {
+  background: #5b3fd6;
+  border: 1px solid #7b5cf6;
+  border-radius: 6px;
+  color: #fff;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
+.vm-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.vm-done {
+  margin: 0;
+  color: #8fe0a8;
+}
+
+.vm-error {
+  margin: 0;
+  color: #ff9aa8;
+  white-space: pre-wrap;
+}

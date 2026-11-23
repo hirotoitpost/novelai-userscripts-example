@@ -30,6 +30,7 @@ import type { GalleryMangaJob } from '../components/GalleryMangaDialog'
 import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './Gallery.css'
 import { openXPost } from '../xpost'
+import VideoMaker from '../components/VideoMaker'
 import { isShortcutKey, keyIs } from '../shortcuts'
 
 type Source = 'generate' | 'panel' | 'illustration' | 'dataset' | 'video'
@@ -116,6 +117,8 @@ export default function Gallery() {
   const { token } = useAuth()
   // 画像生成ページへ送っている最中か
   const [sending, setSending] = useState(false)
+  // 拡大表示で「動画にする」を開いている画像のキー
+  const [videoMakingKey, setVideoMakingKey] = useState<string | null>(null)
 
   const [viewing, setViewing] = useState<number | null>(null)
   // 見ている画像を全画面で出しているか
@@ -843,6 +846,12 @@ export default function Gallery() {
                 title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値と、生成に使った参照画像も入れます)">
                 {sending ? '読み取り中…' : '似た画像を生成(画像生成ページへ)'}
               </button>
+              <button type="button" hidden={current.source === 'video' || current.adult}
+                onClick={() => setVideoMakingKey(videoMakingKey === current.key ? null : current.key)}
+                aria-pressed={videoMakingKey === current.key}
+                title="この絵から Grok で短い動画を作ります(数分・有料。できた動画はギャラリーの「動画」に並びます)">
+                動画にする
+              </button>
               <button type="button" onClick={() => void makeStyleSet(current)} hidden={current.source === 'video'}
                 title="この画像を「絵柄だけ」の参照にした絵柄セットを作ります。キャラに選ばせると、その絵柄で描けます">
                 絵柄セットにする
@@ -872,6 +881,9 @@ export default function Gallery() {
                 削除
               </button>
             </div>
+            {videoMakingKey === current.key && current.source !== 'video' && (
+              <VideoMaker imageKey={current.key} onOpen={key => void openKey(key)} />
+            )}
             {token && current.source !== 'video' && <WholeEnhance key={current.key} token={token} imageKey={current.key} onOpen={key => void openKey(key)} />}
             <dl className="gallery-meta">
               <dt>種類</dt>
