@@ -563,6 +563,29 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # 見えない透かしの台帳(watermark_registry.py)。外に出した画像1枚 = 1行。mark_id は画像に埋めた番号
+    # (X への投稿のやり直しでは同じ番号の行が増える)。sha256 は出したファイル、phash は見た目の指紋(16 進 16 桁)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watermarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mark_id INTEGER NOT NULL,
+            purpose TEXT NOT NULL,
+            source_path TEXT NOT NULL DEFAULT '',
+            ref TEXT,
+            label TEXT NOT NULL DEFAULT '',
+            x_post_id INTEGER,
+            publication_id INTEGER,
+            sha256 TEXT NOT NULL,
+            phash TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_watermarks_mark ON watermarks (mark_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_watermarks_sha ON watermarks (sha256)")
     # アプリの既定値のうち、開発管理者のページで変えたもの(app_settings.py。値は JSON)
     conn.execute(
         """

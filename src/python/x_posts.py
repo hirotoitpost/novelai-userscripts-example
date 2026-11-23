@@ -36,7 +36,7 @@ from typing import Any
 
 from PIL import Image
 
-from . import minor_guard, publish, x_api
+from . import minor_guard, publish, watermark_registry, x_api
 from .client import app_mode
 from .db import as_user, current_user_id, get_connection, user_files
 
@@ -442,7 +442,16 @@ def run_post(post_id: int, client: x_api.XClient | None = None) -> dict[str, Any
                 continue
             media_ids: list[str] = []
             for number, image in enumerate(part.get("images") or [], start=1):
-                data, mime = prepare_image((root / image["path"]).read_bytes())
+                # 見えない透かしを入れて台帳に残す(やり直しでも同じ番号)
+                marked = watermark_registry.mark(
+                    (root / image["path"]).read_bytes(),
+                    purpose=watermark_registry.X_POST,
+                    source_path=image["path"],
+                    label=post.get("title") or image.get("label") or "",
+                    ref=image.get("ref"),
+                    x_post_id=post_id,
+                )
+                data, mime = prepare_image(marked)
                 media_id = x.upload_image(data, mime, f"image{number}.{'png' if mime == 'image/png' else 'jpg'}")
                 x.set_media_metadata(media_id, sensitive=post["sensitive"])
                 media_ids.append(media_id)

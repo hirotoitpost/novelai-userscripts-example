@@ -43,6 +43,8 @@ class PublishRequest(BaseModel):
     image_keys: list[str] = Field(default_factory=list, max_length=MAX_IMAGES)
     # 本棚の本(物語のID)。漫画のページを入れる。ページの無い本は本文を入れる
     book_ids: list[int] = Field(default_factory=list, max_length=MAX_BOOKS)
+    # 画像に見えない透かしを入れて、台帳に残す(watermark_registry.py)
+    watermark: bool = True
 
 
 def _entries(req: PublishRequest) -> list[publish.Entry]:
@@ -88,7 +90,7 @@ def post_publication(req: PublishRequest) -> dict[str, Any]:
     finally:
         conn.close()
     try:
-        built = publish.build(publication["id"], req.title.strip(), entries)
+        built = publish.build(publication["id"], req.title.strip(), entries, watermark=req.watermark)
     except publish.MetadataRemains as exc:
         _discard(publication["id"])
         raise HTTPException(status_code=500, detail=f"メタデータを取り除けなかったので、出版物は作っていません: {exc}")

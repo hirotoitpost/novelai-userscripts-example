@@ -112,9 +112,10 @@ def _folder_names(entries: list[Entry]) -> list[str]:
     return names
 
 
-def build(publication_id: int, title: str, entries: list[Entry]) -> dict[str, object]:
+def build(publication_id: int, title: str, entries: list[Entry], *, watermark: bool = False) -> dict[str, object]:
     """
     出版物を作る: 画像から生成情報を取り除いて pub_<ID>/files/ に保存し、ZIP にまとめる。
+    watermark なら、画像に見えない透かしを入れて台帳に残す(watermark_registry.py)。
     戻り値は {dir, zip_path, bytes, file_count, items}(パスはリポジトリのルートから)。
     途中で失敗したら、作りかけのフォルダを消して例外を上げる。
     """
@@ -135,7 +136,19 @@ def build(publication_id: int, title: str, entries: list[Entry]) -> dict[str, ob
                 if not source.is_file():
                     continue
                 name = f"{index:0{width}d}.png"
-                (target / name).write_bytes(strip_metadata(source.read_bytes()))
+                clean = strip_metadata(source.read_bytes())
+                if watermark:
+                    from . import watermark_registry
+
+                    clean = watermark_registry.mark(
+                        clean,
+                        purpose=watermark_registry.PUBLICATION,
+                        source_path=path,
+                        label=f"{title} / {folder + '/' if folder else ''}{name}",
+                        publication_id=publication_id,
+                    )
+                    check(clean)
+                (target / name).write_bytes(clean)
                 written.append((target / name, f"{folder}/{name}" if folder else name))
                 count += 1
             if entry.text and not count:
@@ -160,6 +173,10 @@ def build(publication_id: int, title: str, entries: list[Entry]) -> dict[str, ob
                 archive.write(path, name)
     except Exception:
         shutil.rmtree(root, ignore_errors=True)
+        if watermark:
+            from . import watermark_registry
+
+            watermark_registry.forget_publication(publication_id)
         raise
     return {
         "dir": root.relative_to(_PROJECT_ROOT).as_posix(),
