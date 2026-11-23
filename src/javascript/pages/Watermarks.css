@@ -96,7 +96,8 @@
   margin-top: 1rem;
 }
 
-.wm-result > img {
+.wm-result > img,
+.wm-result > video {
   max-width: 240px;
   max-height: 320px;
   object-fit: contain;

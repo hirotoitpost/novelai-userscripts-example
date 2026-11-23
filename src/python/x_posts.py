@@ -32,11 +32,12 @@ import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
-from . import minor_guard, publish, watermark_registry, x_api
+from . import minor_guard, publish, video_marks, watermark_registry, x_api
 from .client import app_mode
 from .db import as_user, current_user_id, get_connection, user_files
 
@@ -174,6 +175,22 @@ def _default_scorer(image: Image.Image) -> list[Any]:
     return tag_image(image)
 
 
+def _sexual_rating(scores: list[Any]) -> float:
+    rating = {s.tag: s.probability for s in scores if s.category == "rating"}
+    return float(rating.get("questionable", 0) + rating.get("explicit", 0))
+
+
+def _pictures(path: Path) -> list[Image.Image]:
+    """安全の確認で見る絵(画像はそれ自体、動画は等間隔の 5 コマ)。"""
+    if video_marks.is_video(path):
+        picked = video_marks.frames(path, 5)
+        if not picked:
+            raise video_marks.VideoError("動画のコマを読めません")
+        return picked
+    with Image.open(path) as opened:
+        return [opened.convert("RGB")]
+
+
 def check_images(infos: list[ImageInfo], scorer: Scorer | None = None) -> list[str]:
     """
     画像ごとの安全の確認。投稿できない理由(無ければ空)。成人向けかどうかは、印に加えて判定モデルでも見て、
@@ -188,14 +205,13 @@ def check_images(infos: list[ImageInfo], scorer: Scorer | None = None) -> list[s
         for info in infos:
             path = user_files() / info.path
             try:
-                with Image.open(path) as opened:
-                    image = opened.convert("RGB")
-            except OSError:
+                pictures = _pictures(path)
+            except (OSError, video_marks.VideoError):
                 reasons.append(f"{info.label or info.ref}: 画像を開けません")
                 continue
-            scores = score(image)
-            rating = {s.tag: s.probability for s in scores if s.category == "rating"}
-            if rating.get("questionable", 0) + rating.get("explicit", 0) >= _SEXUAL_RATING:
+            # 動画は何コマか見て、いちばん成人向けに近いコマで決める
+            scores = max((score(picture) for picture in pictures), key=_sexual_rating)
+            if _sexual_rating(scores) >= _SEXUAL_RATING:
                 info.adult = True
             if not info.adult:
                 continue
@@ -343,6 +359,9 @@ def build_parts(parts: list[PartInput], scorer: Scorer | None = None) -> tuple[l
         missing = [ref for ref in part.refs if ref not in infos]
         if missing:
             reasons.append(f"{label}: 画像が見つかりません({', '.join(missing[:3])})")
+        videos = [ref for ref in part.refs if ref in infos and video_marks.is_video(infos[ref].path)]
+        if videos and len(part.refs) > 1:
+            reasons.append(f"{label}: 動画は1件に1本だけで、画像やほかの動画と一緒には付けられません(X の決まり)。")
     if reasons:
         raise PostRejected(reasons)
     used = [infos[ref] for ref in dict.fromkeys(ref for part in parts for ref in part.refs)]
@@ -442,6 +461,11 @@ def run_post(post_id: int, client: x_api.XClient | None = None) -> dict[str, Any
                 continue
             media_ids: list[str] = []
             for number, image in enumerate(part.get("images") or [], start=1):
+                if video_marks.is_video(image["path"]):
+                    media_id = _upload_video(x, root / image["path"], image, post, post_id)
+                    x.set_media_metadata(media_id, sensitive=post["sensitive"])
+                    media_ids.append(media_id)
+                    continue
                 # 見えない透かしを入れて台帳に残す(やり直しでも同じ番号)
                 marked = watermark_registry.mark(
                     (root / image["path"]).read_bytes(),
@@ -458,13 +482,29 @@ def run_post(post_id: int, client: x_api.XClient | None = None) -> dict[str, Any
             reply_to = tweet_ids[-1] if tweet_ids else None
             tweet_ids.append(x.create_post(part.get("text") or "", media_ids, reply_to))
             _update(post_id, tweet_ids=tweet_ids)
-    except (x_api.XApiError, OSError, publish.MetadataRemains, ValueError) as exc:
+    except (x_api.XApiError, OSError, publish.MetadataRemains, ValueError, video_marks.VideoError) as exc:
         done = f"({len(tweet_ids)}/{len(post['parts'])} 件は投稿済み。やり直すと続きから投稿します)" if tweet_ids else ""
         _update(post_id, status=FAILED, error=f"{exc}{done}")
         log.warning("X への投稿 %s に失敗しました: %s", post_id, exc)
         return get_post(post_id)
     _update(post_id, status=POSTED, posted_at=_iso(_now()))
     return get_post(post_id)
+
+
+def _upload_video(x: x_api.XClient, path: Path, image: dict[str, Any], post: dict[str, Any], post_id: int) -> str:
+    """動画に透かしを入れて台帳に残し、X に上げる(透かしを入れた一時ファイルは上げたら消す)。"""
+    marked = watermark_registry.mark_video(
+        path,
+        purpose=watermark_registry.X_POST,
+        source_path=image["path"],
+        label=post.get("title") or image.get("label") or "",
+        ref=image.get("ref"),
+        x_post_id=post_id,
+    )
+    try:
+        return x.upload_video(marked.read_bytes(), "video/mp4")
+    finally:
+        marked.unlink(missing_ok=True)
 
 
 def due_posts(now: datetime | None = None) -> list[dict[str, Any]]:

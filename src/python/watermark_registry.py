@@ -16,14 +16,16 @@ import io
 import logging
 import secrets
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
-from . import watermark
+from . import video_marks, watermark
 from .db import get_connection
 
 log = logging.getLogger(__name__)
@@ -101,19 +103,54 @@ def mark(
         buffer = io.BytesIO()
         marked.save(buffer, "PNG")
         result = buffer.getvalue()
-        conn.execute(
-            """
-            INSERT INTO watermarks (mark_id, purpose, source_path, ref, label, x_post_id, publication_id,
-                                    sha256, phash, width, height, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                mark_id, purpose, source_path, ref, label, x_post_id, publication_id,
-                hashlib.sha256(result).hexdigest(), phash(marked), marked.width, marked.height, _now(),
-            ),
-        )
-        conn.commit()
+        _insert(conn, mark_id, purpose, source_path, ref, label, x_post_id, publication_id,
+                hashlib.sha256(result).hexdigest(), phash(marked), marked.size)
         return result
+    finally:
+        conn.close()
+
+
+def _insert(
+    conn: sqlite3.Connection, mark_id: int, purpose: str, source_path: str, ref: str | None, label: str,
+    x_post_id: int | None, publication_id: int | None, sha256: str, fingerprint: str, size: tuple[int, int],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO watermarks (mark_id, purpose, source_path, ref, label, x_post_id, publication_id,
+                                sha256, phash, width, height, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (mark_id, purpose, source_path, ref, label, x_post_id, publication_id, sha256, fingerprint,
+         size[0], size[1], _now()),
+    )
+    conn.commit()
+
+
+def mark_video(
+    source: Path,
+    *,
+    purpose: str,
+    source_path: str = "",
+    label: str = "",
+    ref: str | None = None,
+    x_post_id: int | None = None,
+) -> Path:
+    """
+    動画の全コマに透かしを入れた mp4 を一時ファイルに書き出して、そのパスを返す(使い終わったら消すこと)。
+    台帳の指紋は、書き出したファイルの SHA-256 と、真ん中のコマの見た目の指紋。
+    """
+    target = video_marks.temp_path()
+    conn = get_connection()
+    try:
+        mark_id = _existing(conn, purpose, ref, x_post_id) or _new_mark_id(conn)
+        info = video_marks.embed_video(source, mark_id, target)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        _insert(conn, mark_id, purpose, source_path, ref, label, x_post_id, None,
+                digest, phash(video_marks.middle_frame(target)), (info.width, info.height))
+        return target
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
     finally:
         conn.close()
 
@@ -162,24 +199,55 @@ def _by_mark(conn: sqlite3.Connection, mark_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM watermarks WHERE mark_id = ? ORDER BY id DESC LIMIT 1", (mark_id,)).fetchone()
 
 
+def _open(data: bytes) -> tuple[Image.Image, Callable[[tuple[int, int] | None], watermark.Reading], Path | None]:
+    """
+    照合するもの(画像か動画)を開く。戻り値は (見た目の指紋を取るコマ, 透かしを読む関数, 消す一時ファイル)。
+    読む関数に大きさを渡すと、その大きさに戻してから読む。
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            image = opened.convert("RGB")
+    except (UnidentifiedImageError, OSError):
+        temp = video_marks.temp_path()
+        temp.write_bytes(data)
+        picked = video_marks.frames(temp)
+        if not picked:
+            temp.unlink(missing_ok=True)
+            raise UnidentifiedImageError("画像としても動画としても読めませんでした。")
+        return picked[len(picked) // 2], lambda size=None: video_marks.read(picked, size), temp
+
+    def read_image(size: tuple[int, int] | None = None) -> watermark.Reading:
+        return watermark.extract(image.resize(size, Image.Resampling.LANCZOS) if size and size != image.size else image)
+
+    return image, read_image, None
+
+
 def verify(data: bytes) -> dict[str, Any]:
     """
-    画像が台帳のどれかを照合する。戻り値:
-      found: 自分が出した画像と分かったか
+    画像・動画が台帳のどれかを照合する。戻り値:
+      found: 自分が出したものと分かったか
       method: exact(ファイルが同じ) / watermark(透かしを読めた) / watermark_resized(大きさを戻して読めた) /
               similar(透かしは読めないが、見た目がほぼ同じ) / none
       mark_id / distance(指紋の距離) / record(台帳の行) / foreign_mark(台帳に無い番号の透かしが読めた)
     """
-    with Image.open(io.BytesIO(data)) as opened:
-        image = opened.convert("RGB")
-    digest = hashlib.sha256(data).hexdigest()
-    query_hash = phash(image)
+    picture, read, temp = _open(data)
+    try:
+        return _verify(hashlib.sha256(data).hexdigest(), picture, read)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+
+
+def _verify(
+    digest: str, picture: Image.Image, read: Callable[[tuple[int, int] | None], watermark.Reading]
+) -> dict[str, Any]:
+    query_hash = phash(picture)
     conn = get_connection()
     try:
         exact = conn.execute("SELECT * FROM watermarks WHERE sha256 = ? ORDER BY id DESC LIMIT 1", (digest,)).fetchone()
         if exact is not None:
             return {"found": True, "method": "exact", "mark_id": exact["mark_id"], "distance": 0, "record": _public(exact)}
-        reading = watermark.extract(image)
+        reading = read(None)
         foreign = None
         if reading.mark_id is not None:
             row = _by_mark(conn, reading.mark_id)
@@ -196,10 +264,9 @@ def verify(data: bytes) -> dict[str, Any]:
     near = [pair for pair in near if pair[0] <= SIMILAR_DISTANCE][:_CANDIDATES]
     for dist, row in near:
         size = (int(row["width"]), int(row["height"]))
-        if size == image.size:
+        if size == picture.size:
             continue
-        resized = watermark.extract(image.resize(size, Image.Resampling.LANCZOS))
-        if resized.mark_id == row["mark_id"]:
+        if read(size).mark_id == row["mark_id"]:
             return {"found": True, "method": "watermark_resized", "mark_id": row["mark_id"], "distance": dist,
                     "record": _public(row)}
     if near and near[0][0] <= MATCH_DISTANCE:

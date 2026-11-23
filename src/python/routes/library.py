@@ -67,7 +67,9 @@ _PROJECT_ROOT = user_files()
 _OUTPUTS = _PROJECT_ROOT / "outputs"
 # 配信してよいフォルダ(生成履歴と漫画)。LoRA の学習データなどは出さない。
 # うごイラのコマ(outputs/ugoira)も画面に出す
-_SERVED_DIRS = (_OUTPUTS / "history", _OUTPUTS / "manga", _OUTPUTS / "ugoira")
+# 動画(Grok などで作ったもの)。横に同じ名前の .json(prompt・label・source_key・adult)を置ける
+_VIDEO_DIR = _OUTPUTS / "videos"
+_SERVED_DIRS = (_OUTPUTS / "history", _OUTPUTS / "manga", _OUTPUTS / "ugoira", _VIDEO_DIR)
 # キャラ別データセットの画像フォルダ: outputs/<ルート>/<キャラのフォルダ>/<この名前>/*.png
 # 引き直しの外れ(rejected)はギャラリーに出さない。
 _DATASET_SUBDIRS = ("generated", "generated_r18", "manual", "manual_r18")
@@ -80,7 +82,7 @@ _FILENAME_UNSAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 # 前提文の頭書き。例: 「[インポート] 本文…」「[エディタ] 題」
 _ORIGIN_RE = re.compile(r"^\[([^\]]{1,10})\]\s*(.*)$", re.DOTALL)
 
-ImageSource = Literal["generate", "panel", "illustration", "dataset"]
+ImageSource = Literal["generate", "panel", "illustration", "dataset", "video"]
 # 一覧の絞り込み: すべて / 一般向けだけ / 成人向けだけ
 Rating = Literal["all", "general", "adult"]
 
@@ -132,13 +134,66 @@ def get_file(path: str, download: bool = False) -> FileResponse:
     full = _served_path(path)
     return FileResponse(
         full,
-        # 動くページ(漫画のうごイラ)はアニメ WebP。ほかは PNG
-        media_type="image/webp" if full.suffix.lower() == ".webp" else "image/png",
+        # 動くページ(漫画のうごイラ)はアニメ WebP、動画は MP4。ほかは PNG
+        media_type=_MEDIA_TYPES.get(full.suffix.lower(), "image/png"),
         filename=full.name if download else None,
         # 全画面で前後の画像を先読みしたものを、移ったときにそのまま使えるよう少しの間キャッシュさせる。
         # 顔・表情シートのように同じ名前で描き直す画像もあるので、長くはしない
         headers={"Cache-Control": "private, max-age=300"},
     )
+
+
+_MEDIA_TYPES = {".webp": "image/webp", ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
+
+
+def _thumb_source(full: Path) -> Image.Image:
+    """縮小画像の元(動画なら真ん中のコマ)。"""
+    from ..video_marks import is_video, middle_frame
+
+    return middle_frame(full) if is_video(full) else Image.open(full)
+
+
+def _video_images() -> list[GalleryImage]:
+    """outputs/videos の動画。横の .json に prompt・label・source_key・adult・created_at を書ける。"""
+    import cv2
+
+    from ..video_marks import is_video
+
+    folder = Path(os.fspath(_VIDEO_DIR))
+    if not folder.is_dir():
+        return []
+    items: list[GalleryImage] = []
+    for entry in sorted(folder.iterdir()):
+        if not entry.is_file() or not is_video(entry):
+            continue
+        meta: dict[str, Any] = {}
+        sidecar = entry.with_suffix(".json")
+        if sidecar.is_file():
+            try:
+                meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                meta = {}
+        cap = cv2.VideoCapture(str(entry))
+        width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None, int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+        cap.release()
+        adult = bool(meta.get("adult")) or _tags_adult(str(meta.get("prompt") or ""))
+        items.append(
+            GalleryImage(
+                key=f"video:{entry.name}",
+                source="video",
+                path=entry.relative_to(Path(os.fspath(_PROJECT_ROOT))).as_posix(),
+                created_at=str(meta.get("created_at") or datetime.fromtimestamp(entry.stat().st_mtime, timezone.utc).isoformat()),
+                width=width,
+                height=height,
+                prompt=str(meta.get("prompt") or ""),
+                model=meta.get("model"),
+                label=meta.get("label"),
+                source_key=meta.get("source_key"),
+                adult=adult,
+                adult_auto=adult,
+            )
+        )
+    return items
 
 
 @router.get("/thumb")
@@ -166,7 +221,7 @@ def _ensure_thumb(full: Path, width: int, thumb_dir: Path) -> Path:
     thumb = thumb_dir / f"{digest}.webp"
     if not thumb.is_file():
         thumb_dir.mkdir(parents=True, exist_ok=True)
-        with Image.open(full) as src:
+        with _thumb_source(full) as src:
             img = src.convert("RGB")
             if img.width > width:
                 img = img.resize(
@@ -417,6 +472,9 @@ def _gallery_signature() -> tuple[Any, ...]:
             parts.append((path.name, stat.st_mtime_ns, stat.st_size))
         except FileNotFoundError:
             continue
+    videos = Path(os.fspath(_VIDEO_DIR))
+    if videos.is_dir():
+        parts.append(("videos", videos.stat().st_mtime_ns, len(os.listdir(videos))))
     outputs = Path(os.fspath(_OUTPUTS))
     if outputs.is_dir():
         for root in os.scandir(outputs):
@@ -605,6 +663,7 @@ def _build_gallery_images() -> list[GalleryImage]:
             or (item.source == "dataset" and item.path.rsplit("/", 2)[-2].endswith("_r18"))
         )
         item.adult = item.adult_auto
+    items.extend(_video_images())
     # ファイルが消えているもの(手で消した等)は出さない
     return [item for item in items if (_PROJECT_ROOT / item.path).is_file()]
 

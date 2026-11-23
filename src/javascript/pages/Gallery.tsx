@@ -32,7 +32,7 @@ import './Gallery.css'
 import { openXPost } from '../xpost'
 import { isShortcutKey, keyIs } from '../shortcuts'
 
-type Source = 'generate' | 'panel' | 'illustration' | 'dataset'
+type Source = 'generate' | 'panel' | 'illustration' | 'dataset' | 'video'
 
 interface GalleryImage {
   key: string
@@ -74,9 +74,10 @@ const SOURCES: { id: Source; label: string }[] = [
   { id: 'panel', label: '漫画のコマ' },
   { id: 'illustration', label: '挿絵ページ' },
   { id: 'dataset', label: 'データセット' },
+  { id: 'video', label: '動画' },
 ]
 const SOURCE_LABELS: Record<Source, string> = {
-  generate: '画像生成', panel: '漫画のコマ', illustration: '挿絵ページ', dataset: 'データセット',
+  generate: '画像生成', panel: '漫画のコマ', illustration: '挿絵ページ', dataset: 'データセット', video: '動画',
 }
 const PAGE_SIZE = 60
 // スワイプとみなす横方向の移動量(px)
@@ -89,6 +90,7 @@ function describe(item: GalleryImage): string {
   if (item.source === 'illustration' && item.index !== null) return `ページ${item.index + 1}`
   // キャラ別データセットは「キャラ名 / generated」のようにキャラと保存先を出す
   if (item.source === 'dataset' && item.label) return item.label
+  if (item.source === 'video' && item.label) return item.label
   return ''
 }
 
@@ -489,7 +491,7 @@ export default function Gallery() {
     try {
       await downloadFile(
         `/api/library/file?path=${encodeURIComponent(item.path)}&download=true`,
-        `${item.key.replace(/:/g, '_')}.png`,
+        `${item.key.replace(/:/g, '_')}${item.source === 'video' ? '' : '.png'}`,
       )
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -649,6 +651,7 @@ export default function Gallery() {
                 {selecting && <span className="gallery-check" aria-hidden>{isSelected ? '✓' : ''}</span>}
                 {item.bookmarked && !selecting && <span className="gallery-star" aria-label="ブックマーク済み">★</span>}
                 {item.adult && <span className="gallery-r18">R18</span>}
+                {item.source === 'video' && <span className="gallery-video-badge" aria-label="動画">▶</span>}
               </button>
             </li>
           )
@@ -723,7 +726,7 @@ export default function Gallery() {
         </div>
       )}
 
-      {current && viewing !== null && fullscreen && (
+      {current && viewing !== null && fullscreen && current.source !== 'video' && (
         <FullscreenViewer
           src={fileUrl(current.path)}
           alt={describe(current) || SOURCE_LABELS[current.source]}
@@ -750,6 +753,7 @@ export default function Gallery() {
               className="gallery-viewer-full"
               data-shortcut="fullscreen"
               onClick={() => setFullscreen(true)}
+              hidden={current.source === 'video'}
               disabled={blurs(current) && !revealed.has(current.key)}
               title={blurs(current) && !revealed.has(current.key) ? '成人向けの画像は、表示してから全画面にできます' : undefined}
             >
@@ -771,12 +775,24 @@ export default function Gallery() {
           >
             <button type="button" className="gallery-nav gallery-nav--prev" onClick={() => step(-1)}
               disabled={viewing === 0} aria-label="前の画像">‹</button>
-            <img
-              key={current.key}
-              src={fileUrl(current.path)}
-              alt={describe(current) || SOURCE_LABELS[current.source]}
-              className={blurs(current) && !revealed.has(current.key) ? 'is-blurred' : undefined}
-            />
+            {current.source === 'video' ? (
+              <video
+                key={current.key}
+                src={fileUrl(current.path)}
+                poster={thumbUrl(current.path, 720)}
+                controls
+                playsInline
+                loop
+                className={blurs(current) && !revealed.has(current.key) ? 'is-blurred' : undefined}
+              />
+            ) : (
+              <img
+                key={current.key}
+                src={fileUrl(current.path)}
+                alt={describe(current) || SOURCE_LABELS[current.source]}
+                className={blurs(current) && !revealed.has(current.key) ? 'is-blurred' : undefined}
+              />
+            )}
             {blurs(current) && !revealed.has(current.key) && (
               <button
                 type="button"
@@ -804,27 +820,30 @@ export default function Gallery() {
                 {current.bookmarked ? '★ ブックマーク済み' : '☆ ブックマーク'}
               </button>
               <button type="button" onClick={() => void downloadOne(current)}>ダウンロード</button>
-              <button type="button" onClick={() => publishOne(current)}
+              <button type="button" onClick={() => publishOne(current)} hidden={current.source === 'video'}
                 title="この画像から NovelAI の生成情報(メタデータ)を取り除いたものを、出版物として保存します">
                 出版する
               </button>
               <button type="button" onClick={() => openXPost([current.key], navigate)}
-                title="この画像を X に投稿します(本文を入れて、今すぐ・予約で投稿できます)">
+                title="この画像・動画を X に投稿します(本文を入れて、今すぐ・予約で投稿できます)">
                 X に投稿
               </button>
               <button type="button" onClick={() => toggleSelectedFromViewer(current)} aria-pressed={selected.has(current.key)}
+                hidden={current.source === 'video'}
                 title="ほかの画像とまとめて出版するために選びます(閉じると、下の選択バーから出版できます)">
                 {selected.has(current.key) ? `出版の選択から外す(${selected.size}枚選択中)` : `出版に選ぶ${selected.size > 0 ? `(${selected.size}枚選択中)` : ''}`}
               </button>
               <button type="button" onClick={() => navigate(`/ugoira?key=${encodeURIComponent(current.key)}`)}
+                hidden={current.source === 'video'}
                 title="この絵の目・口・髪だけを描き直して、まばたき・口パクなどのうごイラを作ります">
                 うごイラを作る
               </button>
               <button type="button" onClick={() => void sendToGenerate(current)} disabled={sending}
+                hidden={current.source === 'video'}
                 title="この画像のプロンプトや設定を画像生成ページに入れて、似た画像を作れるようにします(シード値と、生成に使った参照画像も入れます)">
                 {sending ? '読み取り中…' : '似た画像を生成(画像生成ページへ)'}
               </button>
-              <button type="button" onClick={() => void makeStyleSet(current)}
+              <button type="button" onClick={() => void makeStyleSet(current)} hidden={current.source === 'video'}
                 title="この画像を「絵柄だけ」の参照にした絵柄セットを作ります。キャラに選ばせると、その絵柄で描けます">
                 絵柄セットにする
               </button>
@@ -846,13 +865,14 @@ export default function Gallery() {
               <button
                 type="button"
                 className="gallery-danger"
+                hidden={current.source === 'video'}
                 onClick={() => void deleteKeys([current.key])}
                 disabled={deleting}
               >
                 削除
               </button>
             </div>
-            {token && <WholeEnhance key={current.key} token={token} imageKey={current.key} onOpen={key => void openKey(key)} />}
+            {token && current.source !== 'video' && <WholeEnhance key={current.key} token={token} imageKey={current.key} onOpen={key => void openKey(key)} />}
             <dl className="gallery-meta">
               <dt>種類</dt>
               <dd>{SOURCE_LABELS[current.source]}{describe(current) && ` ・ ${describe(current)}`}</dd>

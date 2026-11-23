@@ -21,14 +21,27 @@ from PIL import Image
 BLOCK = 8
 BITS = 64
 MAGIC = 0x5D1A
-# 量子化の幅(DCT の値。大きいほど丈夫で、変化も大きい)。14 で PSNR 約 43dB、JPEG 画質 60 まで読める
-STEP = 14.0
-# 明るさのばらつきがこれより小さいブロック(ベタ塗り)には入れない(4 倍に拡大すると紙の目のような模様が見えた)。
-# 入れなかったブロックの係数はほぼ 0 で、読むときは 0 と 1 の格子のちょうど間になるので、票を偏らせない
-FLAT_STD = 3.0
-# 埋める係数(8×8 の DCT の中ほどの周波数。低すぎると見え、高すぎると JPEG で消える)
-_COEFFS = ((1, 2), (2, 1), (2, 2), (1, 3), (3, 1))
 _DEFAULT_KEY = "novelai-userscripts-watermark-v1"
+
+
+@dataclass(frozen=True)
+class Profile:
+    """埋め方。step: 量子化の幅(DCT の値。大きいほど丈夫で、変化も大きい)。coeffs: 埋める 8×8 DCT の係数。
+    flat_std: 明るさのばらつきがこれより小さいブロック(ベタ塗り)には入れない。入れなかったブロックの係数は
+    ほぼ 0 で、読むときは 0 と 1 の格子のちょうど間になるので、票を偏らせない。"""
+
+    name: str
+    step: float
+    coeffs: tuple[tuple[int, int], ...]
+    flat_std: float = 3.0
+
+
+# 画像: 中ほどの周波数。PSNR 約 44dB、JPEG 画質 60・0.75 倍の縮小(戻して読む)まで読める
+IMAGE = Profile("image", 14.0, ((1, 2), (2, 1), (2, 2), (1, 3), (3, 1)))
+# 動画: 動画の圧縮は中ほどの周波数を消すので、低い周波数に強めに入れる。PSNR 約 42dB。
+# 1989 番の動画(784x1152)で、H.264 の 2.5M・1.2M bps と 720p への縮小(戻して読む)のあとも、24 コマの多数決で読めた
+VIDEO = Profile("video", 32.0, ((0, 1), (1, 0), (1, 1)))
+PROFILES = (IMAGE, VIDEO)
 
 
 def _dct_matrix() -> np.ndarray:
@@ -96,12 +109,7 @@ def _blocks(luma: np.ndarray) -> tuple[np.ndarray, int, int]:
     return blocks, rows, cols
 
 
-def _steps(blocks: np.ndarray) -> np.ndarray:
-    """ブロックごとの量子化の幅(すべて同じ)。"""
-    return np.full(blocks.shape[:2], STEP)
-
-
-def embed(image: Image.Image, mark_id: int) -> Image.Image:
+def embed(image: Image.Image, mark_id: int, profile: Profile = IMAGE) -> Image.Image:
     """透かしを埋めた絵(RGB)を返す。色(Cb・Cr)は変えず、明るさだけを変える。"""
     ycc = np.asarray(image.convert("RGB").convert("YCbCr"), dtype=np.float64)
     luma = ycc[:, :, 0]
@@ -109,14 +117,14 @@ def embed(image: Image.Image, mark_id: int) -> Image.Image:
     if rows * cols < BITS * 4:
         raise ValueError("絵が小さすぎて透かしを入れられません")
     bits = encode_payload(mark_id)[_assignment(rows, cols)]
-    steps = _steps(blocks)
+    steps = np.full(blocks.shape[:2], profile.step)
     coeffs = _D @ blocks @ _D.T
     # 0 は -幅/4、1 は +幅/4 の格子(0 に丸められた係数は どちらにも寄らない)
     offset = (bits - 0.5) * (steps / 2)
-    busy = blocks.std(axis=(2, 3)) >= FLAT_STD
+    busy = blocks.std(axis=(2, 3)) >= profile.flat_std
     if busy.sum() < BITS * 8:
         raise ValueError("絵の模様が少なすぎて透かしを入れられません")
-    for u, v in _COEFFS:
+    for u, v in profile.coeffs:
         c = coeffs[:, :, u, v]
         coeffs[:, :, u, v] = np.where(busy, np.round((c - offset) / steps) * steps + offset, c)
     restored = _D.T @ coeffs @ _D
@@ -133,24 +141,45 @@ class Reading:
     confidence: float
 
 
-def extract(image: Image.Image) -> Reading:
-    """絵から透かしを読む。読めなければ mark_id は None。"""
+def votes(image: Image.Image, profile: Profile = IMAGE) -> np.ndarray | None:
+    """ビットごとの票(-1〜+1。+ なら 1)。動画では何コマか分を足してから decide で読む。小さすぎる絵は None。"""
     luma = np.asarray(image.convert("RGB").convert("YCbCr"), dtype=np.float64)[:, :, 0]
     blocks, rows, cols = _blocks(luma)
     if rows * cols < BITS * 4:
-        return Reading(None, 0.0)
+        return None
     assign = _assignment(rows, cols)
-    steps = _steps(blocks)
+    steps = np.full(blocks.shape[:2], profile.step)
     coeffs = _D @ blocks @ _D.T
-    votes = np.zeros(BITS)
+    total = np.zeros(BITS)
     weight = np.zeros(BITS)
-    for u, v in _COEFFS:
+    for u, v in profile.coeffs:
         c = coeffs[:, :, u, v]
         # 0 の格子(-幅/4)と 1 の格子(+幅/4)のどちらに近いか。+1 なら 1、-1 なら 0、0 は どちらでもない
         phase = np.mod(c / steps + 0.25, 1.0)  # 0 の格子で 0、1 の格子で 0.5
         score = -np.cos(2 * np.pi * phase)
-        np.add.at(votes, assign.ravel(), score.ravel())
+        np.add.at(total, assign.ravel(), score.ravel())
         np.add.at(weight, assign.ravel(), 1.0)
-    mean = votes / np.maximum(weight, 1)
+    return total / np.maximum(weight, 1)
+
+
+def decide(mean: np.ndarray) -> Reading:
+    """票から番号を読む(目印か CRC が合わなければ None)。"""
     bits = (mean > 0).astype(np.int8)
     return Reading(decode_payload(bits), float(np.abs(mean).mean()))
+
+
+def extract(image: Image.Image, profile: Profile | None = None) -> Reading:
+    """
+    絵から透かしを読む。読めなければ mark_id は None。profile を省くと、画像の埋め方、だめなら動画の埋め方で読む
+    (動画から切り出した1コマも読めるように)。
+    """
+    best = Reading(None, 0.0)
+    for candidate in (profile,) if profile else PROFILES:
+        mean = votes(image, candidate)
+        if mean is None:
+            continue
+        reading = decide(mean)
+        if reading.mark_id is not None:
+            return reading
+        best = reading if reading.confidence > best.confidence else best
+    return best

@@ -8,6 +8,8 @@ X(旧 Twitter)の API を、自分のアカウントとして呼ぶ(OAuth 1.0a �
 使う API(どれも 2026-11 に実機で確かめた。v2 の画像のアップロードも OAuth 1.0a で通る):
   GET  /2/users/me                 つながっているアカウント
   POST /2/media/upload             画像を上げる(multipart。1枚 5MB まで)
+  POST /2/media/upload/initialize・/{id}/append・/{id}/finalize、GET /2/media/upload?command=STATUS
+                                   動画を分割して上げる(2026-11 実装。v2 の分割アップロード)
   POST /2/media/metadata           上げた画像にセンシティブの警告(adult_content)・代替テキストを付ける
   POST /2/tweets                   投稿する(画像は4枚まで。reply で前の投稿へのスレッドにする)
   DELETE /2/tweets/{id}            投稿を消す
@@ -26,6 +28,7 @@ import os
 import secrets
 import time
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +39,10 @@ _KEYS = ("X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET")
 _TIMEOUT = 60.0
 # 1枚の画像の上限(X の決まり)
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# 動画(tweet_video): 上限は 8GB だが、このアプリで扱う短い動画に合わせて 512MB まで。分割は 4MB ずつ
+MAX_VIDEO_BYTES = 512 * 1024 * 1024
+VIDEO_CHUNK_BYTES = 4 * 1024 * 1024
+VIDEO_PROCESS_TIMEOUT = 600.0
 
 
 class XApiError(RuntimeError):
@@ -147,6 +154,43 @@ class XClient:
         if not media_id:
             raise XApiError("画像を上げましたが、メディアの ID が返ってきませんでした。")
         return str(media_id)
+
+    def upload_video(self, data: bytes, mime: str = "video/mp4", *, sleep: Callable[[float], None] = time.sleep) -> str:
+        """
+        動画を分割して上げ、X の処理が終わるのを待って、メディアの ID を返す。
+        initialize(JSON)→ append(multipart、4MB ずつ)→ finalize →(処理中なら)状態を check_after_secs ごとに確かめる。
+        """
+        if len(data) > MAX_VIDEO_BYTES:
+            raise XApiError(f"動画が大きすぎます({len(data) // (1024 * 1024)}MB)")
+        body = self._request(
+            "POST",
+            "/2/media/upload/initialize",
+            headers={"Content-Type": "application/json"},
+            content=json.dumps({"media_type": mime, "total_bytes": len(data), "media_category": "tweet_video"}),
+        )
+        media_id = str((body.get("data") or {}).get("id") or "")
+        if not media_id:
+            raise XApiError("動画のアップロードを始められませんでした(メディアの ID がありません)。")
+        for index, start in enumerate(range(0, len(data), VIDEO_CHUNK_BYTES)):
+            self._request(
+                "POST",
+                f"/2/media/upload/{media_id}/append",
+                files={"media": ("chunk", data[start : start + VIDEO_CHUNK_BYTES], "application/octet-stream")},
+                data={"segment_index": str(index)},
+            )
+        info = (self._request("POST", f"/2/media/upload/{media_id}/finalize").get("data") or {}).get("processing_info")
+        waited = 0.0
+        while info and info.get("state") in ("pending", "in_progress"):
+            if waited > VIDEO_PROCESS_TIMEOUT:
+                raise XApiError("X での動画の処理が終わりませんでした(時間切れ)。")
+            delay = float(info.get("check_after_secs") or 2)
+            sleep(delay)
+            waited += delay
+            status = self._request("GET", "/2/media/upload", params={"command": "STATUS", "media_id": media_id})
+            info = (status.get("data") or {}).get("processing_info")
+        if info and info.get("state") == "failed":
+            raise XApiError("X で動画を処理できませんでした(形式・長さ・大きさを確かめてください)。")
+        return media_id
 
     def set_media_metadata(self, media_id: str, *, sensitive: bool = False, alt_text: str | None = None) -> None:
         """上げた画像に、センシティブの警告(成人向け)と代替テキストを付ける。"""
