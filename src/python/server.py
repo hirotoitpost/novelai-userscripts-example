@@ -55,6 +55,7 @@ from .routes.assistant import router as assistant_router
 from .routes.studio import router as studio_router
 from .routes.x_posts import router as x_posts_router
 from .routes.watermarks import router as watermarks_router
+from .routes.nft import router as nft_router
 from .routes.voice import router as voice_router
 from .routes.manga_voice import router as manga_voice_router
 
@@ -194,6 +195,7 @@ app.include_router(assistant_router)
 app.include_router(studio_router)
 app.include_router(x_posts_router)
 app.include_router(watermarks_router)
+app.include_router(nft_router)
 app.include_router(voice_router)
 app.include_router(manga_voice_router)
 

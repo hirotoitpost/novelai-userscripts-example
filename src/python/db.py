@@ -586,6 +586,33 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_watermarks_mark ON watermarks (mark_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_watermarks_sha ON watermarks (sha256)")
+    # 台帳の画像の NFT 記録(nft_records.py。テストネットだけ)。契約は画面から MetaMask で作る(利用者ごと)。
+    # nft_tokens のトークン番号は透かしの番号(mark_id)。アドレスと取引の ID は小文字の 0x… で持つ
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS nft_contracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chain_id INTEGER NOT NULL,
+            address TEXT NOT NULL,
+            tx_hash TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS nft_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mark_id INTEGER NOT NULL,
+            chain_id INTEGER NOT NULL,
+            contract TEXT NOT NULL,
+            tx_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (mark_id, chain_id, contract)
+        )
+        """
+    )
     # アプリの既定値のうち、開発管理者のページで変えたもの(app_settings.py。値は JSON)
     conn.execute(
         """
