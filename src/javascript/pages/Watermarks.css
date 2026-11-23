@@ -213,3 +213,9 @@
   font-family: ui-monospace, Consolas, monospace;
   color: #d8d0ff;
 }
+
+.wm-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+}

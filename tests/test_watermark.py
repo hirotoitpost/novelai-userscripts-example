@@ -115,3 +115,22 @@ def test_publication_with_watermark(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     reading = watermark.extract(Image.open(io.BytesIO(out)))
     marks = watermark_registry.list_marks()
     assert reading.mark_id == marks[0]["mark_id"] and marks[0]["publication_id"] == 5
+
+
+def test_agreement_separates_right_id_when_bits_are_noisy() -> None:
+    rng = np.random.default_rng(7)
+    right = watermark.encode_payload(0x2468ACE0).astype(float) * 2 - 1
+    # 弱い票(強さ 0.3)に雑音を足して、何ビットか逆になる状態を作る
+    votes = right * 0.3 + rng.normal(0, 0.25, size=right.shape)
+    reading = watermark.decide(votes)
+    assert reading.mark_id is None or reading.mark_id == 0x2468ACE0
+    assert watermark.agreement(reading, 0x2468ACE0) > 0.6
+    others = [watermark.agreement(reading, int(m)) for m in rng.integers(1, 2**32 - 1, size=200)]
+    assert max(others) < 0.6 and abs(float(np.mean(others))) < 0.1
+
+
+def test_video_profile_block16_roundtrip() -> None:
+    image = _picture(768, 1152)
+    marked = watermark.embed(image, 99, watermark.VIDEO)
+    assert watermark.extract(marked, watermark.VIDEO).mark_id == 99
+    assert watermark.extract(marked).mark_id == 99  # 省くと全部の入れ方を試す

@@ -56,9 +56,10 @@ interface Mark {
 
 interface Verify {
   found: boolean
-  method: 'exact' | 'watermark' | 'watermark_resized' | 'similar' | 'none'
+  method: 'exact' | 'watermark' | 'watermark_resized' | 'watermark_partial' | 'similar' | 'none'
   mark_id: number | null
   distance: number | null
+  agreement?: number
   record: Mark | null
   foreign_mark?: number | null
 }
@@ -67,6 +68,7 @@ const METHOD_TEXT: Record<Verify['method'], string> = {
   exact: '出したファイルとまったく同じです。',
   watermark: '画像の中の透かしを読めました。自分が出した画像です。',
   watermark_resized: '縮小された画像でしたが、元の大きさに戻して透かしを読めました。自分が出した画像です。',
+  watermark_partial: '圧縮で透かしが少し崩れていましたが、見た目の指紋が近い台帳の画像・動画の番号とよく合いました。自分が出したものです。',
   similar: '透かしは読めませんでしたが、見た目がほぼ同じ画像を出しています(切り抜き・加工されているかもしれません)。',
   none: '台帳に一致する画像はありません。',
 }
@@ -234,6 +236,9 @@ export default function Watermarks() {
                   <strong>{result.found ? (result.method === 'similar' ? 'よく似た画像を出しています' : '自分の画像です') : '見つかりません'}</strong>
                   <p>{METHOD_TEXT[result.method]}</p>
                   {result.mark_id !== null && <p>透かしの番号: <code>{markText(result.mark_id)}</code></p>}
+                  {result.agreement !== undefined && (
+                    <p className="wm-meta">透かしの一致度: {Math.round(result.agreement * 100)}%(関係ない番号ならほぼ 0%)</p>
+                  )}
                   {result.distance !== null && result.method !== 'exact' && (
                     <p className="wm-meta">見た目の指紋の差: {result.distance} / 64(6 以下ならほぼ同じ絵)</p>
                   )}
@@ -246,11 +251,15 @@ export default function Watermarks() {
                       <div>
                         <p>{result.found ? '出した記録' : 'いちばん近い記録'}: {record.purpose_label} ・ {formatDate(record.created_at)}</p>
                         {record.label && <p>{record.label}</p>}
-                        {record.x_post_url && <a href={record.x_post_url} target="_blank" rel="noreferrer">X の投稿を開く</a>}
-                        {record.publication_title && <p>出版物: {record.publication_title}</p>}
-                        {record.nft?.token_url && (
-                          <a href={record.nft.token_url} target="_blank" rel="noreferrer">NFT の記録を見る({record.nft.chain_name})</a>
+                        {(record.x_post_url || record.nft?.token_url) && (
+                          <p className="wm-links">
+                            {record.x_post_url && <a href={record.x_post_url} target="_blank" rel="noreferrer">X の投稿を開く</a>}
+                            {record.nft?.token_url && (
+                              <a href={record.nft.token_url} target="_blank" rel="noreferrer">NFT の記録を見る({record.nft.chain_name})</a>
+                            )}
+                          </p>
                         )}
+                        {record.publication_title && <p>出版物: {record.publication_title}</p>}
                       </div>
                     </div>
                   )}
@@ -325,9 +334,13 @@ export default function Watermarks() {
                     <p><code>{markText(mark.mark_id)}</code> ・ {mark.purpose_label}</p>
                     <p className="wm-meta">{formatDate(mark.created_at)} ・ {mark.width}×{mark.height}</p>
                     {mark.label && <p className="wm-label">{mark.label}</p>}
-                    {mark.x_post_url && <a href={mark.x_post_url} target="_blank" rel="noreferrer">X で見る</a>}
                     {mark.publication_title && <p className="wm-meta">出版物: {mark.publication_title}</p>}
-                    {mark.nft?.token_url && <a href={mark.nft.token_url} target="_blank" rel="noreferrer">NFT ✓</a>}
+                    {(mark.x_post_url || mark.nft?.token_url) && (
+                      <p className="wm-links">
+                        {mark.x_post_url && <a href={mark.x_post_url} target="_blank" rel="noreferrer">X で見る</a>}
+                        {mark.nft?.token_url && <a href={mark.nft.token_url} target="_blank" rel="noreferrer">NFT ✓(記録を見る)</a>}
+                      </p>
+                    )}
                   </div>
                 </li>
               ))}
