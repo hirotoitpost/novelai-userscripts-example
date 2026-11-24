@@ -8,6 +8,9 @@
 できた動画は outputs/videos/ に保存し、横に同じ名前の .json(label・prompt・model・source_key・費用など)を置く
 (ギャラリーの「動画」に並ぶ。routes/library.py)。作るのは裏のスレッドで、数分かかる。進み具合は job で見る。
 料金は1秒いくら(モデルで違う)。音声付き・高画質では案内より高くなる(1.5・720p・6秒・音声付きで 0.85 ドルだった)。
+
+ループ(loop=True): 最後のコマにも同じ絵を指定する(last_frame。1.5 だけ・720p まで)。映像は継ぎ目なく回る。
+音はつながらないので、できたあと video_loop.apply_fade で始まりと終わりにフェードをかける(長さは後から変えられる)。
 """
 
 from __future__ import annotations
@@ -27,7 +30,9 @@ from typing import Any
 
 import httpx
 
+from . import video_loop
 from .db import as_user, current_user_id, user_files
+from .video_loop import DEFAULT_FADE
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +45,9 @@ MODELS = {
 }
 DEFAULT_MODEL = "grok-imagine-video-1.5"
 RESOLUTIONS = ("480p", "720p", "1080p")
+# 最後のコマを指定できる(ループにできる)モデルと解像度
+LOOP_MODELS = ("grok-imagine-video-1.5",)
+LOOP_RESOLUTIONS = ("480p", "720p")
 MIN_SECONDS, MAX_SECONDS = 1, 15
 POLL_SECONDS = 5.0
 TIMEOUT_SECONDS = 15 * 60
@@ -104,7 +112,9 @@ def _mime(path: Path) -> str:
     return {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(path.suffix.lower(), "image/png")
 
 
-def build_body(image: Path, prompt: str, model: str, seconds: int, resolution: str, audio: bool) -> dict[str, Any]:
+def build_body(
+    image: Path, prompt: str, model: str, seconds: int, resolution: str, audio: bool, loop: bool = False,
+) -> dict[str, Any]:
     if model not in MODELS:
         raise VideoJobError(f"知らないモデルです: {model}")
     if resolution not in RESOLUTIONS:
@@ -114,8 +124,12 @@ def build_body(image: Path, prompt: str, model: str, seconds: int, resolution: s
     data = image.read_bytes()
     if len(data) > 20 * 1024 * 1024:
         raise VideoJobError("元の絵が大きすぎます(20MB まで)。")
+    if loop and model not in LOOP_MODELS:
+        raise VideoJobError(f"ループにできるのは {', '.join(LOOP_MODELS)} だけです。")
+    if loop and resolution not in LOOP_RESOLUTIONS:
+        raise VideoJobError(f"ループの解像度は {', '.join(LOOP_RESOLUTIONS)} までです。")
     url = f"data:{_mime(image)};base64,{base64.b64encode(data).decode()}"
-    return {
+    body: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "image": {"url": url},
@@ -123,6 +137,10 @@ def build_body(image: Path, prompt: str, model: str, seconds: int, resolution: s
         "resolution": resolution,
         "generate_audio": audio,
     }
+    if loop:
+        # 最後のコマも同じ絵にして、終わりが始まりにつながるようにする
+        body["last_frame"] = {"url": url}
+    return body
 
 
 def _video_name(source_key: str) -> str:
@@ -132,10 +150,11 @@ def _video_name(source_key: str) -> str:
 
 def start(
     *, source_key: str, image: Path, prompt: str, model: str, seconds: int, resolution: str, audio: bool,
-    label: str, adult: bool, http: httpx.Client | None = None, sleep: Any = time.sleep,
+    label: str, adult: bool, loop: bool = False, audio_fade: float = DEFAULT_FADE,
+    http: httpx.Client | None = None, sleep: Any = time.sleep,
 ) -> Job:
     """動画づくりを裏で始める(すぐ返る)。中身を確かめられない指定は、ここで VideoJobError。"""
-    body = build_body(image, prompt, model, seconds, resolution, audio)
+    body = build_body(image, prompt, model, seconds, resolution, audio, loop)
     headers = _headers()
     job = Job(uuid.uuid4().hex, current_user_id(), source_key)
     with _lock:
@@ -147,7 +166,8 @@ def start(
         with as_user(user_id):
             client = http or httpx.Client(timeout=120)
             try:
-                _run(job, client, headers, body, folder, label=label, adult=adult, sleep=sleep)
+                _run(job, client, headers, body, folder, label=label, adult=adult, sleep=sleep,
+                     audio_fade=audio_fade if loop and audio else None)
             except Exception as exc:  # noqa: BLE001 - どんな失敗も画面に出す
                 log.warning("動画を作れませんでした: %s", exc)
                 job.status, job.message = "failed", str(exc)[:400]
@@ -160,7 +180,7 @@ def start(
 
 
 def _run(job: Job, client: httpx.Client, headers: dict[str, str], body: dict[str, Any], folder: Path, *,
-         label: str, adult: bool, sleep: Any) -> None:
+         label: str, adult: bool, sleep: Any, audio_fade: float | None = None) -> None:
     r = client.post(f"{API}/videos/generations", headers=headers, json=body)
     if r.status_code >= 400:
         raise VideoJobError(f"xAI のエラー({r.status_code}): {r.text[:300]}")
@@ -203,10 +223,21 @@ def _run(job: Job, client: httpx.Client, headers: dict[str, str], body: dict[str
         "duration": body["duration"],
         "resolution": body["resolution"],
         "audio": body["generate_audio"],
+        "loop": "last_frame" in body,
         "cost_usd": job.cost_usd,
         "request_id": request_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     (folder / f"{name}.json").write_text(json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8")
+    if audio_fade:
+        # ループの音のつなぎ目をなじませる(元の動画は originals/ に残るので、あとで長さを変えられる)
+        job.message = "音のつなぎ目をなじませています"
+        try:
+            video_loop.apply_fade(folder / f"{name}.mp4", audio_fade)
+        except Exception as exc:  # noqa: BLE001 - 動画はできているので、フェードの失敗は知らせるだけ
+            log.warning("音のフェードをかけられませんでした: %s", exc)
+            job.message = f"音のフェードはかけられませんでした: {exc}"[:400]
+        else:
+            job.message = ""
     job.video_key = f"video:{name}.mp4"
     job.status, job.progress = "done", 100

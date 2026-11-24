@@ -19,6 +19,9 @@ interface Config {
   resolutions: string[]
   min_seconds: number
   max_seconds: number
+  loop_models: string[]
+  loop_resolutions: string[]
+  default_fade: number
 }
 
 interface Job {
@@ -45,6 +48,8 @@ export default function VideoMaker({ imageKey, onOpen }: { imageKey: string; onO
   const [seconds, setSeconds] = useState(6)
   const [resolution, setResolution] = useState('720p')
   const [audio, setAudio] = useState(true)
+  const [loop, setLoop] = useState(false)
+  const [fade, setFade] = useState(1.5)
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,6 +61,7 @@ export default function VideoMaker({ imageKey, onOpen }: { imageKey: string; onO
         const data: Config = await res.json()
         setConfig(data)
         setModel(data.default_model)
+        setFade(data.default_fade)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
@@ -78,6 +84,14 @@ export default function VideoMaker({ imageKey, onOpen }: { imageKey: string; onO
     return () => window.clearInterval(timer)
   }, [job])
 
+  // ループは最後のコマを指定できるモデル・解像度だけ
+  function changeLoop(next: boolean) {
+    setLoop(next)
+    if (!next || !config) return
+    if (!config.loop_models.includes(model)) setModel(config.loop_models[0])
+    if (!config.loop_resolutions.includes(resolution)) setResolution(config.loop_resolutions[config.loop_resolutions.length - 1])
+  }
+
   const price = config?.models.find(m => m.id === model)?.usd_per_second ?? 0
   const estimate = Math.round(price * seconds * 100) / 100
   const running = job !== null && (job.status === 'starting' || job.status === 'generating')
@@ -93,7 +107,7 @@ export default function VideoMaker({ imageKey, onOpen }: { imageKey: string; onO
       const res = await fetch(`${API_ORIGIN}/api/videos/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: imageKey, prompt, keep_style: keepStyle, model, seconds, resolution, audio }),
+        body: JSON.stringify({ key: imageKey, prompt, keep_style: keepStyle, model, seconds, resolution, audio, loop, audio_fade: fade }),
       })
       if (!res.ok) throw new Error(await readErrorDetail(res))
       setJob(await res.json())
@@ -125,11 +139,20 @@ export default function VideoMaker({ imageKey, onOpen }: { imageKey: string; onO
         <input type="checkbox" checked={keepStyle} onChange={e => setKeepStyle(e.target.checked)} disabled={running} />
         絵柄・色・顔・髪型を崩さないよう一言足す
       </label>
+      <label className="vm-check">
+        <input type="checkbox" checked={loop} onChange={e => changeLoop(e.target.checked)} disabled={running} />
+        ループにする(最後のコマも同じ絵にして、終わりが始まりにつながる)
+      </label>
+      {loop && (
+        <p className="vm-note">
+          高画質(1.5)・720p までになります。どう動かすかには「最後は最初と同じ姿勢に戻る」(returns to exactly the same pose as the first frame)と書くと自然です。
+        </p>
+      )}
       <div className="vm-row">
         <label>
           モデル
           <select value={model} onChange={e => setModel(e.target.value)} disabled={running}>
-            {config?.models.map(m => (
+            {config?.models.filter(m => !loop || config.loop_models.includes(m.id)).map(m => (
               <option key={m.id} value={m.id}>{MODEL_LABEL[m.id] ?? m.id}(1秒 ${m.usd_per_second})</option>
             ))}
           </select>
@@ -142,13 +165,20 @@ export default function VideoMaker({ imageKey, onOpen }: { imageKey: string; onO
         <label>
           解像度
           <select value={resolution} onChange={e => setResolution(e.target.value)} disabled={running}>
-            {config?.resolutions.map(r => <option key={r} value={r}>{r}</option>)}
+            {config?.resolutions.filter(r => !loop || config.loop_resolutions.includes(r)).map(r => <option key={r} value={r}>{r}</option>)}
           </select>
         </label>
         <label className="vm-check">
           <input type="checkbox" checked={audio} onChange={e => setAudio(e.target.checked)} disabled={running} />
           音声
         </label>
+        {loop && audio && (
+          <label title="音のつなぎ目をなじませる長さ。できたあとでも、動画の画面で変えられます">
+            音のフェード
+            <input type="number" min={0} max={3} step={0.1} value={fade}
+              onChange={e => setFade(Math.max(0, Math.min(3, Number(e.target.value) || 0)))} disabled={running} /> 秒
+          </label>
+        )}
       </div>
       <div className="vm-row">
         <button type="button" className="vm-primary" onClick={() => void start()} disabled={!config || running}>
@@ -162,6 +192,7 @@ export default function VideoMaker({ imageKey, onOpen }: { imageKey: string; onO
           <button type="button" onClick={() => onOpen(job.video_key!)}>できた動画を開く</button>
         </p>
       )}
+      {job?.status === 'done' && job.message && <p className="vm-note">{job.message}</p>}
       {job?.status === 'failed' && <p className="vm-error">{job.message}</p>}
       {error && <p className="vm-error">{error}</p>}
     </div>
