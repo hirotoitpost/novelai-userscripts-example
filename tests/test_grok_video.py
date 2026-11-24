@@ -93,3 +93,31 @@ def test_validation(picture: Path) -> None:
     with pytest.raises(grok_video.VideoJobError):
         grok_video.build_body(picture, "x", grok_video.DEFAULT_MODEL, 6, "4k", True)
     assert grok_video.estimate("grok-imagine-video-1.5-lite", 10) == 0.2
+
+
+def test_loop_pins_last_frame(picture: Path) -> None:
+    body = grok_video.build_body(picture, "x", "grok-imagine-video-1.5", 6, "720p", True, loop=True)
+    assert body["last_frame"] == body["image"]
+    assert "last_frame" not in grok_video.build_body(picture, "x", "grok-imagine-video-1.5", 6, "720p", True)
+    with pytest.raises(grok_video.VideoJobError):
+        grok_video.build_body(picture, "x", "grok-imagine-video-1.5-lite", 6, "720p", True, loop=True)
+    with pytest.raises(grok_video.VideoJobError):
+        grok_video.build_body(picture, "x", "grok-imagine-video-1.5", 6, "1080p", True, loop=True)
+
+
+def test_loop_job_applies_fade(picture: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    faded: list[tuple[str, float]] = []
+    monkeypatch.setattr(grok_video.video_loop, "apply_fade", lambda path, fade: faded.append((path.name, fade)) or fade)
+    seen: list[dict] = []
+    polls = [{"status": "done", "video": {"url": "https://vidgen.example/v.mp4"}}]
+    job = grok_video.start(
+        source_key="history:1:a.png", image=picture, prompt="x", model="grok-imagine-video-1.5", seconds=6,
+        resolution="720p", audio=True, label="", adult=False, loop=True, audio_fade=1.5,
+        http=_client(polls, seen), sleep=lambda s: None,
+    )
+    assert _wait(job).status == "done", job.message
+    assert "last_frame" in seen[0]
+    name = job.video_key.split(":", 1)[1]
+    assert faded == [(name, 1.5)]
+    meta = json.loads((picture.parent / "files" / "outputs" / "videos" / name).with_suffix(".json").read_text(encoding="utf-8"))
+    assert meta["loop"] is True

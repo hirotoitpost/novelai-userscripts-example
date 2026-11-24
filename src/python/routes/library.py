@@ -165,7 +165,8 @@ def _video_images() -> list[GalleryImage]:
         return []
     items: list[GalleryImage] = []
     for entry in sorted(folder.iterdir()):
-        if not entry.is_file() or not is_video(entry):
+        # 「.」で始まるのは書きかけ(video_loop の作り直し)
+        if not entry.is_file() or not is_video(entry) or entry.name.startswith("."):
             continue
         meta: dict[str, Any] = {}
         sidecar = entry.with_suffix(".json")
@@ -192,6 +193,9 @@ def _video_images() -> list[GalleryImage]:
                 source_key=meta.get("source_key"),
                 adult=adult,
                 adult_auto=adult,
+                loop=bool(meta.get("loop")),
+                audio_fade=meta.get("audio_fade"),
+                version=entry.stat().st_mtime_ns // 1_000_000,
             )
         )
     return items
@@ -386,6 +390,10 @@ class GalleryImage(BaseModel):
     adult_manual: bool | None = None
     # キャラ別データセットの画像なら、そのキャラ
     character_id: int | None = None
+    # 動画: 継ぎ目なく回るループ動画か、音にかけたフェード(秒)、ファイルの版(作り直したら変わる。URL に付けて古い動画を見せない)
+    loop: bool = False
+    audio_fade: float | None = None
+    version: int | None = None
 
 
 class GalleryResponse(BaseModel):

@@ -31,6 +31,7 @@ import { TaskStatusDialog, useTaskStatus } from '../components/TaskStatus'
 import './Gallery.css'
 import { openXPost } from '../xpost'
 import VideoMaker from '../components/VideoMaker'
+import VideoFade from '../components/VideoFade'
 import { isShortcutKey, keyIs } from '../shortcuts'
 
 type Source = 'generate' | 'panel' | 'illustration' | 'dataset' | 'video'
@@ -56,6 +57,10 @@ interface GalleryImage {
   adult_manual: boolean | null
   /** ギャラリーの別の画像から作った画像なら、その画像のキー(範囲を高解像度にした画像など) */
   source_key: string | null
+  /** 動画: 継ぎ目なく回るループ動画か・音にかけたフェード(秒)・ファイルの版(作り直すと変わる) */
+  loop?: boolean
+  audio_fade?: number | null
+  version?: number | null
 }
 
 interface SimilarImage {
@@ -780,8 +785,8 @@ export default function Gallery() {
               disabled={viewing === 0} aria-label="前の画像">‹</button>
             {current.source === 'video' ? (
               <video
-                key={current.key}
-                src={fileUrl(current.path)}
+                key={`${current.key}@${current.version ?? ''}`}
+                src={`${fileUrl(current.path)}${current.version ? `&v=${current.version}` : ''}`}
                 poster={thumbUrl(current.path, 720)}
                 controls
                 playsInline
@@ -881,6 +886,16 @@ export default function Gallery() {
                 削除
               </button>
             </div>
+            {current.source === 'video' && (current.loop || current.audio_fade != null) && (
+              <VideoFade
+                key={current.key}
+                videoKey={current.key}
+                current={current.audio_fade ?? null}
+                onDone={fade => setItems(prev => prev.map(i => (
+                  i.key === current.key ? { ...i, audio_fade: fade, version: Date.now() } : i
+                )))}
+              />
+            )}
             {videoMakingKey === current.key && current.source !== 'video' && (
               <VideoMaker imageKey={current.key} onOpen={key => void openKey(key)} />
             )}
